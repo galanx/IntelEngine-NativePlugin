@@ -54,6 +54,9 @@ namespace IntelEngine {
         int departureMinChecks = 5;   // Ticks before first distance check (~15s at 3s interval)
         int departureMaxRetries = 1;  // Soft recovery attempts before escalation
 
+        // Waypoint navigation settings
+        float waypointSearchRadius = 5000.0f;  // Max radius for waypoint marker search
+
     private:
         Settings() = default;
         ~Settings() = default;

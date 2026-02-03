@@ -1165,4 +1165,68 @@ namespace IntelEngine {
         return RE::BSFixedString(stats.dump());
     }
 
+    RE::TESObjectREFR* LocationResolver::FindNearestWaypointToward(
+            RE::Actor* actor, RE::TESObjectREFR* destination, float maxRadius) {
+        if (!actor || !destination) return nullptr;
+
+        auto actorPos = actor->GetPosition();
+        auto destPos = destination->GetPosition();
+
+        // Actor's distance to destination (2D — Z irrelevant for route planning)
+        float actorToDestX = destPos.x - actorPos.x;
+        float actorToDestY = destPos.y - actorPos.y;
+        float actorToDestSq = actorToDestX * actorToDestX + actorToDestY * actorToDestY;
+
+        float maxRadiusSq = maxRadius * maxRadius;
+        float bestDistSq = FLT_MAX;
+        RE::TESObjectREFR* bestMarker = nullptr;
+
+        auto* dataHandler = RE::TESDataHandler::GetSingleton();
+        if (!dataHandler) return nullptr;
+
+        for (auto* loc : dataHandler->GetFormArray<RE::BGSLocation>()) {
+            if (!loc) continue;
+
+            auto markerPtr = loc->worldLocMarker.get();
+            if (!markerPtr) continue;
+
+            auto* marker = markerPtr.get();
+            if (!marker) continue;
+
+            // Skip interior-only markers
+            auto* parentCell = marker->GetParentCell();
+            if (parentCell && parentCell->IsInteriorCell()) continue;
+
+            auto markerPos = marker->GetPosition();
+
+            // Distance from actor to marker (2D)
+            float dx = markerPos.x - actorPos.x;
+            float dy = markerPos.y - actorPos.y;
+            float distSq = dx * dx + dy * dy;
+
+            // Must be within search radius
+            if (distSq > maxRadiusSq) continue;
+
+            // Must be closer to destination than the actor is
+            float markerToDestX = destPos.x - markerPos.x;
+            float markerToDestY = destPos.y - markerPos.y;
+            float markerToDestSq = markerToDestX * markerToDestX + markerToDestY * markerToDestY;
+            if (markerToDestSq >= actorToDestSq) continue;
+
+            // Track closest qualifying marker
+            if (distSq < bestDistSq) {
+                bestDistSq = distSq;
+                bestMarker = marker;
+            }
+        }
+
+        if (bestMarker) {
+            auto pos = bestMarker->GetPosition();
+            logger::debug("FindNearestWaypointToward: found marker at ({:.0f}, {:.0f}, {:.0f}), "
+                          "dist={:.0f}", pos.x, pos.y, pos.z, std::sqrt(bestDistSq));
+        }
+
+        return bestMarker;
+    }
+
 }  // namespace IntelEngine

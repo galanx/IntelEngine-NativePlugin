@@ -146,6 +146,21 @@ namespace IntelEngine {
          */
         RE::BSFixedString GetStatsJSON();
 
+        /**
+         * Find the nearest BGSLocation worldLocMarker toward a destination.
+         *
+         * Iterates all BGSLocations, checks their worldLocMarker:
+         * 1. Must be a valid exterior reference (not interior-only)
+         * 2. Must be within maxRadius of the actor
+         * 3. Must be closer to destination than the actor is
+         * Returns the closest qualifying marker, or nullptr.
+         *
+         * Used by stuck recovery to redirect NPCs to known-good positions
+         * at settlement entrances instead of blind vector teleports.
+         */
+        RE::TESObjectREFR* FindNearestWaypointToward(
+            RE::Actor* actor, RE::TESObjectREFR* destination, float maxRadius);
+
     private:
         LocationResolver() = default;
         ~LocationResolver() = default;

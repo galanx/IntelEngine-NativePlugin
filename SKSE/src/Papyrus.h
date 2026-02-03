@@ -174,6 +174,13 @@ namespace IntelEngine::Papyrus {
     void ResetOffScreenSlot(RE::StaticFunctionTag*, int slot);
 
     // ==========================================================================
+    // Waypoint Navigation Functions
+    // ==========================================================================
+
+    RE::TESObjectREFR* FindNearestWaypointToward(RE::StaticFunctionTag*,
+        RE::Actor* actor, RE::TESObjectREFR* destination, float maxRadius);
+
+    // ==========================================================================
     // Debug Functions
     // ==========================================================================
 

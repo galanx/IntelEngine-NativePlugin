@@ -102,6 +102,9 @@ namespace IntelEngine::Papyrus {
         a_vm->RegisterFunction("CheckOffScreenProgress", SCRIPT_NAME, CheckOffScreenProgress); ++count;
         a_vm->RegisterFunction("ResetOffScreenSlot", SCRIPT_NAME, ResetOffScreenSlot); ++count;
 
+        // Waypoint Navigation Functions
+        a_vm->RegisterFunction("FindNearestWaypointToward", SCRIPT_NAME, FindNearestWaypointToward); ++count;
+
         // Debug Functions
         a_vm->RegisterFunction("TestNPCSearch", SCRIPT_NAME, TestNPCSearch); ++count;
         a_vm->RegisterFunction("TestLocationResolve", SCRIPT_NAME, TestLocationResolve); ++count;
@@ -785,6 +788,17 @@ namespace IntelEngine::Papyrus {
 
     void ResetOffScreenSlot(RE::StaticFunctionTag*, int slot) {
         OffScreenTracker::GetSingleton()->ResetSlot(slot);
+    }
+
+    // ==========================================================================
+    // Waypoint Navigation Functions
+    // ==========================================================================
+
+    RE::TESObjectREFR* FindNearestWaypointToward(RE::StaticFunctionTag*,
+            RE::Actor* actor, RE::TESObjectREFR* destination, float maxRadius) {
+        if (!actor || !destination) return nullptr;
+        return LocationResolver::GetSingleton()->FindNearestWaypointToward(
+            actor, destination, maxRadius);
     }
 
     // ==========================================================================
