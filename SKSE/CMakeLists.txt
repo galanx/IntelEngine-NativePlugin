@@ -37,6 +37,7 @@ set(SOURCES
     src/Settings.cpp
     src/StuckDetector.cpp
     src/DepartureDetector.cpp
+    src/OffScreenTracker.cpp
 )
 
 # =============================================================================

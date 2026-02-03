@@ -164,6 +164,16 @@ namespace IntelEngine::Papyrus {
     int GetStuckRecoveryAttempts(RE::StaticFunctionTag*, int slot);
 
     // ==========================================================================
+    // Off-Screen Travel Detection Functions
+    // ==========================================================================
+
+    void InitOffScreenTravel(RE::StaticFunctionTag*, int slot,
+                             float estimatedArrivalGameTime, RE::Actor* actor);
+    int CheckOffScreenProgress(RE::StaticFunctionTag*, int slot,
+                               RE::Actor* actor, float currentGameTime);
+    void ResetOffScreenSlot(RE::StaticFunctionTag*, int slot);
+
+    // ==========================================================================
     // Debug Functions
     // ==========================================================================
 

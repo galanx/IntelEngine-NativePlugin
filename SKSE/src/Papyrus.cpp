@@ -12,6 +12,7 @@
 #include "ActionValidator.h"
 #include "DepartureDetector.h"
 #include "StuckDetector.h"
+#include "OffScreenTracker.h"
 #include "Settings.h"
 
 namespace IntelEngine::Papyrus {
@@ -95,6 +96,11 @@ namespace IntelEngine::Papyrus {
         a_vm->RegisterFunction("ResetStuckSlot", SCRIPT_NAME, ResetStuckSlot); ++count;
         a_vm->RegisterFunction("GetTeleportDistance", SCRIPT_NAME, GetTeleportDistance); ++count;
         a_vm->RegisterFunction("GetStuckRecoveryAttempts", SCRIPT_NAME, GetStuckRecoveryAttempts); ++count;
+
+        // Off-Screen Travel Detection Functions
+        a_vm->RegisterFunction("InitOffScreenTravel", SCRIPT_NAME, InitOffScreenTravel); ++count;
+        a_vm->RegisterFunction("CheckOffScreenProgress", SCRIPT_NAME, CheckOffScreenProgress); ++count;
+        a_vm->RegisterFunction("ResetOffScreenSlot", SCRIPT_NAME, ResetOffScreenSlot); ++count;
 
         // Debug Functions
         a_vm->RegisterFunction("TestNPCSearch", SCRIPT_NAME, TestNPCSearch); ++count;
@@ -755,6 +761,30 @@ namespace IntelEngine::Papyrus {
 
     int GetStuckRecoveryAttempts(RE::StaticFunctionTag*, int slot) {
         return StuckDetector::GetSingleton()->GetRecoveryAttempts(slot);
+    }
+
+    // ==========================================================================
+    // Off-Screen Travel Detection Functions
+    // ==========================================================================
+
+    void InitOffScreenTravel(RE::StaticFunctionTag*, int slot,
+                             float estimatedArrivalGameTime, RE::Actor* actor) {
+        if (!actor) return;
+        auto pos = actor->GetPosition();
+        OffScreenTracker::GetSingleton()->InitSlot(
+            slot, estimatedArrivalGameTime, pos.x, pos.y);
+    }
+
+    int CheckOffScreenProgress(RE::StaticFunctionTag*, int slot,
+                               RE::Actor* actor, float currentGameTime) {
+        if (!actor) return 0;
+        auto pos = actor->GetPosition();
+        return OffScreenTracker::GetSingleton()->CheckProgress(
+            slot, currentGameTime, pos.x, pos.y);
+    }
+
+    void ResetOffScreenSlot(RE::StaticFunctionTag*, int slot) {
+        OffScreenTracker::GetSingleton()->ResetSlot(slot);
     }
 
     // ==========================================================================
