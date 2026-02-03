@@ -1,0 +1,17 @@
+#pragma once
+
+/**
+ * IntelEngine SKSE Plugin Header
+ *
+ * Common includes and version information.
+ */
+
+#include <RE/Skyrim.h>
+#include <SKSE/SKSE.h>
+#include <spdlog/sinks/basic_file_sink.h>
+
+#define INTELENGINE_VERSION "1.0.0"
+
+using namespace std::literals;
+
+namespace logger = SKSE::log;

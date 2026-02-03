@@ -1,0 +1,35 @@
+# ===========================================
+# IntelEngine-NativePlugin .gitignore
+# ===========================================
+
+# Data/ is a separate repo (IntelEngine-GamePlugin)
+Data/
+
+# CMake build output (massive — rebuild locally)
+SKSE/build/
+
+# Compiled PEX output (built from Source/Scripts/*.psc)
+Output/
+
+# Temp decompile directories
+temp_decompile/
+temp_decompiled/
+
+# Windows NUL device artifact
+nul
+
+# Deprecated/backup verify scripts
+_verify.ps1
+_verify_prompt.ps1
+
+# Visual Studio / IDE
+*.user
+*.suo
+*.vs/
+.vs/
+*.sln.DotSettings.user
+
+# OS artifacts
+Thumbs.db
+Desktop.ini
+.DS_Store
