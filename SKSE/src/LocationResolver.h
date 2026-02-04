@@ -213,10 +213,11 @@ namespace IntelEngine {
             "inside", "in", "interior",
             "the back", "back room", "back",
             "cellar", "basement", "below stairs",
-            "my room", "bedroom", "the bedroom", "my bed", "bed",
+            "my room", "bedroom", "the bedroom", "my bed", "bed", "room",
             "kitchen", "the kitchen",
             "the bar", "counter", "bar counter",
-            "near the fire", "fireplace", "hearth"
+            "near the fire", "fireplace", "hearth",
+            "stairs", "stairwell", "staircase"
         };
 
         bool m_indexBuilt = false;

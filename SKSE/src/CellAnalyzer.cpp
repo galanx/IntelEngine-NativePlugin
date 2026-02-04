@@ -7,6 +7,7 @@
 #include "CellAnalyzer.h"
 #include "StringUtils.h"
 
+#include <algorithm>
 #include <cmath>
 #include <nlohmann/json.hpp>
 
@@ -342,6 +343,8 @@ namespace IntelEngine {
         auto* cell = actor->GetParentCell();
         if (!cell) return results;
 
+        float actorX = actor->GetPositionX();
+        float actorY = actor->GetPositionY();
         float actorZ = actor->GetPositionZ();
 
         cell->ForEachReference([&results, actorZ, minZDiff](RE::TESObjectREFR& ref) {
@@ -359,6 +362,16 @@ namespace IntelEngine {
             return RE::BSContainer::ForEachResult::kContinue;
         });
 
+        // Sort by horizontal (XY) distance to actor — nearest directly above first
+        std::sort(results.begin(), results.end(),
+            [actorX, actorY](RE::TESObjectREFR* a, RE::TESObjectREFR* b) {
+                float dxA = a->GetPositionX() - actorX;
+                float dyA = a->GetPositionY() - actorY;
+                float dxB = b->GetPositionX() - actorX;
+                float dyB = b->GetPositionY() - actorY;
+                return (dxA * dxA + dyA * dyA) < (dxB * dxB + dyB * dyB);
+            });
+
         logger::debug("FindFurnitureAbove: Found {} furniture refs {}+ units above actor Z={:.0f}",
                       results.size(), minZDiff, actorZ);
 
@@ -372,6 +385,8 @@ namespace IntelEngine {
         auto* cell = actor->GetParentCell();
         if (!cell) return results;
 
+        float actorX = actor->GetPositionX();
+        float actorY = actor->GetPositionY();
         float actorZ = actor->GetPositionZ();
 
         cell->ForEachReference([&results, actorZ, minZDiff](RE::TESObjectREFR& ref) {
@@ -388,6 +403,16 @@ namespace IntelEngine {
 
             return RE::BSContainer::ForEachResult::kContinue;
         });
+
+        // Sort by horizontal (XY) distance to actor — nearest directly below first
+        std::sort(results.begin(), results.end(),
+            [actorX, actorY](RE::TESObjectREFR* a, RE::TESObjectREFR* b) {
+                float dxA = a->GetPositionX() - actorX;
+                float dyA = a->GetPositionY() - actorY;
+                float dxB = b->GetPositionX() - actorX;
+                float dyB = b->GetPositionY() - actorY;
+                return (dxA * dxA + dyA * dyA) < (dxB * dxB + dyB * dyB);
+            });
 
         logger::debug("FindFurnitureBelow: Found {} furniture refs {}+ units below actor Z={:.0f}",
                       results.size(), minZDiff, actorZ);

@@ -884,9 +884,13 @@ namespace IntelEngine {
         if (lower == "cellar" || lower == "basement" || lower == "below stairs")
             return {SemanticIntent::CELLAR, "", false};
 
+        // === Stairs terms (exact) — map to DOWNSTAIRS (NPC goes toward stairwell area) ===
+        if (lower == "stairs" || lower == "stairwell" || lower == "staircase")
+            return {SemanticIntent::DOWNSTAIRS, "", false};
+
         // === Bedroom terms (exact) ===
         if (lower == "bedroom" || lower == "the bedroom" || lower == "my room" ||
-            lower == "my bed" || lower == "bed")
+            lower == "my bed" || lower == "bed" || lower == "room")
             return {SemanticIntent::BEDROOM, "", true};
 
         // === Kitchen terms (exact) ===
@@ -923,7 +927,8 @@ namespace IntelEngine {
         if (lower.find("upstairs") != std::string::npos || lower.find("upper floor") != std::string::npos)
             return {SemanticIntent::UPSTAIRS, "", hasBedContext()};
         if (lower.find("downstairs") != std::string::npos || lower.find("basement") != std::string::npos ||
-            lower.find("cellar") != std::string::npos)
+            lower.find("cellar") != std::string::npos || lower.find("stairwell") != std::string::npos ||
+            lower.find("staircase") != std::string::npos || lower.find("stairs") != std::string::npos)
             return {SemanticIntent::DOWNSTAIRS, "", hasBedContext()};
         if (lower.find("outside") != std::string::npos || lower.find("exterior") != std::string::npos)
             return {SemanticIntent::OUTSIDE, "", false};

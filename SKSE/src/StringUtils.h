@@ -192,6 +192,7 @@ namespace IntelEngine::StringUtils {
                                   const std::vector<std::string>& candidates,
                                   int maxDistance) {
         FuzzyResult result;
+        auto searchLen = searchTerm.length();
         for (const auto& name : candidates) {
             int dist = LevenshteinDistance(searchTerm, name);
             if (dist == 0) {
@@ -200,6 +201,11 @@ namespace IntelEngine::StringUtils {
                 result.match = name;
                 return result;
             }
+            // Reject matches where every character is effectively wrong —
+            // prevents "inn" -> "aho" (distance 3, both length 3)
+            auto minLen = std::min(searchLen, name.length());
+            if (dist >= static_cast<int>(minLen)) continue;
+
             if (dist < result.distance) {
                 result.distance = dist;
                 result.match = name;
