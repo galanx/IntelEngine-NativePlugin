@@ -18,6 +18,9 @@ temp_decompiled/
 # Windows NUL device artifact
 nul
 
+# Internal Discord promo files (not for repo)
+README-discord*.md
+
 # Deprecated/backup verify scripts
 _verify.ps1
 _verify_prompt.ps1
