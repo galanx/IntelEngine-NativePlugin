@@ -9,11 +9,16 @@
 #include "Papyrus.h"
 #include "NPCIndex.h"
 #include "LocationResolver.h"
+#include "SlotTracker.h"
 #include "Settings.h"
 
 #include <fstream>
 
 namespace IntelEngine {
+
+    // =========================================================================
+    // SKSE Message Handler
+    // =========================================================================
 
     void MessageHandler(SKSE::MessagingInterface::Message* a_msg) {
         switch (a_msg->type) {
@@ -25,9 +30,16 @@ namespace IntelEngine {
                 break;
 
             case SKSE::MessagingInterface::kNewGame:
+                // New game — clear SlotTracker state
+                logger::info("New game - clearing SlotTracker");
+                SlotTracker::GetSingleton()->ClearAll();
+                NPCIndex::GetSingleton()->RefreshIndex();
+                break;
+
             case SKSE::MessagingInterface::kPostLoadGame:
-                // Game started/loaded - rebuild index to catch any changes
-                logger::info("Game loaded - refreshing NPC index");
+                // Game loaded — clear SlotTracker (Papyrus will re-sync via SyncAllSlots)
+                logger::info("Game loaded - clearing SlotTracker (Papyrus will re-sync)");
+                SlotTracker::GetSingleton()->ClearAll();
                 NPCIndex::GetSingleton()->RefreshIndex();
                 break;
 

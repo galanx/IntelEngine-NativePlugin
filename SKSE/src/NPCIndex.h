@@ -64,6 +64,18 @@ namespace IntelEngine {
         RE::Actor* FindByName(const std::string& searchTerm);
 
         /**
+         * Proximity-aware NPC search.
+         * Same fuzzy matching as FindByName, but when multiple NPCs match,
+         * returns the one closest to nearActor.
+         * Falls back to FindByName if nearActor is nullptr.
+         *
+         * @param searchTerm Name to search for
+         * @param nearActor Actor to measure distance from
+         * @return Closest matching Actor, or nullptr
+         */
+        RE::Actor* FindByNameNear(const std::string& searchTerm, RE::Actor* nearActor);
+
+        /**
          * Check if an NPC is accessible (not disabled, in loaded cell).
          *
          * @param actor Actor to check

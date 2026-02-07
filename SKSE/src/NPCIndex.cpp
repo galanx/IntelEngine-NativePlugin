@@ -209,6 +209,110 @@ namespace IntelEngine {
         return nullptr;
     }
 
+    RE::Actor* NPCIndex::FindByNameNear(const std::string& searchTerm, RE::Actor* nearActor) {
+        // If no actor context, fall back to original FindByName
+        if (!nearActor) return FindByName(searchTerm);
+
+        std::shared_lock lock(m_mutex);
+        if (searchTerm.empty()) return nullptr;
+
+        std::string lowerSearch = StringUtils::ToLowerStd(searchTerm);
+        int maxDist = Settings::GetSingleton()->fuzzyMatchThreshold;
+        auto nearPos = nearActor->GetPosition();
+
+        struct Candidate {
+            RE::Actor* actor;
+            int nameScore;   // 0=exact, 1=substring, 2+=fuzzy
+            float distSq;    // 2D distance squared to nearActor
+        };
+
+        std::vector<Candidate> candidates;
+
+        // Single pass through all loaded actors — collect all candidates
+        ProcessUtils::ForEachLoadedActor([&](RE::Actor* actor) {
+            if (actor == nearActor) return false;  // skip self
+            auto displayName = actor->GetDisplayFullName();
+            if (!displayName || strlen(displayName) == 0) return false;
+
+            std::string lowerName = StringUtils::ToLowerStd(displayName);
+            int nameScore = -1;  // -1 = no match
+
+            if (lowerName == lowerSearch) {
+                nameScore = 0;  // exact
+            } else if (lowerName.find(lowerSearch) != std::string::npos ||
+                       lowerSearch.find(lowerName) != std::string::npos) {
+                nameScore = 1;  // substring
+            } else {
+                int leven = StringUtils::LevenshteinDistance(lowerSearch, lowerName);
+                if (leven <= maxDist) {
+                    nameScore = 2 + leven;  // fuzzy
+                }
+            }
+
+            if (nameScore >= 0) {
+                auto pos = actor->GetPosition();
+                float dx = pos.x - nearPos.x;
+                float dy = pos.y - nearPos.y;
+                candidates.push_back({actor, nameScore, dx * dx + dy * dy});
+            }
+            return false;
+        });
+
+        // Also check indexed NPCs that may not be in loaded actors.
+        // Guard: skip if actor has no parent cell (unloaded — GetPosition may return stale data)
+        auto exactIt = m_npcIndex.find(lowerSearch);
+        if (exactIt != m_npcIndex.end() && exactIt->second && exactIt->second->GetParentCell()) {
+            bool alreadyFound = false;
+            for (auto& c : candidates) {
+                if (c.actor == exactIt->second) { alreadyFound = true; break; }
+            }
+            if (!alreadyFound) {
+                auto pos = exactIt->second->GetPosition();
+                float dx = pos.x - nearPos.x;
+                float dy = pos.y - nearPos.y;
+                candidates.push_back({exactIt->second, 0, dx * dx + dy * dy});
+            }
+        }
+
+        // Fuzzy match in index
+        auto fuzzy = StringUtils::FuzzyFind(lowerSearch, m_allNames, maxDist);
+        if (fuzzy) {
+            auto loadedIt = m_npcIndex.find(fuzzy.match);
+            if (loadedIt != m_npcIndex.end() && loadedIt->second && loadedIt->second->GetParentCell()) {
+                bool alreadyFound = false;
+                for (auto& c : candidates) {
+                    if (c.actor == loadedIt->second) { alreadyFound = true; break; }
+                }
+                if (!alreadyFound) {
+                    auto pos = loadedIt->second->GetPosition();
+                    float dx = pos.x - nearPos.x;
+                    float dy = pos.y - nearPos.y;
+                    candidates.push_back({loadedIt->second, 2 + fuzzy.distance, dx * dx + dy * dy});
+                }
+            }
+        }
+
+        if (candidates.empty()) {
+            logger::debug("FindByNameNear('{}') -> No candidates found", searchTerm);
+            return nullptr;
+        }
+
+        // Pick best: lowest nameScore first, then lowest distSq as tiebreaker
+        auto* best = &candidates[0];
+        for (size_t i = 1; i < candidates.size(); ++i) {
+            auto& c = candidates[i];
+            if (c.nameScore < best->nameScore ||
+                (c.nameScore == best->nameScore && c.distSq < best->distSq)) {
+                best = &c;
+            }
+        }
+
+        logger::debug("FindByNameNear('{}') -> '{}' (score={}, dist={:.0f}, {} candidates)",
+                     searchTerm, best->actor->GetDisplayFullName(), best->nameScore,
+                     std::sqrt(best->distSq), candidates.size());
+        return best->actor;
+    }
+
     RE::FormID NPCIndex::FindFormIdByName(const std::string& searchTerm) {
         std::shared_lock lock(m_mutex);
 
@@ -242,28 +346,17 @@ namespace IntelEngine {
 
         std::string lowerSearch = StringUtils::ToLowerStd(searchTerm);
 
-        // Find the NPC name (with fuzzy matching)
-        std::string matchedName;
-
+        // Exact match
         auto exactIt = m_npcCurrentLocations.find(lowerSearch);
         if (exactIt != m_npcCurrentLocations.end()) {
             return RE::BSFixedString(exactIt->second);
         }
 
-        // Try fuzzy match
+        // Fuzzy match — use FuzzyFind (consistent with rest of codebase)
         int maxDist = Settings::GetSingleton()->fuzzyMatchThreshold;
-        int bestDistance = maxDist + 1;
-
-        for (const auto& [name, location] : m_npcCurrentLocations) {
-            int dist = StringUtils::LevenshteinDistance(lowerSearch, name);
-            if (dist < bestDistance) {
-                bestDistance = dist;
-                matchedName = name;
-            }
-        }
-
-        if (!matchedName.empty() && bestDistance <= maxDist) {
-            auto locIt = m_npcCurrentLocations.find(matchedName);
+        auto fuzzy = StringUtils::FuzzyFind(lowerSearch, m_allNames, maxDist);
+        if (fuzzy) {
+            auto locIt = m_npcCurrentLocations.find(fuzzy.match);
             if (locIt != m_npcCurrentLocations.end()) {
                 return RE::BSFixedString(locIt->second);
             }

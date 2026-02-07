@@ -38,6 +38,7 @@ set(SOURCES
     src/StuckDetector.cpp
     src/DepartureDetector.cpp
     src/OffScreenTracker.cpp
+    src/SlotTracker.cpp
 )
 
 # =============================================================================

@@ -13,6 +13,7 @@
 #include "DepartureDetector.h"
 #include "StuckDetector.h"
 #include "OffScreenTracker.h"
+#include "SlotTracker.h"
 #include "Settings.h"
 
 namespace IntelEngine::Papyrus {
@@ -26,6 +27,7 @@ namespace IntelEngine::Papyrus {
 
         // NPC Search Functions
         a_vm->RegisterFunction("FindNPCByName", SCRIPT_NAME, FindNPCByName); ++count;
+        a_vm->RegisterFunction("FindNPCByNameNear", SCRIPT_NAME, FindNPCByNameNear); ++count;
         a_vm->RegisterFunction("GetNPCCurrentLocation", SCRIPT_NAME, GetNPCCurrentLocation); ++count;
         a_vm->RegisterFunction("IsNPCAccessible", SCRIPT_NAME, IsNPCAccessible); ++count;
         a_vm->RegisterFunction("GetNPCNameSuggestion", SCRIPT_NAME, GetNPCNameSuggestion); ++count;
@@ -105,6 +107,16 @@ namespace IntelEngine::Papyrus {
         // Waypoint Navigation Functions
         a_vm->RegisterFunction("FindNearestWaypointToward", SCRIPT_NAME, FindNearestWaypointToward); ++count;
 
+        // Home Door Access Functions (anti-trespass)
+        a_vm->RegisterFunction("SetHomeDoorAccess", SCRIPT_NAME, SetHomeDoorAccess); ++count;
+        a_vm->RegisterFunction("SetHomeDoorAccessForCell", SCRIPT_NAME, SetHomeDoorAccessForCell); ++count;
+        a_vm->RegisterFunction("GetLastResolvedHomeCellId", SCRIPT_NAME, GetLastResolvedHomeCellId); ++count;
+
+        // Slot Tracker Functions (C++ state mirror for SkyrimNet decorators)
+        a_vm->RegisterFunction("UpdateSlotState", SCRIPT_NAME, UpdateSlotState); ++count;
+        a_vm->RegisterFunction("ClearSlotState", SCRIPT_NAME, ClearSlotState); ++count;
+        a_vm->RegisterFunction("IsActorAvailable", SCRIPT_NAME, IsActorAvailable); ++count;
+
         // Debug Functions
         a_vm->RegisterFunction("TestNPCSearch", SCRIPT_NAME, TestNPCSearch); ++count;
         a_vm->RegisterFunction("TestLocationResolve", SCRIPT_NAME, TestLocationResolve); ++count;
@@ -123,6 +135,10 @@ namespace IntelEngine::Papyrus {
 
     RE::Actor* FindNPCByName(RE::StaticFunctionTag*, RE::BSFixedString searchTerm) {
         return NPCIndex::GetSingleton()->FindByName(searchTerm.c_str());
+    }
+
+    RE::Actor* FindNPCByNameNear(RE::StaticFunctionTag*, RE::BSFixedString searchTerm, RE::Actor* nearActor) {
+        return NPCIndex::GetSingleton()->FindByNameNear(searchTerm.c_str(), nearActor);
     }
 
     RE::BSFixedString GetNPCCurrentLocation(RE::StaticFunctionTag*, RE::Actor* akNPC) {
@@ -799,6 +815,53 @@ namespace IntelEngine::Papyrus {
         if (!actor || !destination) return nullptr;
         return LocationResolver::GetSingleton()->FindNearestWaypointToward(
             actor, destination, maxRadius);
+    }
+
+    // ==========================================================================
+    // Home Door Access Functions (anti-trespass)
+    // ==========================================================================
+
+    RE::TESObjectREFR* SetHomeDoorAccess(RE::StaticFunctionTag*, RE::Actor* akNPC, bool unlock) {
+        if (!akNPC) return nullptr;
+        return LocationResolver::GetSingleton()->SetHomeDoorAccess(akNPC, unlock);
+    }
+
+    RE::TESObjectREFR* SetHomeDoorAccessForCell(RE::StaticFunctionTag*, int cellFormId, bool unlock) {
+        if (cellFormId == 0) return nullptr;
+        return LocationResolver::GetSingleton()->SetHomeDoorAccessForCell(
+            static_cast<RE::FormID>(cellFormId), unlock);
+    }
+
+    int GetLastResolvedHomeCellId(RE::StaticFunctionTag*) {
+        return static_cast<int>(LocationResolver::GetSingleton()->GetLastResolvedHomeCellId());
+    }
+
+    // ==========================================================================
+    // Slot Tracker Functions (C++ state mirror for SkyrimNet decorators)
+    // ==========================================================================
+
+    void UpdateSlotState(RE::StaticFunctionTag*, int slot, RE::Actor* agent, int newState,
+                         RE::BSFixedString taskType, RE::BSFixedString targetName) {
+        SlotTracker::GetSingleton()->UpdateSlot(slot, agent, newState,
+            taskType.c_str(), targetName.c_str());
+    }
+
+    void ClearSlotState(RE::StaticFunctionTag*, int slot) {
+        SlotTracker::GetSingleton()->ClearSlot(slot);
+    }
+
+    bool IsActorAvailable(RE::StaticFunctionTag*, RE::Actor* akActor) {
+        if (!akActor) return false;
+
+        auto* tracker = SlotTracker::GetSingleton();
+        bool hasTask = tracker->HasActiveTask(akActor);
+        bool onCooldown = tracker->IsOnCooldown(akActor);
+        bool available = !hasTask && !onCooldown;
+
+        logger::info("IsActorAvailable({}): hasTask={}, onCooldown={}, available={}",
+                    akActor->GetDisplayFullName(), hasTask, onCooldown, available);
+
+        return available;
     }
 
     // ==========================================================================

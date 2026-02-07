@@ -22,11 +22,21 @@
 
 namespace IntelEngine {
 
+    // Identifies who "home" refers to when a HOME intent is detected.
+    enum class HomeOwner {
+        NONE,       // not a home intent
+        NPC,        // "my home" / "home" — the traveling NPC's own home
+        PLAYER,     // "your home" / "your place" — the player's home
+        NAMED       // "Alvor's home" — a third-party NPC (name in homeOwnerHint)
+    };
+
     struct SemanticIntent {
-        enum Type { NONE, UPSTAIRS, DOWNSTAIRS, OUTSIDE, INSIDE, BACK, CELLAR, BEDROOM, KITCHEN };
+        enum Type { NONE, UPSTAIRS, DOWNSTAIRS, OUTSIDE, INSIDE, BACK, CELLAR, BEDROOM, KITCHEN, HOME };
         Type type = NONE;
         std::string locationContext;  // extracted from compound phrases (e.g., "Helgen" from "out of Helgen")
         bool preferBeds = false;      // true when destination mentions bedroom/bed alongside a direction
+        HomeOwner homeOwner = HomeOwner::NONE;  // who "home" belongs to
+        std::string homeOwnerHint;              // NPC name for HomeOwner::NAMED (e.g., "Alvor")
     };
 
     class LocationResolver {
@@ -161,6 +171,34 @@ namespace IntelEngine {
         RE::TESObjectREFR* FindNearestWaypointToward(
             RE::Actor* actor, RE::TESObjectREFR* destination, float maxRadius);
 
+        // ==========================================================================
+        // Home Door Access (anti-trespass + pathfinding)
+        // ==========================================================================
+
+        /**
+         * Unlock/lock an NPC's home front door and set cell public/private.
+         * Call with unlock=true before travel, unlock=false on task completion.
+         * Uses the NPC home index to find the home cell, then finds the exterior door.
+         *
+         * @param npc The NPC whose home to access (looks up via ActorBase)
+         * @param unlock true=unlock+public, false=lock+private
+         * @return Door ref if found, nullptr if NPC has no indexed home or no exterior door
+         */
+        RE::TESObjectREFR* SetHomeDoorAccess(RE::Actor* npc, bool unlock);
+
+        /**
+         * Same as SetHomeDoorAccess but takes a cell FormID directly.
+         * Used when the home cell ID was stored by Papyrus (e.g., for re-locking on task completion).
+         */
+        RE::TESObjectREFR* SetHomeDoorAccessForCell(RE::FormID cellFormId, bool unlock);
+
+        /**
+         * Get the home cell FormID from the last successful home resolution.
+         * Returns 0 if the last ResolveAnyDestination was not a home destination.
+         * Used by Papyrus to store the cell ID for later re-locking.
+         */
+        RE::FormID GetLastResolvedHomeCellId() const { return m_lastResolvedHomeCellId; }
+
     private:
         LocationResolver() = default;
         ~LocationResolver() = default;
@@ -176,6 +214,19 @@ namespace IntelEngine {
         RE::TESObjectREFR* ResolveCellar(RE::Actor* actor);
         RE::TESObjectREFR* ResolveBedroom(RE::Actor* actor);
         RE::TESObjectREFR* ResolveKitchen(RE::Actor* actor);
+
+        // Home resolution
+        RE::TESObjectREFR* ResolveHome(RE::Actor* actor, const SemanticIntent& intent);
+        RE::TESObjectREFR* ResolveNPCHome(RE::TESNPC* actorBase);
+        RE::TESObjectREFR* ResolvePlayerHome();
+
+        // Home index: build bed-ownership map at startup
+        void BuildHomeIndex();
+        RE::TESObjectREFR* GetLocationTravelTarget(RE::TESObjectCELL* homeCell);
+
+        // Find the exterior-linked door in a cell (front door).
+        // Extracted from GetLocationTravelTarget for reuse by SetHomeDoorAccess.
+        RE::TESObjectREFR* FindExteriorDoorInCell(RE::TESObjectCELL* cell);
 
         // Helper: Find door in a cell that leads to target
         RE::TESObjectREFR* FindDoorInCellTo(RE::TESObjectCELL* sourceCell, RE::TESObjectCELL* targetCell);
@@ -217,8 +268,24 @@ namespace IntelEngine {
             "kitchen", "the kitchen",
             "the bar", "counter", "bar counter",
             "near the fire", "fireplace", "hearth",
-            "stairs", "stairwell", "staircase"
+            "stairs", "stairwell", "staircase",
+            "home", "my home", "my house", "my place",
+            "your home", "your house", "your place"
         };
+
+        // NPC home index: ActorBase FormID -> home cell FormID
+        // Built at startup from bed ownership (actor + faction).
+        struct HomeInfo {
+            RE::FormID cellFormId = 0;   // interior cell containing the owned bed
+            RE::FormID bedFormId = 0;    // the bed reference itself
+        };
+        std::unordered_map<RE::FormID, HomeInfo> m_npcHomeIndex;
+
+        // LocTypePlayerHouse keyword (cached at index build time)
+        RE::BGSKeyword* m_locTypePlayerHouse = nullptr;
+
+        // Last home cell resolved by ResolveAnyDestination (for Papyrus to query)
+        RE::FormID m_lastResolvedHomeCellId = 0;
 
         bool m_indexBuilt = false;
     };

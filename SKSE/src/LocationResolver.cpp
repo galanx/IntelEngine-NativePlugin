@@ -7,6 +7,7 @@
 
 #include "LocationResolver.h"
 #include "CellAnalyzer.h"
+#include "NPCIndex.h"
 #include "StringUtils.h"
 #include "ProcessUtils.h"
 #include "Settings.h"
@@ -95,9 +96,20 @@ namespace IntelEngine {
             }
         }
 
+        // Cache LocTypePlayerHouse keyword for player home resolution
+        m_locTypePlayerHouse = RE::TESForm::LookupByEditorID<RE::BGSKeyword>("LocTypePlayerHouse");
+        if (m_locTypePlayerHouse) {
+            logger::info("Cached LocTypePlayerHouse keyword (FormID {:08X})", m_locTypePlayerHouse->GetFormID());
+        } else {
+            logger::warn("LocTypePlayerHouse keyword not found — player home resolution will be unavailable");
+        }
+
+        // Build NPC home index from bed ownership data
+        BuildHomeIndex();
+
         m_indexBuilt = true;
-        logger::info("Location index built: {} cells, {} locations",
-                     m_allCellNames.size(), m_allLocationNames.size());
+        logger::info("Location index built: {} cells, {} locations, {} NPC homes",
+                     m_allCellNames.size(), m_allLocationNames.size(), m_npcHomeIndex.size());
     }
 
     RE::TESObjectCELL* LocationResolver::ResolveCell(const std::string& locationName) {
@@ -625,6 +637,7 @@ namespace IntelEngine {
 
         // Pass 3: Multi-hop — check if any door leads to a cell that HAS an exterior door
         // (e.g., "The Resting Pilgrim Upstairs" → "The Resting Pilgrim" → Skyrim exterior)
+        // Uses FindExteriorDoorInCell to avoid duplicating the door-scanning loop.
         for (auto* door : doors) {
             auto* destDoor = analyzer->GetDoorDestination(door);
             if (!destDoor) continue;
@@ -632,34 +645,7 @@ namespace IntelEngine {
             auto* destCell = destDoor->GetParentCell();
             if (!destCell) continue;
 
-            // Scan destination cell for exterior doors
-            bool destHasExterior = false;
-            destCell->ForEachReference([&](RE::TESObjectREFR& ref) -> RE::BSContainer::ForEachResult {
-                auto* baseObj = ref.GetBaseObject();
-                if (!baseObj || !baseObj->Is(RE::FormType::Door) || ref.IsDisabled()) {
-                    return RE::BSContainer::ForEachResult::kContinue;
-                }
-
-                auto* refTeleport = ref.extraList.GetByType<RE::ExtraTeleport>();
-                if (!refTeleport || !refTeleport->teleportData) {
-                    return RE::BSContainer::ForEachResult::kContinue;
-                }
-
-                auto linkedDoor = refTeleport->teleportData->linkedDoor.get();
-                if (!linkedDoor) {
-                    return RE::BSContainer::ForEachResult::kContinue;
-                }
-
-                auto* linkedCell = linkedDoor->GetParentCell();
-                if (linkedCell && !linkedCell->IsInteriorCell()) {
-                    destHasExterior = true;
-                    return RE::BSContainer::ForEachResult::kStop;
-                }
-
-                return RE::BSContainer::ForEachResult::kContinue;
-            });
-
-            if (destHasExterior) {
+            if (FindExteriorDoorInCell(destCell)) {
                 // Return the interior-side door so NPC can pathfind to it.
                 // Papyrus handles teleporting through doors and multi-hop to exterior.
                 logger::debug("ResolveOutside: Multi-hop via '{}' (destination cell has exterior door)",
@@ -751,40 +737,10 @@ namespace IntelEngine {
     }
 
     RE::TESObjectREFR* LocationResolver::ResolveCellar(RE::Actor* actor) {
-        auto* analyzer = CellAnalyzer::GetSingleton();
-        auto doors = analyzer->GetDoors(actor);
-
-        logger::debug("ResolveCellar: Scanning {} doors", doors.size());
-
-        // Pass 1: Door name match (strongest signal — "Honeyside Cellar")
-        for (auto* door : doors) {
-            if (analyzer->IsDoorNameDownward(door)) {
-                logger::debug("ResolveCellar: Door name match -> '{}'",
-                             analyzer->GetDoorDestinationName(door).c_str());
-                return door;
-            }
-        }
-
-        // Pass 2: Furniture on lower floor (same-cell fallback)
-        auto furniture = analyzer->FindFurnitureBelow(actor);
-        if (!furniture.empty()) {
-            auto* first = furniture[0];
-            auto* name = first->GetBaseObject() ? first->GetBaseObject()->GetName() : "furniture";
-            logger::debug("ResolveCellar: Furniture below -> '{}'", name ? name : "unnamed");
-            return first;
-        }
-
-        // Pass 3: Door Z-coordinate (door going down — last resort)
-        for (auto* door : doors) {
-            if (analyzer->IsDoorDownward(door)) {
-                logger::debug("ResolveCellar: Door Z match -> '{}'",
-                             analyzer->GetDoorDestinationName(door).c_str());
-                return door;
-            }
-        }
-
-        logger::debug("ResolveCellar: No matching target found");
-        return nullptr;
+        // Cellar is a subset of downstairs — same passes (door name, furniture below,
+        // door Z) without preferBeds. Delegate to avoid duplicating 3 passes.
+        logger::debug("ResolveCellar: Delegating to ResolveDownstairs");
+        return ResolveDownstairs(actor, false);
     }
 
     RE::TESObjectREFR* LocationResolver::ResolveBedroom(RE::Actor* actor) {
@@ -857,6 +813,298 @@ namespace IntelEngine {
     }
 
     // =========================================================================
+    // NPC Home Index
+    // =========================================================================
+
+    void LocationResolver::BuildHomeIndex() {
+        m_npcHomeIndex.clear();
+
+        auto* dataHandler = RE::TESDataHandler::GetSingleton();
+        auto* analyzer = CellAnalyzer::GetSingleton();
+        if (!dataHandler || !analyzer) return;
+
+        logger::info("Building NPC home index from bed ownership...");
+
+        std::uint32_t bedsScanned = 0;
+        std::uint32_t actorOwned = 0;
+        std::uint32_t factionOwned = 0;
+
+        for (auto* cell : dataHandler->interiorCells) {
+            if (!cell) continue;
+
+            cell->ForEachReference([&](RE::TESObjectREFR& ref) -> RE::BSContainer::ForEachResult {
+                if (ref.IsDisabled()) return RE::BSContainer::ForEachResult::kContinue;
+                if (!analyzer->IsBedFurniture(&ref)) return RE::BSContainer::ForEachResult::kContinue;
+
+                bedsScanned++;
+                auto bedFormId = ref.GetFormID();
+                auto cellFormId = cell->GetFormID();
+
+                // Check direct actor ownership (e.g., a bed owned by Alvor specifically)
+                auto* ownerBase = ref.GetActorOwner();
+                if (ownerBase) {
+                    auto ownerFormId = ownerBase->GetFormID();
+                    // Only set if not already mapped (first bed wins — primary sleeping bed)
+                    if (m_npcHomeIndex.find(ownerFormId) == m_npcHomeIndex.end()) {
+                        m_npcHomeIndex[ownerFormId] = {cellFormId, bedFormId};
+                        actorOwned++;
+                    }
+                    return RE::BSContainer::ForEachResult::kContinue;
+                }
+
+                // Check faction ownership (shared homes — Alvor + Sigrid via faction)
+                auto* factionOwner = ref.GetFactionOwner();
+                if (factionOwner) {
+                    // Map all unique NPC members of this faction to this cell
+                    for (auto* npcForm : dataHandler->GetFormArray<RE::TESNPC>()) {
+                        if (!npcForm || !npcForm->IsUnique()) continue;
+                        if (!npcForm->IsInFaction(factionOwner)) continue;
+
+                        auto npcFormId = npcForm->GetFormID();
+                        if (m_npcHomeIndex.find(npcFormId) == m_npcHomeIndex.end()) {
+                            m_npcHomeIndex[npcFormId] = {cellFormId, bedFormId};
+                            factionOwned++;
+                        }
+                    }
+                }
+
+                return RE::BSContainer::ForEachResult::kContinue;
+            });
+        }
+
+        logger::info("NPC home index built: {} beds scanned, {} actor-owned, {} faction-mapped, {} total NPCs with homes",
+                     bedsScanned, actorOwned, factionOwned, m_npcHomeIndex.size());
+    }
+
+    RE::TESObjectREFR* LocationResolver::FindExteriorDoorInCell(RE::TESObjectCELL* cell) {
+        if (!cell) return nullptr;
+
+        RE::TESObjectREFR* exteriorDoor = nullptr;
+        cell->ForEachReference([&](RE::TESObjectREFR& ref) -> RE::BSContainer::ForEachResult {
+            auto* baseObj = ref.GetBaseObject();
+            if (!baseObj || !baseObj->Is(RE::FormType::Door) || ref.IsDisabled())
+                return RE::BSContainer::ForEachResult::kContinue;
+
+            auto* teleport = ref.extraList.GetByType<RE::ExtraTeleport>();
+            if (!teleport || !teleport->teleportData)
+                return RE::BSContainer::ForEachResult::kContinue;
+
+            auto linkedDoor = teleport->teleportData->linkedDoor.get();
+            if (!linkedDoor)
+                return RE::BSContainer::ForEachResult::kContinue;
+
+            auto* destCell = linkedDoor->GetParentCell();
+            if (destCell && !destCell->IsInteriorCell()) {
+                exteriorDoor = &ref;  // Return the INTERIOR-side door
+                return RE::BSContainer::ForEachResult::kStop;
+            }
+
+            return RE::BSContainer::ForEachResult::kContinue;
+        });
+
+        return exteriorDoor;
+    }
+
+    RE::TESObjectREFR* LocationResolver::GetLocationTravelTarget(RE::TESObjectCELL* homeCell) {
+        if (!homeCell) return nullptr;
+
+        // Prefer BGSLocation worldLocMarker — gives an exterior marker at the front door
+        // that Skyrim's AI can always pathfind to.
+        auto* location = homeCell->GetLocation();
+        if (location) {
+            // Try this location's marker
+            auto markerPtr = location->worldLocMarker.get();
+            if (markerPtr) {
+                auto* marker = markerPtr.get();
+                if (marker) return marker;
+            }
+
+            // Try parent location's marker (e.g., house → settlement)
+            if (location->parentLoc) {
+                auto parentPtr = location->parentLoc->worldLocMarker.get();
+                if (parentPtr) {
+                    auto* parentMarker = parentPtr.get();
+                    if (parentMarker) return parentMarker;
+                }
+            }
+        }
+
+        // Fallback: find a door in the home cell that leads to an exterior
+        // and return the exterior-side linked door as a travel target
+        auto* interiorDoor = FindExteriorDoorInCell(homeCell);
+        if (interiorDoor) {
+            auto* teleport = interiorDoor->extraList.GetByType<RE::ExtraTeleport>();
+            if (teleport && teleport->teleportData) {
+                auto linkedDoor = teleport->teleportData->linkedDoor.get();
+                if (linkedDoor) return linkedDoor.get();
+            }
+        }
+
+        return nullptr;
+    }
+
+    // =========================================================================
+    // Home Resolution
+    // =========================================================================
+
+    RE::TESObjectREFR* LocationResolver::ResolveNPCHome(RE::TESNPC* actorBase) {
+        if (!actorBase) return nullptr;
+
+        auto it = m_npcHomeIndex.find(actorBase->GetFormID());
+        if (it == m_npcHomeIndex.end()) {
+            logger::debug("ResolveNPCHome: No home indexed for '{}'",
+                         actorBase->GetFullName() ? actorBase->GetFullName() : "unknown");
+            return nullptr;
+        }
+
+        auto* homeCell = RE::TESForm::LookupByID<RE::TESObjectCELL>(it->second.cellFormId);
+        if (!homeCell) {
+            logger::warn("ResolveNPCHome: Home cell {:08X} not found for '{}'",
+                        it->second.cellFormId,
+                        actorBase->GetFullName() ? actorBase->GetFullName() : "unknown");
+            return nullptr;
+        }
+
+        auto cellName = homeCell->GetName();
+        logger::info("ResolveNPCHome: '{}' -> cell '{}' ({:08X})",
+                    actorBase->GetFullName() ? actorBase->GetFullName() : "unknown",
+                    cellName ? cellName : "unnamed", it->second.cellFormId);
+
+        return GetLocationTravelTarget(homeCell);
+    }
+
+    RE::TESObjectREFR* LocationResolver::ResolvePlayerHome() {
+        if (!m_locTypePlayerHouse) {
+            logger::debug("ResolvePlayerHome: LocTypePlayerHouse keyword not cached");
+            return nullptr;
+        }
+
+        auto* player = RE::PlayerCharacter::GetSingleton();
+        auto* dataHandler = RE::TESDataHandler::GetSingleton();
+        if (!player || !dataHandler) return nullptr;
+
+        auto playerPos = player->GetPosition();
+        RE::TESObjectREFR* nearestMarker = nullptr;
+        float nearestDistSq = FLT_MAX;
+
+        for (auto* loc : dataHandler->GetFormArray<RE::BGSLocation>()) {
+            if (!loc || !loc->HasKeyword(m_locTypePlayerHouse)) continue;
+
+            auto markerPtr = loc->worldLocMarker.get();
+            if (!markerPtr) continue;
+            auto* marker = markerPtr.get();
+            if (!marker) continue;
+
+            // Skip interior-only markers
+            auto* parentCell = marker->GetParentCell();
+            if (parentCell && parentCell->IsInteriorCell()) continue;
+
+            float dx = marker->GetPosition().x - playerPos.x;
+            float dy = marker->GetPosition().y - playerPos.y;
+            float distSq = dx * dx + dy * dy;
+
+            if (distSq < nearestDistSq) {
+                nearestDistSq = distSq;
+                nearestMarker = marker;
+
+                // If player is very close (within city), this is almost certainly the right one
+                if (distSq < 10000.0f * 10000.0f) break;
+            }
+        }
+
+        if (nearestMarker) {
+            auto pos = nearestMarker->GetPosition();
+            logger::info("ResolvePlayerHome: nearest player home at ({:.0f}, {:.0f}, {:.0f}), dist={:.0f}",
+                        pos.x, pos.y, pos.z, std::sqrt(nearestDistSq));
+        } else {
+            logger::debug("ResolvePlayerHome: no player homes found with LocTypePlayerHouse keyword");
+        }
+
+        return nearestMarker;
+    }
+
+    RE::TESObjectREFR* LocationResolver::ResolveHome(RE::Actor* actor, const SemanticIntent& intent) {
+        if (!actor) return nullptr;
+
+        // Helper: store home cell ID for anti-trespass door unlock
+        auto storeHomeCellId = [this](RE::TESNPC* actorBase) {
+            if (!actorBase) return;
+            auto it = m_npcHomeIndex.find(actorBase->GetFormID());
+            if (it != m_npcHomeIndex.end()) {
+                m_lastResolvedHomeCellId = it->second.cellFormId;
+                logger::debug("ResolveHome: stored home cell {:08X} for anti-trespass",
+                             m_lastResolvedHomeCellId);
+            }
+        };
+
+        switch (intent.homeOwner) {
+            case HomeOwner::NPC: {
+                logger::debug("ResolveHome: NPC's own home");
+                storeHomeCellId(actor->GetActorBase());
+                auto* result = ResolveNPCHome(actor->GetActorBase());
+                if (!result) {
+                    // Fallback: use editor location
+                    auto* editorLoc = actor->GetEditorLocation();
+                    if (editorLoc) {
+                        logger::debug("ResolveHome: falling back to editor location '{}'",
+                                     editorLoc->GetFullName() ? editorLoc->GetFullName() : "unnamed");
+                        return FindTravelTarget(editorLoc->GetFullName() ? editorLoc->GetFullName() : "");
+                    }
+                }
+                return result;
+            }
+
+            case HomeOwner::PLAYER: {
+                logger::debug("ResolveHome: player's home");
+                // Player homes use LocTypePlayerHouse keyword — no cell ID to store
+                return ResolvePlayerHome();
+            }
+
+            case HomeOwner::NAMED: {
+                logger::debug("ResolveHome: named NPC's home -> '{}'", intent.homeOwnerHint);
+
+                // Check if the name matches the player character.
+                // The action LLM uses the player's name (e.g., "Dragonborn's home")
+                // since template variables aren't available in dynamic params.
+                auto* player = RE::PlayerCharacter::GetSingleton();
+                if (player) {
+                    auto playerName = player->GetDisplayFullName();
+                    if (playerName && strlen(playerName) > 0) {
+                        std::string lowerPlayer = StringUtils::ToLowerStd(playerName);
+                        if (lowerPlayer == intent.homeOwnerHint) {
+                            logger::debug("ResolveHome: '{}' is the player — routing to player home",
+                                         intent.homeOwnerHint);
+                            return ResolvePlayerHome();
+                        }
+                    }
+                }
+
+                // Not the player — look up the NPC
+                auto* npcIndex = NPCIndex::GetSingleton();
+                auto* targetActor = npcIndex->FindByNameNear(intent.homeOwnerHint, actor);
+                if (targetActor) {
+                    storeHomeCellId(targetActor->GetActorBase());
+                    auto* result = ResolveNPCHome(targetActor->GetActorBase());
+                    if (result) return result;
+
+                    // Fallback: editor location of the named NPC
+                    auto* editorLoc = targetActor->GetEditorLocation();
+                    if (editorLoc) {
+                        logger::debug("ResolveHome: falling back to '{}' editor location",
+                                     intent.homeOwnerHint);
+                        return FindTravelTarget(editorLoc->GetFullName() ? editorLoc->GetFullName() : "");
+                    }
+                }
+                logger::debug("ResolveHome: NPC '{}' not found", intent.homeOwnerHint);
+                return nullptr;
+            }
+
+            default:
+                return nullptr;
+        }
+    }
+
+    // =========================================================================
     // Unified Destination Resolution
     // =========================================================================
 
@@ -896,6 +1144,60 @@ namespace IntelEngine {
         // === Kitchen terms (exact) ===
         if (lower == "kitchen" || lower == "the kitchen")
             return {SemanticIntent::KITCHEN, "", false};
+
+        // === Home terms (exact) — NPC's own home ===
+        if (lower == "home" || lower == "my home" || lower == "my house" || lower == "my place" ||
+            lower == "go home" || lower == "head home" || lower == "back home")
+            return {SemanticIntent::HOME, "", false, HomeOwner::NPC, ""};
+
+        // === Home terms (exact) — player's home ===
+        if (lower == "your home" || lower == "your house" || lower == "your place" ||
+            lower == "the player's home" || lower == "player's home")
+            return {SemanticIntent::HOME, "", false, HomeOwner::PLAYER, ""};
+
+        // === Possessive and bare-name home patterns ===
+        // Matches: "Alvor's home", "Camilla Valerius's house", "Camilla Valerius home"
+        {
+            std::vector<std::string> homeSuffixes = {
+                "'s home", "'s house", "'s place",   // possessive: "Alvor's home"
+                " home", " house", " place"          // bare: "Camilla Valerius home"
+            };
+
+            // Words that precede "home" but are NOT names — prevents
+            // "go home", "back home", "head home" from being misdetected.
+            std::unordered_set<std::string> nonNameWords = {
+                "go", "my", "your", "head", "back", "the", "get",
+                "at", "to", "a", "our", "their", "its", "this"
+            };
+
+            for (const auto& suffix : homeSuffixes) {
+                auto pos = lower.find(suffix);
+                if (pos == std::string::npos || pos == 0) continue;
+
+                std::string ownerName = lower.substr(0, pos);
+
+                // Strip leading travel prefixes
+                std::vector<std::string> travelPrefixes = {"go to ", "head to ", "travel to ", "get to "};
+                for (const auto& tp : travelPrefixes) {
+                    if (ownerName.length() > tp.length() && ownerName.substr(0, tp.length()) == tp) {
+                        ownerName = ownerName.substr(tp.length());
+                        break;
+                    }
+                }
+                ownerName = StringUtils::TrimStd(ownerName);
+                if (ownerName.empty()) continue;
+
+                // For bare suffixes (no apostrophe), reject single non-name words
+                // to avoid "go home" → NAMED("go") or "my home" → NAMED("my").
+                // Multi-word names like "camilla valerius" are always accepted.
+                bool isBare = (suffix.front() == ' ');
+                if (isBare && ownerName.find(' ') == std::string::npos) {
+                    if (nonNameWords.count(ownerName)) continue;
+                }
+
+                return {SemanticIntent::HOME, "", false, HomeOwner::NAMED, ownerName};
+            }
+        }
 
         // === Compound phrase patterns ===
 
@@ -941,6 +1243,20 @@ namespace IntelEngine {
         if (lower.find("kitchen") != std::string::npos)
             return {SemanticIntent::KITCHEN, "", false};
 
+        // === Home embedded — catch phrases like "go to my home", "head to your place" ===
+        if (lower.find("my home") != std::string::npos || lower.find("my house") != std::string::npos ||
+            lower.find("my place") != std::string::npos)
+            return {SemanticIntent::HOME, "", false, HomeOwner::NPC, ""};
+        if (lower.find("your home") != std::string::npos || lower.find("your house") != std::string::npos ||
+            lower.find("your place") != std::string::npos)
+            return {SemanticIntent::HOME, "", false, HomeOwner::PLAYER, ""};
+        // Bare "home" as embedded keyword (e.g., "head home now") — NPC's own home
+        // Check last to avoid false positives (e.g., "Honeyside" contains no "home")
+        if (lower.find("home") != std::string::npos &&
+            lower.find("homebrew") == std::string::npos &&
+            lower.find("honning") == std::string::npos)
+            return {SemanticIntent::HOME, "", false, HomeOwner::NPC, ""};
+
         return {SemanticIntent::NONE, "", false};
     }
 
@@ -954,6 +1270,7 @@ namespace IntelEngine {
             case SemanticIntent::CELLAR:     return ResolveCellar(actor);
             case SemanticIntent::BEDROOM:    return ResolveBedroom(actor);
             case SemanticIntent::KITCHEN:    return ResolveKitchen(actor);
+            case SemanticIntent::HOME:       return ResolveHome(actor, intent);
             default: return nullptr;
         }
     }
@@ -997,14 +1314,30 @@ namespace IntelEngine {
     RE::TESObjectREFR* LocationResolver::ResolveAnyDestination(RE::Actor* actor, const std::string& destination) {
         if (!actor || destination.empty()) return nullptr;
 
+        // Reset home cell tracking — only set if this destination resolves to a home
+        m_lastResolvedHomeCellId = 0;
+
         logger::debug("ResolveAnyDestination: '{}' for '{}'", destination, actor->GetDisplayFullName());
 
         // Phase 1: Detect semantic intent
         auto intent = DetectSemanticIntent(destination);
 
         if (intent.type != SemanticIntent::NONE) {
-            logger::debug("  Semantic intent: type={}, context='{}', preferBeds={}",
-                         static_cast<int>(intent.type), intent.locationContext, intent.preferBeds);
+            logger::debug("  Semantic intent: type={}, context='{}', preferBeds={}, homeOwner={}",
+                         static_cast<int>(intent.type), intent.locationContext, intent.preferBeds,
+                         static_cast<int>(intent.homeOwner));
+
+            // Phase 2-HOME: Home resolution uses the home index, not door scanning.
+            // Resolve immediately and return — no fallthrough to fuzzy search.
+            if (intent.type == SemanticIntent::HOME) {
+                auto* homeResult = ResolveHome(actor, intent);
+                if (homeResult) {
+                    logger::debug("  Resolved via home index");
+                    return homeResult;
+                }
+                logger::debug("  Home resolution failed — no home found");
+                return nullptr;
+            }
 
             // Phase 2a: Parent BGSLocation (outside only — preferred)
             // "Outside" resolves to the parent city/town name (e.g., "Whiterun" for Bannered Mare)
@@ -1039,6 +1372,33 @@ namespace IntelEngine {
             }
 
             logger::debug("  Semantic resolution exhausted");
+        }
+
+        // Phase 2.5: NPC name as destination → resolve to their home
+        // Catches "Camilla", "Camilla Valerius", "Alvor" used as a bare destination.
+        // Only when semantic intent was NONE (not already handled as home).
+        if (intent.type == SemanticIntent::NONE) {
+            auto* npcIndex = NPCIndex::GetSingleton();
+            auto* targetActor = npcIndex->FindByNameNear(destination, actor);
+            if (targetActor) {
+                auto* targetBase = targetActor->GetActorBase();
+                if (targetBase) {
+                    auto it = m_npcHomeIndex.find(targetBase->GetFormID());
+                    if (it != m_npcHomeIndex.end()) {
+                        m_lastResolvedHomeCellId = it->second.cellFormId;
+                        logger::debug("  NPC name '{}' → home cell {:08X}", destination,
+                                     m_lastResolvedHomeCellId);
+                        auto* homeResult = ResolveNPCHome(targetBase);
+                        if (homeResult) {
+                            logger::debug("  Resolved NPC name as home destination");
+                            return homeResult;
+                        }
+                    }
+                    // NPC found but no home — fall through to named location
+                    // (destination might coincidentally be a location name too)
+                    logger::debug("  NPC '{}' found but no home indexed, falling through", destination);
+                }
+            }
         }
 
         // Phase 3: Named location resolution
@@ -1165,6 +1525,7 @@ namespace IntelEngine {
         stats["cellCount"] = m_allCellNames.size();
         stats["locationCount"] = m_allLocationNames.size();
         stats["semanticTermCount"] = m_semanticTerms.size();
+        stats["npcHomesIndexed"] = m_npcHomeIndex.size();
         stats["indexBuilt"] = m_indexBuilt;
 
         return RE::BSFixedString(stats.dump());
@@ -1232,6 +1593,110 @@ namespace IntelEngine {
         }
 
         return bestMarker;
+    }
+
+    // =========================================================================
+    // Home Door Access (anti-trespass + pathfinding)
+    // =========================================================================
+
+    RE::TESObjectREFR* LocationResolver::SetHomeDoorAccess(RE::Actor* npc, bool unlock) {
+        if (!npc) return nullptr;
+
+        auto* actorBase = npc->GetActorBase();
+        if (!actorBase) return nullptr;
+
+        auto it = m_npcHomeIndex.find(actorBase->GetFormID());
+        if (it == m_npcHomeIndex.end()) {
+            logger::debug("SetHomeDoorAccess: No home indexed for '{}'",
+                         actorBase->GetFullName() ? actorBase->GetFullName() : "unknown");
+            return nullptr;
+        }
+
+        // Store the cell ID so Papyrus can query it via GetLastResolvedHomeCellId()
+        m_lastResolvedHomeCellId = it->second.cellFormId;
+
+        return SetHomeDoorAccessForCell(it->second.cellFormId, unlock);
+    }
+
+    RE::TESObjectREFR* LocationResolver::SetHomeDoorAccessForCell(RE::FormID cellFormId, bool unlock) {
+        if (cellFormId == 0) return nullptr;
+
+        auto* homeCell = RE::TESForm::LookupByID<RE::TESObjectCELL>(cellFormId);
+        if (!homeCell) {
+            logger::warn("SetHomeDoorAccessForCell: Cell {:08X} not found", cellFormId);
+            return nullptr;
+        }
+
+        auto cellName = homeCell->GetName();
+        auto* interiorDoor = FindExteriorDoorInCell(homeCell);
+
+        if (!interiorDoor) {
+            logger::debug("SetHomeDoorAccessForCell: No exterior door in cell '{}' ({:08X})",
+                         cellName ? cellName : "unnamed", cellFormId);
+            return nullptr;
+        }
+
+        if (unlock) {
+            // Unlock door for pathfinding
+            if (interiorDoor->IsLocked()) {
+                auto* lock = interiorDoor->GetLock();
+                if (lock) {
+                    lock->SetLocked(false);
+                    logger::info("SetHomeDoorAccess: Unlocked door in '{}'", cellName ? cellName : "unnamed");
+                }
+            }
+
+            // Also unlock the exterior-side linked door (NPCs approach from outside)
+            auto* teleport = interiorDoor->extraList.GetByType<RE::ExtraTeleport>();
+            if (teleport && teleport->teleportData) {
+                auto linkedDoor = teleport->teleportData->linkedDoor.get();
+                if (linkedDoor) {
+                    auto* extDoor = linkedDoor.get();
+                    if (extDoor && extDoor->IsLocked()) {
+                        auto* extLock = extDoor->GetLock();
+                        if (extLock) {
+                            extLock->SetLocked(false);
+                            logger::info("SetHomeDoorAccess: Unlocked exterior door");
+                        }
+                    }
+                }
+            }
+
+            // Make cell public (no trespass)
+            homeCell->SetPublic(true);
+            logger::info("SetHomeDoorAccess: Set cell '{}' ({:08X}) PUBLIC for anti-trespass",
+                        cellName ? cellName : "unnamed", cellFormId);
+        } else {
+            // Re-lock door
+            auto* lock = interiorDoor->GetLock();
+            if (lock) {
+                lock->SetLocked(true);
+                logger::info("SetHomeDoorAccess: Re-locked door in '{}'", cellName ? cellName : "unnamed");
+            }
+
+            // Also re-lock the exterior-side linked door
+            auto* teleport = interiorDoor->extraList.GetByType<RE::ExtraTeleport>();
+            if (teleport && teleport->teleportData) {
+                auto linkedDoor = teleport->teleportData->linkedDoor.get();
+                if (linkedDoor) {
+                    auto* extDoor = linkedDoor.get();
+                    if (extDoor) {
+                        auto* extLock = extDoor->GetLock();
+                        if (extLock) {
+                            extLock->SetLocked(true);
+                            logger::info("SetHomeDoorAccess: Re-locked exterior door");
+                        }
+                    }
+                }
+            }
+
+            // Make cell private (restore trespass)
+            homeCell->SetPublic(false);
+            logger::info("SetHomeDoorAccess: Set cell '{}' ({:08X}) PRIVATE (restored)",
+                        cellName ? cellName : "unnamed", cellFormId);
+        }
+
+        return interiorDoor;
     }
 
 }  // namespace IntelEngine

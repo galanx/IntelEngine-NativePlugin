@@ -23,6 +23,8 @@ namespace IntelEngine::Papyrus {
 
     RE::Actor* FindNPCByName(RE::StaticFunctionTag*, RE::BSFixedString searchTerm);
 
+    RE::Actor* FindNPCByNameNear(RE::StaticFunctionTag*, RE::BSFixedString searchTerm, RE::Actor* nearActor);
+
     RE::BSFixedString GetNPCCurrentLocation(RE::StaticFunctionTag*, RE::Actor* akNPC);
 
     bool IsNPCAccessible(RE::StaticFunctionTag*, RE::Actor* akNPC);
@@ -179,6 +181,36 @@ namespace IntelEngine::Papyrus {
 
     RE::TESObjectREFR* FindNearestWaypointToward(RE::StaticFunctionTag*,
         RE::Actor* actor, RE::TESObjectREFR* destination, float maxRadius);
+
+    // ==========================================================================
+    // Home Door Access Functions (anti-trespass)
+    // ==========================================================================
+
+    // Unlock/lock NPC's home door + set cell public/private. Returns door ref.
+    RE::TESObjectREFR* SetHomeDoorAccess(RE::StaticFunctionTag*, RE::Actor* akNPC, bool unlock);
+
+    // Same for a specific cell (target NPC's home in fetch/deliver tasks).
+    RE::TESObjectREFR* SetHomeDoorAccessForCell(RE::StaticFunctionTag*, int cellFormId, bool unlock);
+
+    // Get the home cell ID that was resolved in the last ResolveAnyDestination call.
+    int GetLastResolvedHomeCellId(RE::StaticFunctionTag*);
+
+    // ==========================================================================
+    // Slot Tracker Functions (C++ state mirror for SkyrimNet decorators)
+    // ==========================================================================
+
+    // Push slot state from Papyrus to C++ SlotTracker.
+    // Called by Core.AllocateSlot, Core.SetSlotState.
+    void UpdateSlotState(RE::StaticFunctionTag*, int slot, RE::Actor* agent, int newState,
+                         RE::BSFixedString taskType, RE::BSFixedString targetName);
+
+    // Clear a slot in C++ SlotTracker.
+    // Called by Core.ClearSlot.
+    void ClearSlotState(RE::StaticFunctionTag*, int slot);
+
+    // Check if actor is available for new tasks (no active task + no cooldown).
+    // Used as SkyrimNet tag via Papyrus wrapper.
+    bool IsActorAvailable(RE::StaticFunctionTag*, RE::Actor* akActor);
 
     // ==========================================================================
     // Debug Functions
