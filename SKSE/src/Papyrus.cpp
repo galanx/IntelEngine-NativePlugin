@@ -598,10 +598,16 @@ namespace IntelEngine::Papyrus {
         if (input.empty()) return -1.0f;
 
         // Helper: compute relative hour offset from current time, wrapped at 24
+        // Uses GetCurrentGameTime() to be timescale-aware (compatible with DTS mods)
         auto relativeHour = [](float offset) -> float {
             auto* cal = RE::Calendar::GetSingleton();
             if (!cal) return -1.0f;
-            float target = cal->GetHour() + offset;
+
+            // Derive current hour from timescale-aware GetCurrentGameTime()
+            float currentGameTime = cal->GetCurrentGameTime();
+            float currentHour = (currentGameTime - std::floor(currentGameTime)) * 24.0f;
+
+            float target = currentHour + offset;
             while (target >= 24.0f) target -= 24.0f;
             return target;
         };
