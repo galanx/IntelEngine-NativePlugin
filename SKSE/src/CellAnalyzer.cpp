@@ -103,8 +103,9 @@ namespace IntelEngine {
         float currentZ = door->GetPositionZ();
         float destZ = destDoor->GetPositionZ();
 
-        // Any positive Z delta indicates upward (relaxed from 100-unit threshold)
-        return (destZ - currentZ) > 0.0f;
+        // Minimum 100-unit Z delta to count as a floor change.
+        // Prevents false positives from ramps, balcony doors, and slight elevation changes.
+        return (destZ - currentZ) > 100.0f;
     }
 
     bool CellAnalyzer::IsDoorDownward(RE::TESObjectREFR* door) {
@@ -116,8 +117,8 @@ namespace IntelEngine {
         float currentZ = door->GetPositionZ();
         float destZ = destDoor->GetPositionZ();
 
-        // Any negative Z delta indicates downward (relaxed from 100-unit threshold)
-        return (currentZ - destZ) > 0.0f;
+        // Minimum 100-unit Z delta to count as a floor change.
+        return (currentZ - destZ) > 100.0f;
     }
 
     bool CellAnalyzer::IsDoorNameUpward(RE::TESObjectREFR* door) {

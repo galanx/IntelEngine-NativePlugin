@@ -31,12 +31,13 @@ namespace IntelEngine {
     };
 
     struct SemanticIntent {
-        enum Type { NONE, UPSTAIRS, DOWNSTAIRS, OUTSIDE, INSIDE, BACK, CELLAR, BEDROOM, KITCHEN, HOME };
+        enum Type { NONE, UPSTAIRS, DOWNSTAIRS, OUTSIDE, INSIDE, BACK, CELLAR, BEDROOM, KITCHEN, HOME, WATER };
         Type type = NONE;
         std::string locationContext;  // extracted from compound phrases (e.g., "Helgen" from "out of Helgen")
         bool preferBeds = false;      // true when destination mentions bedroom/bed alongside a direction
         HomeOwner homeOwner = HomeOwner::NONE;  // who "home" belongs to
         std::string homeOwnerHint;              // NPC name for HomeOwner::NAMED (e.g., "Alvor")
+        bool preferInterior = false;  // WATER: true = bath/wash (try interior first), false = swim/river (exterior)
     };
 
     class LocationResolver {
@@ -214,6 +215,7 @@ namespace IntelEngine {
         RE::TESObjectREFR* ResolveCellar(RE::Actor* actor);
         RE::TESObjectREFR* ResolveBedroom(RE::Actor* actor);
         RE::TESObjectREFR* ResolveKitchen(RE::Actor* actor);
+        RE::TESObjectREFR* ResolveWater(RE::Actor* actor, bool preferInterior);
 
         // Home resolution
         RE::TESObjectREFR* ResolveHome(RE::Actor* actor, const SemanticIntent& intent);
@@ -270,7 +272,9 @@ namespace IntelEngine {
             "near the fire", "fireplace", "hearth",
             "stairs", "stairwell", "staircase",
             "home", "my home", "my house", "my place",
-            "your home", "your house", "your place"
+            "your home", "your house", "your place",
+            "the river", "river", "lake", "stream", "water", "swim", "wash",
+            "bath", "bathe", "the bath", "hot spring"
         };
 
         // NPC home index: ActorBase FormID -> home cell FormID

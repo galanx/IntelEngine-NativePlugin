@@ -172,6 +172,43 @@ namespace IntelEngine::StringUtils {
     }
 
     /**
+     * Strip leading articles ("the", "a", "an") from a lowercase string.
+     */
+    inline std::string StripArticles(const std::string& text) {
+        static const std::vector<std::pair<std::string, size_t>> articles = {
+            {"the ", 4}, {"a ", 2}, {"an ", 3}
+        };
+        for (const auto& [art, len] : articles) {
+            if (text.length() > len && text.compare(0, len, art) == 0) {
+                return text.substr(len);
+            }
+        }
+        return text;
+    }
+
+    /**
+     * Token-based match score: ratio of matching words between search and candidate.
+     * Articles are ignored. Returns 0.0 (no overlap) to 1.0 (all words match).
+     * Both inputs should be lowercase.
+     */
+    inline float TokenMatchScore(const std::string& search, const std::string& candidate) {
+        auto searchWords = Split(search, " ");
+        auto candWords = Split(candidate, " ");
+
+        int meaningful = 0;
+        int matches = 0;
+        for (const auto& sw : searchWords) {
+            if (sw == "the" || sw == "a" || sw == "an" || sw.empty()) continue;
+            meaningful++;
+            for (const auto& cw : candWords) {
+                if (sw == cw) { matches++; break; }
+            }
+        }
+        if (meaningful == 0) return 0.0f;
+        return static_cast<float>(matches) / static_cast<float>(meaningful);
+    }
+
+    /**
      * Result of a fuzzy search.
      */
     struct FuzzyResult {
@@ -216,6 +253,43 @@ namespace IntelEngine::StringUtils {
             result.distance = INT_MAX;
         }
         return result;
+    }
+
+    /**
+     * Enhanced fuzzy find with article stripping and token matching.
+     * Resolution order:
+     * 1. Article-stripped exact match ("western watchtower" == "the western watchtower")
+     * 2. Token-based match (word overlap >= minTokenScore)
+     * 3. Levenshtein distance (existing character-level fuzzy)
+     */
+    inline FuzzyResult TokenFuzzyFind(const std::string& searchTerm,
+                                       const std::vector<std::string>& candidates,
+                                       int maxLevenshtein,
+                                       float minTokenScore = 0.6f) {
+        std::string stripped = StripArticles(searchTerm);
+
+        // Phase 1: Article-stripped exact match
+        for (const auto& name : candidates) {
+            if (StripArticles(name) == stripped) {
+                return {name, 0};
+            }
+        }
+
+        // Phase 2: Token-based match (word overlap)
+        FuzzyResult bestToken;
+        float bestScore = 0.0f;
+        for (const auto& name : candidates) {
+            float score = TokenMatchScore(stripped, StripArticles(name));
+            if (score >= minTokenScore && score > bestScore) {
+                bestScore = score;
+                bestToken.match = name;
+                bestToken.distance = static_cast<int>((1.0f - score) * 10);
+            }
+        }
+        if (!bestToken.match.empty()) return bestToken;
+
+        // Phase 3: Levenshtein (existing behavior)
+        return FuzzyFind(searchTerm, candidates, maxLevenshtein);
     }
 
 }  // namespace IntelEngine::StringUtils

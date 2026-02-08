@@ -129,9 +129,9 @@ namespace IntelEngine {
             }
         }
 
-        // 2. Fuzzy match
-        auto fuzzy = StringUtils::FuzzyFind(lowerName, m_allCellNames,
-                                             Settings::GetSingleton()->fuzzyMatchThreshold);
+        // 2. Token + fuzzy match (article-stripped exact → word overlap → Levenshtein)
+        auto fuzzy = StringUtils::TokenFuzzyFind(lowerName, m_allCellNames,
+                                                  Settings::GetSingleton()->fuzzyMatchThreshold);
         if (fuzzy) {
             auto cellIt = m_cellIndex.find(fuzzy.match);
             if (cellIt != m_cellIndex.end()) {
@@ -166,9 +166,9 @@ namespace IntelEngine {
             }
         }
 
-        // 2. Fuzzy match
-        auto fuzzy = StringUtils::FuzzyFind(lowerName, m_allLocationNames,
-                                             Settings::GetSingleton()->fuzzyMatchThreshold);
+        // 2. Token + fuzzy match (article-stripped exact → word overlap → Levenshtein)
+        auto fuzzy = StringUtils::TokenFuzzyFind(lowerName, m_allLocationNames,
+                                                  Settings::GetSingleton()->fuzzyMatchThreshold);
         if (fuzzy) {
             auto locIt = m_locationIndex.find(fuzzy.match);
             if (locIt != m_locationIndex.end()) {
@@ -513,12 +513,45 @@ namespace IntelEngine {
             return first;
         }
 
-        // Pass 3: Door Z-coordinate (last resort — can misfire with balcony doors)
+        // Pass 3: Door Z-coordinate (interior doors only — skip exterior to prevent teleporting outside)
         for (auto* door : doors) {
+            if (analyzer->IsDoorExterior(door)) continue;
             if (analyzer->IsDoorUpward(door)) {
                 logger::debug("ResolveUpstairs: Door Z match -> '{}'",
                              analyzer->GetDoorDestinationName(door).c_str());
                 return door;
+            }
+        }
+
+        // Pass 4: Downstairs-named cell heuristic (inverse logic)
+        // If current cell is "cellar"/"basement"/"lower", any door leading to a cell
+        // WITHOUT those keywords is effectively "upstairs"
+        auto* cell = actor->GetParentCell();
+        if (cell) {
+            auto cellName = cell->GetName();
+            if (cellName && strlen(cellName) > 0) {
+                std::string lowerCellName = StringUtils::ToLowerStd(cellName);
+                if (lowerCellName.find("cellar") != std::string::npos ||
+                    lowerCellName.find("basement") != std::string::npos ||
+                    lowerCellName.find("lower") != std::string::npos ||
+                    lowerCellName.find("dungeon") != std::string::npos ||
+                    lowerCellName.find("undercroft") != std::string::npos) {
+
+                    logger::debug("ResolveUpstairs: Cell '{}' is downstairs-named, trying inverse heuristic", cellName);
+
+                    for (auto* door : doors) {
+                        auto destName = analyzer->GetDoorDestinationName(door);
+                        std::string lowerDest = StringUtils::ToLowerStd(destName.c_str());
+                        if (lowerDest.find("cellar") == std::string::npos &&
+                            lowerDest.find("basement") == std::string::npos &&
+                            lowerDest.find("lower") == std::string::npos &&
+                            lowerDest.find("dungeon") == std::string::npos &&
+                            lowerDest.find("undercroft") == std::string::npos) {
+                            logger::debug("ResolveUpstairs: Inverse heuristic -> '{}'", destName.c_str());
+                            return door;
+                        }
+                    }
+                }
             }
         }
 
@@ -559,8 +592,9 @@ namespace IntelEngine {
             return first;
         }
 
-        // Pass 3: Door Z-coordinate (last resort)
+        // Pass 3: Door Z-coordinate (interior doors only — skip exterior to prevent teleporting outside)
         for (auto* door : doors) {
+            if (analyzer->IsDoorExterior(door)) continue;
             if (analyzer->IsDoorDownward(door)) {
                 logger::debug("ResolveDownstairs: Door Z match -> '{}'",
                              analyzer->GetDoorDestinationName(door).c_str());
@@ -810,6 +844,106 @@ namespace IntelEngine {
         }
 
         return nearest;
+    }
+
+    // =========================================================================
+    // Water / River Resolution
+    // =========================================================================
+
+    RE::TESObjectREFR* LocationResolver::ResolveWater(RE::Actor* actor, bool preferInterior) {
+        if (!actor) return nullptr;
+
+        auto* currentCell = actor->GetParentCell();
+        if (!currentCell) return nullptr;
+
+        logger::debug("ResolveWater: preferInterior={}, cell='{}', interior={}",
+                     preferInterior, currentCell->GetName() ? currentCell->GetName() : "unnamed",
+                     currentCell->IsInteriorCell());
+
+        // Keywords for interior water features (modded baths, hot springs)
+        static const std::vector<std::string> interiorKeywords = {
+            "bath", "tub", "pool", "jacuzzi", "hot spring", "basin", "wash"
+        };
+
+        // Keywords for exterior water landmarks
+        static const std::vector<std::string> exteriorKeywords = {
+            "dock", "pier", "boat", "canoe", "ship",
+            "fish", "fishing",
+            "bridge",
+            "mill", "lumber",
+            "waterfall",
+            "river", "lake", "stream", "pond", "harbor", "harbour",
+            "well", "fountain"
+        };
+
+        struct WaterCandidate {
+            RE::TESObjectREFR* ref;
+            float distSq;
+        };
+
+        auto actorPos = actor->GetPosition();
+
+        // Helper: check if reference base name matches any keyword in a list
+        auto matchesKeywords = [](RE::TESObjectREFR& ref,
+                                  const std::vector<std::string>& keywords) -> bool {
+            auto* baseObj = ref.GetBaseObject();
+            if (!baseObj) return false;
+            auto* name = baseObj->GetName();
+            if (!name || strlen(name) == 0) return false;
+            std::string lowerName = StringUtils::ToLowerStd(name);
+            for (const auto& kw : keywords) {
+                if (lowerName.find(kw) != std::string::npos) return true;
+            }
+            return false;
+        };
+
+        // Helper: scan a cell for references matching keywords, return nearest
+        auto scanCell = [&](RE::TESObjectCELL* cell,
+                           const std::vector<std::string>& keywords) -> RE::TESObjectREFR* {
+            std::vector<WaterCandidate> candidates;
+            cell->ForEachReference([&](RE::TESObjectREFR& ref) -> RE::BSContainer::ForEachResult {
+                if (ref.IsDisabled() || ref.IsDeleted())
+                    return RE::BSContainer::ForEachResult::kContinue;
+                if (matchesKeywords(ref, keywords)) {
+                    auto pos = ref.GetPosition();
+                    float dx = pos.x - actorPos.x;
+                    float dy = pos.y - actorPos.y;
+                    candidates.push_back({&ref, dx * dx + dy * dy});
+                }
+                return RE::BSContainer::ForEachResult::kContinue;
+            });
+
+            if (candidates.empty()) return nullptr;
+
+            auto* best = &candidates[0];
+            for (size_t i = 1; i < candidates.size(); i++) {
+                if (candidates[i].distSq < best->distSq) best = &candidates[i];
+            }
+
+            auto* baseName = best->ref->GetBaseObject() ? best->ref->GetBaseObject()->GetName() : "unknown";
+            logger::debug("ResolveWater: Found '{}' at distance {:.0f} ({} candidates)",
+                         baseName, std::sqrt(best->distSq), candidates.size());
+            return best->ref;
+        };
+
+        bool isInterior = currentCell->IsInteriorCell();
+
+        // Strategy 1: Interior bath scan (if preferInterior and indoors)
+        if (preferInterior && isInterior) {
+            auto* result = scanCell(currentCell, interiorKeywords);
+            if (result) return result;
+            logger::debug("ResolveWater: No interior water found, no exterior fallback from indoors");
+            return nullptr;
+        }
+
+        // Strategy 2: Exterior landmark scan
+        if (!isInterior) {
+            return scanCell(currentCell, exteriorKeywords);
+        }
+
+        // Interior + exterior-only request (e.g., "go swim" while indoors) — can't resolve
+        logger::debug("ResolveWater: Indoor with exterior intent — cannot resolve");
+        return nullptr;
     }
 
     // =========================================================================
@@ -1145,6 +1279,32 @@ namespace IntelEngine {
         if (lower == "kitchen" || lower == "the kitchen")
             return {SemanticIntent::KITCHEN, "", false};
 
+        // === Water/bath terms (exact) — interior preferred ===
+        if (lower == "bath" || lower == "the bath" || lower == "bathe" ||
+            lower == "hot spring" || lower == "hot springs" || lower == "pool" ||
+            lower == "the pool")
+            return {SemanticIntent::WATER, "", false, HomeOwner::NONE, "", true};
+
+        // === Water terms (exact) — exterior ===
+        if (lower == "the river" || lower == "river" || lower == "the lake" ||
+            lower == "lake" || lower == "stream" || lower == "the stream" ||
+            lower == "the water" || lower == "water" || lower == "the shore")
+            return {SemanticIntent::WATER, "", false};
+
+        // === Water action phrases ===
+        if (lower == "wash" || lower == "wash up" || lower == "go wash" ||
+            lower == "clean up" || lower == "take a bath" ||
+            lower.find("wash yourself") != std::string::npos ||
+            lower.find("wash myself") != std::string::npos ||
+            lower.find("clean yourself") != std::string::npos)
+            return {SemanticIntent::WATER, "", false, HomeOwner::NONE, "", true};
+
+        if (lower == "swim" || lower == "go swim" || lower == "go swimming" ||
+            lower == "go fishing" || lower == "fishing" ||
+            lower.find("go to the river") != std::string::npos ||
+            lower.find("go to the lake") != std::string::npos)
+            return {SemanticIntent::WATER, "", false};
+
         // === Home terms (exact) — NPC's own home ===
         if (lower == "home" || lower == "my home" || lower == "my house" || lower == "my place" ||
             lower == "go home" || lower == "head home" || lower == "back home")
@@ -1243,6 +1403,13 @@ namespace IntelEngine {
         if (lower.find("kitchen") != std::string::npos)
             return {SemanticIntent::KITCHEN, "", false};
 
+        // === Water embedded (catches "head to the river", "find a river") ===
+        if (lower.find("river") != std::string::npos || lower.find("lake") != std::string::npos ||
+            lower.find("swim") != std::string::npos || lower.find("fishing") != std::string::npos)
+            return {SemanticIntent::WATER, "", false};
+        if (lower.find("bath") != std::string::npos || lower.find("hot spring") != std::string::npos)
+            return {SemanticIntent::WATER, "", false, HomeOwner::NONE, "", true};
+
         // === Home embedded — catch phrases like "go to my home", "head to your place" ===
         if (lower.find("my home") != std::string::npos || lower.find("my house") != std::string::npos ||
             lower.find("my place") != std::string::npos)
@@ -1271,6 +1438,7 @@ namespace IntelEngine {
             case SemanticIntent::BEDROOM:    return ResolveBedroom(actor);
             case SemanticIntent::KITCHEN:    return ResolveKitchen(actor);
             case SemanticIntent::HOME:       return ResolveHome(actor, intent);
+            case SemanticIntent::WATER:      return ResolveWater(actor, intent.preferInterior);
             default: return nullptr;
         }
     }
