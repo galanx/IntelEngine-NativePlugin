@@ -73,7 +73,7 @@ namespace IntelEngine {
          * @param nearActor Actor to measure distance from
          * @return Closest matching Actor, or nullptr
          */
-        RE::Actor* FindByNameNear(const std::string& searchTerm, RE::Actor* nearActor);
+        RE::Actor* FindByNameNear(const std::string& searchTerm, RE::Actor* nearActor, bool allowSelf = false);
 
         /**
          * Check if an NPC is accessible (not disabled, in loaded cell).

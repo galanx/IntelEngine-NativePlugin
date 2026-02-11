@@ -597,6 +597,22 @@ namespace IntelEngine::Papyrus {
         std::string input = StringUtils::ToLowerStd(condition.c_str());
         if (input.empty()) return -1.0f;
 
+        // Check for "tomorrow" — adds 24h offset to force next-day scheduling
+        // Supports: "tomorrow", "tomorrow morning", "tomorrow night", "tomorrow at 3pm", etc.
+        float dayOffset = 0.0f;
+        auto tomorrowPos = input.find("tomorrow");
+        if (tomorrowPos != std::string::npos) {
+            dayOffset = 24.0f;
+            input.erase(tomorrowPos, 8);  // "tomorrow" = 8 chars
+            while (!input.empty() && input.front() == ' ') input.erase(input.begin());
+            while (!input.empty() && input.back() == ' ') input.pop_back();
+            if (input.empty()) {
+                logger::debug("ParseTimeCondition: '{}' -> noon tomorrow (36.0)", condition.c_str());
+                return 12.0f + dayOffset;  // "tomorrow" alone → noon tomorrow
+            }
+            logger::debug("ParseTimeCondition: stripped 'tomorrow', parsing sub-time '{}'", input);
+        }
+
         // Helper: compute relative hour offset from current time, wrapped at 24
         // Uses GetCurrentGameTime() to be timescale-aware (compatible with DTS mods)
         auto relativeHour = [](float offset) -> float {
@@ -618,18 +634,18 @@ namespace IntelEngine::Papyrus {
             input.find("a moment") != std::string::npos ||
             input.find("right away") != std::string::npos ||
             input.find("immediately") != std::string::npos) {
-            return relativeHour(0.25f);
+            return relativeHour(0.25f) + dayOffset;
         }
 
         if (input.find("half an hour") != std::string::npos ||
             input.find("30 minute") != std::string::npos) {
-            return relativeHour(0.5f);
+            return relativeHour(0.5f) + dayOffset;
         }
 
         if (input.find("few hour") != std::string::npos ||
             input.find("couple hour") != std::string::npos ||
             input.find("couple of hour") != std::string::npos) {
-            return relativeHour(2.0f);
+            return relativeHour(2.0f) + dayOffset;
         }
 
         // "N hour(s)" — check from high to low to avoid "1 hour" matching inside "10 hour"
@@ -642,7 +658,7 @@ namespace IntelEngine::Papyrus {
         };
         for (const auto& hp : hourPatterns) {
             if (input.find(hp.text) != std::string::npos) {
-                return relativeHour(hp.hours);
+                return relativeHour(hp.hours) + dayOffset;
             }
         }
 
@@ -650,7 +666,7 @@ namespace IntelEngine::Papyrus {
         if (input.find("1 hour") != std::string::npos ||
             input.find("an hour") != std::string::npos ||
             input.find("one hour") != std::string::npos) {
-            return relativeHour(1.0f);
+            return relativeHour(1.0f) + dayOffset;
         }
 
         // --- Named time patterns (substring match) ---
@@ -683,7 +699,7 @@ namespace IntelEngine::Papyrus {
         };
         for (const auto& nt : namedTimes) {
             if (input.find(nt.keyword) != std::string::npos) {
-                return nt.hour;
+                return nt.hour + dayOffset;
             }
         }
 
@@ -705,7 +721,7 @@ namespace IntelEngine::Papyrus {
         };
         for (const auto& cp : pmPatterns) {
             if (input.find(cp.text) != std::string::npos) {
-                return static_cast<float>(cp.hour);
+                return static_cast<float>(cp.hour) + dayOffset;
             }
         }
 
@@ -720,7 +736,7 @@ namespace IntelEngine::Papyrus {
         };
         for (const auto& cp : amPatterns) {
             if (input.find(cp.text) != std::string::npos) {
-                return static_cast<float>(cp.hour);
+                return static_cast<float>(cp.hour) + dayOffset;
             }
         }
 
@@ -733,13 +749,20 @@ namespace IntelEngine::Papyrus {
         auto* calendar = RE::Calendar::GetSingleton();
         if (!calendar) return 0.0f;
 
+        // Handle day offset: targetHour >= 24 means "tomorrow at (targetHour - 24)"
+        int extraDays = 0;
+        while (targetHour >= 24.0f) {
+            targetHour -= 24.0f;
+            extraDays++;
+        }
+
         float currentGameTime = calendar->GetCurrentGameTime();
         float dayPart = std::floor(currentGameTime);
         float targetDayFraction = targetHour / 24.0f;
-        float targetTime = dayPart + targetDayFraction;
+        float targetTime = dayPart + targetDayFraction + static_cast<float>(extraDays);
 
-        // If target hour is before or at current hour, it means tomorrow
-        if (targetHour <= currentHour) {
+        // Only auto-advance to tomorrow if NO explicit day offset and hour already passed
+        if (extraDays == 0 && targetHour <= currentHour) {
             targetTime += 1.0f;
         }
 

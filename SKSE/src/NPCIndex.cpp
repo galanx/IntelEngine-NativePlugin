@@ -209,7 +209,7 @@ namespace IntelEngine {
         return nullptr;
     }
 
-    RE::Actor* NPCIndex::FindByNameNear(const std::string& searchTerm, RE::Actor* nearActor) {
+    RE::Actor* NPCIndex::FindByNameNear(const std::string& searchTerm, RE::Actor* nearActor, bool allowSelf) {
         // If no actor context, fall back to original FindByName
         if (!nearActor) return FindByName(searchTerm);
 
@@ -230,7 +230,7 @@ namespace IntelEngine {
 
         // Single pass through all loaded actors — collect all candidates
         ProcessUtils::ForEachLoadedActor([&](RE::Actor* actor) {
-            if (actor == nearActor) return false;  // skip self
+            if (!allowSelf && actor == nearActor) return false;  // skip self unless allowed
             auto displayName = actor->GetDisplayFullName();
             if (!displayName || strlen(displayName) == 0) return false;
 

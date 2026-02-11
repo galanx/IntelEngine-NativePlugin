@@ -1215,7 +1215,7 @@ namespace IntelEngine {
 
                 // Not the player — look up the NPC
                 auto* npcIndex = NPCIndex::GetSingleton();
-                auto* targetActor = npcIndex->FindByNameNear(intent.homeOwnerHint, actor);
+                auto* targetActor = npcIndex->FindByNameNear(intent.homeOwnerHint, actor, true);
                 if (targetActor) {
                     storeHomeCellId(targetActor->GetActorBase());
                     auto* result = ResolveNPCHome(targetActor->GetActorBase());
@@ -1547,7 +1547,7 @@ namespace IntelEngine {
         // Only when semantic intent was NONE (not already handled as home).
         if (intent.type == SemanticIntent::NONE) {
             auto* npcIndex = NPCIndex::GetSingleton();
-            auto* targetActor = npcIndex->FindByNameNear(destination, actor);
+            auto* targetActor = npcIndex->FindByNameNear(destination, actor, true);
             if (targetActor) {
                 auto* targetBase = targetActor->GetActorBase();
                 if (targetBase) {
