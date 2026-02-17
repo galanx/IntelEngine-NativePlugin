@@ -57,6 +57,13 @@ namespace IntelEngine {
         // Waypoint navigation settings
         float waypointSearchRadius = 5000.0f;  // Max radius for waypoint marker search
 
+        // Story Engine settings
+        float storyMinAbsenceDays = 3.0f;     // Min days since player interaction before NPC becomes story candidate
+
+        // MemoryDB settings
+        std::string skyrimNetDbPath;           // Override path (empty = auto-detect via USVFS)
+        int maxMemoriesInContext = 5;          // Max memories injected in BuildActorContextJson
+
     private:
         Settings() = default;
         ~Settings() = default;

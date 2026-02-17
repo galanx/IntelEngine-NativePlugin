@@ -508,4 +508,42 @@ namespace IntelEngine {
         }
     }
 
+    void CellAnalyzer::EnsureDangerousKeywordsCached() {
+        if (m_dangerousKeywordsCached) return;
+        m_dangerousKeywordsCached = true;
+
+        static const char* editorIDs[] = {
+            "LocTypeDungeon", "LocTypeCrypt", "LocTypeRuin",
+            "LocTypeCave", "LocTypeMine", "LocTypeMilitaryFort"
+        };
+
+        for (auto* editorID : editorIDs) {
+            auto* form = RE::TESForm::LookupByEditorID(editorID);
+            if (form) {
+                auto* keyword = form->As<RE::BGSKeyword>();
+                if (keyword) {
+                    m_dangerousKeywords.push_back(keyword);
+                }
+            }
+        }
+
+        logger::debug("CellAnalyzer: Cached {} dangerous location keywords", m_dangerousKeywords.size());
+    }
+
+    bool CellAnalyzer::IsPlayerInDangerousLocation() {
+        auto* player = RE::PlayerCharacter::GetSingleton();
+        if (!player) return false;
+
+        auto* location = player->GetCurrentLocation();
+        if (!location) return false;
+
+        EnsureDangerousKeywordsCached();
+        for (auto* keyword : m_dangerousKeywords) {
+            if (location->HasKeyword(keyword)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
 }  // namespace IntelEngine

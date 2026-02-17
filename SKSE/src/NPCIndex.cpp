@@ -5,11 +5,32 @@
  */
 
 #include "NPCIndex.h"
+#include "CellAnalyzer.h"
+#include "LocationResolver.h"
+#include "MemoryDB.h"
+#include "SlotTracker.h"
 #include "StringUtils.h"
 #include "ProcessUtils.h"
 #include "Settings.h"
 
+#include <random>
+#include <cmath>
+
 namespace IntelEngine {
+
+    // Shared time-of-day string from timescale-aware game time
+    static const char* GetTimeOfDayString() {
+        float gameTime = RE::Calendar::GetSingleton()->GetCurrentGameTime();
+        float hour = (gameTime - std::floor(gameTime)) * 24.0f;
+        if (hour < 5.0f)       return "late night";
+        else if (hour < 8.0f)  return "early morning";
+        else if (hour < 12.0f) return "morning";
+        else if (hour < 14.0f) return "midday";
+        else if (hour < 17.0f) return "afternoon";
+        else if (hour < 20.0f) return "evening";
+        else if (hour < 23.0f) return "night";
+        else                    return "late night";
+    }
 
     void NPCIndex::BuildIndex() {
         std::unique_lock lock(m_mutex);
@@ -212,6 +233,8 @@ namespace IntelEngine {
     RE::Actor* NPCIndex::FindByNameNear(const std::string& searchTerm, RE::Actor* nearActor, bool allowSelf) {
         // If no actor context, fall back to original FindByName
         if (!nearActor) return FindByName(searchTerm);
+        // Guard: actor may be unloaded (no cell = no valid position)
+        if (!nearActor->GetParentCell()) return FindByName(searchTerm);
 
         std::shared_lock lock(m_mutex);
         if (searchTerm.empty()) return nullptr;
@@ -258,39 +281,8 @@ namespace IntelEngine {
             return false;
         });
 
-        // Also check indexed NPCs that may not be in loaded actors.
-        // Guard: skip if actor has no parent cell (unloaded — GetPosition may return stale data)
-        auto exactIt = m_npcIndex.find(lowerSearch);
-        if (exactIt != m_npcIndex.end() && exactIt->second && exactIt->second->GetParentCell()) {
-            bool alreadyFound = false;
-            for (auto& c : candidates) {
-                if (c.actor == exactIt->second) { alreadyFound = true; break; }
-            }
-            if (!alreadyFound) {
-                auto pos = exactIt->second->GetPosition();
-                float dx = pos.x - nearPos.x;
-                float dy = pos.y - nearPos.y;
-                candidates.push_back({exactIt->second, 0, dx * dx + dy * dy});
-            }
-        }
-
-        // Fuzzy match in index
-        auto fuzzy = StringUtils::FuzzyFind(lowerSearch, m_allNames, maxDist);
-        if (fuzzy) {
-            auto loadedIt = m_npcIndex.find(fuzzy.match);
-            if (loadedIt != m_npcIndex.end() && loadedIt->second && loadedIt->second->GetParentCell()) {
-                bool alreadyFound = false;
-                for (auto& c : candidates) {
-                    if (c.actor == loadedIt->second) { alreadyFound = true; break; }
-                }
-                if (!alreadyFound) {
-                    auto pos = loadedIt->second->GetPosition();
-                    float dx = pos.x - nearPos.x;
-                    float dy = pos.y - nearPos.y;
-                    candidates.push_back({loadedIt->second, 2 + fuzzy.distance, dx * dx + dy * dy});
-                }
-            }
-        }
+        // Note: m_npcIndex is NOT used here — raw Actor* pointers can become dangling
+        // when actors unload. ForEachLoadedActor above already covers all loaded actors safely.
 
         if (candidates.empty()) {
             logger::debug("FindByNameNear('{}') -> No candidates found", searchTerm);
@@ -393,6 +385,51 @@ namespace IntelEngine {
         return nullptr;
     }
 
+    RE::Actor* NPCIndex::ResolveStoryCandidate(const std::string& name) {
+        std::shared_lock lock(m_mutex);
+        std::string lowerName = StringUtils::ToLowerStd(name);
+
+        // Check DM pool first (player-centric tick), then NPC pool (social tick)
+        for (const auto& pool : {std::cref(m_dmCandidatePool), std::cref(m_npcCandidatePool)}) {
+            auto it = pool.get().find(lowerName);
+            if (it != pool.get().end() && it->second != 0) {
+                auto* actor = GetActorFromFormId(it->second);
+                if (actor) {
+                    logger::debug("ResolveStoryCandidate('{}') -> exact pool match (0x{:08X})",
+                        name, it->second);
+                    return actor;
+                }
+            }
+        }
+
+        // Fallback to general name search if not in either pool (safety net)
+        logger::debug("ResolveStoryCandidate('{}') -> not in pool, falling back to FindByName", name);
+        lock.unlock();  // FindByName acquires its own lock
+        return FindByName(name);
+    }
+
+    RE::Actor* NPCIndex::ResolveFromMemoryDB(RE::FormID formId, const std::string& name) {
+        // Fast path: try the DB's FormID directly (works when FormID is still current)
+        if (auto* actor = GetActorFromFormId(formId)) {
+            return actor;
+        }
+
+        // Slow path: FormID is stale (mod update, base-form vs reference mismatch).
+        // Fall back to fuzzy name search using the reliable display name from uuid_mappings.
+        // See MemoryDB.cpp header comment for full bug documentation.
+        if (!name.empty()) {
+            auto* actor = FindByName(name);
+            if (actor) {
+                logger::debug("ResolveFromMemoryDB: stale FormID 0x{:08X} for '{}', "
+                    "resolved via name to 0x{:08X}",
+                    formId, name, actor->GetFormID());
+            }
+            return actor;
+        }
+
+        return nullptr;
+    }
+
     bool NPCIndex::IsAccessible(RE::Actor* actor) {
         if (!actor) return false;
 
@@ -444,6 +481,1019 @@ namespace IntelEngine {
         }
 
         return "";
+    }
+
+    // Generic creature/animal names that appear in SkyrimNet's MemoryDB because
+    // events were recorded for them (combat, death, looting). These are not valid
+    // story candidates — they lack ActorTypeNPC keyword in-game, but filtering
+    // them here avoids wasting DB query slots and resolve+scoring cycles.
+    static bool IsGenericCreatureName(const std::string& name) {
+        static const std::unordered_set<std::string> kExcluded = {
+            "Bear", "Bone Wolf", "Cave Bear", "Chicken", "Cow", "Dog",
+            "Dragon", "Draugr", "Falmer", "Female Mammoth",
+            "Frostbite Spider", "Giant", "Giant Youngling", "Goat",
+            "Gypsy Horse", "Horse", "Ice Wolf", "Ice Wraith",
+            "Mammoth", "Mammoth Calf", "Mudcrab", "Rabbit",
+            "Sabre Cat", "Skeever", "Slaughterfish", "Snowy Sabre Cat",
+            "Spriggan", "Thrall Wolf", "Troll", "Unknown", "Wisp",
+            "Wolf", "Flame Atronach", "Frost Atronach", "Storm Atronach",
+            "Hagraven", "Chaurus", "Horker", "Fox"
+        };
+        return kExcluded.count(name) > 0;
+    }
+
+    bool NPCIndex::IsEligibleStoryCandidate(RE::Actor* actor, RE::Actor* player,
+        RE::TESObjectCELL* playerCell, SlotTracker* tracker) {
+        if (!actor || actor == player) return false;
+        if (!actor->GetParentCell()) return false;
+        // Filter out nameless/unknown actors
+        auto displayName = actor->GetDisplayFullName();
+        if (!displayName || !displayName[0] || std::string_view(displayName) == "Unknown") return false;
+        if (actor->IsDead() || actor->IsDisabled()) return false;
+        if (actor->IsInCombat()) return false;
+        if (actor->IsPlayerTeammate()) return false;
+        if (actor->IsHostileToActor(player)) return false;
+        if (actor->GetParentCell() == playerCell) return false;
+        if (tracker && (tracker->HasActiveTask(actor) || tracker->IsOnCooldown(actor))) return false;
+
+        // Filter out animals/creatures — only humanoid NPCs with ActorTypeNPC keyword (0x13794)
+        static auto* kwActorTypeNPC = RE::TESForm::LookupByID<RE::BGSKeyword>(0x00013794);
+        if (kwActorTypeNPC && !actor->HasKeyword(kwActorTypeNPC)) return false;
+
+        // Filter out child NPCs — children can't be story candidates
+        if (auto* race = actor->GetRace()) {
+            if (race->IsChildRace()) return false;
+        }
+
+        // Full MCM cooldown — prevents wasted LLM turns picking NPCs Papyrus would reject
+        if (NPCIndex::GetSingleton()->IsOnStoryCooldown(actor->GetFormID(), GetStoryCooldownHours())) return false;
+
+        return true;
+    }
+
+    bool NPCIndex::IsEligibleStoryCandidateRelaxed(RE::Actor* actor, RE::Actor* player,
+        SlotTracker* tracker) {
+        if (!actor || actor == player) return false;
+
+        // Filter out nameless/unknown actors (dynamically created NPCs with no display name)
+        auto displayName = actor->GetDisplayFullName();
+        if (!displayName || !displayName[0] || std::string_view(displayName) == "Unknown") {
+            logger::debug("[StoryDM] Rejected 0x{:08X}: no display name", actor->GetFormID());
+            return false;
+        }
+
+        if (actor->IsDead()) {
+            logger::debug("[StoryDM] Rejected '{}': dead", displayName);
+            return false;
+        }
+        if (actor->IsDisabled()) {
+            logger::debug("[StoryDM] Rejected '{}': disabled", displayName);
+            return false;
+        }
+        if (tracker && tracker->HasActiveTask(actor)) {
+            logger::debug("[StoryDM] Rejected '{}': active task", displayName);
+            return false;
+        }
+        if (tracker && tracker->IsOnCooldown(actor)) {
+            logger::debug("[StoryDM] Rejected '{}': task cooldown", displayName);
+            return false;
+        }
+
+        // Filter out animals/creatures — only humanoid NPCs with ActorTypeNPC keyword (0x13794)
+        static auto* kwActorTypeNPC = RE::TESForm::LookupByID<RE::BGSKeyword>(0x00013794);
+        if (kwActorTypeNPC && !actor->HasKeyword(kwActorTypeNPC)) {
+            logger::debug("[StoryDM] Rejected '{}': not ActorTypeNPC", displayName);
+            return false;
+        }
+
+        // Filter out child NPCs
+        if (auto* race = actor->GetRace()) {
+            if (race->IsChildRace()) {
+                logger::debug("[StoryDM] Rejected '{}': child race", displayName);
+                return false;
+            }
+        }
+
+        // No hard cooldown block here — the scoring penalty system (GetCooldownPenalty)
+        // handles recently-picked NPCs by deranking them. Papyrus ApplyCooldownCheck
+        // still acts as a safety net at dispatch time. This allows high-absence NPCs
+        // to appear in the pool even during cooldown (scored low but visible).
+
+        return true;
+    }
+
+    std::string NPCIndex::GetNPCLocationName(RE::Actor* actor) {
+        if (!actor) return "";
+
+        // Loaded: use current cell/location
+        if (auto* cell = actor->GetParentCell()) {
+            auto cellName = cell->GetName();
+            if (cellName && cellName[0]) return cellName;
+
+            if (auto* loc = actor->GetCurrentLocation()) {
+                auto locName = loc->GetFullName();
+                if (locName && locName[0]) return locName;
+            }
+        }
+
+        // Unloaded: fall back to editor location
+        if (auto* editorLoc = actor->GetEditorLocation()) {
+            auto locName = editorLoc->GetFullName();
+            if (locName && locName[0]) return locName;
+        }
+
+        return "";
+    }
+
+    std::string NPCIndex::GetNPCHoldName(RE::Actor* actor) {
+        if (!actor) return "";
+
+        RE::BGSLocation* loc = nullptr;
+
+        // Loaded: get location from parent cell
+        if (auto* cell = actor->GetParentCell()) {
+            loc = cell->GetLocation();
+        }
+
+        // Unloaded: fall back to editor location
+        if (!loc) {
+            loc = actor->GetEditorLocation();
+        }
+
+        if (!loc) return "";
+
+        // Walk to topmost named parent (the hold)
+        while (loc->parentLoc) {
+            loc = loc->parentLoc;
+        }
+        auto name = loc->GetFullName();
+        return (name && name[0]) ? name : "";
+    }
+
+    RE::Actor* NPCIndex::GetRandomStoryCandidate() {
+        auto* player = RE::PlayerCharacter::GetSingleton();
+        if (!player) return nullptr;
+        auto* playerCell = player->GetParentCell();
+        if (!playerCell) return nullptr;
+        auto* tracker = SlotTracker::GetSingleton();
+
+        std::vector<RE::Actor*> candidates;
+        ProcessUtils::ForEachLoadedActor([&](RE::Actor* actor) {
+            if (IsEligibleStoryCandidate(actor, player, playerCell, tracker)) {
+                candidates.push_back(actor);
+            }
+            return false;
+        });
+
+        if (candidates.empty()) return nullptr;
+
+        static thread_local std::mt19937 rng(std::random_device{}());
+        std::uniform_int_distribution<size_t> dist(0, candidates.size() - 1);
+        return candidates[dist(rng)];
+    }
+
+    RE::Actor* NPCIndex::GetMemoryDrivenCandidate() {
+        auto* player = RE::PlayerCharacter::GetSingleton();
+        if (!player) return nullptr;
+        auto* playerCell = player->GetParentCell();
+        if (!playerCell) return nullptr;
+        auto* tracker = SlotTracker::GetSingleton();
+        auto* memDB = MemoryDB::GetSingleton();
+
+        float absenceHours = Settings::GetSingleton()->storyMinAbsenceDays * 24.0f;
+        // Name-based exclusion set (lowercase) — handles dual UUID + stale FormID bugs
+        auto recentPlayerNPCs = memDB->GetRecentPlayerInteractionNames(absenceHours);
+
+        auto ranked = memDB->GetRankedCandidateFormIDs(30);
+        for (const auto& [formId, name, score] : ranked) {
+            // Exclusion check by lowercase name (matches the LOWER() output from SQL)
+            if (recentPlayerNPCs.count(StringUtils::ToLowerStd(name))) continue;
+
+            // Resolve via FormID first, fall back to name if FormID is stale
+            auto* actor = ResolveFromMemoryDB(formId, name);
+            if (!IsEligibleStoryCandidate(actor, player, playerCell, tracker)) continue;
+
+            logger::info("GetMemoryDrivenCandidate: '{}' (score: {:.1f})",
+                        actor->GetDisplayFullName(), score);
+            return actor;
+        }
+
+        logger::debug("GetMemoryDrivenCandidate: falling back to random");
+        return GetRandomStoryCandidate();
+    }
+
+    RE::Actor* NPCIndex::GetRelatedCandidate(RE::Actor* relatedTo) {
+        auto* player = RE::PlayerCharacter::GetSingleton();
+        if (!player || !relatedTo) return nullptr;
+        auto* playerCell = player->GetParentCell();
+        if (!playerCell) return nullptr;
+        auto* tracker = SlotTracker::GetSingleton();
+        auto* memDB = MemoryDB::GetSingleton();
+
+        float absenceHours = Settings::GetSingleton()->storyMinAbsenceDays * 24.0f;
+        // Name-based exclusion set (lowercase) — handles dual UUID + stale FormID bugs
+        auto recentPlayerNPCs = memDB->GetRecentPlayerInteractionNames(absenceHours);
+
+        // Phase 1: NPCs sharing event history with relatedTo
+        auto ranked = memDB->GetRelatedCandidateFormIDs(relatedTo->GetFormID(), 15);
+        for (const auto& [formId, name, score] : ranked) {
+            if (recentPlayerNPCs.count(StringUtils::ToLowerStd(name))) continue;
+
+            auto* actor = ResolveFromMemoryDB(formId, name);
+            if (!actor || actor == relatedTo) continue;
+            if (!IsEligibleStoryCandidate(actor, player, playerCell, tracker)) continue;
+
+            logger::info("GetRelatedCandidate: '{}' related to '{}' (score: {:.1f})",
+                        actor->GetDisplayFullName(), relatedTo->GetDisplayFullName(), score);
+            return actor;
+        }
+
+        // Phase 2: any ranked NPC excluding relatedTo
+        auto fallback = memDB->GetRankedCandidateFormIDs(30);
+        for (const auto& [formId, name, score] : fallback) {
+            if (recentPlayerNPCs.count(StringUtils::ToLowerStd(name))) continue;
+
+            auto* actor = ResolveFromMemoryDB(formId, name);
+            if (!actor || actor == relatedTo) continue;
+            if (!IsEligibleStoryCandidate(actor, player, playerCell, tracker)) continue;
+
+            logger::info("GetRelatedCandidate: '{}' (fallback, score: {:.1f})",
+                        actor->GetDisplayFullName(), score);
+            return actor;
+        }
+
+        logger::debug("GetRelatedCandidate: no related candidates found");
+        return nullptr;
+    }
+
+    std::string NPCIndex::ClassifyNPCArchetype(RE::Actor* actor) {
+        if (!actor) return "CIVILIAN";
+
+        auto* base = actor->GetActorBase();
+        if (!base) return "CIVILIAN";
+
+        // Primary: pass through the CK class name directly to the LLM.
+        // Only known civilian classes get mapped to CIVILIAN — everything else
+        // is returned uppercased so the DM LLM can interpret it contextually.
+        if (auto* cls = base->npcClass) {
+            auto raw = cls->GetFullName();
+            if (raw && raw[0]) {
+                std::string classLower = StringUtils::ToLowerStd(raw);
+
+                // Known civilian classes → CIVILIAN
+                if (classLower == "citizen" || classLower == "farmer" ||
+                    classLower == "beggar" || classLower == "child" ||
+                    classLower == "bard's college" || classLower == "food vendor" ||
+                    classLower == "peddler" || classLower == "apothecary" ||
+                    classLower == "blacksmith" || classLower == "fence" ||
+                    classLower == "innkeeper" || classLower == "lumberjack" ||
+                    classLower == "miner" || classLower == "vendor")
+                    return "CIVILIAN";
+
+                // Everything else: uppercase the raw class name
+                std::string result(raw);
+                for (auto& c : result) {
+                    c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+                }
+                return result;
+            }
+        }
+
+        // No class name — fall back to skill-based classification
+        auto* avo = actor->AsActorValueOwner();
+        float combat = avo->GetActorValue(RE::ActorValue::kOneHanded) +
+                       avo->GetActorValue(RE::ActorValue::kTwoHanded) +
+                       avo->GetActorValue(RE::ActorValue::kBlock);
+        float magic  = avo->GetActorValue(RE::ActorValue::kDestruction) +
+                       avo->GetActorValue(RE::ActorValue::kConjuration) +
+                       avo->GetActorValue(RE::ActorValue::kRestoration);
+        float stealth = avo->GetActorValue(RE::ActorValue::kSneak) +
+                        avo->GetActorValue(RE::ActorValue::kPickpocket) +
+                        avo->GetActorValue(RE::ActorValue::kLockpicking);
+
+        float best = std::max({combat, magic, stealth});
+        if (best >= 75.0f) {
+            if (combat == best) return "WARRIOR";
+            if (magic == best) return "MAGE";
+            return "ROGUE";
+        }
+
+        return "CIVILIAN";
+    }
+
+
+    std::string NPCIndex::BuildDungeonMasterContext(int maxCandidates, float absenceDays) {
+        auto* player = RE::PlayerCharacter::GetSingleton();
+        if (!player) return "";
+        auto* playerCell = player->GetParentCell();
+        if (!playerCell) return "";
+
+        auto* tracker = SlotTracker::GetSingleton();
+        auto* memDB = MemoryDB::GetSingleton();
+        auto* locResolver = LocationResolver::GetSingleton();
+        auto* cellAnalyzer = CellAnalyzer::GetSingleton();
+        auto* settings = Settings::GetSingleton();
+
+        // --- Gather eligible candidates ---
+        float absenceHours = absenceDays * 24.0f;
+        // Name-based exclusion (lowercase) — handles dual UUID + stale FormID bugs
+        auto recentPlayerNPCs = memDB->GetRecentPlayerInteractionNames(absenceHours);
+
+        // dbFormId: the FormID from MemoryDB (may differ from actor->GetFormID() if stale).
+        // Used for MemoryDB queries (memories, events) since the UUID cache maps DB FormIDs.
+        // actor->GetFormID() is used for game-engine checks (cell, combat, etc).
+        struct CandidateInfo { RE::Actor* actor; float score; RE::FormID dbFormId; bool fromMemoryDB; };
+        std::vector<CandidateInfo> pool;
+
+        // Memory-ranked candidates first — relaxed check allows unloaded NPCs
+        // (dispatch system handles bringing them into the world via MoveTo + off-screen tracking)
+        // NOTE: No collectTarget cap — process ALL ranked candidates from MemoryDB.
+        // The DB query already limits results (maxCandidates * 4). Eligibility checks are cheap.
+        // Scoring + final trim to maxCandidates handles pool sizing. A collectTarget cap was
+        // cutting off high-value NPCs at positions 11+ before they could be scored.
+        auto ranked = memDB->GetRankedCandidateFormIDs(maxCandidates * 4);
+        // Log full ranked list for diagnostics (helps identify missing NPCs)
+        for (int ri = 0; ri < static_cast<int>(ranked.size()); ++ri) {
+            logger::debug("[StoryDM] DB rank #{}: '{}' (0x{:08X}, dbScore={:.1f})",
+                ri + 1, ranked[ri].name, ranked[ri].formId, ranked[ri].score);
+        }
+        int dbUnresolved = 0, dbIneligible = 0, dbPlayerCell = 0, dbAccepted = 0, dbCreature = 0;
+        for (const auto& [formId, name, score] : ranked) {
+            // Pre-filter generic creature/animal names before expensive resolve+scoring
+            if (IsGenericCreatureName(name)) {
+                dbCreature++;
+                continue;
+            }
+            // Resolve via FormID first, fall back to name if FormID is stale
+            auto* actor = ResolveFromMemoryDB(formId, name);
+            if (!actor) {
+                logger::warn("[StoryDM] Ranked '{}' (0x{:08X}, score={:.1f}) failed to resolve",
+                    name, formId, score);
+                dbUnresolved++;
+                continue;
+            }
+            if (!IsEligibleStoryCandidateRelaxed(actor, player, tracker)) {
+                logger::debug("[StoryDM] Ranked '{}' failed eligibility", name);
+                dbIneligible++;
+                continue;
+            }
+            // Skip if in same cell as player (already nearby — not interesting for story dispatch)
+            if (actor->GetParentCell() && actor->GetParentCell() == playerCell) {
+                dbPlayerCell++;
+                continue;
+            }
+            pool.push_back({actor, score, formId, true});  // formId = DB's FormID for MemoryDB queries
+            dbAccepted++;
+        }
+        logger::info("[StoryDM] MemoryDB candidates: {} ranked, {} accepted, "
+            "{} creature, {} unresolved, {} ineligible, {} player-cell",
+            ranked.size(), dbAccepted, dbCreature, dbUnresolved, dbIneligible, dbPlayerCell);
+
+        // Always add random encounter NPCs for variety.
+        // Even when MemoryDB pool is full, include random loaded NPCs so the LLM
+        // can choose between history-driven stories and fresh encounters.
+        constexpr int RANDOM_ENCOUNTER_SLOTS = 3;
+        {
+            std::unordered_set<RE::FormID> poolIds;
+            for (auto& c : pool) poolIds.insert(c.actor->GetFormID());
+
+            int randomsAdded = 0;
+            int randomTarget = RANDOM_ENCOUNTER_SLOTS;
+
+            ProcessUtils::ForEachLoadedActor([&](RE::Actor* actor) {
+                if (randomsAdded >= randomTarget) return true;
+                if (poolIds.count(actor->GetFormID())) return false;
+                if (recentPlayerNPCs.count(StringUtils::ToLowerStd(actor->GetDisplayFullName()))) return false;
+                if (!IsEligibleStoryCandidate(actor, player, playerCell, tracker)) return false;
+                pool.push_back({actor, 0.0f, actor->GetFormID(), false});
+                poolIds.insert(actor->GetFormID());
+                randomsAdded++;
+                return false;
+            });
+        }
+
+        // Phase 3: Location-mate candidates for npc_interaction/npc_gossip variety.
+        // Scans loaded actors sharing a location with existing pool members.
+        // This is NOT player-proximity-biased like MemoryDB social data — it surfaces
+        // natural NPC pairs (e.g., Carlotta/Mikael in Whiterun market) even without
+        // prior recorded NPC-to-NPC events. NPCs with MemoryDB social history get boosted.
+        {
+            std::unordered_set<RE::FormID> poolIds;
+            for (auto& c : pool) poolIds.insert(c.actor->GetFormID());
+
+            // Collect locations of existing pool members (only loaded ones have locations)
+            std::unordered_set<std::string> poolLocations;
+            for (auto& c : pool) {
+                std::string loc = GetNPCLocationName(c.actor);
+                if (!loc.empty() && loc != "Unknown") {
+                    poolLocations.insert(StringUtils::ToLowerStd(loc));
+                }
+            }
+
+            // Build social score lookup from MemoryDB (for boosting location-mates with history)
+            std::unordered_map<std::string, float> socialScoreLookup;  // lowercase name -> score
+            auto socialNPCs = memDB->GetSociallyActiveFormIDs(20);
+            for (const auto& [formId, name, socialScore] : socialNPCs) {
+                socialScoreLookup[StringUtils::ToLowerStd(name)] = socialScore;
+            }
+
+            // Scan loaded actors for location-mates of pool members
+            int locationMatesAdded = 0;
+            constexpr int MAX_LOCATION_MATES = 4;
+            constexpr float SOCIAL_MEMORY_BOOST = 0.3f;  // Multiplier for MemoryDB social score
+
+            ProcessUtils::ForEachLoadedActor([&](RE::Actor* actor) {
+                if (locationMatesAdded >= MAX_LOCATION_MATES) return true;
+                if (!actor || poolIds.count(actor->GetFormID())) return false;
+                std::string actorNameLower = StringUtils::ToLowerStd(actor->GetDisplayFullName());
+                if (recentPlayerNPCs.count(actorNameLower)) return false;
+                if (!IsEligibleStoryCandidate(actor, player, playerCell, tracker)) return false;
+
+                // Check if this actor shares a location with any pool member
+                std::string actorLoc = GetNPCLocationName(actor);
+                if (actorLoc.empty()) return false;
+                if (!poolLocations.count(StringUtils::ToLowerStd(actorLoc))) return false;
+
+                // Base score: small constant. Boost if NPC has MemoryDB social activity.
+                float score = 1.0f;
+                auto socialIt = socialScoreLookup.find(actorNameLower);
+                if (socialIt != socialScoreLookup.end()) {
+                    score += socialIt->second * SOCIAL_MEMORY_BOOST;
+                }
+
+                pool.push_back({actor, score, actor->GetFormID(), false});
+                poolIds.insert(actor->GetFormID());
+                locationMatesAdded++;
+                return false;
+            });
+
+            if (locationMatesAdded > 0) {
+                logger::debug("[StoryDM] Added {} location-mate NPCs to pool", locationMatesAdded);
+            }
+        }
+
+        if (pool.empty()) {
+            logger::debug("[StoryDM] No eligible candidates for DM context");
+            return "";
+        }
+
+        // --- Multi-factor scoring ---
+        {
+            // Factor 2: Absence bonus (old friends who haven't been seen in a long time)
+            // relMap keyed by lowercase name — handles stale FormIDs in relationship data
+            auto relationships = memDB->GetPlayerRelationshipData();
+            std::unordered_map<std::string, PlayerRelationship> relMap;
+            for (const auto& rel : relationships) {
+                relMap[StringUtils::ToLowerStd(rel.name)] = rel;
+            }
+
+            // Use DB-derived time — Calendar may not match SkyrimNet's game_time scale
+            float currentHours = memDB->GetCurrentDBHours();
+            constexpr float ABSENCE_BONUS_WEIGHT = 1.5f;
+            constexpr float GEOGRAPHIC_BONUS = 3.0f;
+            constexpr float FRIEND_OF_FRIEND_BONUS = 2.0f;
+            constexpr float NOVELTY_BONUS = 4.0f;
+            constexpr float RANDOM_NOISE_MAX = 3.0f;
+
+            // Factor 4: Geographic hold bonus — player's hold
+            std::string playerHold = GetNPCHoldName(player);
+
+            // Factor 5: Friend-of-friend — build second-degree connection set (by lowercase name)
+            std::unordered_set<std::string> friendOfFriendNames;
+            {
+                // Sort player relationships by interaction count, take top 5
+                auto relSorted = relationships;
+                std::sort(relSorted.begin(), relSorted.end(),
+                    [](const PlayerRelationship& a, const PlayerRelationship& b) {
+                        return a.interactionCount > b.interactionCount;
+                    });
+
+                int friendsChecked = 0;
+                for (const auto& rel : relSorted) {
+                    if (friendsChecked >= 5) break;
+                    auto related = memDB->GetRelatedCandidateFormIDs(rel.formId, 5);
+                    for (const auto& [fofId, fofName, fofScore] : related) {
+                        if (fofId != 0x14 && !fofName.empty()) {
+                            friendOfFriendNames.insert(StringUtils::ToLowerStd(fofName));
+                        }
+                    }
+                    friendsChecked++;
+                }
+            }
+
+            // Factor 3: Random perturbation
+            static thread_local std::mt19937 rng(std::random_device{}());
+            std::uniform_real_distribution<float> noiseDist(0.0f, RANDOM_NOISE_MAX);
+
+            for (auto& c : pool) {
+                // Dampen MemoryDB activity to prevent feedback loops —
+                // NPCs who get dispatched generate more events, raising their score.
+                // log2 flattens the curve: 90→6.5, 10→3.5, 2→1.6, 0→0.
+                float activity = std::log2(c.score + 1.0f);
+                float absenceBonus = 0.0f;
+                float geoBonus = 0.0f;
+                float fofBonus = 0.0f;
+
+                // Absence bonus — look up by lowercase name (survives FormID changes)
+                std::string actorNameLower = StringUtils::ToLowerStd(c.actor->GetDisplayFullName());
+                auto relIt = relMap.find(actorNameLower);
+                if (relIt != relMap.end() && relIt->second.interactionCount > 0) {
+                    // DB game_time is in seconds: divide by 86400 (3600*24) to get days
+                    float daysSinceLast = (currentHours - relIt->second.lastInteractionHours) / 86400.0f;
+                    if (daysSinceLast < 0.0f) daysSinceLast = 0.0f;
+                    float absenceRatio = std::min(daysSinceLast / 30.0f, 2.0f);
+                    // Depth from interaction count. sqrt() dampens: 100→10, 25→5, 4→2.
+                    // Capped at 15.0 (225+ interactions) to prevent extreme values from
+                    // permanently locking rankings, while still strongly rewarding deep history.
+                    float depth = std::min(std::sqrt(static_cast<float>(relIt->second.interactionCount)), 15.0f);
+                    absenceBonus = absenceRatio * depth * ABSENCE_BONUS_WEIGHT;
+                }
+
+                // Novelty bonus — graduated decay by interaction count.
+                // Unknown NPCs (0 interactions) get full bonus (4.0).
+                // Shallow history decays smoothly: 1→2.0, 3→1.0, 10→0.36.
+                // Deep history (~0) lets absence bonus dominate instead.
+                // Hyperbolic curve fills the dead zone between novelty and absence.
+                float noveltyBonus = 0.0f;
+                if (relIt == relMap.end()) {
+                    noveltyBonus = NOVELTY_BONUS;
+                } else {
+                    noveltyBonus = NOVELTY_BONUS / (1.0f + static_cast<float>(relIt->second.interactionCount));
+                }
+
+                // Geographic bonus — same hold as player (uses editor location for unloaded)
+                if (!playerHold.empty()) {
+                    std::string npcHold = GetNPCHoldName(c.actor);
+                    if (!npcHold.empty() && npcHold == playerHold) {
+                        geoBonus = GEOGRAPHIC_BONUS;
+                    }
+                }
+
+                // Friend-of-friend bonus — look up by lowercase name
+                if (friendOfFriendNames.count(actorNameLower)) {
+                    fofBonus = FRIEND_OF_FRIEND_BONUS;
+                }
+
+                // Cooldown penalty — recently picked NPCs score lower, decays over 72h.
+                // Naturally rotates candidates so lower-ranked NPCs get a chance.
+                float cooldownPenalty = GetCooldownPenalty(c.actor->GetFormID());
+
+                float noise = noiseDist(rng);
+                c.score = activity + absenceBonus + noveltyBonus + geoBonus + fofBonus + noise - cooldownPenalty;
+
+                if (absenceBonus > 1.0f || geoBonus > 0.0f || fofBonus > 0.0f || noveltyBonus > 0.0f || cooldownPenalty > 0.0f) {
+                    logger::debug("[StoryDM] Score: {} = {:.1f} (act={:.1f} abs={:.1f} nov={:.1f} geo={:.1f} fof={:.1f} cd={:.1f} rng={:.1f})",
+                        c.actor->GetDisplayFullName(), c.score, activity, absenceBonus, noveltyBonus, geoBonus, fofBonus, -cooldownPenalty, noise);
+                }
+            }
+
+            // Re-sort by enhanced score
+            std::sort(pool.begin(), pool.end(), [](const CandidateInfo& a, const CandidateInfo& b) {
+                return a.score > b.score;
+            });
+
+            // Split pool: top maxCandidates history-driven + guaranteed random encounters.
+            // MemoryDB NPCs always outscore randoms, so we separate them before trimming
+            // to guarantee the LLM sees both familiar faces AND fresh encounters.
+            std::vector<CandidateInfo> rankedPool;
+            std::vector<CandidateInfo> randomPool;
+            for (auto& c : pool) {
+                if (c.fromMemoryDB) {
+                    rankedPool.push_back(c);
+                } else {
+                    randomPool.push_back(c);
+                }
+            }
+            // Trim ranked to maxCandidates, then append up to 3 random encounters
+            if (static_cast<int>(rankedPool.size()) > maxCandidates) {
+                rankedPool.resize(maxCandidates);
+            }
+            if (static_cast<int>(randomPool.size()) > RANDOM_ENCOUNTER_SLOTS) {
+                randomPool.resize(RANDOM_ENCOUNTER_SLOTS);
+            }
+            pool = rankedPool;
+            for (auto& c : randomPool) {
+                pool.push_back(c);
+            }
+        }
+
+        // Store DM candidate pool for exact name->FormID resolution during dispatch.
+        // Separate from NPC pool — clearing this won't affect NPC tick's async response.
+        {
+            std::unique_lock poolLock(m_mutex);
+            m_dmCandidatePool.clear();
+            for (const auto& c : pool) {
+                std::string nameLower = StringUtils::ToLowerStd(c.actor->GetDisplayFullName());
+                m_dmCandidatePool[nameLower] = c.actor->GetFormID();
+            }
+        }
+
+        // --- Build markdown ---
+        std::string md;
+        md.reserve(2048);
+
+        // Player location
+        std::string playerLoc = locResolver->GetActorLocationName(player).c_str();
+        if (playerLoc.empty()) playerLoc = "Unknown";
+
+        // Danger + environment
+        bool dangerous = cellAnalyzer->IsPlayerInDangerousLocation();
+        bool interior = playerCell->IsInteriorCell();
+
+        // Hold name (parent location)
+        std::string holdName;
+        if (auto* loc = player->GetCurrentLocation()) {
+            if (auto* parent = loc->parentLoc) {
+                auto n = parent->GetFullName();
+                if (n && n[0]) holdName = n;
+            }
+            if (holdName.empty()) {
+                auto n = loc->GetFullName();
+                if (n && n[0]) holdName = n;
+            }
+        }
+        if (holdName.empty()) holdName = "Unknown";
+
+        const char* timeStr = GetTimeOfDayString();
+
+        md += "## World State\n";
+        md += "- Player: ";  md += player->GetDisplayFullName();
+        md += " at ";        md += playerLoc;        md += "\n";
+        md += "- Danger: ";  md += dangerous ? "DANGEROUS" : "SAFE";  md += "\n";
+        md += "- Environment: ";  md += interior ? "Interior" : "Exterior";  md += "\n";
+        md += "- Hold: ";    md += holdName;   md += "\n";
+        md += "- Time: ";    md += timeStr;    md += "\n\n";
+
+        // --- Fetch NPC-NPC relationships within pool ---
+        // Use dbFormIds for MemoryDB queries (UUID cache maps DB FormIDs, not current game FormIDs)
+        std::vector<RE::FormID> poolFormIds;
+        poolFormIds.reserve(pool.size());
+        for (const auto& c : pool) {
+            poolFormIds.push_back(c.dbFormId);
+        }
+        auto pairRelationships = memDB->GetPoolRelationships(poolFormIds);
+
+        // Build lookup: dbFormId -> list of (otherName, sharedEvents)
+        // Uses dbFormId (not actor->GetFormID()) because GetPoolRelationships returns DB FormIDs
+        std::unordered_map<RE::FormID, std::vector<std::pair<std::string, int>>> connectionMap;
+        for (const auto& pair : pairRelationships) {
+            // Find names from pool using dbFormId
+            std::string name1, name2;
+            for (const auto& c : pool) {
+                if (c.dbFormId == pair.formId1) name1 = c.actor->GetDisplayFullName();
+                if (c.dbFormId == pair.formId2) name2 = c.actor->GetDisplayFullName();
+            }
+            if (!name1.empty() && !name2.empty()) {
+                connectionMap[pair.formId1].push_back({name2, pair.sharedEvents});
+                connectionMap[pair.formId2].push_back({name1, pair.sharedEvents});
+            }
+        }
+
+        // --- Candidate pool ---
+        md += "## Candidate Pool\n\n";
+        int memPerCandidate = std::min(settings->maxMemoriesInContext, 2);
+
+        for (int i = 0; i < static_cast<int>(pool.size()); ++i) {
+            auto* actor = pool[i].actor;
+
+            std::string name = actor->GetDisplayFullName();
+            std::string archetype = ClassifyNPCArchetype(actor);
+            std::string loc = GetNPCLocationName(actor);
+            if (loc.empty()) loc = "Unknown";
+
+            // Gender from actor base (prevents LLM guessing wrong from names)
+            const char* gender = "Male";
+            if (auto* npc = actor->GetActorBase()) {
+                if (npc->GetSex() == RE::SEX::kFemale) gender = "Female";
+            }
+
+            char uuid[16];
+            snprintf(uuid, sizeof(uuid), "0x%08X", actor->GetFormID());
+
+            md += "### ";  md += std::to_string(i + 1);  md += ". ";  md += name;
+            md += " [";    md += archetype;  md += ", ";  md += gender;  md += "] - ";  md += loc;
+            md += " (";    md += uuid;       md += ")\n";
+
+            // Use dbFormId for MemoryDB queries — the DB's FormID is in the UUID cache.
+            // actor->GetFormID() may differ if resolved via name (stale FormID workaround).
+            RE::FormID queryFormId = pool[i].dbFormId;
+            auto memories = memDB->GetFormattedMemories(queryFormId, memPerCandidate);
+            if (!memories.empty()) {
+                md += "Memories:\n";  md += memories;  md += "\n";
+            }
+
+            // Recent dialogue with player — gives DM context on what was already discussed
+            auto dialogue = memDB->GetRecentDialogueForActor(queryFormId, 3);
+            if (!dialogue.empty()) {
+                md += "Last conversation:\n";  md += dialogue;  md += "\n";
+            }
+
+            // Recent events — prevents DM from repeating stories (e.g., thanking player twice)
+            auto recentEvents = memDB->GetRecentEventsForActor(queryFormId, 2);
+            if (!recentEvents.empty()) {
+                md += "Recent:\n";  md += recentEvents;  md += "\n";
+            }
+
+            // NPC-NPC connections within the pool (keyed by dbFormId)
+            auto connIt = connectionMap.find(queryFormId);
+            if (connIt != connectionMap.end() && !connIt->second.empty()) {
+                md += "Knows: ";
+                for (size_t j = 0; j < connIt->second.size(); ++j) {
+                    if (j > 0) md += ", ";
+                    md += connIt->second[j].first;
+                    md += " (";
+                    md += std::to_string(connIt->second[j].second);
+                    md += " events)";
+                }
+                md += "\n";
+            }
+            md += "\n";
+        }
+
+        // Story type usage stats for DM balancing (only types this prompt can pick)
+        static const std::unordered_set<std::string> dmTypes = {
+            "seek_player", "informant", "road_encounter", "ambush", "stalker", "message", "quest"
+        };
+        auto typeCounts = GetStoryTypeCountsMarkdown(dmTypes);
+        if (!typeCounts.empty()) {
+            md += "## Story Type Picks This Session\n";
+            md += typeCounts;
+            md += "\n\n";
+        }
+
+        logger::info("[StoryDM] DM context: {} candidates, {} chars",
+                     pool.size(), md.size());
+        return MemoryDB::EscapeJsonString(md);
+    }
+
+    std::string NPCIndex::BuildNPCInteractionContext(int maxPairs) {
+        auto* player = RE::PlayerCharacter::GetSingleton();
+        if (!player) return "";
+        auto* playerCell = player->GetParentCell();
+        if (!playerCell) return "";
+
+        auto* tracker = SlotTracker::GetSingleton();
+        auto* memDB = MemoryDB::GetSingleton();
+        auto* locResolver = LocationResolver::GetSingleton();
+
+        // Build social score lookup from MemoryDB (for boosting groups with history)
+        std::unordered_map<std::string, float> socialScoreLookup;
+        auto socialNPCs = memDB->GetSociallyActiveFormIDs(20);
+        for (const auto& [formId, name, score] : socialNPCs) {
+            socialScoreLookup[StringUtils::ToLowerStd(name)] = score;
+        }
+
+        // Collect eligible NPCs grouped by location.
+        // Unlike BuildDungeonMasterContext, does NOT exclude player cell —
+        // NPC-to-NPC interactions CAN happen with the player as witness.
+        struct NPCEntry {
+            RE::Actor* actor;
+            std::string location;
+            float socialScore;
+        };
+        std::unordered_map<std::string, std::vector<NPCEntry>> locationGroups;
+
+        static auto* kwActorTypeNPC = RE::TESForm::LookupByID<RE::BGSKeyword>(0x00013794);
+
+        ProcessUtils::ForEachLoadedActor([&](RE::Actor* actor) {
+            if (!actor || actor == player) return false;
+            if (!actor->GetParentCell()) return false;
+            if (actor->IsDead() || actor->IsDisabled()) return false;
+            if (actor->IsInCombat()) return false;
+            if (actor->IsHostileToActor(player)) return false;
+            if (tracker && (tracker->HasActiveTask(actor) || tracker->IsOnCooldown(actor))) return false;
+            if (kwActorTypeNPC && !actor->HasKeyword(kwActorTypeNPC)) return false;
+            // Filter out child NPCs
+            if (auto* race = actor->GetRace()) {
+                if (race->IsChildRace()) return false;
+            }
+            // Full MCM cooldown — prevents wasted LLM turns
+            if (IsOnStoryCooldown(actor->GetFormID(), GetStoryCooldownHours())) return false;
+
+            std::string loc = GetNPCLocationName(actor);
+            if (loc.empty()) return false;
+
+            std::string locLower = StringUtils::ToLowerStd(loc);
+            std::string nameLower = StringUtils::ToLowerStd(actor->GetDisplayFullName());
+
+            float socialScore = 0.0f;
+            auto it = socialScoreLookup.find(nameLower);
+            if (it != socialScoreLookup.end()) {
+                socialScore = it->second;
+            }
+
+            locationGroups[locLower].push_back({actor, loc, socialScore});
+            return false;
+        });
+
+        // Score and filter: only locations with 2+ NPCs form candidate groups
+        struct ScoredGroup {
+            std::string locationDisplay;
+            std::vector<NPCEntry> npcs;
+            float groupScore;
+            bool playerNearby;
+        };
+        std::vector<ScoredGroup> groups;
+
+        static thread_local std::mt19937 rng(std::random_device{}());
+        std::uniform_real_distribution<float> noiseDist(0.0f, 1.0f);
+
+        for (auto& [locKey, npcs] : locationGroups) {
+            if (npcs.size() < 2) continue;
+
+            float groupScore = static_cast<float>(npcs.size());
+            for (const auto& npc : npcs) {
+                groupScore += npc.socialScore * 0.3f;
+            }
+            groupScore += noiseDist(rng);
+
+            bool nearPlayer = false;
+            for (const auto& npc : npcs) {
+                if (npc.actor->GetParentCell() == playerCell) {
+                    nearPlayer = true;
+                    break;
+                }
+            }
+            // Moderate boost for player-nearby groups — witnessing interactions
+            // is more immersive than reading about them in bios later
+            if (nearPlayer) {
+                groupScore += 2.0f;
+            }
+
+            groups.push_back({npcs[0].location, std::move(npcs), groupScore, nearPlayer});
+        }
+
+        if (groups.empty()) {
+            logger::debug("[NPCTick] No location groups with 2+ NPCs");
+            return "";
+        }
+
+        // Sort by score, take top maxPairs
+        std::sort(groups.begin(), groups.end(), [](const ScoredGroup& a, const ScoredGroup& b) {
+            return a.groupScore > b.groupScore;
+        });
+        if (static_cast<int>(groups.size()) > maxPairs) {
+            groups.resize(maxPairs);
+        }
+
+        // Store NPC interaction candidates for exact name->FormID resolution.
+        // Separate from DM pool — clearing this won't affect DM tick's async response.
+        {
+            std::unique_lock poolLock(m_mutex);
+            m_npcCandidatePool.clear();
+            for (const auto& group : groups) {
+                for (const auto& npc : group.npcs) {
+                    std::string nameLower = StringUtils::ToLowerStd(npc.actor->GetDisplayFullName());
+                    m_npcCandidatePool[nameLower] = npc.actor->GetFormID();
+                }
+            }
+        }
+
+        // --- Build markdown ---
+        std::string md;
+        md.reserve(1024);
+
+        // World state (lighter than player-centric DM context)
+        std::string playerLoc = locResolver->GetActorLocationName(player).c_str();
+        if (playerLoc.empty()) playerLoc = "Unknown";
+
+        const char* timeStr = GetTimeOfDayString();
+
+        md += "## World State\n";
+        md += "- Player: ";  md += player->GetDisplayFullName();
+        md += " at ";        md += playerLoc;  md += "\n";
+        md += "- Time: ";    md += timeStr;    md += "\n\n";
+
+        md += "## NPC Groups by Location\n";
+
+        for (const auto& group : groups) {
+            md += "### ";  md += group.locationDisplay;
+            md += " (player nearby: ";  md += group.playerNearby ? "yes" : "no";  md += ")\n";
+
+            int npcCount = std::min(static_cast<int>(group.npcs.size()), 3);
+            for (int i = 0; i < npcCount; ++i) {
+                auto* actor = group.npcs[i].actor;
+                std::string name = actor->GetDisplayFullName();
+                std::string archetype = ClassifyNPCArchetype(actor);
+                const char* gender = "Male";
+                if (auto* npc = actor->GetActorBase()) {
+                    if (npc->GetSex() == RE::SEX::kFemale) gender = "Female";
+                }
+
+                md += "- ";   md += name;
+                md += " [";   md += archetype;  md += ", ";  md += gender;  md += "]";
+                if (actor->IsPlayerTeammate()) {
+                    md += " (follower)";
+                }
+
+                auto memories = memDB->GetFormattedMemories(actor->GetFormID(), 2);
+                if (!memories.empty()) {
+                    md += ": ";  md += memories;
+                }
+                md += "\n";
+            }
+            md += "\n";
+        }
+
+        // Story type usage stats for NPC DM balancing (only types this prompt can pick)
+        static const std::unordered_set<std::string> npcTypes = {
+            "npc_interaction", "npc_gossip"
+        };
+        auto typeCounts = GetStoryTypeCountsMarkdown(npcTypes);
+        if (!typeCounts.empty()) {
+            md += "## Story Type Picks This Session\n";
+            md += typeCounts;
+            md += "\n\n";
+        }
+
+        logger::info("[NPCTick] NPC context: {} groups, {} chars", groups.size(), md.size());
+        return MemoryDB::EscapeJsonString(md);
+    }
+
+    void NPCIndex::NotifyStoryTypePicked(const std::string& storyType) {
+        std::unique_lock lock(m_mutex);
+        m_storyTypeCounts[storyType]++;
+    }
+
+    std::string NPCIndex::GetStoryTypeCountsMarkdown(const std::unordered_set<std::string>& relevantTypes) const {
+        std::shared_lock lock(m_mutex);
+        if (m_storyTypeCounts.empty()) return "";
+
+        std::string result;
+        bool first = true;
+        for (const auto& [type, count] : m_storyTypeCounts) {
+            if (!relevantTypes.empty() && relevantTypes.find(type) == relevantTypes.end()) continue;
+            if (!first) result += ", ";
+            result += type;
+            result += ": ";
+            result += std::to_string(count);
+            first = false;
+        }
+        return result;
+    }
+
+    std::vector<RE::FormID> NPCIndex::GetDMCandidatePoolFormIDs() const {
+        std::shared_lock lock(m_mutex);
+        std::vector<RE::FormID> result;
+        result.reserve(m_dmCandidatePool.size());
+        for (const auto& [name, formId] : m_dmCandidatePool) {
+            result.push_back(formId);
+        }
+        return result;
+    }
+
+    float NPCIndex::GetStoryCooldownHours() {
+        static auto* global = RE::TESForm::LookupByEditorID<RE::TESGlobal>("IntelEngine_StoryEngineCooldown");
+        return global ? global->value : 24.0f;
+    }
+
+    void NPCIndex::NotifyStoryCooldown(RE::FormID formId, float gameTime) {
+        std::unique_lock lock(m_mutex);
+        m_storyCooldowns[formId] = gameTime;
+
+        // Prune expired entries when map grows large (use penalty window, not hard block)
+        if (m_storyCooldowns.size() > 100) {
+            float cooldownDays = GetStoryCooldownHours() / 24.0f;  // MCM-configurable
+            auto* calendar = RE::Calendar::GetSingleton();
+            if (calendar) {
+                float now = calendar->GetCurrentGameTime();
+                std::erase_if(m_storyCooldowns, [&](const auto& pair) {
+                    return (now - pair.second) >= cooldownDays;
+                });
+            }
+        }
+    }
+
+    bool NPCIndex::IsOnStoryCooldown(RE::FormID formId, float cooldownHours) const {
+        std::shared_lock lock(m_mutex);
+        auto it = m_storyCooldowns.find(formId);
+        if (it == m_storyCooldowns.end()) return false;
+
+        auto* calendar = RE::Calendar::GetSingleton();
+        if (!calendar) return false;
+
+        float currentGameTime = calendar->GetCurrentGameTime();
+        float cooldownDays = cooldownHours / 24.0f;
+        return (currentGameTime - it->second) < cooldownDays;
+    }
+
+    float NPCIndex::GetCooldownPenalty(RE::FormID formId) const {
+        constexpr float PENALTY_WEIGHT = 45.0f;
+        float penaltyWindowHours = GetStoryCooldownHours();  // MCM-configurable (default 24h)
+
+        std::shared_lock lock(m_mutex);
+        auto it = m_storyCooldowns.find(formId);
+        if (it == m_storyCooldowns.end()) return 0.0f;
+
+        auto* calendar = RE::Calendar::GetSingleton();
+        if (!calendar) return 0.0f;
+
+        float currentGameTime = calendar->GetCurrentGameTime();
+        float hoursSincePicked = (currentGameTime - it->second) * 24.0f;
+
+        if (hoursSincePicked >= penaltyWindowHours) return 0.0f;
+
+        return ((penaltyWindowHours - hoursSincePicked) / penaltyWindowHours) * PENALTY_WEIGHT;
     }
 
 }  // namespace IntelEngine

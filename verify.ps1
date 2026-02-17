@@ -27,7 +27,8 @@ function Compare-File {
     param(
         [string]$Label,
         [string]$SourcePath,
-        [string]$DestPath
+        [string]$DestPath,
+        [switch]$UseHash  # Use SHA256 hash instead of size-only (for DLLs that can change content without changing size)
     )
 
     $script:checked++
@@ -53,6 +54,18 @@ function Compare-File {
         $script:mismatches += $Label
         return
     }
+    if ($UseHash) {
+        $srcHash = (Get-FileHash $SourcePath -Algorithm SHA256).Hash
+        $dstHash = (Get-FileHash $DestPath -Algorithm SHA256).Hash
+        if ($srcHash -ne $dstHash) {
+            Write-Host "  HASH MISMATCH: $Label (same size, different content!)" -ForegroundColor Red
+            Write-Host "    Source: $srcHash" -ForegroundColor Red
+            Write-Host "    Dest:   $dstHash" -ForegroundColor Red
+            $script:ok = $false
+            $script:mismatches += $Label
+            return
+        }
+    }
     if (-not $Quiet) {
         Write-Host "  OK: $Label ($($src.Length) bytes)" -ForegroundColor Green
     }
@@ -64,15 +77,15 @@ function Compare-File {
 Write-Host "`n=== DLL ===" -ForegroundColor Cyan
 Compare-File "DLL: Build -> Data" `
     "$SKSEDir\build\Release\IntelEngine.dll" `
-    "$DataDir\SKSE\Plugins\IntelEngine.dll"
+    "$DataDir\SKSE\Plugins\IntelEngine.dll" -UseHash
 
 Compare-File "DLL: Data -> Testing" `
     "$DataDir\SKSE\Plugins\IntelEngine.dll" `
-    "$TestDest\SKSE\Plugins\IntelEngine.dll"
+    "$TestDest\SKSE\Plugins\IntelEngine.dll" -UseHash
 
 Compare-File "DLL: Data -> CK" `
     "$DataDir\SKSE\Plugins\IntelEngine.dll" `
-    "$CKDest\SKSE\Plugins\IntelEngine.dll"
+    "$CKDest\SKSE\Plugins\IntelEngine.dll" -UseHash
 
 # =============================================================================
 # PEX: Data → Testing → CK
