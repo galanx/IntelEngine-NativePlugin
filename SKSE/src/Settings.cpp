@@ -85,6 +85,16 @@ namespace IntelEngine {
                     } else if (key == "MaxRetries") {
                         departureMaxRetries = std::stoi(value);
                     }
+                } else if (currentSection == "StoryEngine") {
+                    if (key == "MinAbsenceDays") {
+                        storyMinAbsenceDays = std::stof(value);
+                    }
+                } else if (currentSection == "MemoryDB") {
+                    if (key == "SkyrimNetDbPath") {
+                        skyrimNetDbPath = value;
+                    } else if (key == "MaxMemoriesInContext") {
+                        maxMemoriesInContext = std::stoi(value);
+                    }
                 }
             } catch (const std::exception& e) {
                 logger::warn("Failed to parse setting [{}] {}={}: {}", currentSection, key, value, e.what());
@@ -126,6 +136,16 @@ namespace IntelEngine {
         file << "MinChecks=" << departureMinChecks << "\n";
         file << "; Soft recovery attempts before escalation\n";
         file << "MaxRetries=" << departureMaxRetries << "\n";
+
+        file << "\n[StoryEngine]\n";
+        file << "; Minimum in-game days since player interaction before NPC becomes story candidate\n";
+        file << "MinAbsenceDays=" << storyMinAbsenceDays << "\n";
+
+        file << "\n[MemoryDB]\n";
+        file << "; Override path to SkyrimNet database (empty = auto-detect via USVFS)\n";
+        file << "SkyrimNetDbPath=" << skyrimNetDbPath << "\n";
+        file << "; Maximum memories to inject per actor in story prompts\n";
+        file << "MaxMemoriesInContext=" << maxMemoriesInContext << "\n";
 
         logger::info("Settings saved to {}", configPath);
     }

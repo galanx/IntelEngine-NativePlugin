@@ -10,6 +10,7 @@
 #include "NPCIndex.h"
 #include "LocationResolver.h"
 #include "SlotTracker.h"
+#include "MemoryDB.h"
 #include "Settings.h"
 
 #include <fstream>
@@ -30,17 +31,19 @@ namespace IntelEngine {
                 break;
 
             case SKSE::MessagingInterface::kNewGame:
-                // New game — clear SlotTracker state
-                logger::info("New game - clearing SlotTracker");
+                // New game — clear SlotTracker state, force DB re-discovery
+                logger::info("New game - clearing SlotTracker, disconnecting MemoryDB");
                 SlotTracker::GetSingleton()->ClearAll();
                 NPCIndex::GetSingleton()->RefreshIndex();
+                MemoryDB::GetSingleton()->Disconnect();
                 break;
 
             case SKSE::MessagingInterface::kPostLoadGame:
-                // Game loaded — clear SlotTracker (Papyrus will re-sync via SyncAllSlots)
-                logger::info("Game loaded - clearing SlotTracker (Papyrus will re-sync)");
+                // Game loaded — clear SlotTracker, invalidate MemoryDB (lazy reconnect on first query)
+                logger::info("Game loaded - clearing SlotTracker, disconnecting MemoryDB for lazy reconnect");
                 SlotTracker::GetSingleton()->ClearAll();
                 NPCIndex::GetSingleton()->RefreshIndex();
+                MemoryDB::GetSingleton()->Disconnect();
                 break;
 
             default:

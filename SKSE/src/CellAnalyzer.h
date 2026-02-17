@@ -97,6 +97,12 @@ namespace IntelEngine {
          */
         RE::TESObjectREFR* GetDoorDestination(RE::TESObjectREFR* door);
 
+        /**
+         * Check if the player is in a dangerous location (dungeon, crypt, cave, etc.).
+         * Used by Story Engine to avoid dispatching NPCs into danger zones.
+         */
+        bool IsPlayerInDangerousLocation();
+
     private:
         CellAnalyzer() = default;
         ~CellAnalyzer() = default;
@@ -116,6 +122,11 @@ namespace IntelEngine {
         void EnsureKeywordsCached();
         bool m_keywordsCached = false;
         std::vector<RE::BGSKeyword*> m_interiorKeywords;
+
+        // Lazily cache dangerous location keywords
+        void EnsureDangerousKeywordsCached();
+        bool m_dangerousKeywordsCached = false;
+        std::vector<RE::BGSKeyword*> m_dangerousKeywords;
     };
 
 }  // namespace IntelEngine

@@ -211,6 +211,74 @@ namespace IntelEngine::Papyrus {
     // Check if actor is available for new tasks (no active task + no cooldown).
     // Used as SkyrimNet tag via Papyrus wrapper.
     bool IsActorAvailable(RE::StaticFunctionTag*, RE::Actor* akActor);
+    bool HasBaseAIPackages(RE::StaticFunctionTag*, RE::Actor* akActor);
+    bool HasNonSandboxAI(RE::StaticFunctionTag*, RE::Actor* akActor);
+    RE::TESObjectREFR* GetEditorLocationRef(RE::StaticFunctionTag*, RE::Actor* akActor);
+
+    // ==========================================================================
+    // Story Engine Functions
+    // ==========================================================================
+
+    RE::Actor* GetRandomStoryCandidate(RE::StaticFunctionTag*);
+    RE::Actor* GetMemoryDrivenCandidate(RE::StaticFunctionTag*);
+    RE::Actor* GetRelatedCandidate(RE::StaticFunctionTag*, RE::Actor* relatedTo);
+    RE::BSFixedString GetActorUUID(RE::StaticFunctionTag*, RE::Actor* actor);
+    bool IsPlayerInDangerousLocation(RE::StaticFunctionTag*);
+    bool StoryResponseShouldAct(RE::StaticFunctionTag*, RE::BSFixedString response);
+    RE::BSFixedString StoryResponseGetField(RE::StaticFunctionTag*, RE::BSFixedString json,
+                                            RE::BSFixedString fieldName);
+    RE::BSFixedString BuildActorContextJson(RE::StaticFunctionTag*, RE::Actor* actor,
+                                            int slot);
+    RE::BSFixedString BuildDungeonMasterContext(RE::StaticFunctionTag*, int maxCandidates,
+                                                float absenceDays);
+
+    // NPC-to-NPC interaction context (location-grouped pairs for NPC Social tick)
+    RE::BSFixedString BuildNPCInteractionContext(RE::StaticFunctionTag*, int maxPairs);
+    RE::BSFixedString BuildNPCInteractionRequestJson(RE::StaticFunctionTag*,
+                                                      RE::BSFixedString npcContext,
+                                                      RE::BSFixedString recentLog);
+
+    // Quest enemy spawning — looks up vanilla leveled ActorBases by EditorID,
+    // spawns at location with spread. Returns Actor* array for direct Papyrus use.
+    std::vector<RE::Actor*> SpawnQuestEnemies(RE::StaticFunctionTag*, RE::TESObjectREFR* location,
+                                        RE::BSFixedString enemyType);
+
+    // ==========================================================================
+    // MemoryDB Functions (SkyrimNet SQLite reader)
+    // ==========================================================================
+
+    RE::BSFixedString GetNPCMemories(RE::StaticFunctionTag*, RE::Actor* akActor, int maxCount);
+    RE::BSFixedString GetRecentWorldEvents(RE::StaticFunctionTag*, int maxCount, RE::BSFixedString eventTypeFilter);
+    RE::BSFixedString GetActiveStoryNPCs(RE::StaticFunctionTag*, int maxCount);
+    RE::BSFixedString GetNPCRelationshipSummary(RE::StaticFunctionTag*, RE::Actor* akActor1, RE::Actor* akActor2);
+    RE::BSFixedString IsMemoryDBConnected(RE::StaticFunctionTag*);
+
+    // ==========================================================================
+    // Dialogue Safety Net Functions
+    // ==========================================================================
+
+    // Tick-based check: queries MemoryDB for new dialogue, runs keyword matching.
+    // Returns keyword hint (0=nothing, 1=meeting, 2=fetch, 3=delivery).
+    // Stores the NPC internally — retrieve with GetSafetyNetNPC().
+    int RunSafetyNetCheck(RE::StaticFunctionTag*);
+
+    // Returns the NPC from the last positive RunSafetyNetCheck() call.
+    RE::Actor* GetSafetyNetNPC(RE::StaticFunctionTag*);
+
+    RE::Actor* GetLastConversationPartner(RE::StaticFunctionTag*);
+    RE::BSFixedString GetRecentDialogue(RE::StaticFunctionTag*, RE::Actor* npc, int maxExchanges);
+    int HasScheduleKeywords(RE::StaticFunctionTag*, RE::Actor* npc);
+
+    // Build JSON context for safety net LLM prompt (all values properly escaped).
+    RE::BSFixedString BuildSafetyNetContextJson(RE::StaticFunctionTag*,
+                                                 RE::Actor* npc, int keywordHint);
+
+    // Build JSON request for Story DM prompt. dmContext is pre-escaped from BuildDungeonMasterContext;
+    // recentLog and excludedTypes are escaped here.
+    RE::BSFixedString BuildStoryDMRequestJson(RE::StaticFunctionTag*,
+                                               RE::BSFixedString dmContext,
+                                               RE::BSFixedString recentLog,
+                                               RE::BSFixedString excludedTypes);
 
     // ==========================================================================
     // Debug Functions

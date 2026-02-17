@@ -6,6 +6,8 @@
 
 #include "Papyrus.h"
 #include "NPCIndex.h"
+#include <random>
+#include <algorithm>
 #include "LocationResolver.h"
 #include "StringUtils.h"
 #include "CellAnalyzer.h"
@@ -14,9 +16,20 @@
 #include "StuckDetector.h"
 #include "OffScreenTracker.h"
 #include "SlotTracker.h"
+#include "MemoryDB.h"
 #include "Settings.h"
 
 namespace IntelEngine::Papyrus {
+
+    // Forward declarations for functions defined after Register()
+    RE::Actor* ResolveStoryCandidate(RE::StaticFunctionTag*, RE::BSFixedString);
+    void NotifyStoryCooldown(RE::StaticFunctionTag*, RE::Actor*, float);
+    void NotifyStoryTypePicked(RE::StaticFunctionTag*, RE::BSFixedString);
+    std::vector<int> GetDMCandidatePoolFormIDs(RE::StaticFunctionTag*);
+    RE::BSFixedString RenderFactsSection(RE::StaticFunctionTag*, std::vector<RE::BSFixedString>, std::vector<float>, float);
+    RE::BSFixedString RenderGossipHeardSection(RE::StaticFunctionTag*, std::vector<RE::BSFixedString>, std::vector<RE::BSFixedString>, std::vector<float>, float);
+    RE::BSFixedString RenderGossipToldSection(RE::StaticFunctionTag*, std::vector<RE::BSFixedString>, std::vector<RE::BSFixedString>, std::vector<float>, float);
+    RE::BSFixedString RenderTaskHistorySection(RE::StaticFunctionTag*, std::vector<RE::BSFixedString>, std::vector<float>, float);
 
     bool Register(RE::BSScript::IVirtualMachine* a_vm) {
         if (!a_vm) {
@@ -28,6 +41,7 @@ namespace IntelEngine::Papyrus {
         // NPC Search Functions
         a_vm->RegisterFunction("FindNPCByName", SCRIPT_NAME, FindNPCByName); ++count;
         a_vm->RegisterFunction("FindNPCByNameNear", SCRIPT_NAME, FindNPCByNameNear); ++count;
+        a_vm->RegisterFunction("ResolveStoryCandidate", SCRIPT_NAME, ResolveStoryCandidate); ++count;
         a_vm->RegisterFunction("GetNPCCurrentLocation", SCRIPT_NAME, GetNPCCurrentLocation); ++count;
         a_vm->RegisterFunction("IsNPCAccessible", SCRIPT_NAME, IsNPCAccessible); ++count;
         a_vm->RegisterFunction("GetNPCNameSuggestion", SCRIPT_NAME, GetNPCNameSuggestion); ++count;
@@ -116,6 +130,48 @@ namespace IntelEngine::Papyrus {
         a_vm->RegisterFunction("UpdateSlotState", SCRIPT_NAME, UpdateSlotState); ++count;
         a_vm->RegisterFunction("ClearSlotState", SCRIPT_NAME, ClearSlotState); ++count;
         a_vm->RegisterFunction("IsActorAvailable", SCRIPT_NAME, IsActorAvailable); ++count;
+        a_vm->RegisterFunction("HasBaseAIPackages", SCRIPT_NAME, HasBaseAIPackages); ++count;
+        a_vm->RegisterFunction("HasNonSandboxAI", SCRIPT_NAME, HasNonSandboxAI); ++count;
+        a_vm->RegisterFunction("GetEditorLocationRef", SCRIPT_NAME, GetEditorLocationRef); ++count;
+
+        // Story Engine Functions
+        a_vm->RegisterFunction("GetRandomStoryCandidate", SCRIPT_NAME, GetRandomStoryCandidate); ++count;
+        a_vm->RegisterFunction("GetMemoryDrivenCandidate", SCRIPT_NAME, GetMemoryDrivenCandidate); ++count;
+        a_vm->RegisterFunction("GetRelatedCandidate", SCRIPT_NAME, GetRelatedCandidate); ++count;
+        a_vm->RegisterFunction("GetActorUUID", SCRIPT_NAME, GetActorUUID); ++count;
+        a_vm->RegisterFunction("IsPlayerInDangerousLocation", SCRIPT_NAME, IsPlayerInDangerousLocation); ++count;
+        a_vm->RegisterFunction("StoryResponseShouldAct", SCRIPT_NAME, StoryResponseShouldAct); ++count;
+        a_vm->RegisterFunction("StoryResponseGetField", SCRIPT_NAME, StoryResponseGetField); ++count;
+        a_vm->RegisterFunction("BuildActorContextJson", SCRIPT_NAME, BuildActorContextJson); ++count;
+        a_vm->RegisterFunction("BuildDungeonMasterContext", SCRIPT_NAME, BuildDungeonMasterContext); ++count;
+        a_vm->RegisterFunction("BuildNPCInteractionContext", SCRIPT_NAME, BuildNPCInteractionContext); ++count;
+        a_vm->RegisterFunction("BuildNPCInteractionRequestJson", SCRIPT_NAME, BuildNPCInteractionRequestJson); ++count;
+        a_vm->RegisterFunction("NotifyStoryCooldown", SCRIPT_NAME, NotifyStoryCooldown); ++count;
+        a_vm->RegisterFunction("NotifyStoryTypePicked", SCRIPT_NAME, NotifyStoryTypePicked); ++count;
+        a_vm->RegisterFunction("GetDMCandidatePoolFormIDs", SCRIPT_NAME, GetDMCandidatePoolFormIDs); ++count;
+        a_vm->RegisterFunction("SpawnQuestEnemies", SCRIPT_NAME, SpawnQuestEnemies); ++count;
+
+        // MemoryDB Functions (SkyrimNet SQLite reader)
+        a_vm->RegisterFunction("GetNPCMemories", SCRIPT_NAME, GetNPCMemories); ++count;
+        a_vm->RegisterFunction("GetRecentWorldEvents", SCRIPT_NAME, GetRecentWorldEvents); ++count;
+        a_vm->RegisterFunction("GetActiveStoryNPCs", SCRIPT_NAME, GetActiveStoryNPCs); ++count;
+        a_vm->RegisterFunction("GetNPCRelationshipSummary", SCRIPT_NAME, GetNPCRelationshipSummary); ++count;
+        a_vm->RegisterFunction("IsMemoryDBConnected", SCRIPT_NAME, IsMemoryDBConnected); ++count;
+
+        // Dialogue Safety Net Functions
+        a_vm->RegisterFunction("RunSafetyNetCheck", SCRIPT_NAME, RunSafetyNetCheck); ++count;
+        a_vm->RegisterFunction("GetSafetyNetNPC", SCRIPT_NAME, GetSafetyNetNPC); ++count;
+        a_vm->RegisterFunction("GetLastConversationPartner", SCRIPT_NAME, GetLastConversationPartner); ++count;
+        a_vm->RegisterFunction("GetRecentDialogue", SCRIPT_NAME, GetRecentDialogue); ++count;
+        a_vm->RegisterFunction("HasScheduleKeywords", SCRIPT_NAME, HasScheduleKeywords); ++count;
+        a_vm->RegisterFunction("BuildSafetyNetContextJson", SCRIPT_NAME, BuildSafetyNetContextJson); ++count;
+        a_vm->RegisterFunction("BuildStoryDMRequestJson", SCRIPT_NAME, BuildStoryDMRequestJson); ++count;
+
+        // Bio Section Pre-Rendering Functions
+        a_vm->RegisterFunction("RenderFactsSection", SCRIPT_NAME, RenderFactsSection); ++count;
+        a_vm->RegisterFunction("RenderGossipHeardSection", SCRIPT_NAME, RenderGossipHeardSection); ++count;
+        a_vm->RegisterFunction("RenderGossipToldSection", SCRIPT_NAME, RenderGossipToldSection); ++count;
+        a_vm->RegisterFunction("RenderTaskHistorySection", SCRIPT_NAME, RenderTaskHistorySection); ++count;
 
         // Debug Functions
         a_vm->RegisterFunction("TestNPCSearch", SCRIPT_NAME, TestNPCSearch); ++count;
@@ -139,6 +195,10 @@ namespace IntelEngine::Papyrus {
 
     RE::Actor* FindNPCByNameNear(RE::StaticFunctionTag*, RE::BSFixedString searchTerm, RE::Actor* nearActor) {
         return NPCIndex::GetSingleton()->FindByNameNear(searchTerm.c_str(), nearActor);
+    }
+
+    RE::Actor* ResolveStoryCandidate(RE::StaticFunctionTag*, RE::BSFixedString name) {
+        return NPCIndex::GetSingleton()->ResolveStoryCandidate(name.c_str());
     }
 
     RE::BSFixedString GetNPCCurrentLocation(RE::StaticFunctionTag*, RE::Actor* akNPC) {
@@ -893,6 +953,613 @@ namespace IntelEngine::Papyrus {
         return available;
     }
 
+    bool HasBaseAIPackages(RE::StaticFunctionTag*, RE::Actor* akActor) {
+        if (!akActor) return false;
+        auto* npc = akActor->GetActorBase();
+        if (!npc) return false;
+
+        std::uint32_t count = 0;
+        for ([[maybe_unused]] auto* pkg : npc->aiPackages.packages) {
+            if (pkg) count++;
+        }
+        bool hasPackages = count > 0;
+        logger::info("HasBaseAIPackages({}): {} base AI package(s), formID={:08X}",
+                    akActor->GetDisplayFullName(), count, akActor->GetFormID());
+        return hasPackages;
+    }
+
+    bool HasNonSandboxAI(RE::StaticFunctionTag*, RE::Actor* akActor) {
+        if (!akActor) return false;
+        auto* npc = akActor->GetActorBase();
+        if (!npc) return false;
+
+        for (auto* pkg : npc->aiPackages.packages) {
+            if (!pkg) continue;
+            auto type = pkg->packData.packType.get();
+            // Anything other than sandbox/wander/doNothing counts as "schedule" AI
+            if (type != RE::PACKAGE_PROCEDURE_TYPE::kSandbox &&
+                type != RE::PACKAGE_PROCEDURE_TYPE::kWander &&
+                type != RE::PACKAGE_PROCEDURE_TYPE::kDoNothing) {
+                logger::info("HasNonSandboxAI({}): TRUE — found package type {}",
+                            akActor->GetDisplayFullName(), static_cast<int>(type));
+                return true;
+            }
+        }
+        logger::info("HasNonSandboxAI({}): FALSE — all packages are sandbox/wander",
+                    akActor->GetDisplayFullName());
+        return false;
+    }
+
+    RE::TESObjectREFR* GetEditorLocationRef(RE::StaticFunctionTag*, RE::Actor* akActor) {
+        if (!akActor) return nullptr;
+
+        auto* editorLoc = akActor->GetEditorLocation();
+        if (!editorLoc) {
+            logger::info("GetEditorLocationRef({}): no editor location",
+                        akActor->GetDisplayFullName());
+            return nullptr;
+        }
+
+        // Try this location's world marker
+        auto markerPtr = editorLoc->worldLocMarker.get();
+        if (markerPtr) {
+            auto* marker = markerPtr.get();
+            if (marker) {
+                logger::info("GetEditorLocationRef({}): found marker at location '{}'",
+                            akActor->GetDisplayFullName(),
+                            editorLoc->GetFullName() ? editorLoc->GetFullName() : "unnamed");
+                return marker;
+            }
+        }
+
+        // Try parent location's marker (e.g., interior shop → settlement)
+        if (editorLoc->parentLoc) {
+            auto parentPtr = editorLoc->parentLoc->worldLocMarker.get();
+            if (parentPtr) {
+                auto* parentMarker = parentPtr.get();
+                if (parentMarker) {
+                    logger::info("GetEditorLocationRef({}): found marker at parent location '{}'",
+                                akActor->GetDisplayFullName(),
+                                editorLoc->parentLoc->GetFullName() ? editorLoc->parentLoc->GetFullName() : "unnamed");
+                    return parentMarker;
+                }
+            }
+        }
+
+        logger::info("GetEditorLocationRef({}): no usable world marker found",
+                    akActor->GetDisplayFullName());
+        return nullptr;
+    }
+
+    // ==========================================================================
+    // Story Engine Functions
+    // ==========================================================================
+
+    RE::Actor* GetRandomStoryCandidate(RE::StaticFunctionTag*) {
+        auto* candidate = NPCIndex::GetSingleton()->GetRandomStoryCandidate();
+        if (candidate) {
+            logger::info("GetRandomStoryCandidate: Selected '{}'", candidate->GetDisplayFullName());
+        } else {
+            logger::debug("GetRandomStoryCandidate: No eligible candidates found");
+        }
+        return candidate;
+    }
+
+    RE::Actor* GetMemoryDrivenCandidate(RE::StaticFunctionTag*) {
+        return NPCIndex::GetSingleton()->GetMemoryDrivenCandidate();
+    }
+
+    RE::Actor* GetRelatedCandidate(RE::StaticFunctionTag*, RE::Actor* relatedTo) {
+        return NPCIndex::GetSingleton()->GetRelatedCandidate(relatedTo);
+    }
+
+    RE::BSFixedString GetActorUUID(RE::StaticFunctionTag*, RE::Actor* actor) {
+        if (!actor) return "";
+        char buf[16];
+        snprintf(buf, sizeof(buf), "0x%08X", actor->GetFormID());
+        return RE::BSFixedString(buf);
+    }
+
+    bool IsPlayerInDangerousLocation(RE::StaticFunctionTag*) {
+        return CellAnalyzer::GetSingleton()->IsPlayerInDangerousLocation();
+    }
+
+    bool StoryResponseShouldAct(RE::StaticFunctionTag*, RE::BSFixedString response) {
+        std::string_view sv(response.c_str());
+        bool result = sv.find("\"should_act\":true") != std::string_view::npos ||
+                      sv.find("\"should_act\": true") != std::string_view::npos;
+        logger::info("[StoryDM] ShouldAct={} — input len={}", result, sv.size());
+        return result;
+    }
+
+    RE::BSFixedString StoryResponseGetField(RE::StaticFunctionTag*, RE::BSFixedString json,
+                                            RE::BSFixedString fieldName) {
+        std::string_view sv(json.c_str());
+        // BSFixedString is case-insensitive: "npc" may become "NPC" if the engine
+        // already stored that casing.  We must also handle camelCase keys like
+        // "msgContent" that get lowercased.  Solution: lowercase BOTH the JSON
+        // (for searching) and the field name, but extract values from the original.
+        std::string jsonLower(sv);
+        std::transform(jsonLower.begin(), jsonLower.end(), jsonLower.begin(),
+                       [](unsigned char c) { return std::tolower(c); });
+
+        std::string field(fieldName.c_str());
+        std::transform(field.begin(), field.end(), field.begin(),
+                       [](unsigned char c) { return std::tolower(c); });
+        std::string needle = "\"" + field + "\":";
+        auto pos = jsonLower.find(needle);
+        if (pos == std::string::npos) {
+            // Try with space after colon
+            needle = "\"" + field + "\": ";
+            pos = jsonLower.find(needle);
+        }
+        if (pos == std::string::npos) {
+            logger::warn("[StoryDM] GetField('{}') NOT FOUND — input len={}, first80='{}'",
+                         fieldName.c_str(), sv.size(),
+                         sv.size() > 80 ? sv.substr(0, 80) : sv);
+            return "";
+        }
+
+        // Find opening quote of value (use original sv for value extraction)
+        auto quoteStart = sv.find('"', pos + needle.size());
+        if (quoteStart == std::string_view::npos) return "";
+
+        // Find closing quote (handle escaped quotes)
+        auto i = quoteStart + 1;
+        while (i < sv.size()) {
+            if (sv[i] == '"' && (i == 0 || sv[i - 1] != '\\')) break;
+            ++i;
+        }
+        if (i >= sv.size()) return "";
+
+        auto value = sv.substr(quoteStart + 1, i - quoteStart - 1);
+        return RE::BSFixedString(std::string(value).c_str());
+    }
+
+    RE::BSFixedString BuildActorContextJson(RE::StaticFunctionTag*, RE::Actor* actor,
+                                            int slot) {
+        if (!actor) {
+            logger::warn("[IntelEngine] BuildActorContextJson: actor is null");
+            return "";
+        }
+
+        // slot 0 = "actor" (single), 1 = "actor1", 2 = "actor2"
+        const char* pfx;
+        switch (slot) {
+            case 1:  pfx = "actor1"; break;
+            case 2:  pfx = "actor2"; break;
+            default: pfx = "actor";  break;
+        }
+
+        std::string name = actor->GetDisplayFullName();
+        logger::info("[IntelEngine] BuildActorContextJson: slot={}, actor='{}'", slot, name);
+
+        // Race
+        std::string race;
+        if (auto* raceForm = actor->GetRace()) {
+            const char* raceName = raceForm->GetFullName();
+            if (raceName && raceName[0] != '\0') {
+                race = raceName;
+            }
+        }
+
+        // Gender
+        auto* base = actor->GetActorBase();
+        bool isMale = base ? (base->GetSex() == RE::SEX::kMale) : true;
+
+        // Build JSON fragment — hardcoded keys, zero Papyrus string involvement
+        std::string json;
+        json.reserve(256);
+        json += ",\"";  json += pfx;  json += "Name\":\"";    json += name;  json += "\"";
+        json += ",\"";  json += pfx;  json += "Race\":\"";    json += race;  json += "\"";
+        json += ",\"";  json += pfx;  json += "Gender\":\"";  json += (isMale ? "Male" : "Female");  json += "\"";
+
+        // Numeric form ID for SkyrimNet decorators (get_relevant_memories, etc.)
+        json += ",\"";  json += pfx;  json += "FormID\":";  json += std::to_string(actor->GetFormID());
+
+        // Single-actor prompts get pronouns
+        if (slot == 0) {
+            if (isMale) {
+                json += ",\"subj\":\"he\",\"obj\":\"him\",\"poss\":\"his\"";
+            } else {
+                json += ",\"subj\":\"she\",\"obj\":\"her\",\"poss\":\"her\"";
+            }
+        }
+
+        // Inject NPC memories from SkyrimNet database
+        auto* settings = Settings::GetSingleton();
+        auto memories = MemoryDB::GetSingleton()->GetFormattedMemories(
+            actor->GetFormID(), settings->maxMemoriesInContext);
+        if (!memories.empty()) {
+            json += ",\"";  json += pfx;  json += "Memories\":\"";
+            json += MemoryDB::EscapeJsonString(memories);  json += "\"";
+        }
+
+        logger::info("[IntelEngine] BuildActorContextJson: result='{}' ({} chars)", json, json.size());
+        return RE::BSFixedString(json);
+    }
+
+    RE::BSFixedString BuildDungeonMasterContext(RE::StaticFunctionTag*, int maxCandidates,
+                                                float absenceDays) {
+        if (maxCandidates <= 0) maxCandidates = 5;
+        if (absenceDays <= 0.0f) absenceDays = 3.0f;
+        auto result = NPCIndex::GetSingleton()->BuildDungeonMasterContext(maxCandidates, absenceDays);
+        return RE::BSFixedString(result);
+    }
+
+    RE::BSFixedString BuildNPCInteractionContext(RE::StaticFunctionTag*, int maxPairs) {
+        if (maxPairs <= 0) maxPairs = 4;
+        auto result = NPCIndex::GetSingleton()->BuildNPCInteractionContext(maxPairs);
+        return RE::BSFixedString(result);
+    }
+
+    RE::BSFixedString BuildNPCInteractionRequestJson(RE::StaticFunctionTag*,
+                                                      RE::BSFixedString npcContext,
+                                                      RE::BSFixedString recentLog) {
+        // npcContext is already JSON-escaped by BuildNPCInteractionContext — do NOT double-escape
+        // recentLog is raw Papyrus string — must escape
+        std::string json = "{";
+        json += "\"npcPairPool\":\"" + std::string(npcContext.c_str()) + "\",";
+        json += "\"recentStoryEvents\":\"" + MemoryDB::EscapeJsonString(recentLog.c_str()) + "\"}";
+        return RE::BSFixedString(json);
+    }
+
+    void NotifyStoryCooldown(RE::StaticFunctionTag*, RE::Actor* akActor, float gameTime) {
+        if (!akActor) return;
+        NPCIndex::GetSingleton()->NotifyStoryCooldown(akActor->GetFormID(), gameTime);
+    }
+
+    void NotifyStoryTypePicked(RE::StaticFunctionTag*, RE::BSFixedString storyType) {
+        std::string type(storyType.c_str());
+        if (!type.empty()) {
+            NPCIndex::GetSingleton()->NotifyStoryTypePicked(type);
+        }
+    }
+
+    std::vector<int> GetDMCandidatePoolFormIDs(RE::StaticFunctionTag*) {
+        auto formIds = NPCIndex::GetSingleton()->GetDMCandidatePoolFormIDs();
+        std::vector<int> result;
+        result.reserve(formIds.size());
+        for (auto fid : formIds) {
+            result.push_back(static_cast<int>(fid));
+        }
+        return result;
+    }
+
+    // ==========================================================================
+    // MemoryDB Functions (SkyrimNet SQLite reader)
+    // ==========================================================================
+
+    RE::BSFixedString GetNPCMemories(RE::StaticFunctionTag*, RE::Actor* akActor, int maxCount) {
+        if (!akActor) {
+            logger::warn("[IntelEngine] GetNPCMemories: actor is null");
+            return "";
+        }
+        auto result = MemoryDB::GetSingleton()->GetFormattedMemories(akActor->GetFormID(), maxCount);
+        return RE::BSFixedString(result);
+    }
+
+    RE::BSFixedString GetRecentWorldEvents(RE::StaticFunctionTag*, int maxCount, RE::BSFixedString eventTypeFilter) {
+        auto result = MemoryDB::GetSingleton()->GetFormattedRecentEvents(maxCount, eventTypeFilter.c_str());
+        return RE::BSFixedString(result);
+    }
+
+    RE::BSFixedString GetActiveStoryNPCs(RE::StaticFunctionTag*, int maxCount) {
+        auto result = MemoryDB::GetSingleton()->GetActiveStoryNPCs(maxCount);
+        return RE::BSFixedString(result);
+    }
+
+    RE::BSFixedString GetNPCRelationshipSummary(RE::StaticFunctionTag*, RE::Actor* akActor1, RE::Actor* akActor2) {
+        if (!akActor1 || !akActor2) {
+            logger::warn("[IntelEngine] GetNPCRelationshipSummary: actor is null");
+            return "";
+        }
+        auto result = MemoryDB::GetSingleton()->GetRelationshipSummary(
+            akActor1->GetFormID(), akActor2->GetFormID());
+        return RE::BSFixedString(result);
+    }
+
+    RE::BSFixedString IsMemoryDBConnected(RE::StaticFunctionTag*) {
+        return MemoryDB::GetSingleton()->IsConnected() ? "true" : "false";
+    }
+
+    // ==========================================================================
+    // Dialogue Safety Net Functions
+    // ==========================================================================
+
+    // Static state for tick-based safety net (transient — does not survive save/load)
+    static float s_lastCheckedDialogueTime = 0.0f;
+    static RE::FormID s_safetyNetNPCFormId = 0;
+
+    int RunSafetyNetCheck(RE::StaticFunctionTag*) {
+        auto* db = MemoryDB::GetSingleton();
+        auto info = db->GetLatestDialogueInfo();
+
+        // No dialogue found, or same conversation already checked
+        if (info.npcFormId == 0 || info.gameTimeHours == s_lastCheckedDialogueTime) {
+            return 0;
+        }
+
+        // Mark as checked regardless of outcome
+        s_lastCheckedDialogueTime = info.gameTimeHours;
+
+        // Get dialogue text and run keyword matching
+        auto dialogue = db->GetRecentDialogueForActor(info.npcFormId, 4);
+        if (dialogue.empty()) return 0;
+
+        int keywordHint = MemoryDB::CheckScheduleKeywords(dialogue);
+        if (keywordHint == 0) return 0;
+
+        // Validate NPC is alive and reachable
+        auto* form = RE::TESForm::LookupByID(info.npcFormId);
+        if (!form) return 0;
+        auto* actor = form->As<RE::Actor>();
+        if (!actor || actor->IsDead()) return 0;
+
+        // NOTE: Schedule slot check happens in Papyrus (Schedule.FindScheduleSlotByAgent)
+        // because schedule slots are not mirrored in C++ SlotTracker.
+        // Task slots (HasActiveTask) are intentionally NOT checked here — an NPC with
+        // an active task can still receive a schedule that fires later.
+
+        // All C++ gates passed — store NPC and return hint for Papyrus
+        s_safetyNetNPCFormId = info.npcFormId;
+        logger::info("[IntelEngine] SafetyNet: keywords={} for FormID {:X}",
+            keywordHint, info.npcFormId);
+        return keywordHint;
+    }
+
+    RE::Actor* GetSafetyNetNPC(RE::StaticFunctionTag*) {
+        if (s_safetyNetNPCFormId == 0) return nullptr;
+        auto* form = RE::TESForm::LookupByID(s_safetyNetNPCFormId);
+        if (!form) return nullptr;
+        return form->As<RE::Actor>();
+    }
+
+    RE::Actor* GetLastConversationPartner(RE::StaticFunctionTag*) {
+        auto info = MemoryDB::GetSingleton()->GetLatestDialogueInfo();
+        if (info.npcFormId == 0) return nullptr;
+        auto* form = RE::TESForm::LookupByID(info.npcFormId);
+        if (!form) return nullptr;
+        return form->As<RE::Actor>();
+    }
+
+    RE::BSFixedString GetRecentDialogue(RE::StaticFunctionTag*, RE::Actor* npc, int maxExchanges) {
+        if (!npc) {
+            logger::warn("[IntelEngine] GetRecentDialogue: actor is null");
+            return "";
+        }
+        if (maxExchanges < 1) maxExchanges = 4;
+
+        auto result = MemoryDB::GetSingleton()->GetRecentDialogueForActor(
+            npc->GetFormID(), maxExchanges);
+        // JSON-escape for safe embedding in Papyrus contextJson strings
+        return RE::BSFixedString(MemoryDB::EscapeJsonString(result));
+    }
+
+    int HasScheduleKeywords(RE::StaticFunctionTag*, RE::Actor* npc) {
+        if (!npc) return 0;
+
+        auto* db = MemoryDB::GetSingleton();
+        auto dialogue = db->GetRecentDialogueForActor(npc->GetFormID(), 4);
+        if (dialogue.empty()) return 0;
+
+        return MemoryDB::CheckScheduleKeywords(dialogue);
+    }
+
+    RE::BSFixedString BuildSafetyNetContextJson(RE::StaticFunctionTag*,
+                                                 RE::Actor* npc, int keywordHint) {
+        if (!npc) return "";
+
+        auto* db = MemoryDB::GetSingleton();
+        auto dialogue = db->GetRecentDialogueForActor(npc->GetFormID(), 4);
+        if (dialogue.empty()) return "";
+
+        // Get location name (same logic as GetActorParentLocationName)
+        std::string locName;
+        if (auto* loc = npc->GetCurrentLocation()) {
+            auto* parent = loc->parentLoc;
+            if (parent && parent->GetFullName() && strlen(parent->GetFullName()) > 0) {
+                locName = parent->GetFullName();
+            } else if (loc->GetFullName()) {
+                locName = loc->GetFullName();
+            }
+        }
+
+        const char* keywordType = "meeting";
+        if (keywordHint == 2) keywordType = "fetch";
+        else if (keywordHint == 3) keywordType = "delivery";
+
+        auto* player = RE::PlayerCharacter::GetSingleton();
+
+        // Build JSON with proper escaping on all string values
+        std::string json = "{";
+        json += "\"npcName\":\"" + MemoryDB::EscapeJsonString(npc->GetDisplayFullName()) + "\",";
+        json += "\"playerName\":\"" + MemoryDB::EscapeJsonString(player ? player->GetDisplayFullName() : "Player") + "\",";
+        json += "\"location\":\"" + MemoryDB::EscapeJsonString(locName) + "\",";
+        json += "\"dialogue\":\"" + MemoryDB::EscapeJsonString(dialogue) + "\",";
+        json += "\"keywordHint\":\"" + std::string(keywordType) + "\"}";
+
+        return RE::BSFixedString(json);
+    }
+
+    RE::BSFixedString BuildStoryDMRequestJson(RE::StaticFunctionTag*,
+                                               RE::BSFixedString dmContext,
+                                               RE::BSFixedString recentLog,
+                                               RE::BSFixedString excludedTypes) {
+        // dmContext is already JSON-escaped by BuildDungeonMasterContext — do NOT double-escape
+        // recentLog is a raw Papyrus string — must escape
+
+        // Parse comma-separated excluded types into a set for per-type show flags.
+        // Prompt template uses {% if show_X == "1" %} to conditionally render each type.
+        std::unordered_set<std::string> excludedSet;
+        {
+            std::string excl = excludedTypes.c_str();
+            size_t pos = 0;
+            while (pos < excl.size()) {
+                size_t comma = excl.find(',', pos);
+                if (comma == std::string::npos) comma = excl.size();
+                std::string token = excl.substr(pos, comma - pos);
+                // Trim whitespace
+                size_t start = token.find_first_not_of(" \t");
+                size_t end = token.find_last_not_of(" \t");
+                if (start != std::string::npos) {
+                    excludedSet.insert(token.substr(start, end - start + 1));
+                }
+                pos = comma + 1;
+            }
+        }
+
+        static const char* allTypes[] = {
+            "seek_player", "informant", "road_encounter",
+            "ambush", "stalker", "message", "quest"
+        };
+
+        std::string json = "{";
+        json += "\"candidatePool\":\"" + std::string(dmContext.c_str()) + "\",";
+        json += "\"recentStoryEvents\":\"" + MemoryDB::EscapeJsonString(recentLog.c_str()) + "\",";
+
+        // Per-type show flags: "1" if allowed, "" if excluded
+        for (const auto* t : allTypes) {
+            json += "\"show_" + std::string(t) + "\":\"" +
+                    (excludedSet.count(t) ? "" : "1") + "\",";
+        }
+
+        // Remove trailing comma, close
+        if (json.back() == ',') json.pop_back();
+        json += "}";
+
+        return RE::BSFixedString(json);
+    }
+
+    // ==========================================================================
+    // Bio Section Pre-Rendering Functions
+    // ==========================================================================
+    // papyrus_util("GetStringList") can't see StorageUtil lists newly created
+    // during the current session (only co-save data). These functions pre-render
+    // list-based bio sections as single strings, stored via SetStringValue which
+    // IS visible to papyrus_util("GetStringValue") immediately.
+    // Only first-person rendering — templates fall back to list-based for 3P.
+
+    static std::string FormatRelativeTimeFromDays(float currentGameDays, float eventGameDays) {
+        float hoursPassed = (currentGameDays - eventGameDays) * 24.0f;
+        if (hoursPassed < 0.1f) return "just now";
+        if (hoursPassed < 1.0f) return "a few minutes ago";
+        if (hoursPassed < 3.0f) return "a short while ago";
+        if (hoursPassed < 12.0f) return "earlier today";
+        if (hoursPassed < 24.0f) return "yesterday";
+        if (hoursPassed < 48.0f) return "a day ago";
+        if (hoursPassed < 72.0f) return "a couple of days ago";
+        if (hoursPassed < 120.0f) return "a few days ago";
+        if (hoursPassed < 168.0f) return "several days ago";
+        return "some time ago";
+    }
+
+    RE::BSFixedString RenderFactsSection(RE::StaticFunctionTag*,
+                                          std::vector<RE::BSFixedString> facts,
+                                          std::vector<float> factTimes,
+                                          float currentGameDays) {
+        if (facts.empty()) return RE::BSFixedString("");
+
+        std::string result = "## Things I Know\n\n";
+
+        // Reverse order (most recent first), matching template behavior
+        for (int i = static_cast<int>(facts.size()) - 1; i >= 0; --i) {
+            auto idx = static_cast<size_t>(i);
+            std::string timeLabel = "some time ago";
+            if (idx < factTimes.size()) {
+                timeLabel = FormatRelativeTimeFromDays(currentGameDays, factTimes[idx]);
+            }
+            result += "- I ";
+            result += facts[idx].c_str();
+            result += " (";
+            result += timeLabel;
+            result += ")\n";
+        }
+
+        return RE::BSFixedString(result);
+    }
+
+    RE::BSFixedString RenderGossipHeardSection(RE::StaticFunctionTag*,
+                                                std::vector<RE::BSFixedString> rumors,
+                                                std::vector<RE::BSFixedString> sources,
+                                                std::vector<float> times,
+                                                float currentGameDays) {
+        if (rumors.empty()) return RE::BSFixedString("");
+
+        std::string result = "## Rumors I've Heard\n\n";
+
+        for (int i = static_cast<int>(rumors.size()) - 1; i >= 0; --i) {
+            auto idx = static_cast<size_t>(i);
+            std::string source = (idx < sources.size()) ? sources[idx].c_str() : "someone";
+            std::string timeLabel = "some time ago";
+            if (idx < times.size()) {
+                timeLabel = FormatRelativeTimeFromDays(currentGameDays, times[idx]);
+            }
+            result += "- ";
+            result += source;
+            result += " told me: ";
+            result += rumors[idx].c_str();
+            result += " (";
+            result += timeLabel;
+            result += ")\n";
+        }
+
+        return RE::BSFixedString(result);
+    }
+
+    RE::BSFixedString RenderGossipToldSection(RE::StaticFunctionTag*,
+                                               std::vector<RE::BSFixedString> rumors,
+                                               std::vector<RE::BSFixedString> recipients,
+                                               std::vector<float> times,
+                                               float currentGameDays) {
+        if (rumors.empty()) return RE::BSFixedString("");
+
+        std::string result = "## Rumors I've Shared\n\n";
+
+        for (int i = static_cast<int>(rumors.size()) - 1; i >= 0; --i) {
+            auto idx = static_cast<size_t>(i);
+            std::string recipient = (idx < recipients.size()) ? recipients[idx].c_str() : "someone";
+            std::string timeLabel = "some time ago";
+            if (idx < times.size()) {
+                timeLabel = FormatRelativeTimeFromDays(currentGameDays, times[idx]);
+            }
+            result += "- I told ";
+            result += recipient;
+            result += ": ";
+            result += rumors[idx].c_str();
+            result += " (";
+            result += timeLabel;
+            result += ")\n";
+        }
+
+        return RE::BSFixedString(result);
+    }
+
+    RE::BSFixedString RenderTaskHistorySection(RE::StaticFunctionTag*,
+                                                std::vector<RE::BSFixedString> descs,
+                                                std::vector<float> descTimes,
+                                                float currentGameDays) {
+        if (descs.empty()) return RE::BSFixedString("");
+
+        std::string result = "### Past Tasks\nWhat I've done:\n";
+
+        // Reverse order (most recent first)
+        for (int i = static_cast<int>(descs.size()) - 1; i >= 0; --i) {
+            auto idx = static_cast<size_t>(i);
+            std::string timeLabel = "some time ago";
+            if (idx < descTimes.size()) {
+                timeLabel = FormatRelativeTimeFromDays(currentGameDays, descTimes[idx]);
+            }
+            result += "- ";
+            result += descs[idx].c_str();
+            result += " (";
+            result += timeLabel;
+            result += ")\n";
+        }
+
+        return RE::BSFixedString(result);
+    }
+
     // ==========================================================================
     // Debug Functions
     // ==========================================================================
@@ -957,6 +1624,193 @@ namespace IntelEngine::Papyrus {
 
     RE::BSFixedString GetVersion(RE::StaticFunctionTag*) {
         return INTELENGINE_VERSION;
+    }
+
+    // ==========================================================================
+    // Quest Enemy Spawning (replaces 5 CK ActorBase properties)
+    // Returns formID array so Papyrus can persist via StorageUtil (save-safe).
+    // ==========================================================================
+
+    static std::mt19937 s_rng{std::random_device{}()};
+
+    // Exact-match cache (EditorID → single form)
+    static std::unordered_map<std::string, RE::TESBoundObject*> s_leveledActorCache;
+    // Prefix-match cache (EditorID → list of matching forms for random selection)
+    static std::unordered_map<std::string, std::vector<RE::TESBoundObject*>> s_prefixMatchCache;
+
+    static bool IsPrefixSkippable(const char* eid) {
+        // Skip Requiem-nullified forms (REQ_NULL_) and ERDP mod-specific variants
+        return (_strnicmp(eid, "REQ_NULL_", 9) == 0 ||
+                _strnicmp(eid, "ERDP", 4) == 0 ||
+                _strnicmp(eid, "manny_GF_", 9) == 0 ||
+                _strnicmp(eid, "QVK", 3) == 0 ||
+                _strnicmp(eid, "SocDLC", 6) == 0);
+    }
+
+    static RE::TESBoundObject* LookupLeveledActor(const char* editorID) {
+        std::string key(editorID);
+
+        // Check exact cache first (includes negative results)
+        auto it = s_leveledActorCache.find(key);
+        if (it != s_leveledActorCache.end()) {
+            return it->second;
+        }
+
+        // Check prefix cache (picks random match each call)
+        auto pit = s_prefixMatchCache.find(key);
+        if (pit != s_prefixMatchCache.end()) {
+            if (pit->second.empty()) return nullptr;
+            return pit->second[s_rng() % pit->second.size()];
+        }
+
+        // Fast path: engine EditorID map
+        auto* form = RE::TESForm::LookupByEditorID(editorID);
+        if (form) {
+            auto ft = form->GetFormType();
+            if (ft == RE::FormType::LeveledNPC || ft == RE::FormType::NPC) {
+                auto* result = static_cast<RE::TESBoundObject*>(form);
+                s_leveledActorCache[key] = result;
+                return result;
+            }
+            logger::warn("[IntelEngine] LookupLeveledActor: '{}' is FormType {} (expected LeveledNPC/NPC)",
+                        editorID, static_cast<int>(ft));
+        }
+
+        // Enumeration fallback: exact match by GetFormEditorID()
+        auto* dh = RE::TESDataHandler::GetSingleton();
+        if (dh) {
+            for (auto* f : dh->GetFormArray<RE::TESLevCharacter>()) {
+                if (f) {
+                    auto eid = f->GetFormEditorID();
+                    if (eid && eid[0] != '\0' && _stricmp(eid, editorID) == 0) {
+                        auto* result = static_cast<RE::TESBoundObject*>(f);
+                        s_leveledActorCache[key] = result;
+                        logger::info("[IntelEngine] LookupLeveledActor: found '{}' via enumeration (FormID {:08X})",
+                                    editorID, f->GetFormID());
+                        return result;
+                    }
+                }
+            }
+            for (auto* f : dh->GetFormArray<RE::TESNPC>()) {
+                if (f) {
+                    auto eid = f->GetFormEditorID();
+                    if (eid && eid[0] != '\0' && _stricmp(eid, editorID) == 0) {
+                        auto* result = static_cast<RE::TESBoundObject*>(f);
+                        s_leveledActorCache[key] = result;
+                        logger::info("[IntelEngine] LookupLeveledActor: found '{}' via NPC enumeration (FormID {:08X})",
+                                    editorID, f->GetFormID());
+                        return result;
+                    }
+                }
+            }
+
+            // Prefix fallback: Lorerim/Requiem replaces leveled characters with individual
+            // NPC variants (e.g., "LvlBanditMelee" → "LvlBanditMelee1HCold", "LvlBanditMelee2HCold").
+            // Collect all prefix matches, skip mod-specific/nullified forms, pick randomly for variety.
+            size_t prefixLen = strlen(editorID);
+            std::vector<RE::TESBoundObject*> matches;
+            for (auto* f : dh->GetFormArray<RE::TESNPC>()) {
+                if (f) {
+                    auto eid = f->GetFormEditorID();
+                    if (eid && eid[0] != '\0' && _strnicmp(eid, editorID, prefixLen) == 0) {
+                        if (!IsPrefixSkippable(eid)) {
+                            matches.push_back(static_cast<RE::TESBoundObject*>(f));
+                        }
+                    }
+                }
+            }
+            if (!matches.empty()) {
+                logger::info("[IntelEngine] LookupLeveledActor: '{}' not found exactly, using {} prefix matches",
+                            editorID, matches.size());
+                for (auto* m : matches) {
+                    logger::info("  - {} (FormID {:08X})", m->GetName(), m->GetFormID());
+                }
+                s_prefixMatchCache[key] = matches;
+                return matches[s_rng() % matches.size()];
+            }
+        }
+
+        // Complete miss — cache negative result in exact cache
+        s_leveledActorCache[key] = nullptr;
+        return nullptr;
+    }
+
+    std::vector<RE::Actor*> SpawnQuestEnemies(RE::StaticFunctionTag*, RE::TESObjectREFR* location,
+                                        RE::BSFixedString enemyType) {
+        std::vector<RE::Actor*> result;
+        if (!location) {
+            logger::error("[IntelEngine] SpawnQuestEnemies: location is null");
+            return result;
+        }
+
+        std::string type = StringUtils::ToLowerStd(enemyType.c_str());
+
+        const char* primaryID = nullptr;
+        const char* secondaryID = nullptr;
+        int minCount = 1;
+        int maxCount = 1;
+
+        if (type == "bandit") {
+            primaryID = "LvlBanditMelee";
+            secondaryID = "LvlBanditMissile";
+            minCount = 3;
+            maxCount = 5;
+        } else if (type == "draugr") {
+            primaryID = "LvlDraugr";
+            secondaryID = "LvlDraugrMelee";
+            minCount = 2;
+            maxCount = 4;
+        } else if (type == "dragon") {
+            primaryID = "EncDragon01";
+            minCount = 1;
+            maxCount = 1;
+        } else {
+            logger::error("[IntelEngine] SpawnQuestEnemies: unknown enemy type '{}'", type);
+            return result;
+        }
+
+        auto* primaryBase = LookupLeveledActor(primaryID);
+        if (!primaryBase) {
+            logger::error("[IntelEngine] SpawnQuestEnemies: EditorID '{}' not found", primaryID);
+            return result;
+        }
+
+        RE::TESBoundObject* secondaryBase = nullptr;
+        if (secondaryID) {
+            secondaryBase = LookupLeveledActor(secondaryID);
+            if (!secondaryBase) {
+                logger::warn("[IntelEngine] SpawnQuestEnemies: secondary '{}' not found, using primary only", secondaryID);
+            }
+        }
+
+        std::uniform_int_distribution<int> countDist(minCount, maxCount);
+        std::uniform_real_distribution<float> spreadDist(-300.0f, 300.0f);
+
+        int count = countDist(s_rng);
+        auto basePos = location->GetPosition();
+
+        for (int i = 0; i < count; ++i) {
+            auto* baseToSpawn = (secondaryBase && i % 2 == 1) ? secondaryBase : primaryBase;
+
+            auto spawned = location->PlaceObjectAtMe(baseToSpawn, true);
+            if (spawned) {
+                float sx = spreadDist(s_rng);
+                float sy = spreadDist(s_rng);
+                RE::NiPoint3 newPos{basePos.x + sx, basePos.y + sy, basePos.z};
+                spawned->SetPosition(newPos);
+
+                auto* actor = spawned->As<RE::Actor>();
+                if (actor) {
+                    result.push_back(actor);
+                }
+                logger::info("[IntelEngine] SpawnQuestEnemies: spawned '{}' at ({:.0f}, {:.0f})",
+                            baseToSpawn->GetName(), newPos.x, newPos.y);
+            }
+        }
+
+        logger::info("[IntelEngine] SpawnQuestEnemies: {} {} spawned at {}",
+                    result.size(), type, location->GetName());
+        return result;
     }
 
 }  // namespace IntelEngine::Papyrus
