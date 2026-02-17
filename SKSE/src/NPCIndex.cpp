@@ -192,6 +192,7 @@ namespace IntelEngine {
         int bestLiveDist = maxDist + 1;
 
         ProcessUtils::ForEachLoadedActor([&](RE::Actor* actor) {
+            if (!actor || actor->IsDeleted()) return false;
             auto displayName = actor->GetDisplayFullName();
             if (!displayName || strlen(displayName) == 0) return false;
 
@@ -253,6 +254,7 @@ namespace IntelEngine {
 
         // Single pass through all loaded actors — collect all candidates
         ProcessUtils::ForEachLoadedActor([&](RE::Actor* actor) {
+            if (!actor || actor->IsDeleted()) return false;
             if (!allowSelf && actor == nearActor) return false;  // skip self unless allowed
             auto displayName = actor->GetDisplayFullName();
             if (!displayName || strlen(displayName) == 0) return false;
@@ -363,7 +365,18 @@ namespace IntelEngine {
         auto* form = RE::TESForm::LookupByID(formId);
         if (!form) return nullptr;
 
-        // Try to get as Actor directly
+        // Guard against stale pointers to freed/recycled memory.
+        // GetFormID() and IsDeleted() are non-virtual member reads (offsets 0x14
+        // and 0x10) — safe even on corrupted objects in committed heap memory.
+        // If memory was zeroed, GetFormID() returns 0 != formId → early out.
+        // If memory was recycled for a different form, FormID won't match.
+        // Crash report: EXCEPTION_ACCESS_VIOLATION at 0x000000000000 when the
+        // Papyrus VM called a virtual method on the stale Actor* we returned.
+        if (form->GetFormID() != formId || form->IsDeleted()) {
+            logger::warn("GetActorFromFormId(0x{:08X}): stale or deleted form, skipping", formId);
+            return nullptr;
+        }
+
         auto* actor = form->As<RE::Actor>();
         if (actor) return actor;
 
@@ -372,6 +385,7 @@ namespace IntelEngine {
         if (npc) {
             RE::Actor* found = nullptr;
             ProcessUtils::ForEachLoadedActor([&](RE::Actor* a) {
+                if (!a || a->IsDeleted()) return false;
                 auto* base = a->GetActorBase();
                 if (base && base->GetFormID() == formId) {
                     found = a;
@@ -505,6 +519,7 @@ namespace IntelEngine {
     bool NPCIndex::IsEligibleStoryCandidate(RE::Actor* actor, RE::Actor* player,
         RE::TESObjectCELL* playerCell, SlotTracker* tracker) {
         if (!actor || actor == player) return false;
+        if (actor->IsDeleted()) return false;
         if (!actor->GetParentCell()) return false;
         // Filter out nameless/unknown actors
         auto displayName = actor->GetDisplayFullName();
