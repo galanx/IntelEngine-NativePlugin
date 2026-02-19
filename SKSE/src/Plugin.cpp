@@ -18,6 +18,77 @@
 namespace IntelEngine {
 
     // =========================================================================
+    // Papyrus Maintenance Bootstrap
+    // =========================================================================
+
+    /**
+     * Call Maintenance() on IntelEngine_Core via the Papyrus VM.
+     *
+     * OnPlayerLoadGame on the PlayerAlias doesn't fire reliably (alias fill
+     * issue). This C++ safety net ensures Maintenance always runs on every
+     * game load, re-registering timers and recovering tasks.
+     */
+    void DispatchMaintenanceCall(bool firstInstall) {
+        auto* handler = RE::TESDataHandler::GetSingleton();
+        if (!handler) return;
+
+        auto* modFile = handler->LookupModByName("IntelEngine.esp"sv);
+        if (!modFile) {
+            logger::warn("DispatchMaintenance: IntelEngine.esp not loaded");
+            return;
+        }
+
+        // Compute runtime FormID for quest (local ID 0x000D61)
+        RE::FormID questFormId;
+        if (modFile->IsLight()) {
+            questFormId = 0xFE000000 |
+                (static_cast<RE::FormID>(modFile->GetSmallFileCompileIndex()) << 12) |
+                (0x0D61 & 0x0FFF);
+        } else {
+            questFormId = (static_cast<RE::FormID>(modFile->GetCompileIndex()) << 24) | 0x000D61;
+        }
+
+        auto* quest = RE::TESForm::LookupByID<RE::TESQuest>(questFormId);
+        if (!quest) {
+            logger::warn("DispatchMaintenance: Quest {:08X} not found", questFormId);
+            return;
+        }
+
+        if (!quest->IsRunning()) {
+            logger::info("DispatchMaintenance: Quest not running, starting it");
+            quest->Start();
+        }
+
+        auto* vm = RE::BSScript::Internal::VirtualMachine::GetSingleton();
+        if (!vm) {
+            logger::error("DispatchMaintenance: Papyrus VM not available");
+            return;
+        }
+
+        auto* policy = vm->GetObjectHandlePolicy1();
+        if (!policy) {
+            logger::error("DispatchMaintenance: Handle policy not available");
+            return;
+        }
+
+        auto handle = policy->GetHandleForObject(RE::FormType::Quest, quest);
+        if (handle == policy->EmptyHandle()) {
+            logger::error("DispatchMaintenance: Could not get VM handle for quest");
+            return;
+        }
+
+        auto* args = RE::MakeFunctionArguments(static_cast<bool>(firstInstall));
+        RE::BSTSmartPointer<RE::BSScript::IStackCallbackFunctor> callback;
+
+        RE::BSFixedString className("IntelEngine_Core");
+        RE::BSFixedString fnName("Maintenance");
+
+        bool ok = vm->DispatchMethodCall2(handle, className, fnName, args, callback);
+        logger::info("DispatchMaintenance: {} (firstInstall={})",
+            ok ? "queued successfully" : "FAILED to queue", firstInstall);
+    }
+
+    // =========================================================================
     // SKSE Message Handler
     // =========================================================================
 
@@ -36,6 +107,13 @@ namespace IntelEngine {
                 SlotTracker::GetSingleton()->ClearAll();
                 NPCIndex::GetSingleton()->RefreshIndex();
                 MemoryDB::GetSingleton()->Disconnect();
+                // Bootstrap: start quest and call Maintenance for first install
+                {
+                    auto* task = SKSE::GetTaskInterface();
+                    if (task) {
+                        task->AddTask([]() { DispatchMaintenanceCall(true); });
+                    }
+                }
                 break;
 
             case SKSE::MessagingInterface::kPostLoadGame:
@@ -44,6 +122,13 @@ namespace IntelEngine {
                 SlotTracker::GetSingleton()->ClearAll();
                 NPCIndex::GetSingleton()->RefreshIndex();
                 MemoryDB::GetSingleton()->Disconnect();
+                // Bootstrap: call Maintenance since OnPlayerLoadGame doesn't fire reliably
+                {
+                    auto* task = SKSE::GetTaskInterface();
+                    if (task) {
+                        task->AddTask([]() { DispatchMaintenanceCall(false); });
+                    }
+                }
                 break;
 
             default:

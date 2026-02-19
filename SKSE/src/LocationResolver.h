@@ -298,6 +298,7 @@ namespace IntelEngine {
             bool cellWasPublic = false;
             bool interiorDoorWasLocked = false;
             bool exteriorDoorWasLocked = false;
+            int refCount = 0;  // How many slots are using this cell's anti-trespass
         };
         std::unordered_map<RE::FormID, CellOriginalState> m_cellOriginalStates;
 

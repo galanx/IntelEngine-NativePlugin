@@ -124,6 +124,8 @@ namespace IntelEngine {
         m_formIdToUUID.clear();
         m_uuidToFormId.clear();
         m_uuidToName.clear();
+        m_formIdToBioTemplate.clear();
+        m_bioSummaryCache.clear();
         m_dbPath.clear();
         m_connectionAttempted = false;
 
@@ -294,27 +296,68 @@ namespace IntelEngine {
             }
         }
 
-        // Look up bio_template_name
+        // Look up bio_template_name (release shared lock before potentially taking exclusive)
         std::string bioTemplate;
+        bool found = false;
         {
             std::shared_lock lock(m_mutex);
             auto it = m_formIdToBioTemplate.find(formId);
-            if (it == m_formIdToBioTemplate.end()) {
-                // No bio template — cache empty result
-                std::unique_lock wlock(m_mutex);
-                m_bioSummaryCache[formId] = "";
-                return "";
+            if (it != m_formIdToBioTemplate.end()) {
+                bioTemplate = it->second;
+                found = true;
             }
-            bioTemplate = it->second;
+        }
+
+        if (!found) {
+            // No bio template — cache empty result
+            std::unique_lock wlock(m_mutex);
+            m_bioSummaryCache[formId] = "";
+            return "";
         }
 
         // Read the .prompt file from SkyrimNet's character prompts directory.
-        // MO2's USVFS makes overwrite/mod files accessible via Data/ path.
-        std::string filePath = "Data/SKSE/Plugins/SkyrimNet/prompts/characters/" + bioTemplate + ".prompt";
+        // SkyrimNet generates dynamic bios into prompts/characters/ at runtime,
+        // but ships original templates in original_prompts/characters/.
+        // Try dynamic first (more recent), fall back to original templates.
+        const std::string promptFile = bioTemplate + ".prompt";
+        std::string filePath;
+        std::error_code ec;
+
+        std::string dynamicPath = "Data/SKSE/Plugins/SkyrimNet/prompts/characters/" + promptFile;
+        std::string originalPath = "Data/SKSE/Plugins/SkyrimNet/original_prompts/characters/" + promptFile;
+
+        if (std::filesystem::exists(dynamicPath, ec)) {
+            filePath = dynamicPath;
+        } else if (std::filesystem::exists(originalPath, ec)) {
+            filePath = originalPath;
+        } else {
+            // Fallback: SkyrimNet stores save-specific bios in _saves/{saveId}/characters/.
+            // Search all save directories, newest first.
+            std::string savesDir = "Data/SKSE/Plugins/SkyrimNet/prompts/_saves";
+            if (std::filesystem::exists(savesDir, ec) && std::filesystem::is_directory(savesDir, ec)) {
+                std::vector<std::filesystem::directory_entry> saveDirs;
+                for (auto& entry : std::filesystem::directory_iterator(savesDir, ec)) {
+                    if (entry.is_directory(ec)) {
+                        saveDirs.push_back(entry);
+                    }
+                }
+                // Sort by directory name descending (names are timestamps, newest = largest)
+                std::sort(saveDirs.begin(), saveDirs.end(),
+                    [](const auto& a, const auto& b) {
+                        return a.path().filename().string() > b.path().filename().string();
+                    });
+                for (auto& saveDir : saveDirs) {
+                    auto saveBioPath = saveDir.path() / "characters" / promptFile;
+                    if (std::filesystem::exists(saveBioPath, ec)) {
+                        filePath = saveBioPath.string();
+                        break;
+                    }
+                }
+            }
+        }
 
         std::string summary;
-        std::error_code ec;
-        if (std::filesystem::exists(filePath, ec)) {
+        if (!filePath.empty()) {
             std::ifstream file(filePath);
             if (file.is_open()) {
                 std::string content((std::istreambuf_iterator<char>(file)),
@@ -341,7 +384,11 @@ namespace IntelEngine {
         }
 
         if (summary.empty()) {
-            logger::debug("MemoryDB: No bio summary for FormID 0x{:08X} (template: '{}')", formId, bioTemplate);
+            logger::warn("MemoryDB: No bio summary for FormID 0x{:08X} (template: '{}', tried: '{}', '{}', and _saves/*/characters/)",
+                formId, bioTemplate, dynamicPath, originalPath);
+        } else {
+            logger::info("MemoryDB: Bio loaded for 0x{:08X} ({}) from {}: {}...",
+                formId, bioTemplate, filePath, summary.substr(0, 60));
         }
 
         // Cache result (including empty = negative cache)
