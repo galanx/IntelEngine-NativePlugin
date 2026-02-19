@@ -184,6 +184,12 @@ namespace IntelEngine {
         static std::string ClassifyNPCArchetype(RE::Actor* actor);
 
         /**
+         * Build a compact bio line for DM context: race + notable factions.
+         * Filters out internal/crime factions. Returns e.g., "Nord | Companions, Stormcloaks"
+         */
+        static std::string GetNPCBioLine(RE::Actor* actor);
+
+        /**
          * Resolve a name from the DM response to the exact Actor from the last candidate pool.
          * Uses stored FormIDs from BuildDungeonMasterContext/BuildNPCInteractionContext,
          * ensuring we get the EXACT NPC that was in the pool (not a different NPC with the same name).

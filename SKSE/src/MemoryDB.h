@@ -219,6 +219,10 @@ namespace IntelEngine {
          */
         float GetCurrentDBHours();
 
+        // Get the bio summary ({% block summary %}) for an NPC from SkyrimNet's prompt files.
+        // Returns cached summary or reads from disk on first call. Empty if no bio file exists.
+        std::string GetNPCBioSummary(RE::FormID formId);
+
     private:
         MemoryDB() = default;
         ~MemoryDB();
@@ -277,6 +281,10 @@ namespace IntelEngine {
         std::unordered_map<RE::FormID, int64_t> m_formIdToUUID;
         std::unordered_map<int64_t, RE::FormID> m_uuidToFormId;
         std::unordered_map<int64_t, std::string> m_uuidToName;
+        std::unordered_map<RE::FormID, std::string> m_formIdToBioTemplate;
+
+        // Bio summary cache: FormID -> extracted {% block summary %} content
+        std::unordered_map<RE::FormID, std::string> m_bioSummaryCache;
 
         // Connection state
         std::string m_dbPath;

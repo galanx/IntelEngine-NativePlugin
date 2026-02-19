@@ -11,6 +11,7 @@
 
 #include <sqlite3.h>
 #include <filesystem>
+#include <fstream>
 #include <cmath>
 #include <algorithm>
 
@@ -236,11 +237,13 @@ namespace IntelEngine {
         m_formIdToUUID.clear();
         m_uuidToFormId.clear();
         m_uuidToName.clear();
+        m_formIdToBioTemplate.clear();
+        m_bioSummaryCache.clear();
 
         if (!m_db) return;
 
         sqlite3_stmt* stmt = nullptr;
-        const char* sql = "SELECT uuid, form_id, actor_name FROM uuid_mappings";
+        const char* sql = "SELECT uuid, form_id, actor_name, bio_template_name FROM uuid_mappings";
 
         if (sqlite3_prepare_v2(m_db, sql, -1, &stmt, nullptr) != SQLITE_OK) {
             logger::warn("MemoryDB: Failed to prepare uuid_mappings query: {}",
@@ -252,6 +255,7 @@ namespace IntelEngine {
             int64_t uuid = sqlite3_column_int64(stmt, 0);
             int64_t formId64 = sqlite3_column_int64(stmt, 1);
             const char* name = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 2));
+            const char* bioTemplate = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 3));
 
             auto fid = static_cast<RE::FormID>(formId64);
             m_formIdToUUID[fid] = uuid;
@@ -259,10 +263,14 @@ namespace IntelEngine {
             if (name) {
                 m_uuidToName[uuid] = name;
             }
+            if (bioTemplate && bioTemplate[0]) {
+                m_formIdToBioTemplate[fid] = bioTemplate;
+            }
         }
 
         sqlite3_finalize(stmt);
-        logger::info("MemoryDB: Cached {} UUID mappings", m_formIdToUUID.size());
+        logger::info("MemoryDB: Cached {} UUID mappings, {} bio templates",
+            m_formIdToUUID.size(), m_formIdToBioTemplate.size());
     }
 
     int64_t MemoryDB::FormIdToUUID(RE::FormID formId) const {
@@ -274,6 +282,75 @@ namespace IntelEngine {
         if (uuid == 0) return "";
         auto it = m_uuidToName.find(uuid);
         return (it != m_uuidToName.end()) ? it->second : "";
+    }
+
+    std::string MemoryDB::GetNPCBioSummary(RE::FormID formId) {
+        // Check cache first (includes negative cache — empty string = no bio file)
+        {
+            std::shared_lock lock(m_mutex);
+            auto cacheIt = m_bioSummaryCache.find(formId);
+            if (cacheIt != m_bioSummaryCache.end()) {
+                return cacheIt->second;
+            }
+        }
+
+        // Look up bio_template_name
+        std::string bioTemplate;
+        {
+            std::shared_lock lock(m_mutex);
+            auto it = m_formIdToBioTemplate.find(formId);
+            if (it == m_formIdToBioTemplate.end()) {
+                // No bio template — cache empty result
+                std::unique_lock wlock(m_mutex);
+                m_bioSummaryCache[formId] = "";
+                return "";
+            }
+            bioTemplate = it->second;
+        }
+
+        // Read the .prompt file from SkyrimNet's character prompts directory.
+        // MO2's USVFS makes overwrite/mod files accessible via Data/ path.
+        std::string filePath = "Data/SKSE/Plugins/SkyrimNet/prompts/characters/" + bioTemplate + ".prompt";
+
+        std::string summary;
+        std::error_code ec;
+        if (std::filesystem::exists(filePath, ec)) {
+            std::ifstream file(filePath);
+            if (file.is_open()) {
+                std::string content((std::istreambuf_iterator<char>(file)),
+                                     std::istreambuf_iterator<char>());
+                file.close();
+
+                // Extract {% block summary %}...{% endblock %}
+                const std::string startTag = "{% block summary %}";
+                const std::string endTag = "{% endblock %}";
+                auto startPos = content.find(startTag);
+                if (startPos != std::string::npos) {
+                    startPos += startTag.size();
+                    auto endPos = content.find(endTag, startPos);
+                    if (endPos != std::string::npos) {
+                        summary = content.substr(startPos, endPos - startPos);
+                        // Trim whitespace
+                        while (!summary.empty() && (summary.front() == ' ' || summary.front() == '\n' || summary.front() == '\r'))
+                            summary.erase(summary.begin());
+                        while (!summary.empty() && (summary.back() == ' ' || summary.back() == '\n' || summary.back() == '\r'))
+                            summary.pop_back();
+                    }
+                }
+            }
+        }
+
+        if (summary.empty()) {
+            logger::debug("MemoryDB: No bio summary for FormID 0x{:08X} (template: '{}')", formId, bioTemplate);
+        }
+
+        // Cache result (including empty = negative cache)
+        {
+            std::unique_lock lock(m_mutex);
+            m_bioSummaryCache[formId] = summary;
+        }
+
+        return summary;
     }
 
     // =========================================================================
