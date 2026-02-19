@@ -291,6 +291,16 @@ namespace IntelEngine {
         // Last home cell resolved by ResolveAnyDestination (for Papyrus to query)
         RE::FormID m_lastResolvedHomeCellId = 0;
 
+        // Original cell state before anti-trespass modification.
+        // Saved on unlock, restored on re-lock. Prevents turning public
+        // locations (inns, shops) private when cleanup runs.
+        struct CellOriginalState {
+            bool cellWasPublic = false;
+            bool interiorDoorWasLocked = false;
+            bool exteriorDoorWasLocked = false;
+        };
+        std::unordered_map<RE::FormID, CellOriginalState> m_cellOriginalStates;
+
         bool m_indexBuilt = false;
     };
 

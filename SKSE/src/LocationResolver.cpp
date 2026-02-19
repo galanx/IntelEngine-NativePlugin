@@ -1805,7 +1805,36 @@ namespace IntelEngine {
         }
 
         if (unlock) {
-            // Unlock door for pathfinding
+            // Save original state BEFORE modifying — so we only restore what we changed.
+            // Without this, public locations (inns, shops) get set PRIVATE on cleanup,
+            // triggering the vanilla trespass system on buildings that were never restricted.
+            //
+            // Only save on FIRST unlock — if two NPCs unlock the same cell, the second
+            // call must NOT overwrite the saved state (it would record already-modified
+            // values, losing the true original).
+            bool firstUnlock = (m_cellOriginalStates.find(cellFormId) == m_cellOriginalStates.end());
+
+            if (firstUnlock) {
+                CellOriginalState origState;
+                origState.cellWasPublic = homeCell->cellFlags.any(RE::TESObjectCELL::Flag::kPublicArea);
+                origState.interiorDoorWasLocked = interiorDoor->IsLocked();
+
+                // Check exterior door lock state before modifying
+                auto* teleport = interiorDoor->extraList.GetByType<RE::ExtraTeleport>();
+                if (teleport && teleport->teleportData) {
+                    auto linkedDoor = teleport->teleportData->linkedDoor.get();
+                    if (linkedDoor) {
+                        auto* extDoor = linkedDoor.get();
+                        if (extDoor) {
+                            origState.exteriorDoorWasLocked = extDoor->IsLocked();
+                        }
+                    }
+                }
+
+                m_cellOriginalStates[cellFormId] = origState;
+            }
+
+            // Unlock interior door for pathfinding
             if (interiorDoor->IsLocked()) {
                 auto* lock = interiorDoor->GetLock();
                 if (lock) {
@@ -1830,38 +1859,64 @@ namespace IntelEngine {
                 }
             }
 
-            // Make cell public (no trespass)
-            homeCell->SetPublic(true);
-            logger::info("SetHomeDoorAccess: Set cell '{}' ({:08X}) PUBLIC for anti-trespass",
-                        cellName ? cellName : "unnamed", cellFormId);
+            // Make cell public (no trespass) — always set, idempotent
+            if (!homeCell->cellFlags.any(RE::TESObjectCELL::Flag::kPublicArea)) {
+                homeCell->SetPublic(true);
+                logger::info("SetHomeDoorAccess: Set cell '{}' ({:08X}) PUBLIC for anti-trespass",
+                            cellName ? cellName : "unnamed", cellFormId);
+            } else {
+                logger::info("SetHomeDoorAccess: Cell '{}' ({:08X}) already public, no change needed",
+                            cellName ? cellName : "unnamed", cellFormId);
+            }
         } else {
-            // Re-lock door
-            auto* lock = interiorDoor->GetLock();
-            if (lock) {
-                lock->SetLocked(true);
-                logger::info("SetHomeDoorAccess: Re-locked door in '{}'", cellName ? cellName : "unnamed");
+            // Restore to original state — only re-lock/re-private if it was that way before
+            auto stateIt = m_cellOriginalStates.find(cellFormId);
+            if (stateIt == m_cellOriginalStates.end()) {
+                // No saved state — we never unlocked this cell, so don't touch it
+                logger::warn("SetHomeDoorAccess: No saved state for cell {:08X}, skipping restore", cellFormId);
+                return interiorDoor;
             }
 
-            // Also re-lock the exterior-side linked door
-            auto* teleport = interiorDoor->extraList.GetByType<RE::ExtraTeleport>();
-            if (teleport && teleport->teleportData) {
-                auto linkedDoor = teleport->teleportData->linkedDoor.get();
-                if (linkedDoor) {
-                    auto* extDoor = linkedDoor.get();
-                    if (extDoor) {
-                        auto* extLock = extDoor->GetLock();
-                        if (extLock) {
-                            extLock->SetLocked(true);
-                            logger::info("SetHomeDoorAccess: Re-locked exterior door");
+            const auto& origState = stateIt->second;
+
+            // Only re-lock interior door if it was originally locked
+            if (origState.interiorDoorWasLocked) {
+                auto* lock = interiorDoor->GetLock();
+                if (lock) {
+                    lock->SetLocked(true);
+                    logger::info("SetHomeDoorAccess: Re-locked door in '{}'", cellName ? cellName : "unnamed");
+                }
+            }
+
+            // Only re-lock exterior door if it was originally locked
+            if (origState.exteriorDoorWasLocked) {
+                auto* teleport = interiorDoor->extraList.GetByType<RE::ExtraTeleport>();
+                if (teleport && teleport->teleportData) {
+                    auto linkedDoor = teleport->teleportData->linkedDoor.get();
+                    if (linkedDoor) {
+                        auto* extDoor = linkedDoor.get();
+                        if (extDoor) {
+                            auto* extLock = extDoor->GetLock();
+                            if (extLock) {
+                                extLock->SetLocked(true);
+                                logger::info("SetHomeDoorAccess: Re-locked exterior door");
+                            }
                         }
                     }
                 }
             }
 
-            // Make cell private (restore trespass)
-            homeCell->SetPublic(false);
-            logger::info("SetHomeDoorAccess: Set cell '{}' ({:08X}) PRIVATE (restored)",
-                        cellName ? cellName : "unnamed", cellFormId);
+            // Only restore private if cell was originally private
+            if (!origState.cellWasPublic) {
+                homeCell->SetPublic(false);
+                logger::info("SetHomeDoorAccess: Set cell '{}' ({:08X}) PRIVATE (restored original)",
+                            cellName ? cellName : "unnamed", cellFormId);
+            } else {
+                logger::info("SetHomeDoorAccess: Cell '{}' ({:08X}) was originally public, leaving as-is",
+                            cellName ? cellName : "unnamed", cellFormId);
+            }
+
+            m_cellOriginalStates.erase(stateIt);
         }
 
         return interiorDoor;
