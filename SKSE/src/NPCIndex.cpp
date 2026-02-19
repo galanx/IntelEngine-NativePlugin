@@ -796,6 +796,71 @@ namespace IntelEngine {
         return "CIVILIAN";
     }
 
+    std::string NPCIndex::GetNPCBioLine(RE::Actor* actor) {
+        if (!actor) return "";
+
+        // Prefer SkyrimNet bio summary — rich, personality-aware, faction-aware
+        auto* memDB = MemoryDB::GetSingleton();
+        if (memDB) {
+            std::string bio = memDB->GetNPCBioSummary(actor->GetFormID());
+            if (!bio.empty()) return bio;
+        }
+
+        // Fallback: race + factions from game data (for NPCs without bio files)
+        auto* base = actor->GetActorBase();
+        if (!base) return "";
+
+        std::string result;
+
+        if (auto* race = base->GetRace()) {
+            auto raceName = race->GetFullName();
+            if (raceName && raceName[0]) {
+                result = raceName;
+            }
+        }
+
+        std::vector<std::string> factionNames;
+        for (const auto& fr : base->factions) {
+            if (!fr.faction) continue;
+            auto editorId = fr.faction->GetFormEditorID();
+            if (!editorId || !editorId[0]) continue;
+            std::string eid(editorId);
+
+            if (eid.find("CrimeFaction") != std::string::npos) continue;
+            if (eid.find("CurrentFollower") != std::string::npos) continue;
+            if (eid.find("PotentialFollower") != std::string::npos) continue;
+            if (eid.find("PotentialMarriage") != std::string::npos) continue;
+            if (eid.find("WIPlayer") != std::string::npos) continue;
+            if (eid.find("WINever") != std::string::npos) continue;
+            if (eid.find("Job") == 0) continue;
+            if (eid.find("TownFarm") != std::string::npos) continue;
+            if (eid.find("ServicesRent") != std::string::npos) continue;
+            if (eid.find("Favor") != std::string::npos) continue;
+            if (eid.find("defaultDisallow") != std::string::npos) continue;
+
+            auto dispName = fr.faction->GetFullName();
+            if (dispName && dispName[0]) {
+                factionNames.push_back(dispName);
+            } else {
+                if (eid.size() > 7 && eid.substr(eid.size() - 7) == "Faction") {
+                    eid = eid.substr(0, eid.size() - 7);
+                }
+                factionNames.push_back(eid);
+            }
+
+            if (factionNames.size() >= 4) break;
+        }
+
+        if (!factionNames.empty()) {
+            if (!result.empty()) result += " | ";
+            for (size_t i = 0; i < factionNames.size(); ++i) {
+                if (i > 0) result += ", ";
+                result += factionNames[i];
+            }
+        }
+
+        return result;
+    }
 
     std::string NPCIndex::BuildDungeonMasterContext(int maxCandidates, float absenceDays) {
         auto* player = RE::PlayerCharacter::GetSingleton();
@@ -1185,9 +1250,14 @@ namespace IntelEngine {
             char uuid[16];
             snprintf(uuid, sizeof(uuid), "0x%08X", actor->GetFormID());
 
+            std::string bio = GetNPCBioLine(actor);
+
             md += "### ";  md += std::to_string(i + 1);  md += ". ";  md += name;
             md += " [";    md += archetype;  md += ", ";  md += gender;  md += "] - ";  md += loc;
             md += " (";    md += uuid;       md += ")\n";
+            if (!bio.empty()) {
+                md += "Bio: ";  md += bio;  md += "\n";
+            }
 
             // Use dbFormId for MemoryDB queries — the DB's FormID is in the UUID cache.
             // actor->GetFormID() may differ if resolved via name (stale FormID workaround).
@@ -1395,10 +1465,15 @@ namespace IntelEngine {
                     if (npc->GetSex() == RE::SEX::kFemale) gender = "Female";
                 }
 
+                std::string bio = GetNPCBioLine(actor);
+
                 md += "- ";   md += name;
                 md += " [";   md += archetype;  md += ", ";  md += gender;  md += "]";
                 if (actor->IsPlayerTeammate()) {
                     md += " (follower)";
+                }
+                if (!bio.empty()) {
+                    md += " {";  md += bio;  md += "}";
                 }
 
                 auto memories = memDB->GetFormattedMemories(actor->GetFormID(), 2);
