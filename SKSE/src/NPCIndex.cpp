@@ -806,7 +806,7 @@ namespace IntelEngine {
             if (!bio.empty()) return bio;
         }
 
-        // Fallback: race + factions from game data (for NPCs without bio files)
+        // Fallback: race + vanilla factions from game data (for NPCs without bio files)
         auto* base = actor->GetActorBase();
         if (!base) return "";
 
@@ -822,6 +822,12 @@ namespace IntelEngine {
         std::vector<std::string> factionNames;
         for (const auto& fr : base->factions) {
             if (!fr.faction) continue;
+
+            // Only include vanilla factions (Skyrim.esm = mod index 0)
+            // Filters out modded factions (VectorPlexus, Schlongified, etc.)
+            uint8_t modIdx = static_cast<uint8_t>(fr.faction->GetFormID() >> 24);
+            if (modIdx != 0) continue;
+
             auto editorId = fr.faction->GetFormEditorID();
             if (!editorId || !editorId[0]) continue;
             std::string eid(editorId);

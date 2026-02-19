@@ -20,6 +20,7 @@ nul
 
 # Internal Discord promo files (not for repo)
 README-discord*.md
+RELEASE_PITCH.md
 
 # Deprecated/backup verify scripts
 _verify.ps1
