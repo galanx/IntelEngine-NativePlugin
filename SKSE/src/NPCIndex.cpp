@@ -776,6 +776,7 @@ namespace IntelEngine {
 
         // No class name — fall back to skill-based classification
         auto* avo = actor->AsActorValueOwner();
+        if (!avo) return "CIVILIAN";
         float combat = avo->GetActorValue(RE::ActorValue::kOneHanded) +
                        avo->GetActorValue(RE::ActorValue::kTwoHanded) +
                        avo->GetActorValue(RE::ActorValue::kBlock);
