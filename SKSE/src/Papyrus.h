@@ -224,6 +224,10 @@ namespace IntelEngine::Papyrus {
     RE::Actor* GetRelatedCandidate(RE::StaticFunctionTag*, RE::Actor* relatedTo);
     RE::BSFixedString GetActorUUID(RE::StaticFunctionTag*, RE::Actor* actor);
     bool IsPlayerInDangerousLocation(RE::StaticFunctionTag*);
+    bool IsPlayerInOwnHome(RE::StaticFunctionTag*);
+    RE::TESObjectREFR* GetPlayerHomeExteriorDoor(RE::StaticFunctionTag*);
+    RE::TESObjectREFR* GetPlayerHomeInteriorDoor(RE::StaticFunctionTag*);
+    bool IsCivilianClass(RE::StaticFunctionTag*, RE::Actor* actor);
     bool StoryResponseShouldAct(RE::StaticFunctionTag*, RE::BSFixedString response);
     RE::BSFixedString StoryResponseGetField(RE::StaticFunctionTag*, RE::BSFixedString json,
                                             RE::BSFixedString fieldName);
@@ -235,8 +239,7 @@ namespace IntelEngine::Papyrus {
     // NPC-to-NPC interaction context (location-grouped pairs for NPC Social tick)
     RE::BSFixedString BuildNPCInteractionContext(RE::StaticFunctionTag*, int maxPairs);
     RE::BSFixedString BuildNPCInteractionRequestJson(RE::StaticFunctionTag*,
-                                                      RE::BSFixedString npcContext,
-                                                      RE::BSFixedString recentLog);
+                                                      RE::BSFixedString npcContext);
 
     // Quest enemy spawning — looks up vanilla leveled ActorBases by EditorID,
     // spawns at location with spread. Returns Actor* array for direct Papyrus use.
@@ -274,10 +277,9 @@ namespace IntelEngine::Papyrus {
                                                  RE::Actor* npc, int keywordHint);
 
     // Build JSON request for Story DM prompt. dmContext is pre-escaped from BuildDungeonMasterContext;
-    // recentLog and excludedTypes are escaped here.
+    // excludedTypes is escaped here.
     RE::BSFixedString BuildStoryDMRequestJson(RE::StaticFunctionTag*,
                                                RE::BSFixedString dmContext,
-                                               RE::BSFixedString recentLog,
                                                RE::BSFixedString excludedTypes);
 
     // ==========================================================================

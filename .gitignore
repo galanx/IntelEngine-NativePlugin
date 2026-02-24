@@ -37,3 +37,8 @@ _verify_prompt.ps1
 Thumbs.db
 Desktop.ini
 .DS_Store
+tools/
+check_header.ps1
+check_backslash.ps1
+SkyrimNet_API_Issues.log
+CHANGELOG.md

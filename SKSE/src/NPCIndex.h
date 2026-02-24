@@ -210,13 +210,6 @@ namespace IntelEngine {
         bool IsOnStoryCooldown(RE::FormID formId, float cooldownHours) const;
 
         /**
-         * Get decaying score penalty for a recently-picked NPC.
-         * Returns 0 if never picked or penalty window expired.
-         * Linear decay from PENALTY_WEIGHT at pick time to 0 at window end.
-         */
-        float GetCooldownPenalty(RE::FormID formId) const;
-
-        /**
          * Record that the LLM picked a story type. Volatile (per session).
          * Used to build type count stats for DM prompt balancing.
          */

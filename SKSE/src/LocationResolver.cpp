@@ -1042,7 +1042,7 @@ namespace IntelEngine {
     RE::TESObjectREFR* LocationResolver::FindExteriorDoorInCell(RE::TESObjectCELL* cell) {
         if (!cell) return nullptr;
 
-        RE::TESObjectREFR* exteriorDoor = nullptr;
+        RE::TESObjectREFR* found = nullptr;
         cell->ForEachReference([&](RE::TESObjectREFR& ref) -> RE::BSContainer::ForEachResult {
             auto* baseObj = ref.GetBaseObject();
             if (!baseObj || !baseObj->Is(RE::FormType::Door) || ref.IsDisabled())
@@ -1058,14 +1058,38 @@ namespace IntelEngine {
 
             auto* destCell = linkedDoor->GetParentCell();
             if (destCell && !destCell->IsInteriorCell()) {
-                exteriorDoor = &ref;  // Return the INTERIOR-side door
+                found = &ref;
                 return RE::BSContainer::ForEachResult::kStop;
             }
 
             return RE::BSContainer::ForEachResult::kContinue;
         });
 
-        return exteriorDoor;
+        return found;
+    }
+
+    RE::TESObjectREFR* LocationResolver::GetExteriorLinkedDoor(RE::TESObjectREFR* interiorDoor) {
+        if (!interiorDoor) return nullptr;
+        auto* teleport = interiorDoor->extraList.GetByType<RE::ExtraTeleport>();
+        if (!teleport || !teleport->teleportData) return nullptr;
+        auto linked = teleport->teleportData->linkedDoor.get();
+        return linked ? linked.get() : nullptr;
+    }
+
+    RE::TESObjectREFR* LocationResolver::GetPlayerHomeExteriorDoorRef() {
+        auto* player = RE::PlayerCharacter::GetSingleton();
+        if (!player) return nullptr;
+        auto* cell = player->GetParentCell();
+        if (!cell || !cell->IsInteriorCell()) return nullptr;
+        return GetExteriorLinkedDoor(FindExteriorDoorInCell(cell));
+    }
+
+    RE::TESObjectREFR* LocationResolver::GetPlayerHomeInteriorDoorRef() {
+        auto* player = RE::PlayerCharacter::GetSingleton();
+        if (!player) return nullptr;
+        auto* cell = player->GetParentCell();
+        if (!cell || !cell->IsInteriorCell()) return nullptr;
+        return FindExteriorDoorInCell(cell);
     }
 
     RE::TESObjectREFR* LocationResolver::GetLocationTravelTarget(RE::TESObjectCELL* homeCell) {
@@ -1094,14 +1118,8 @@ namespace IntelEngine {
 
         // Fallback: find a door in the home cell that leads to an exterior
         // and return the exterior-side linked door as a travel target
-        auto* interiorDoor = FindExteriorDoorInCell(homeCell);
-        if (interiorDoor) {
-            auto* teleport = interiorDoor->extraList.GetByType<RE::ExtraTeleport>();
-            if (teleport && teleport->teleportData) {
-                auto linkedDoor = teleport->teleportData->linkedDoor.get();
-                if (linkedDoor) return linkedDoor.get();
-            }
-        }
+        auto* exteriorDoor = GetExteriorLinkedDoor(FindExteriorDoorInCell(homeCell));
+        if (exteriorDoor) return exteriorDoor;
 
         return nullptr;
     }

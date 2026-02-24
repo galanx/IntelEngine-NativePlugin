@@ -95,18 +95,19 @@ namespace IntelEngine {
     void MessageHandler(SKSE::MessagingInterface::Message* a_msg) {
         switch (a_msg->type) {
             case SKSE::MessagingInterface::kDataLoaded:
-                // Game data is loaded - build NPC index
-                logger::info("Data loaded - building NPC index");
+                // Game data is loaded - initialize SkyrimNet API and build NPC index
+                logger::info("Data loaded - initializing SkyrimNet API and NPC index");
+                MemoryDB::GetSingleton()->InitializeAPI();
                 NPCIndex::GetSingleton()->BuildIndex();
                 LocationResolver::GetSingleton()->BuildLocationIndex();
                 break;
 
             case SKSE::MessagingInterface::kNewGame:
                 // New game — clear SlotTracker state, force DB re-discovery
-                logger::info("New game - clearing SlotTracker, disconnecting MemoryDB");
+                logger::info("New game - clearing SlotTracker, clearing MemoryDB caches");
                 SlotTracker::GetSingleton()->ClearAll();
                 NPCIndex::GetSingleton()->RefreshIndex();
-                MemoryDB::GetSingleton()->Disconnect();
+                MemoryDB::GetSingleton()->ClearCaches();
                 // Bootstrap: start quest and call Maintenance for first install
                 {
                     auto* task = SKSE::GetTaskInterface();
@@ -118,10 +119,10 @@ namespace IntelEngine {
 
             case SKSE::MessagingInterface::kPostLoadGame:
                 // Game loaded — clear SlotTracker, invalidate MemoryDB (lazy reconnect on first query)
-                logger::info("Game loaded - clearing SlotTracker, disconnecting MemoryDB for lazy reconnect");
+                logger::info("Game loaded - clearing SlotTracker, clearing MemoryDB caches");
                 SlotTracker::GetSingleton()->ClearAll();
                 NPCIndex::GetSingleton()->RefreshIndex();
-                MemoryDB::GetSingleton()->Disconnect();
+                MemoryDB::GetSingleton()->ClearCaches();
                 // Bootstrap: call Maintenance since OnPlayerLoadGame doesn't fire reliably
                 {
                     auto* task = SKSE::GetTaskInterface();

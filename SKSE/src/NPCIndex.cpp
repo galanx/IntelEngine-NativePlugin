@@ -12,11 +12,107 @@
 #include "StringUtils.h"
 #include "ProcessUtils.h"
 #include "Settings.h"
+#include "SkyrimNetAPI.h"
+
+// SkyrimNetAPI.h pulls in Windows.h whose min/max macros conflict with std::min/std::max
+#ifdef max
+#undef max
+#endif
+#ifdef min
+#undef min
+#endif
 
 #include <random>
 #include <cmath>
+#include <chrono>
+#include <mutex>
+#include <sstream>
 
 namespace IntelEngine {
+
+    // ── Faction Blocklist (populated from plugin config) ──
+    // Format: "FactionEditorID" blocks all ranks, "FactionEditorID:N" blocks rank <= N
+    struct BlockedFaction {
+        RE::TESFaction* faction = nullptr;
+        int maxBlockedRank = -1;  // -1 = block all ranks
+    };
+
+    static std::mutex s_blocklistMutex;
+    static std::vector<BlockedFaction> s_blockedFactions;
+    static std::chrono::steady_clock::time_point s_lastBlocklistRefresh;
+
+    static void RefreshFactionBlocklist() {
+        auto now = std::chrono::steady_clock::now();
+        {
+            std::lock_guard<std::mutex> lock(s_blocklistMutex);
+            if (now - s_lastBlocklistRefresh < std::chrono::seconds(30)) return;
+            s_lastBlocklistRefresh = now;
+        }
+
+        if (!SkyrimNetAPI::GetPluginConfigValue) return;
+        std::string csv = SkyrimNetAPI::GetPluginConfigValue("IntelEngine", "story.faction_blocklist", "");
+
+        // Build new list outside the lock, then swap in atomically
+        std::vector<BlockedFaction> newList;
+        if (!csv.empty()) {
+            std::stringstream ss(csv);
+            std::string token;
+            while (std::getline(ss, token, ',')) {
+                size_t start = token.find_first_not_of(" \t");
+                size_t end = token.find_last_not_of(" \t");
+                if (start == std::string::npos) continue;
+                std::string entry = token.substr(start, end - start + 1);
+                if (entry.empty()) continue;
+
+                // Parse optional rank: "FactionEditorID:maxRank"
+                std::string factionId = entry;
+                int maxRank = -1;  // default: block all ranks
+                size_t colonPos = entry.find(':');
+                if (colonPos != std::string::npos) {
+                    factionId = entry.substr(0, colonPos);
+                    try {
+                        maxRank = std::stoi(entry.substr(colonPos + 1));
+                    } catch (...) {
+                        // Invalid rank number — fall back to blocking all ranks
+                        logger::warn("Faction blocklist: invalid rank in '{}', blocking all ranks", entry);
+                        maxRank = -1;
+                    }
+                }
+
+                auto* form = RE::TESForm::LookupByEditorID(factionId);
+                if (auto* faction = form ? form->As<RE::TESFaction>() : nullptr) {
+                    newList.push_back({ faction, maxRank });
+                } else {
+                    logger::warn("Faction blocklist: '{}' not found as a faction", factionId);
+                }
+            }
+        }
+
+        std::lock_guard<std::mutex> lock(s_blocklistMutex);
+        s_blockedFactions = std::move(newList);
+        if (!s_blockedFactions.empty()) {
+            logger::info("Faction blocklist refreshed: {} entries", s_blockedFactions.size());
+        }
+    }
+
+    static bool IsInBlockedFaction(RE::Actor* actor) {
+        std::lock_guard<std::mutex> lock(s_blocklistMutex);
+        for (const auto& blocked : s_blockedFactions) {
+            if (!actor->IsInFaction(blocked.faction)) continue;
+            if (blocked.maxBlockedRank == -1) return true;  // block all ranks
+            // Use VisitFactions to find the actor's rank in this faction
+            bool shouldBlock = false;
+            actor->VisitFactions([&](RE::TESFaction* f, std::int8_t rank) -> bool {
+                if (f == blocked.faction) {
+                    shouldBlock = (rank <= blocked.maxBlockedRank);
+                    return false;  // stop visiting
+                }
+                return true;  // keep visiting
+            });
+            if (shouldBlock) return true;
+        }
+        return false;
+    }
 
     // Shared time-of-day string from timescale-aware game time
     static const char* GetTimeOfDayString() {
@@ -543,6 +639,10 @@ namespace IntelEngine {
         // Full MCM cooldown — prevents wasted LLM turns picking NPCs Papyrus would reject
         if (NPCIndex::GetSingleton()->IsOnStoryCooldown(actor->GetFormID(), GetStoryCooldownHours())) return false;
 
+        // Plugin-configured faction blocklist (refreshes every 30s)
+        RefreshFactionBlocklist();
+        if (IsInBlockedFaction(actor)) return false;
+
         return true;
     }
 
@@ -589,10 +689,19 @@ namespace IntelEngine {
             }
         }
 
-        // No hard cooldown block here — the scoring penalty system (GetCooldownPenalty)
-        // handles recently-picked NPCs by deranking them. Papyrus ApplyCooldownCheck
-        // still acts as a safety net at dispatch time. This allows high-absence NPCs
-        // to appear in the pool even during cooldown (scored low but visible).
+        // Hard cooldown block — prevents recently-dispatched NPCs from appearing in
+        // the pool entirely, forcing variety. Matches IsEligibleStoryCandidate behavior.
+        if (GetSingleton()->IsOnStoryCooldown(actor->GetFormID(), GetStoryCooldownHours())) {
+            logger::debug("[StoryDM] Rejected '{}': story cooldown", displayName);
+            return false;
+        }
+
+        // Plugin-configured faction blocklist (shared with IsEligibleStoryCandidate)
+        RefreshFactionBlocklist();
+        if (IsInBlockedFaction(actor)) {
+            logger::debug("[StoryDM] Rejected '{}': blocked faction", displayName);
+            return false;
+        }
 
         return true;
     }
@@ -1034,7 +1143,7 @@ namespace IntelEngine {
                 relMap[StringUtils::ToLowerStd(rel.name)] = rel;
             }
 
-            // Use DB-derived time — Calendar may not match SkyrimNet's game_time scale
+            // Live game time in seconds (same scale as DB game_time: days * 86400)
             float currentHours = memDB->GetCurrentDBHours();
             constexpr float ABSENCE_BONUS_WEIGHT = 1.5f;
             constexpr float GEOGRAPHIC_BONUS = 3.0f;
@@ -1121,16 +1230,15 @@ namespace IntelEngine {
                     fofBonus = FRIEND_OF_FRIEND_BONUS;
                 }
 
-                // Cooldown penalty — recently picked NPCs score lower, decays over 72h.
-                // Naturally rotates candidates so lower-ranked NPCs get a chance.
-                float cooldownPenalty = GetCooldownPenalty(c.actor->GetFormID());
+                // Hard cooldown block is now in eligibility checks — NPCs on cooldown
+                // never enter the pool, so no scoring penalty needed.
 
                 float noise = noiseDist(rng);
-                c.score = activity + absenceBonus + noveltyBonus + geoBonus + fofBonus + noise - cooldownPenalty;
+                c.score = activity + absenceBonus + noveltyBonus + geoBonus + fofBonus + noise;
 
-                if (absenceBonus > 1.0f || geoBonus > 0.0f || fofBonus > 0.0f || noveltyBonus > 0.0f || cooldownPenalty > 0.0f) {
-                    logger::debug("[StoryDM] Score: {} = {:.1f} (act={:.1f} abs={:.1f} nov={:.1f} geo={:.1f} fof={:.1f} cd={:.1f} rng={:.1f})",
-                        c.actor->GetDisplayFullName(), c.score, activity, absenceBonus, noveltyBonus, geoBonus, fofBonus, -cooldownPenalty, noise);
+                if (absenceBonus > 1.0f || geoBonus > 0.0f || fofBonus > 0.0f || noveltyBonus > 0.0f) {
+                    logger::debug("[StoryDM] Score: {} = {:.1f} (act={:.1f} abs={:.1f} nov={:.1f} geo={:.1f} fof={:.1f} rng={:.1f})",
+                        c.actor->GetDisplayFullName(), c.score, activity, absenceBonus, noveltyBonus, geoBonus, fofBonus, noise);
                 }
             }
 
@@ -1236,7 +1344,8 @@ namespace IntelEngine {
             }
         }
 
-        // --- Candidate pool ---
+        // --- Candidate pool (ascending score: most important candidates last for LLM attention) ---
+        std::reverse(pool.begin(), pool.end());
         md += "## Candidate Pool\n\n";
         int memPerCandidate = std::min(settings->maxMemoriesInContext, 2);
 
@@ -1280,8 +1389,8 @@ namespace IntelEngine {
                 md += "Last conversation:\n";  md += dialogue;  md += "\n";
             }
 
-            // Recent events — prevents DM from repeating stories (e.g., thanking player twice)
-            auto recentEvents = memDB->GetRecentEventsForActor(queryFormId, 2);
+            // Recent events — surfaces NPC-to-NPC interactions and player encounters
+            auto recentEvents = memDB->GetRecentEventsForActor(queryFormId, 3);
             if (!recentEvents.empty()) {
                 md += "Recent:\n";  md += recentEvents;  md += "\n";
             }
@@ -1572,25 +1681,6 @@ namespace IntelEngine {
         float currentGameTime = calendar->GetCurrentGameTime();
         float cooldownDays = cooldownHours / 24.0f;
         return (currentGameTime - it->second) < cooldownDays;
-    }
-
-    float NPCIndex::GetCooldownPenalty(RE::FormID formId) const {
-        constexpr float PENALTY_WEIGHT = 45.0f;
-        float penaltyWindowHours = GetStoryCooldownHours();  // MCM-configurable (default 24h)
-
-        std::shared_lock lock(m_mutex);
-        auto it = m_storyCooldowns.find(formId);
-        if (it == m_storyCooldowns.end()) return 0.0f;
-
-        auto* calendar = RE::Calendar::GetSingleton();
-        if (!calendar) return 0.0f;
-
-        float currentGameTime = calendar->GetCurrentGameTime();
-        float hoursSincePicked = (currentGameTime - it->second) * 24.0f;
-
-        if (hoursSincePicked >= penaltyWindowHours) return 0.0f;
-
-        return ((penaltyWindowHours - hoursSincePicked) / penaltyWindowHours) * PENALTY_WEIGHT;
     }
 
 }  // namespace IntelEngine

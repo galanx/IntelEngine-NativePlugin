@@ -27,6 +27,7 @@ $DataDir = "$ModRoot\Data"
 $OutputDir = "$DataDir\Scripts"
 $SKSEDir = "$ModRoot\SKSE"
 $TestDest = "E:\Modding\Lorerim\mods\Galanx_IntelEngine"
+$VanillaDest = "E:\Modding\VanillaTest\mods\Galanx_IntelEngine"
 $CKDest = "D:\SkyrimVR-MO2\mods\Galanx_IntelEngine"
 
 # =============================================================================
@@ -51,7 +52,8 @@ if (-not $DeployOnly) {
         "IntelEngine_PlayerAlias",
         "IntelEngine_Travel",
         "IntelEngine_NPCTasks",
-        "IntelEngine_Schedule"
+        "IntelEngine_Schedule",
+        "IntelEngine_StoryEngine"
     )
 
     if ($Scripts -and $Scripts.Count -gt 0) {
@@ -149,10 +151,10 @@ Get-ChildItem "$SourceDir\IntelEngine*.psc" | ForEach-Object {
 Write-Host "  Source scripts synced to Data"
 
 # =============================================================================
-# Step 4: Deploy Data folder → Testing + CK (unless -SkipDeploy)
+# Step 4: Deploy Data folder → Testing + Vanilla Test + CK (unless -SkipDeploy)
 # =============================================================================
 if (-not $SkipDeploy) {
-    Write-Host "`n--- Deploying Data to Testing + CK ---" -ForegroundColor Cyan
+    Write-Host "`n--- Deploying Data to Testing + Vanilla Test + CK ---" -ForegroundColor Cyan
 
     $robocopyArgs = @("/E", "/IS", "/IT", "/NFL", "/NDL", "/NJH", "/NJS", "/R:1", "/W:1")
 
@@ -160,6 +162,10 @@ if (-not $SkipDeploy) {
     & robocopy $DataDir $TestDest @robocopyArgs | Out-Null
     $fileCount = (Get-ChildItem $DataDir -Recurse -File).Count
     Write-Host "  -> $fileCount files deployed to Testing" -ForegroundColor Green
+
+    Write-Host "  Copying to Vanilla Test..."
+    & robocopy $DataDir $VanillaDest @robocopyArgs | Out-Null
+    Write-Host "  -> $fileCount files deployed to Vanilla Test" -ForegroundColor Green
 
     Write-Host "  Copying to CK..."
     & robocopy $DataDir $CKDest @robocopyArgs | Out-Null

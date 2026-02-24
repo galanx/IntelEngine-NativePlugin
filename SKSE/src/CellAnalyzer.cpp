@@ -5,6 +5,7 @@
  */
 
 #include "CellAnalyzer.h"
+#include "LocationResolver.h"
 #include "StringUtils.h"
 
 #include <algorithm>
@@ -544,6 +545,17 @@ namespace IntelEngine {
             }
         }
         return false;
+    }
+
+    bool CellAnalyzer::IsPlayerInOwnHome() {
+        auto* player = RE::PlayerCharacter::GetSingleton();
+        if (!player) return false;
+
+        auto* location = player->GetCurrentLocation();
+        if (!location) return false;
+
+        auto* keyword = LocationResolver::GetSingleton()->GetPlayerHouseKeyword();
+        return keyword && location->HasKeyword(keyword);
     }
 
 }  // namespace IntelEngine

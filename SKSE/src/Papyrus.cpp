@@ -140,6 +140,10 @@ namespace IntelEngine::Papyrus {
         a_vm->RegisterFunction("GetRelatedCandidate", SCRIPT_NAME, GetRelatedCandidate); ++count;
         a_vm->RegisterFunction("GetActorUUID", SCRIPT_NAME, GetActorUUID); ++count;
         a_vm->RegisterFunction("IsPlayerInDangerousLocation", SCRIPT_NAME, IsPlayerInDangerousLocation); ++count;
+        a_vm->RegisterFunction("IsPlayerInOwnHome", SCRIPT_NAME, IsPlayerInOwnHome); ++count;
+        a_vm->RegisterFunction("GetPlayerHomeExteriorDoor", SCRIPT_NAME, GetPlayerHomeExteriorDoor); ++count;
+        a_vm->RegisterFunction("GetPlayerHomeInteriorDoor", SCRIPT_NAME, GetPlayerHomeInteriorDoor); ++count;
+        a_vm->RegisterFunction("IsCivilianClass", SCRIPT_NAME, IsCivilianClass); ++count;
         a_vm->RegisterFunction("StoryResponseShouldAct", SCRIPT_NAME, StoryResponseShouldAct); ++count;
         a_vm->RegisterFunction("StoryResponseGetField", SCRIPT_NAME, StoryResponseGetField); ++count;
         a_vm->RegisterFunction("BuildActorContextJson", SCRIPT_NAME, BuildActorContextJson); ++count;
@@ -1064,6 +1068,23 @@ namespace IntelEngine::Papyrus {
         return CellAnalyzer::GetSingleton()->IsPlayerInDangerousLocation();
     }
 
+    bool IsPlayerInOwnHome(RE::StaticFunctionTag*) {
+        return CellAnalyzer::GetSingleton()->IsPlayerInOwnHome();
+    }
+
+    RE::TESObjectREFR* GetPlayerHomeExteriorDoor(RE::StaticFunctionTag*) {
+        return LocationResolver::GetSingleton()->GetPlayerHomeExteriorDoorRef();
+    }
+
+    RE::TESObjectREFR* GetPlayerHomeInteriorDoor(RE::StaticFunctionTag*) {
+        return LocationResolver::GetSingleton()->GetPlayerHomeInteriorDoorRef();
+    }
+
+    bool IsCivilianClass(RE::StaticFunctionTag*, RE::Actor* actor) {
+        if (!actor) return true;
+        return NPCIndex::ClassifyNPCArchetype(actor) == "CIVILIAN";
+    }
+
     bool StoryResponseShouldAct(RE::StaticFunctionTag*, RE::BSFixedString response) {
         std::string_view sv(response.c_str());
         bool result = sv.find("\"should_act\":true") != std::string_view::npos ||
@@ -1194,13 +1215,10 @@ namespace IntelEngine::Papyrus {
     }
 
     RE::BSFixedString BuildNPCInteractionRequestJson(RE::StaticFunctionTag*,
-                                                      RE::BSFixedString npcContext,
-                                                      RE::BSFixedString recentLog) {
+                                                      RE::BSFixedString npcContext) {
         // npcContext is already JSON-escaped by BuildNPCInteractionContext — do NOT double-escape
-        // recentLog is raw Papyrus string — must escape
         std::string json = "{";
-        json += "\"npcPairPool\":\"" + std::string(npcContext.c_str()) + "\",";
-        json += "\"recentStoryEvents\":\"" + MemoryDB::EscapeJsonString(recentLog.c_str()) + "\"}";
+        json += "\"npcPairPool\":\"" + std::string(npcContext.c_str()) + "\"}";
         return RE::BSFixedString(json);
     }
 
@@ -1384,10 +1402,8 @@ namespace IntelEngine::Papyrus {
 
     RE::BSFixedString BuildStoryDMRequestJson(RE::StaticFunctionTag*,
                                                RE::BSFixedString dmContext,
-                                               RE::BSFixedString recentLog,
                                                RE::BSFixedString excludedTypes) {
         // dmContext is already JSON-escaped by BuildDungeonMasterContext — do NOT double-escape
-        // recentLog is a raw Papyrus string — must escape
 
         // Parse comma-separated excluded types into a set for per-type show flags.
         // Prompt template uses {% if show_X == "1" %} to conditionally render each type.
@@ -1416,7 +1432,6 @@ namespace IntelEngine::Papyrus {
 
         std::string json = "{";
         json += "\"candidatePool\":\"" + std::string(dmContext.c_str()) + "\",";
-        json += "\"recentStoryEvents\":\"" + MemoryDB::EscapeJsonString(recentLog.c_str()) + "\",";
 
         // Per-type show flags: "1" if allowed, "" if excluded
         for (const auto* t : allTypes) {
