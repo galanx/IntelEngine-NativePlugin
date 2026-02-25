@@ -163,6 +163,13 @@ namespace IntelEngine {
         RE::Actor* GetRelatedCandidate(RE::Actor* relatedTo);
 
         /**
+         * Find a suitable messenger to deliver a message on behalf of sender.
+         * Cascade: household → social associate → same-hold guard → any civilian.
+         * Returns nullptr if no messenger found (caller decides self-delivery vs reject).
+         */
+        RE::Actor* FindMessengerForSender(RE::Actor* sender);
+
+        /**
          * Shared eligibility filter for all story candidate selection methods.
          * Strict version: requires actor to be in a loaded cell.
          */
@@ -182,6 +189,17 @@ namespace IntelEngine {
          * Returns: "WARRIOR", "MAGE", "ROGUE", "PRIEST", "NOBLE", "BARD", "CIVILIAN"
          */
         static std::string ClassifyNPCArchetype(RE::Actor* actor);
+
+        /**
+         * Set danger zone dispatch policy (synced from MCM via Papyrus).
+         */
+        void SetDangerZonePolicy(bool blockCivilians, bool blockAll);
+
+        /**
+         * Check if the player is in a location on the blocklist.
+         * Uses plugin config API with 30-second cache.
+         */
+        static bool IsPlayerInBlockedLocation();
 
         /**
          * Build a compact bio line for DM context: race + notable factions.
@@ -208,13 +226,6 @@ namespace IntelEngine {
          * @param cooldownHours Hard block duration in game hours
          */
         bool IsOnStoryCooldown(RE::FormID formId, float cooldownHours) const;
-
-        /**
-         * Get decaying score penalty for a recently-picked NPC.
-         * Returns 0 if never picked or penalty window expired.
-         * Linear decay from PENALTY_WEIGHT at pick time to 0 at window end.
-         */
-        float GetCooldownPenalty(RE::FormID formId) const;
 
         /**
          * Record that the LLM picked a story type. Volatile (per session).
@@ -309,6 +320,10 @@ namespace IntelEngine {
         std::unordered_map<std::string, int> m_storyTypeCounts;
 
         bool m_indexBuilt = false;
+
+        // Danger zone dispatch policy (MCM-synced)
+        std::atomic<bool> m_blockCiviliansInDanger{true};
+        std::atomic<bool> m_blockAllInDanger{false};
     };
 
 }  // namespace IntelEngine

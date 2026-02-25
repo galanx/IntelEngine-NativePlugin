@@ -16,8 +16,9 @@ $Root      = "E:\Tools\spookys-automod-toolkit"
 $ModRoot   = "$Root\Mods\IntelEngine"
 $DataDir   = "$ModRoot\Data"
 $SKSEDir   = "$ModRoot\SKSE"
-$TestDest  = "E:\Modding\Lorerim\mods\Galanx_IntelEngine"
-$CKDest    = "D:\SkyrimVR-MO2\mods\Galanx_IntelEngine"
+$TestDest     = "E:\Modding\Lorerim\mods\Galanx_IntelEngine"
+$VanillaDest  = "E:\Modding\VanillaTest\mods\Galanx_IntelEngine"
+$CKDest       = "D:\SkyrimVR-MO2\mods\Galanx_IntelEngine"
 
 $ok        = $true
 $checked   = 0
@@ -72,7 +73,7 @@ function Compare-File {
 }
 
 # =============================================================================
-# DLL: Build → Data → Testing → CK
+# DLL: Build → Data → Testing → Vanilla Test → CK
 # =============================================================================
 Write-Host "`n=== DLL ===" -ForegroundColor Cyan
 Compare-File "DLL: Build -> Data" `
@@ -82,6 +83,10 @@ Compare-File "DLL: Build -> Data" `
 Compare-File "DLL: Data -> Testing" `
     "$DataDir\SKSE\Plugins\IntelEngine.dll" `
     "$TestDest\SKSE\Plugins\IntelEngine.dll" -UseHash
+
+Compare-File "DLL: Data -> Vanilla Test" `
+    "$DataDir\SKSE\Plugins\IntelEngine.dll" `
+    "$VanillaDest\SKSE\Plugins\IntelEngine.dll" -UseHash
 
 Compare-File "DLL: Data -> CK" `
     "$DataDir\SKSE\Plugins\IntelEngine.dll" `
@@ -96,6 +101,10 @@ Get-ChildItem "$DataDir\Scripts\IntelEngine*.pex" -ErrorAction SilentlyContinue 
     Compare-File "PEX $name -> Testing" `
         $_.FullName `
         "$TestDest\Scripts\$name"
+
+    Compare-File "PEX $name -> Vanilla Test" `
+        $_.FullName `
+        "$VanillaDest\Scripts\$name"
 
     Compare-File "PEX $name -> CK" `
         $_.FullName `
@@ -135,6 +144,7 @@ if ($plugins.Count -eq 0) {
     foreach ($p in $plugins) {
         $name = $p.Name
         Compare-File "Plugin $name -> Testing" $p.FullName "$TestDest\$name"
+        Compare-File "Plugin $name -> Vanilla Test" $p.FullName "$VanillaDest\$name"
         Compare-File "Plugin $name -> CK" $p.FullName "$CKDest\$name"
     }
 }

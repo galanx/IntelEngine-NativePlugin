@@ -1,30 +1,26 @@
 #pragma once
 
 /**
- * MemoryDB - SkyrimNet SQLite Database Reader
+ * MemoryDB - SkyrimNet Data API Client
  *
- * Reads NPC memories, events, and conversation history directly from
- * SkyrimNet's SQLite database. Provides formatted text for LLM prompt
+ * Reads NPC memories, events, and conversation history via SkyrimNet's
+ * PublicAPI (dllexport functions). Provides formatted text for LLM prompt
  * injection via BuildActorContextJson and standalone Papyrus natives.
  *
  * Design:
- * - Read-only access (SQLITE_OPEN_READONLY) - safe alongside SkyrimNet writes
- * - Lazy initialization (DB discovered on first query, not at kDataLoaded)
- * - UUID mappings cached (small table, ~854 rows)
- * - Memories/events NOT cached (grow during session)
- * - Graceful degradation (returns empty strings if DB unavailable)
+ * - All data flows through SkyrimNet's PublicAPI (no direct SQLite access)
+ * - SkyrimNet owns the DB connection, WAL checkpoints, and UUID resolution
+ * - IntelEngine owns scoring logic, formatting, and prompt assembly
+ * - Graceful degradation (returns empty strings if API unavailable)
  */
 
 #include "Plugin.h"
 
-#include <shared_mutex>
+#include <mutex>
 #include <unordered_map>
 #include <unordered_set>
 #include <string>
 #include <vector>
-
-struct sqlite3;       // Forward declaration
-struct sqlite3_stmt;  // Forward declaration
 
 namespace IntelEngine {
 
@@ -60,21 +56,21 @@ namespace IntelEngine {
         }
 
         /**
-         * Find and open the latest SkyrimNet database.
-         * Thread-safe: acquires exclusive lock.
+         * Initialize the SkyrimNet API function pointers.
+         * Must be called during kDataLoaded before any queries.
          */
-        void Connect();
+        void InitializeAPI();
 
         /**
-         * Close the database connection.
-         * Called on kNewGame to force re-discovery.
-         */
-        void Disconnect();
-
-        /**
-         * Check if database is connected and queryable.
+         * Check if SkyrimNet's memory system is ready for queries.
          */
         bool IsConnected() const;
+
+        /**
+         * Clear cached data (bio summaries, DB time).
+         * Called on kNewGame/kPostLoadGame to reset session state.
+         */
+        void ClearCaches();
 
         // =================================================================
         // Formatted Query Functions (return LLM-ready text)
@@ -147,35 +143,24 @@ namespace IntelEngine {
         /**
          * Get NAMES of NPCs who had events with the player within the last N hours.
          * Returns lowercase actor names for case-insensitive exclusion checks.
-         *
-         * BUG WORKAROUND: Uses name-based matching instead of FormID because:
-         * 1) The player ("Galanx") can have MULTIPLE UUIDs in the DB (e.g., 3734...
-         *    with 126 events, 4819... with 2407 events). FormIdToUUID(0x14) only
-         *    returns one, missing ~95% of player interaction events.
-         * 2) NPC FormIDs stored in uuid_mappings can become stale across mod updates
-         *    (e.g., Heidi DB=0xBC027633 vs Game=0xBC018519). Name matching survives
-         *    load-order and FormID changes.
          */
         std::unordered_set<std::string> GetRecentPlayerInteractionNames(float withinHours);
 
         /**
          * Get relationship data between the player and all NPCs they've ever interacted with.
          * Returns interaction count + last interaction time per NPC.
-         * Used for absence-bonus scoring in story candidate ranking.
          */
         std::vector<PlayerRelationship> GetPlayerRelationshipData();
 
         /**
          * Get NPCs ranked by NPC-to-NPC event density (excluding player interactions).
          * Returns "social butterflies" — NPCs with rich NPC-NPC interaction history.
-         * Used to include non-player-centric candidates in the story pool.
          */
         std::vector<RankedCandidate> GetSociallyActiveFormIDs(int maxCount);
 
         /**
          * Get NPC-NPC relationship pairs within a set of pool FormIDs.
          * Returns pairs with shared event counts (both directions combined).
-         * Used to annotate the DM markdown with intra-pool connections.
          */
         std::vector<NPCPairRelationship> GetPoolRelationships(const std::vector<RE::FormID>& poolFormIds);
 
@@ -186,7 +171,6 @@ namespace IntelEngine {
         /**
          * Get recent dialogue between the player and a specific NPC.
          * Returns raw formatted conversation text (caller handles escaping).
-         * Queries dialogue + dialogue_player_text events from SQLite.
          *
          * @param formId NPC's Skyrim FormID
          * @param maxExchanges Maximum conversation exchanges (1 exchange = player + NPC line)
@@ -196,7 +180,6 @@ namespace IntelEngine {
 
         /**
          * Find the most recent NPC the player had a dialogue with, plus event timestamp.
-         * Queries the events table for the latest 'dialogue' event targeting the player.
          *
          * @return LatestDialogueInfo with FormID + game_time (both 0 if not found)
          */
@@ -213,9 +196,7 @@ namespace IntelEngine {
 
         /**
          * Get current time in DB seconds from the DB's own timeline.
-         * SkyrimNet stores game_time as GameDaysPassed * 86400 (game-seconds).
-         * Uses MAX(game_time) from events — consistent with all DB timestamps.
-         * Thread-safe: acquires own lock. Used by NPCIndex for scoring.
+         * Uses cached value from the most recent PublicGetPlayerContext call.
          */
         float GetCurrentDBHours();
 
@@ -225,34 +206,15 @@ namespace IntelEngine {
 
     private:
         MemoryDB() = default;
-        ~MemoryDB();
+        ~MemoryDB() = default;
         MemoryDB(const MemoryDB&) = delete;
         MemoryDB& operator=(const MemoryDB&) = delete;
-
-        // Ensure connection exists (lazy init)
-        void EnsureConnected();
-
-        // Find latest SkyrimNet-*.db file
-        std::string FindLatestDatabase();
-
-        // Build UUID cache from uuid_mappings table (caller must hold exclusive lock)
-        void RefreshUUIDCacheInternal();
-
-        // Resolve Skyrim FormID to SkyrimNet UUID. Returns 0 if not found.
-        int64_t FormIdToUUID(RE::FormID formId) const;
-
-        // Resolve SkyrimNet UUID to actor display name. Returns empty if not found.
-        std::string UUIDToName(int64_t uuid) const;
-
-        // Get current time in DB seconds from DB's own timeline.
-        // Must be called while holding m_mutex. Falls back to Calendar if DB empty.
-        float GetDBCurrentHoursLocked();
 
         // Format relative time from game_time (in DB seconds) given current seconds
         static std::string FormatRelativeTime(float gameTimeSeconds, float currentSeconds);
 
         // Extract display text from event_data JSON by event type
-        static std::string ExtractEventDisplayText(const std::string& eventType, const char* eventData);
+        static std::string ExtractEventDisplayText(const std::string& eventType, const std::string& eventData);
 
         // Truncate text to maxLen characters with "..."
         static std::string Truncate(const std::string& text, size_t maxLen);
@@ -260,35 +222,23 @@ namespace IntelEngine {
         // Sanitize text for safe prompt embedding (newlines → spaces, quotes → single)
         static std::string SanitizeForPrompt(const std::string& text);
 
-        // Get or create a prepared statement from cache. Returns nullptr on failure.
-        // Caller must NOT finalize the returned stmt — cache owns its lifecycle.
-        // Caller must bind params after this call; stmt is already reset.
-        sqlite3_stmt* PrepareOrGet(const char* sql);
+        // Format memories JSON array into LLM-ready text
+        std::string FormatMemoriesFromJson(const std::string& json, float currentTime);
 
-        // Finalize all cached prepared statements (call before closing DB)
-        void ClearStatementCache();
+        // Format events JSON array into LLM-ready text (world events view)
+        std::string FormatWorldEventsFromJson(const std::string& json);
+
+        // Format events JSON array into concise actor-centric text
+        std::string FormatActorEventsFromJson(const std::string& json, float currentTime);
 
         // Thread safety
-        mutable std::shared_mutex m_mutex;
-
-        // SQLite database handle
-        sqlite3* m_db = nullptr;
-
-        // Prepared statement cache (key = SQL string, value = compiled stmt)
-        std::unordered_map<std::string, sqlite3_stmt*> m_stmtCache;
-
-        // Cached UUID mappings
-        std::unordered_map<RE::FormID, int64_t> m_formIdToUUID;
-        std::unordered_map<int64_t, RE::FormID> m_uuidToFormId;
-        std::unordered_map<int64_t, std::string> m_uuidToName;
-        std::unordered_map<RE::FormID, std::string> m_formIdToBioTemplate;
+        mutable std::mutex m_mutex;
 
         // Bio summary cache: FormID -> extracted {% block summary %} content
         std::unordered_map<RE::FormID, std::string> m_bioSummaryCache;
 
-        // Connection state
-        std::string m_dbPath;
-        bool m_connectionAttempted = false;
+        // Cached current DB time (refreshed on GetCurrentDBHours)
+        float m_cachedCurrentTime = 0.0f;
     };
 
 }  // namespace IntelEngine

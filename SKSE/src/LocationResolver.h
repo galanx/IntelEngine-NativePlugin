@@ -200,6 +200,33 @@ namespace IntelEngine {
          */
         RE::FormID GetLastResolvedHomeCellId() const { return m_lastResolvedHomeCellId; }
 
+        /**
+         * Get cached LocTypePlayerHouse keyword.
+         * Used by CellAnalyzer::IsPlayerInOwnHome().
+         */
+        RE::BGSKeyword* GetPlayerHouseKeyword() const { return m_locTypePlayerHouse; }
+
+        /**
+         * Get the exterior-side door reference for the player's current home.
+         * Finds the front door in the player's interior cell, then returns
+         * the linked door on the exterior side (for MoveTo teleport targets).
+         * @return Exterior door ref, or nullptr if player is not in an interior cell
+         */
+        RE::TESObjectREFR* GetPlayerHomeExteriorDoorRef();
+
+        /**
+         * Get the interior-side door of the player's current home cell.
+         * Used for placing NPCs at the doorway so they walk in naturally.
+         */
+        RE::TESObjectREFR* GetPlayerHomeInteriorDoorRef();
+
+        /**
+         * Find NPCs sharing the same home cell as the given actor (household members).
+         * Thread-safe: acquires shared_lock on m_mutex.
+         * @return Vector of ActorBase FormIDs sharing the same home cell (excluding actor)
+         */
+        std::vector<RE::FormID> GetHouseholdMembers(RE::Actor* actor);
+
     private:
         LocationResolver() = default;
         ~LocationResolver() = default;
@@ -226,9 +253,11 @@ namespace IntelEngine {
         void BuildHomeIndex();
         RE::TESObjectREFR* GetLocationTravelTarget(RE::TESObjectCELL* homeCell);
 
-        // Find the exterior-linked door in a cell (front door).
-        // Extracted from GetLocationTravelTarget for reuse by SetHomeDoorAccess.
+        // Find the interior-side door in a cell that leads to an exterior cell.
         RE::TESObjectREFR* FindExteriorDoorInCell(RE::TESObjectCELL* cell);
+
+        // Follow an interior door's teleport link to get the exterior-side door ref.
+        RE::TESObjectREFR* GetExteriorLinkedDoor(RE::TESObjectREFR* interiorDoor);
 
         // Helper: Find door in a cell that leads to target
         RE::TESObjectREFR* FindDoorInCellTo(RE::TESObjectCELL* sourceCell, RE::TESObjectCELL* targetCell);

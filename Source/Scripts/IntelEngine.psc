@@ -329,6 +329,11 @@ ObjectReference Function GetEditorLocationRef(Actor akActor) Global Native
 ; USE THIS instead of FindNPCByName for story dispatch to avoid name ambiguity.
 Actor Function ResolveStoryCandidate(String name) Global Native
 
+; Find a suitable messenger to deliver a message on behalf of sender.
+; Cascade: household member → social associate → same-hold guard → any civilian.
+; Returns None if no messenger found (caller decides self-delivery vs reject).
+Actor Function FindMessengerForSender(Actor sender) Global Native
+
 ; Get a random NPC eligible for Story Engine dispatch.
 ; Filters: alive, not disabled, not in combat, not in player's cell,
 ; not on an active IntelEngine task, not on cooldown.
@@ -350,6 +355,30 @@ String Function GetActorUUID(Actor akActor) Global Native
 ; Used by Story Engine to avoid dispatching NPCs into danger zones.
 Bool Function IsPlayerInDangerousLocation() Global Native
 
+; Check if the player is in their own home (LocTypePlayerHouse keyword).
+; Used by Story Engine for knocking prompt.
+Bool Function IsPlayerInOwnHome() Global Native
+
+; Get the exterior-side door reference for the player's current home.
+; Returns the door outside the home for MoveTo teleport targets.
+ObjectReference Function GetPlayerHomeExteriorDoor() Global Native
+
+; Get the interior-side door reference for the player's current home.
+; Returns the door inside the home — used to place NPCs at the doorway.
+ObjectReference Function GetPlayerHomeInteriorDoor() Global Native
+
+; Check if an NPC has a civilian class (farmer, merchant, innkeeper, etc.).
+; Civilians should not enter dangerous locations.
+Bool Function IsCivilianClass(Actor akActor) Global Native
+
+; Set danger zone dispatch policy (synced from MCM).
+; blockCivilians: exclude CIVILIAN archetype NPCs when player is in danger zone.
+; blockAll: exclude ALL NPCs when player is in danger zone.
+Function SetDangerZonePolicy(Bool blockCivilians, Bool blockAll) Global Native
+
+; Check if the player is in a location on the blocklist (plugin config, 30s cache).
+Bool Function IsPlayerInBlockedLocation() Global Native
+
 ; Check if a JSON LLM response contains "should_act":true.
 ; Faster than Papyrus string parsing. Used by Story Engine response handlers.
 Bool Function StoryResponseShouldAct(String response) Global Native
@@ -370,17 +399,17 @@ String Function BuildActorContextJson(Actor akActor, Int slot) Global Native
 String Function BuildDungeonMasterContext(Int maxCandidates = 7, Float absenceDays = 3.0) Global Native
 
 ; Build complete JSON request for Story DM prompt.
-; dmContext is pre-escaped from BuildDungeonMasterContext; other values are escaped here.
-String Function BuildStoryDMRequestJson(String dmContext, String recentLog, String excludedTypes) Global Native
+; dmContext is pre-escaped from BuildDungeonMasterContext; excludedTypes is escaped here.
+String Function BuildStoryDMRequestJson(String dmContext, String excludedTypes) Global Native
 
 ; Build NPC-to-NPC interaction context for the NPC Social tick.
 ; Groups eligible loaded NPCs by location, scores by density and MemoryDB social history.
 ; Returns JSON-escaped markdown string, or "" if no eligible groups.
 String Function BuildNPCInteractionContext(Int maxPairs = 4) Global Native
 
-; Wrap NPC context + recent log into JSON for the NPC-to-NPC DM prompt.
-; npcContext is pre-escaped from BuildNPCInteractionContext; recentLog is escaped here.
-String Function BuildNPCInteractionRequestJson(String npcContext, String recentLog) Global Native
+; Wrap NPC context into JSON for the NPC-to-NPC DM prompt.
+; npcContext is pre-escaped from BuildNPCInteractionContext.
+String Function BuildNPCInteractionRequestJson(String npcContext) Global Native
 
 ; Mirror story cooldown to C++ so candidate builders can filter before LLM call.
 ; gameTime: the Intel_StoryLastPicked timestamp (NOT current time on rejection).

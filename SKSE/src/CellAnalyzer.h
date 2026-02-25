@@ -103,6 +103,12 @@ namespace IntelEngine {
          */
         bool IsPlayerInDangerousLocation();
 
+        /**
+         * Check if the player is in their own home (LocTypePlayerHouse keyword).
+         * Used by Story Engine for knocking prompt before NPCs enter.
+         */
+        bool IsPlayerInOwnHome();
+
     private:
         CellAnalyzer() = default;
         ~CellAnalyzer() = default;

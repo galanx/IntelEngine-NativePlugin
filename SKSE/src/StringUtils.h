@@ -107,7 +107,7 @@ namespace IntelEngine::StringUtils {
 
             for (size_t j = 1; j <= n; ++j) {
                 int cost = (std::tolower(a[i - 1]) == std::tolower(b[j - 1])) ? 0 : 1;
-                curr[j] = std::min({
+                curr[j] = (std::min)({
                     prev[j] + 1,       // deletion
                     curr[j - 1] + 1,   // insertion
                     prev[j - 1] + cost // substitution
@@ -240,7 +240,7 @@ namespace IntelEngine::StringUtils {
             }
             // Reject matches where every character is effectively wrong —
             // prevents "inn" -> "aho" (distance 3, both length 3)
-            auto minLen = std::min(searchLen, name.length());
+            auto minLen = (std::min)(searchLen, name.length());
             if (dist >= static_cast<int>(minLen)) continue;
 
             if (dist < result.distance) {

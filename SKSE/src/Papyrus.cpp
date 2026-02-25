@@ -23,6 +23,7 @@ namespace IntelEngine::Papyrus {
 
     // Forward declarations for functions defined after Register()
     RE::Actor* ResolveStoryCandidate(RE::StaticFunctionTag*, RE::BSFixedString);
+    RE::Actor* FindMessengerForSender(RE::StaticFunctionTag*, RE::Actor*);
     void NotifyStoryCooldown(RE::StaticFunctionTag*, RE::Actor*, float);
     void NotifyStoryTypePicked(RE::StaticFunctionTag*, RE::BSFixedString);
     std::vector<int> GetDMCandidatePoolFormIDs(RE::StaticFunctionTag*);
@@ -30,6 +31,8 @@ namespace IntelEngine::Papyrus {
     RE::BSFixedString RenderGossipHeardSection(RE::StaticFunctionTag*, std::vector<RE::BSFixedString>, std::vector<RE::BSFixedString>, std::vector<float>, float);
     RE::BSFixedString RenderGossipToldSection(RE::StaticFunctionTag*, std::vector<RE::BSFixedString>, std::vector<RE::BSFixedString>, std::vector<float>, float);
     RE::BSFixedString RenderTaskHistorySection(RE::StaticFunctionTag*, std::vector<RE::BSFixedString>, std::vector<float>, float);
+    void SetDangerZonePolicy(RE::StaticFunctionTag*, bool, bool);
+    bool IsPlayerInBlockedLocation(RE::StaticFunctionTag*);
 
     bool Register(RE::BSScript::IVirtualMachine* a_vm) {
         if (!a_vm) {
@@ -42,6 +45,7 @@ namespace IntelEngine::Papyrus {
         a_vm->RegisterFunction("FindNPCByName", SCRIPT_NAME, FindNPCByName); ++count;
         a_vm->RegisterFunction("FindNPCByNameNear", SCRIPT_NAME, FindNPCByNameNear); ++count;
         a_vm->RegisterFunction("ResolveStoryCandidate", SCRIPT_NAME, ResolveStoryCandidate); ++count;
+        a_vm->RegisterFunction("FindMessengerForSender", SCRIPT_NAME, FindMessengerForSender); ++count;
         a_vm->RegisterFunction("GetNPCCurrentLocation", SCRIPT_NAME, GetNPCCurrentLocation); ++count;
         a_vm->RegisterFunction("IsNPCAccessible", SCRIPT_NAME, IsNPCAccessible); ++count;
         a_vm->RegisterFunction("GetNPCNameSuggestion", SCRIPT_NAME, GetNPCNameSuggestion); ++count;
@@ -140,6 +144,12 @@ namespace IntelEngine::Papyrus {
         a_vm->RegisterFunction("GetRelatedCandidate", SCRIPT_NAME, GetRelatedCandidate); ++count;
         a_vm->RegisterFunction("GetActorUUID", SCRIPT_NAME, GetActorUUID); ++count;
         a_vm->RegisterFunction("IsPlayerInDangerousLocation", SCRIPT_NAME, IsPlayerInDangerousLocation); ++count;
+        a_vm->RegisterFunction("IsPlayerInOwnHome", SCRIPT_NAME, IsPlayerInOwnHome); ++count;
+        a_vm->RegisterFunction("GetPlayerHomeExteriorDoor", SCRIPT_NAME, GetPlayerHomeExteriorDoor); ++count;
+        a_vm->RegisterFunction("GetPlayerHomeInteriorDoor", SCRIPT_NAME, GetPlayerHomeInteriorDoor); ++count;
+        a_vm->RegisterFunction("IsCivilianClass", SCRIPT_NAME, IsCivilianClass); ++count;
+        a_vm->RegisterFunction("SetDangerZonePolicy", SCRIPT_NAME, SetDangerZonePolicy); ++count;
+        a_vm->RegisterFunction("IsPlayerInBlockedLocation", SCRIPT_NAME, IsPlayerInBlockedLocation); ++count;
         a_vm->RegisterFunction("StoryResponseShouldAct", SCRIPT_NAME, StoryResponseShouldAct); ++count;
         a_vm->RegisterFunction("StoryResponseGetField", SCRIPT_NAME, StoryResponseGetField); ++count;
         a_vm->RegisterFunction("BuildActorContextJson", SCRIPT_NAME, BuildActorContextJson); ++count;
@@ -199,6 +209,10 @@ namespace IntelEngine::Papyrus {
 
     RE::Actor* ResolveStoryCandidate(RE::StaticFunctionTag*, RE::BSFixedString name) {
         return NPCIndex::GetSingleton()->ResolveStoryCandidate(name.c_str());
+    }
+
+    RE::Actor* FindMessengerForSender(RE::StaticFunctionTag*, RE::Actor* sender) {
+        return NPCIndex::GetSingleton()->FindMessengerForSender(sender);
     }
 
     RE::BSFixedString GetNPCCurrentLocation(RE::StaticFunctionTag*, RE::Actor* akNPC) {
@@ -607,6 +621,24 @@ namespace IntelEngine::Papyrus {
         float dx = p1.x - p2.x;
         float dy = p1.y - p2.y;
         float straightLine = std::sqrt(dx * dx + dy * dy);
+
+        // Interior cells use a separate coordinate space — straight-line distance
+        // between an interior NPC and an exterior target is meaningless.
+        // Use minHours as fallback when source/target are in different cell types.
+        auto* sourceCell = source->GetParentCell();
+        auto* targetCell = target->GetParentCell();
+        bool crossCellType = false;
+        if (sourceCell && targetCell) {
+            crossCellType = sourceCell->IsInteriorCell() != targetCell->IsInteriorCell();
+        } else if (sourceCell) {
+            crossCellType = sourceCell->IsInteriorCell();
+        }
+        if (crossCellType) {
+            logger::debug("CalculateDeadlineFromDistance: cross-cell-type (interior<->exterior), "
+                          "using minHours={}", minHours);
+            auto* cal = RE::Calendar::GetSingleton();
+            return cal ? cal->GetCurrentGameTime() + (minHours / 24.0f) : 0.0f;
+        }
 
         // Pathfinding adds ~50% over straight-line (doors, stairs, detours)
         float pathDist = straightLine * 1.5f;
@@ -1064,6 +1096,31 @@ namespace IntelEngine::Papyrus {
         return CellAnalyzer::GetSingleton()->IsPlayerInDangerousLocation();
     }
 
+    bool IsPlayerInOwnHome(RE::StaticFunctionTag*) {
+        return CellAnalyzer::GetSingleton()->IsPlayerInOwnHome();
+    }
+
+    RE::TESObjectREFR* GetPlayerHomeExteriorDoor(RE::StaticFunctionTag*) {
+        return LocationResolver::GetSingleton()->GetPlayerHomeExteriorDoorRef();
+    }
+
+    RE::TESObjectREFR* GetPlayerHomeInteriorDoor(RE::StaticFunctionTag*) {
+        return LocationResolver::GetSingleton()->GetPlayerHomeInteriorDoorRef();
+    }
+
+    bool IsCivilianClass(RE::StaticFunctionTag*, RE::Actor* actor) {
+        if (!actor) return true;
+        return NPCIndex::ClassifyNPCArchetype(actor) == "CIVILIAN";
+    }
+
+    void SetDangerZonePolicy(RE::StaticFunctionTag*, bool blockCivilians, bool blockAll) {
+        NPCIndex::GetSingleton()->SetDangerZonePolicy(blockCivilians, blockAll);
+    }
+
+    bool IsPlayerInBlockedLocation(RE::StaticFunctionTag*) {
+        return NPCIndex::IsPlayerInBlockedLocation();
+    }
+
     bool StoryResponseShouldAct(RE::StaticFunctionTag*, RE::BSFixedString response) {
         std::string_view sv(response.c_str());
         bool result = sv.find("\"should_act\":true") != std::string_view::npos ||
@@ -1194,13 +1251,10 @@ namespace IntelEngine::Papyrus {
     }
 
     RE::BSFixedString BuildNPCInteractionRequestJson(RE::StaticFunctionTag*,
-                                                      RE::BSFixedString npcContext,
-                                                      RE::BSFixedString recentLog) {
+                                                      RE::BSFixedString npcContext) {
         // npcContext is already JSON-escaped by BuildNPCInteractionContext — do NOT double-escape
-        // recentLog is raw Papyrus string — must escape
         std::string json = "{";
-        json += "\"npcPairPool\":\"" + std::string(npcContext.c_str()) + "\",";
-        json += "\"recentStoryEvents\":\"" + MemoryDB::EscapeJsonString(recentLog.c_str()) + "\"}";
+        json += "\"npcPairPool\":\"" + std::string(npcContext.c_str()) + "\"}";
         return RE::BSFixedString(json);
     }
 
@@ -1384,10 +1438,8 @@ namespace IntelEngine::Papyrus {
 
     RE::BSFixedString BuildStoryDMRequestJson(RE::StaticFunctionTag*,
                                                RE::BSFixedString dmContext,
-                                               RE::BSFixedString recentLog,
                                                RE::BSFixedString excludedTypes) {
         // dmContext is already JSON-escaped by BuildDungeonMasterContext — do NOT double-escape
-        // recentLog is a raw Papyrus string — must escape
 
         // Parse comma-separated excluded types into a set for per-type show flags.
         // Prompt template uses {% if show_X == "1" %} to conditionally render each type.
@@ -1416,7 +1468,6 @@ namespace IntelEngine::Papyrus {
 
         std::string json = "{";
         json += "\"candidatePool\":\"" + std::string(dmContext.c_str()) + "\",";
-        json += "\"recentStoryEvents\":\"" + MemoryDB::EscapeJsonString(recentLog.c_str()) + "\",";
 
         // Per-type show flags: "1" if allowed, "" if excluded
         for (const auto* t : allTypes) {
