@@ -220,6 +220,13 @@ namespace IntelEngine {
          */
         RE::TESObjectREFR* GetPlayerHomeInteriorDoorRef();
 
+        /**
+         * Find NPCs sharing the same home cell as the given actor (household members).
+         * Thread-safe: acquires shared_lock on m_mutex.
+         * @return Vector of ActorBase FormIDs sharing the same home cell (excluding actor)
+         */
+        std::vector<RE::FormID> GetHouseholdMembers(RE::Actor* actor);
+
     private:
         LocationResolver() = default;
         ~LocationResolver() = default;

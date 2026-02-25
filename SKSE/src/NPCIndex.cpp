@@ -114,6 +114,60 @@ namespace IntelEngine {
         return false;
     }
 
+    // ── Danger Zone Policy ──
+    void NPCIndex::SetDangerZonePolicy(bool blockCivilians, bool blockAll) {
+        m_blockCiviliansInDanger.store(blockCivilians, std::memory_order_relaxed);
+        m_blockAllInDanger.store(blockAll, std::memory_order_relaxed);
+    }
+
+    // ── Location Blocklist (populated from plugin config) ──
+    static std::vector<std::string> s_blockedLocations;  // lowercase
+    static std::mutex s_locationMutex;
+    static std::chrono::steady_clock::time_point s_locationBlocklistLastRefresh;
+
+    static void RefreshLocationBlocklist() {
+        auto now = std::chrono::steady_clock::now();
+        {
+            std::lock_guard<std::mutex> lock(s_locationMutex);
+            if (now - s_locationBlocklistLastRefresh < std::chrono::seconds(30)) return;
+            s_locationBlocklistLastRefresh = now;
+        }
+
+        if (!SkyrimNetAPI::GetPluginConfigValue) return;
+        std::string csv = SkyrimNetAPI::GetPluginConfigValue(
+            "IntelEngine", "story.location_blocklist", "");
+
+        std::vector<std::string> newList;
+        if (!csv.empty()) {
+            std::stringstream ss(csv);
+            std::string token;
+            while (std::getline(ss, token, ',')) {
+                auto start = token.find_first_not_of(" \t");
+                auto end = token.find_last_not_of(" \t");
+                if (start != std::string::npos) {
+                    newList.push_back(StringUtils::ToLowerStd(token.substr(start, end - start + 1)));
+                }
+            }
+        }
+        std::lock_guard<std::mutex> lock(s_locationMutex);
+        s_blockedLocations = std::move(newList);
+    }
+
+    bool NPCIndex::IsPlayerInBlockedLocation() {
+        RefreshLocationBlocklist();
+        std::lock_guard<std::mutex> lock(s_locationMutex);
+        if (s_blockedLocations.empty()) return false;
+
+        auto* player = RE::PlayerCharacter::GetSingleton();
+        if (!player) return false;
+        RE::BSFixedString locName = LocationResolver::GetSingleton()->GetActorLocationName(player);
+        std::string playerLoc = StringUtils::ToLowerStd(locName.c_str() ? locName.c_str() : "");
+        for (const auto& blocked : s_blockedLocations) {
+            if (playerLoc == blocked) return true;
+        }
+        return false;
+    }
+
     // Shared time-of-day string from timescale-aware game time
     static const char* GetTimeOfDayString() {
         float gameTime = RE::Calendar::GetSingleton()->GetCurrentGameTime();
@@ -643,6 +697,19 @@ namespace IntelEngine {
         RefreshFactionBlocklist();
         if (IsInBlockedFaction(actor)) return false;
 
+        // Danger zone candidate filtering (MCM-controlled)
+        {
+            auto* npcIndex = NPCIndex::GetSingleton();
+            if (npcIndex->m_blockAllInDanger.load(std::memory_order_relaxed) ||
+                npcIndex->m_blockCiviliansInDanger.load(std::memory_order_relaxed)) {
+                if (CellAnalyzer::GetSingleton()->IsPlayerInDangerousLocation()) {
+                    if (npcIndex->m_blockAllInDanger.load(std::memory_order_relaxed)) return false;
+                    if (npcIndex->m_blockCiviliansInDanger.load(std::memory_order_relaxed) &&
+                        ClassifyNPCArchetype(actor) == "CIVILIAN") return false;
+                }
+            }
+        }
+
         return true;
     }
 
@@ -701,6 +768,25 @@ namespace IntelEngine {
         if (IsInBlockedFaction(actor)) {
             logger::debug("[StoryDM] Rejected '{}': blocked faction", displayName);
             return false;
+        }
+
+        // Danger zone candidate filtering (MCM-controlled)
+        {
+            auto* npcIndex = NPCIndex::GetSingleton();
+            if (npcIndex->m_blockAllInDanger.load(std::memory_order_relaxed) ||
+                npcIndex->m_blockCiviliansInDanger.load(std::memory_order_relaxed)) {
+                if (CellAnalyzer::GetSingleton()->IsPlayerInDangerousLocation()) {
+                    if (npcIndex->m_blockAllInDanger.load(std::memory_order_relaxed)) {
+                        logger::debug("[StoryDM] Rejected '{}': danger zone (block all)", displayName);
+                        return false;
+                    }
+                    if (npcIndex->m_blockCiviliansInDanger.load(std::memory_order_relaxed) &&
+                        ClassifyNPCArchetype(actor) == "CIVILIAN") {
+                        logger::debug("[StoryDM] Rejected '{}': danger zone (civilian)", displayName);
+                        return false;
+                    }
+                }
+            }
         }
 
         return true;
@@ -850,6 +936,105 @@ namespace IntelEngine {
         return nullptr;
     }
 
+    RE::Actor* NPCIndex::FindMessengerForSender(RE::Actor* sender) {
+        auto* player = RE::PlayerCharacter::GetSingleton();
+        if (!player || !sender) return nullptr;
+        auto* playerCell = player->GetParentCell();
+        if (!playerCell) return nullptr;
+        auto* tracker = SlotTracker::GetSingleton();
+
+        auto isValidMessenger = [&](RE::Actor* actor) -> bool {
+            return actor && actor != sender && actor != player &&
+                   IsEligibleStoryCandidate(actor, player, playerCell, tracker);
+        };
+
+        // Phase 1: Household members (same home cell via bed ownership index)
+        auto* locResolver = LocationResolver::GetSingleton();
+        if (locResolver) {
+            auto household = locResolver->GetHouseholdMembers(sender);
+            if (!household.empty()) {
+                // Resolve base FormIDs to TESNPC pointers for fast comparison
+                std::vector<RE::TESNPC*> householdBases;
+                householdBases.reserve(household.size());
+                for (RE::FormID baseFormId : household) {
+                    auto* npcBase = RE::TESForm::LookupByID<RE::TESNPC>(baseFormId);
+                    if (npcBase) householdBases.push_back(npcBase);
+                }
+
+                // Single scan: find any loaded actor matching a household base
+                std::vector<RE::Actor*> householdActors;
+                ProcessUtils::ForEachLoadedActor([&](RE::Actor* a) {
+                    auto* base = a->GetActorBase();
+                    for (auto* hBase : householdBases) {
+                        if (base == hBase) { householdActors.push_back(a); break; }
+                    }
+                    return false;
+                });
+
+                for (auto* actor : householdActors) {
+                    if (isValidMessenger(actor)) {
+                        logger::info("FindMessengerForSender: household '{}' for '{}'",
+                            actor->GetDisplayFullName(), sender->GetDisplayFullName());
+                        return actor;
+                    }
+                }
+            }
+        }
+
+        // Phase 2: Social associates (MemoryDB shared event history — interactions + gossip)
+        auto* memDB = MemoryDB::GetSingleton();
+        if (memDB) {
+            auto ranked = memDB->GetRelatedCandidateFormIDs(sender->GetFormID(), 10);
+            for (const auto& [formId, name, score] : ranked) {
+                auto* actor = ResolveFromMemoryDB(formId, name);
+                if (isValidMessenger(actor)) {
+                    logger::info("FindMessengerForSender: associate '{}' for '{}' (score: {:.1f})",
+                        actor->GetDisplayFullName(), sender->GetDisplayFullName(), score);
+                    return actor;
+                }
+            }
+        }
+
+        // Phases 3+4: Single loaded-actor scan for guards AND civilians
+        std::string senderHold = GetNPCHoldName(sender);
+        std::vector<RE::Actor*> guards;
+        std::vector<RE::Actor*> civilians;
+        ProcessUtils::ForEachLoadedActor([&](RE::Actor* actor) {
+            if (!isValidMessenger(actor)) return false;
+            std::string archetype = ClassifyNPCArchetype(actor);
+            if (archetype == "GUARD" && !senderHold.empty() && GetNPCHoldName(actor) == senderHold) {
+                guards.push_back(actor);
+            } else if (archetype == "CIVILIAN") {
+                civilians.push_back(actor);
+            }
+            return false;
+        });
+
+        // Phase 3: Prefer same-hold guard
+        if (!guards.empty()) {
+            static thread_local std::mt19937 rng(std::random_device{}());
+            std::uniform_int_distribution<size_t> dist(0, guards.size() - 1);
+            auto* guard = guards[dist(rng)];
+            logger::info("FindMessengerForSender: guard '{}' from {} for '{}'",
+                guard->GetDisplayFullName(), senderHold, sender->GetDisplayFullName());
+            return guard;
+        }
+
+        // Phase 4: Any eligible civilian ("courier boy" fallback)
+        if (!civilians.empty()) {
+            static thread_local std::mt19937 rng(std::random_device{}());
+            std::uniform_int_distribution<size_t> dist(0, civilians.size() - 1);
+            auto* civ = civilians[dist(rng)];
+            logger::info("FindMessengerForSender: civilian '{}' for '{}'",
+                civ->GetDisplayFullName(), sender->GetDisplayFullName());
+            return civ;
+        }
+
+        logger::info("FindMessengerForSender: no messenger found for '{}'",
+            sender->GetDisplayFullName());
+        return nullptr;
+    }
+
     std::string NPCIndex::ClassifyNPCArchetype(RE::Actor* actor) {
         if (!actor) return "CIVILIAN";
 
@@ -983,6 +1168,12 @@ namespace IntelEngine {
         if (!player) return "";
         auto* playerCell = player->GetParentCell();
         if (!playerCell) return "";
+
+        // Block all dispatches when player is at a blocklisted location
+        if (IsPlayerInBlockedLocation()) {
+            logger::info("[StoryDM] Player at blocked location — skipping DM tick");
+            return "";
+        }
 
         auto* tracker = SlotTracker::GetSingleton();
         auto* memDB = MemoryDB::GetSingleton();

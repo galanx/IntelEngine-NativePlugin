@@ -211,7 +211,8 @@ namespace IntelEngine {
                 return RE::BSContainer::ForEachResult::kContinue;
             }
 
-            auto* destCell = linkedDoor->GetParentCell();
+            auto* destCell = linkedDoor->GetSaveParentCell();
+            if (!destCell) destCell = linkedDoor->GetParentCell();
             if (destCell && destCell->GetFormID() == targetCell->GetFormID()) {
                 foundDoor = &ref;
                 return RE::BSContainer::ForEachResult::kStop;
@@ -262,6 +263,38 @@ namespace IntelEngine {
 
         logger::info("FindTravelTarget('{}') — starting resolution", locationName);
 
+        // Strategy 0: Exact interior cell match (highest priority for named interiors)
+        // Catches shop/inn/house names like "Riverwood Trader" or "Bannered Mare" before
+        // BGSLocation fuzzy matching can resolve to a parent settlement ("Riverwood").
+        // Uses EXACT match only — fuzzy would let "Riften" match "Riften Jail", hijacking
+        // settlement lookups that should resolve via BGSLocation world markers.
+        {
+            std::string lowerName = StringUtils::ToLowerStd(locationName);
+            RE::TESObjectCELL* destCell = nullptr;
+            {
+                std::shared_lock lock(m_mutex);
+                auto cellIt = m_cellIndex.find(lowerName);
+                if (cellIt != m_cellIndex.end()) {
+                    destCell = RE::TESForm::LookupByID<RE::TESObjectCELL>(cellIt->second);
+                }
+            }
+            if (destCell && destCell->IsInteriorCell()) {
+                auto* interiorDoor = FindExteriorDoorInCell(destCell);
+                if (interiorDoor) {
+                    auto* extDoor = GetExteriorLinkedDoor(interiorDoor);
+                    if (extDoor) {
+                        auto pos = extDoor->GetPosition();
+                        logger::info("  Strategy 0 SUCCESS: interior cell '{}' exterior door at ({:.0f}, {:.0f}, {:.0f})",
+                                    destCell->GetName() ? destCell->GetName() : "unnamed",
+                                    pos.x, pos.y, pos.z);
+                        return extDoor;
+                    }
+                }
+                logger::info("  Strategy 0: interior cell '{}' found but no exterior door",
+                            destCell->GetName() ? destCell->GetName() : "unnamed");
+            }
+        }
+
         // Strategy 1: World location marker (highest priority for named destinations)
         // These are exterior persistent references at the map marker position.
         // Skyrim's AI can always pathfind to these.
@@ -294,19 +327,13 @@ namespace IntelEngine {
                 if (destCell && destCell->IsInteriorCell()) {
                     auto* interiorDoor = FindExteriorDoorInCell(destCell);
                     if (interiorDoor) {
-                        auto* teleport = interiorDoor->extraList.GetByType<RE::ExtraTeleport>();
-                        if (teleport && teleport->teleportData) {
-                            auto linkedDoor = teleport->teleportData->linkedDoor.get();
-                            if (linkedDoor) {
-                                auto* extDoor = linkedDoor.get();
-                                if (extDoor) {
-                                    auto pos = extDoor->GetPosition();
-                                    logger::info("  Strategy 1b SUCCESS: exterior door of '{}' at ({:.0f}, {:.0f}, {:.0f})",
-                                                destCell->GetName() ? destCell->GetName() : "unnamed",
-                                                pos.x, pos.y, pos.z);
-                                    return extDoor;
-                                }
-                            }
+                        auto* extDoor = GetExteriorLinkedDoor(interiorDoor);
+                        if (extDoor) {
+                            auto pos = extDoor->GetPosition();
+                            logger::info("  Strategy 1b SUCCESS: exterior door of '{}' at ({:.0f}, {:.0f}, {:.0f})",
+                                        destCell->GetName() ? destCell->GetName() : "unnamed",
+                                        pos.x, pos.y, pos.z);
+                            return extDoor;
                         }
                     }
                     logger::info("  Strategy 1b: no exterior door found for cell '{}'",
@@ -705,7 +732,8 @@ namespace IntelEngine {
             auto* destDoor = analyzer->GetDoorDestination(door);
             if (!destDoor) continue;
 
-            auto* destCell = destDoor->GetParentCell();
+            auto* destCell = destDoor->GetSaveParentCell();
+            if (!destCell) destCell = destDoor->GetParentCell();
             if (!destCell) continue;
 
             if (FindExteriorDoorInCell(destCell)) {
@@ -1042,30 +1070,66 @@ namespace IntelEngine {
     RE::TESObjectREFR* LocationResolver::FindExteriorDoorInCell(RE::TESObjectCELL* cell) {
         if (!cell) return nullptr;
 
-        RE::TESObjectREFR* found = nullptr;
+        std::vector<RE::TESObjectREFR*> candidates;
+        int doorCount = 0;
+        int noTeleport = 0;
+        int noLinked = 0;
+        int interiorDest = 0;
+        int noDest = 0;
         cell->ForEachReference([&](RE::TESObjectREFR& ref) -> RE::BSContainer::ForEachResult {
             auto* baseObj = ref.GetBaseObject();
             if (!baseObj || !baseObj->Is(RE::FormType::Door) || ref.IsDisabled())
                 return RE::BSContainer::ForEachResult::kContinue;
 
+            doorCount++;
             auto* teleport = ref.extraList.GetByType<RE::ExtraTeleport>();
-            if (!teleport || !teleport->teleportData)
+            if (!teleport || !teleport->teleportData) {
+                noTeleport++;
                 return RE::BSContainer::ForEachResult::kContinue;
+            }
 
             auto linkedDoor = teleport->teleportData->linkedDoor.get();
-            if (!linkedDoor)
+            if (!linkedDoor) {
+                noLinked++;
                 return RE::BSContainer::ForEachResult::kContinue;
+            }
 
-            auto* destCell = linkedDoor->GetParentCell();
-            if (destCell && !destCell->IsInteriorCell()) {
-                found = &ref;
-                return RE::BSContainer::ForEachResult::kStop;
+            // Use GetSaveParentCell — GetParentCell returns null when the
+            // destination cell isn't loaded (e.g., loading a save inside an interior)
+            auto* destCell = linkedDoor->GetSaveParentCell();
+            if (!destCell) destCell = linkedDoor->GetParentCell();
+            if (!destCell) {
+                noDest++;
+                return RE::BSContainer::ForEachResult::kContinue;
+            }
+
+            if (destCell->IsInteriorCell()) {
+                interiorDest++;
+            } else {
+                candidates.push_back(&ref);
             }
 
             return RE::BSContainer::ForEachResult::kContinue;
         });
 
-        return found;
+        if (candidates.empty()) {
+            logger::debug("FindExteriorDoorInCell '{}': {} doors, {} noTeleport, {} noLinked, {} noDest, {} interiorDest, 0 exterior",
+                         cell->GetName() ? cell->GetName() : "unnamed",
+                         doorCount, noTeleport, noLinked, noDest, interiorDest);
+            return nullptr;
+        }
+        if (candidates.size() == 1) return candidates[0];
+
+        // Multiple exterior doors — prefer lowest z-coordinate (ground-level main entrance)
+        RE::TESObjectREFR* best = candidates[0];
+        for (size_t i = 1; i < candidates.size(); ++i) {
+            if (candidates[i]->GetPositionZ() < best->GetPositionZ()) {
+                best = candidates[i];
+            }
+        }
+        logger::debug("FindExteriorDoorInCell: {} exterior doors found, selected lowest-z at ({:.0f}, {:.0f}, {:.0f})",
+            candidates.size(), best->GetPositionX(), best->GetPositionY(), best->GetPositionZ());
+        return best;
     }
 
     RE::TESObjectREFR* LocationResolver::GetExteriorLinkedDoor(RE::TESObjectREFR* interiorDoor) {
@@ -1081,7 +1145,53 @@ namespace IntelEngine {
         if (!player) return nullptr;
         auto* cell = player->GetParentCell();
         if (!cell || !cell->IsInteriorCell()) return nullptr;
-        return GetExteriorLinkedDoor(FindExteriorDoorInCell(cell));
+
+        logger::debug("GetPlayerHomeExteriorDoorRef: scanning cell '{}' ({:08X})",
+                     cell->GetName() ? cell->GetName() : "unnamed", cell->GetFormID());
+
+        // Direct: door in player's cell leading to exterior
+        auto* directDoor = FindExteriorDoorInCell(cell);
+        if (directDoor) {
+            auto* extDoor = GetExteriorLinkedDoor(directDoor);
+            logger::debug("GetPlayerHomeExteriorDoorRef: direct exterior door found (extDoor={})",
+                         extDoor ? "valid" : "null");
+            return extDoor;
+        }
+        logger::debug("GetPlayerHomeExteriorDoorRef: no direct exterior door, trying multi-hop");
+
+        // Multi-hop: door leads to another interior that HAS an exterior door
+        // (modded homes with porches, entryways, or multi-room layouts)
+        RE::TESObjectREFR* bestHopDoor = nullptr;
+        cell->ForEachReference([&](RE::TESObjectREFR& ref) -> RE::BSContainer::ForEachResult {
+            auto* baseObj = ref.GetBaseObject();
+            if (!baseObj || !baseObj->Is(RE::FormType::Door) || ref.IsDisabled())
+                return RE::BSContainer::ForEachResult::kContinue;
+
+            auto* teleport = ref.extraList.GetByType<RE::ExtraTeleport>();
+            if (!teleport || !teleport->teleportData)
+                return RE::BSContainer::ForEachResult::kContinue;
+
+            auto linkedDoor = teleport->teleportData->linkedDoor.get();
+            if (!linkedDoor)
+                return RE::BSContainer::ForEachResult::kContinue;
+
+            auto* destCell = linkedDoor->GetSaveParentCell();
+            if (!destCell) destCell = linkedDoor->GetParentCell();
+            if (destCell && destCell->IsInteriorCell()) {
+                auto* hopDoor = FindExteriorDoorInCell(destCell);
+                if (hopDoor) {
+                    bestHopDoor = GetExteriorLinkedDoor(hopDoor);
+                    return RE::BSContainer::ForEachResult::kStop;
+                }
+            }
+
+            return RE::BSContainer::ForEachResult::kContinue;
+        });
+
+        if (bestHopDoor) {
+            logger::debug("GetPlayerHomeExteriorDoorRef: multi-hop exterior door found");
+        }
+        return bestHopDoor;
     }
 
     RE::TESObjectREFR* LocationResolver::GetPlayerHomeInteriorDoorRef() {
@@ -1177,7 +1287,8 @@ namespace IntelEngine {
             if (!marker) continue;
 
             // Skip interior-only markers
-            auto* parentCell = marker->GetParentCell();
+            auto* parentCell = marker->GetSaveParentCell();
+            if (!parentCell) parentCell = marker->GetParentCell();
             if (parentCell && parentCell->IsInteriorCell()) continue;
 
             float dx = marker->GetPosition().x - playerPos.x;
@@ -1751,6 +1862,28 @@ namespace IntelEngine {
         return RE::BSFixedString(stats.dump());
     }
 
+    std::vector<RE::FormID> LocationResolver::GetHouseholdMembers(RE::Actor* actor) {
+        std::vector<RE::FormID> result;
+        if (!actor) return result;
+
+        auto* base = actor->GetActorBase();
+        if (!base) return result;
+
+        std::shared_lock lock(m_mutex);
+
+        auto it = m_npcHomeIndex.find(base->GetFormID());
+        if (it == m_npcHomeIndex.end()) return result;
+
+        RE::FormID homeCellId = it->second.cellFormId;
+
+        for (const auto& [npcFormId, info] : m_npcHomeIndex) {
+            if (npcFormId != base->GetFormID() && info.cellFormId == homeCellId) {
+                result.push_back(npcFormId);
+            }
+        }
+        return result;
+    }
+
     RE::TESObjectREFR* LocationResolver::FindNearestWaypointToward(
             RE::Actor* actor, RE::TESObjectREFR* destination, float maxRadius) {
         if (!actor || !destination) return nullptr;
@@ -1780,7 +1913,8 @@ namespace IntelEngine {
             if (!marker) continue;
 
             // Skip interior-only markers
-            auto* parentCell = marker->GetParentCell();
+            auto* parentCell = marker->GetSaveParentCell();
+            if (!parentCell) parentCell = marker->GetParentCell();
             if (parentCell && parentCell->IsInteriorCell()) continue;
 
             auto markerPos = marker->GetPosition();

@@ -67,7 +67,8 @@ namespace IntelEngine {
             return "Unknown";
         }
 
-        auto* destCell = destDoor->GetParentCell();
+        auto* destCell = destDoor->GetSaveParentCell();
+        if (!destCell) destCell = destDoor->GetParentCell();
         if (!destCell) return "Unknown";
 
         auto cellName = destCell->GetName();
@@ -89,7 +90,8 @@ namespace IntelEngine {
         auto* destDoor = GetDoorDestination(door);
         if (!destDoor) return false;
 
-        auto* destCell = destDoor->GetParentCell();
+        auto* destCell = destDoor->GetSaveParentCell();
+        if (!destCell) destCell = destDoor->GetParentCell();
         if (!destCell) return false;
 
         return !destCell->IsInteriorCell();
@@ -551,11 +553,32 @@ namespace IntelEngine {
         auto* player = RE::PlayerCharacter::GetSingleton();
         if (!player) return false;
 
+        auto* cell = player->GetParentCell();
         auto* location = player->GetCurrentLocation();
-        if (!location) return false;
 
+        // Also check cell's own location if player location is null or lacks keyword
         auto* keyword = LocationResolver::GetSingleton()->GetPlayerHouseKeyword();
-        return keyword && location->HasKeyword(keyword);
+
+        if (location && keyword && location->HasKeyword(keyword)) {
+            logger::debug("IsPlayerInOwnHome: true (player location '{}' has LocTypePlayerHouse)",
+                         location->GetFullName() ? location->GetFullName() : "unnamed");
+            return true;
+        }
+
+        // Fallback: check cell's location (player's GetCurrentLocation can lag behind cell transitions)
+        if (cell) {
+            auto* cellLoc = cell->GetLocation();
+            if (cellLoc && keyword && cellLoc->HasKeyword(keyword)) {
+                logger::debug("IsPlayerInOwnHome: true (cell location '{}' has LocTypePlayerHouse)",
+                             cellLoc->GetFullName() ? cellLoc->GetFullName() : "unnamed");
+                return true;
+            }
+        }
+
+        logger::debug("IsPlayerInOwnHome: false (location={}, cell={})",
+                     location ? (location->GetFullName() ? location->GetFullName() : "unnamed") : "null",
+                     cell ? (cell->GetName() ? cell->GetName() : "unnamed") : "null");
+        return false;
     }
 
 }  // namespace IntelEngine

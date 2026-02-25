@@ -298,7 +298,7 @@ namespace IntelEngine {
         if (!SkyrimNetAPI::GetRecentEvents) return "";
         try {
             auto jsonStr = SkyrimNetAPI::GetRecentEvents(
-                formId, maxCount, "direct_narration,custom_action,dialogue,persistent_generic");
+                formId, maxCount, "direct_narration,custom_action,dialogue,dialogue_background,persistent_generic");
             float currentTime = GetCurrentDBHours();
             return FormatActorEventsFromJson(jsonStr, currentTime);
         } catch (...) {
@@ -329,7 +329,7 @@ namespace IntelEngine {
                 }
 
                 std::string displayText = ExtractEventDisplayText(eventType, eventData);
-                displayText = Truncate(SanitizeForPrompt(displayText), 80);
+                displayText = Truncate(SanitizeForPrompt(displayText), 100);
                 if (displayText.empty()) continue;
 
                 std::string timeAgo = FormatRelativeTime(
@@ -338,9 +338,11 @@ namespace IntelEngine {
                 if (!result.empty()) result += "; ";
                 result += "[" + timeAgo + "] ";
 
-                if (eventType == "dialogue") {
+                if (eventType == "dialogue" || eventType == "dialogue_background") {
                     if (!originName.empty() && !targetName.empty()) {
-                        result += originName + " spoke with " + targetName;
+                        result += originName + " told " + targetName + ": \"" + displayText + "\"";
+                    } else if (!originName.empty()) {
+                        result += originName + " said: \"" + displayText + "\"";
                     } else {
                         result += displayText;
                     }
@@ -931,7 +933,12 @@ namespace IntelEngine {
 
     std::string MemoryDB::Truncate(const std::string& text, size_t maxLen) {
         if (text.size() <= maxLen) return text;
-        return text.substr(0, maxLen - 3) + "...";
+        // UTF-8 safe: walk back from cut point to avoid splitting multi-byte sequences
+        size_t cut = maxLen - 3;
+        while (cut > 0 && (static_cast<unsigned char>(text[cut]) & 0xC0) == 0x80) {
+            --cut;  // Skip continuation bytes (10xxxxxx)
+        }
+        return text.substr(0, cut) + "...";
     }
 
     std::string MemoryDB::SanitizeForPrompt(const std::string& text) {
