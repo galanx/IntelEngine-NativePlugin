@@ -8,6 +8,7 @@
 #include "NPCIndex.h"
 #include <random>
 #include <algorithm>
+#include <chrono>
 #include "LocationResolver.h"
 #include "StringUtils.h"
 #include "CellAnalyzer.h"
@@ -148,6 +149,7 @@ namespace IntelEngine::Papyrus {
         a_vm->RegisterFunction("GetPlayerHomeExteriorDoor", SCRIPT_NAME, GetPlayerHomeExteriorDoor); ++count;
         a_vm->RegisterFunction("GetPlayerHomeInteriorDoor", SCRIPT_NAME, GetPlayerHomeInteriorDoor); ++count;
         a_vm->RegisterFunction("IsCivilianClass", SCRIPT_NAME, IsCivilianClass); ++count;
+        a_vm->RegisterFunction("IsJarl", SCRIPT_NAME, IsJarl); ++count;
         a_vm->RegisterFunction("SetDangerZonePolicy", SCRIPT_NAME, SetDangerZonePolicy); ++count;
         a_vm->RegisterFunction("IsPlayerInBlockedLocation", SCRIPT_NAME, IsPlayerInBlockedLocation); ++count;
         a_vm->RegisterFunction("StoryResponseShouldAct", SCRIPT_NAME, StoryResponseShouldAct); ++count;
@@ -170,6 +172,7 @@ namespace IntelEngine::Papyrus {
 
         // Dialogue Safety Net Functions
         a_vm->RegisterFunction("RunSafetyNetCheck", SCRIPT_NAME, RunSafetyNetCheck); ++count;
+        a_vm->RegisterFunction("NotifyNewDialogue", SCRIPT_NAME, NotifyNewDialogue); ++count;
         a_vm->RegisterFunction("GetSafetyNetNPC", SCRIPT_NAME, GetSafetyNetNPC); ++count;
         a_vm->RegisterFunction("GetLastConversationPartner", SCRIPT_NAME, GetLastConversationPartner); ++count;
         a_vm->RegisterFunction("GetRecentDialogue", SCRIPT_NAME, GetRecentDialogue); ++count;
@@ -1113,6 +1116,10 @@ namespace IntelEngine::Papyrus {
         return NPCIndex::ClassifyNPCArchetype(actor) == "CIVILIAN";
     }
 
+    bool IsJarl(RE::StaticFunctionTag*, RE::Actor* actor) {
+        return NPCIndex::IsJarl(actor);
+    }
+
     void SetDangerZonePolicy(RE::StaticFunctionTag*, bool blockCivilians, bool blockAll) {
         NPCIndex::GetSingleton()->SetDangerZonePolicy(blockCivilians, blockAll);
     }
@@ -1324,15 +1331,38 @@ namespace IntelEngine::Papyrus {
     // Static state for tick-based safety net (transient — does not survive save/load)
     static float s_lastCheckedDialogueTime = 0.0f;
     static RE::FormID s_safetyNetNPCFormId = 0;
+    static std::chrono::steady_clock::time_point s_lastApiCallTime{};
+    // Consecutive unchanged results — used for adaptive backoff
+    static int s_unchangedCount = 0;
+
+    void NotifyNewDialogue(RE::StaticFunctionTag*) {
+        // Reset backoff so the next tick checks immediately
+        s_unchangedCount = 0;
+    }
 
     int RunSafetyNetCheck(RE::StaticFunctionTag*) {
+        // Adaptive backoff: if recent checks found nothing new, slow down.
+        //  0 misses → check every 5s  (active conversation)
+        //  1 miss   → check every 15s (just finished talking)
+        //  2+ misses → check every 60s (idle — no dialogue in a while)
+        auto now = std::chrono::steady_clock::now();
+        int cooldownSec = (s_unchangedCount == 0) ? 5 : (s_unchangedCount == 1) ? 15 : 60;
+        if (std::chrono::duration_cast<std::chrono::seconds>(now - s_lastApiCallTime).count() < cooldownSec) {
+            return 0;
+        }
+        s_lastApiCallTime = now;
+
         auto* db = MemoryDB::GetSingleton();
         auto info = db->GetLatestDialogueInfo();
 
         // No dialogue found, or same conversation already checked
         if (info.npcFormId == 0 || info.gameTimeHours == s_lastCheckedDialogueTime) {
+            if (s_unchangedCount < 3) s_unchangedCount++;
             return 0;
         }
+
+        // New dialogue detected — reset backoff
+        s_unchangedCount = 0;
 
         // Mark as checked regardless of outcome
         s_lastCheckedDialogueTime = info.gameTimeHours;
@@ -1455,7 +1485,11 @@ namespace IntelEngine::Papyrus {
                 size_t start = token.find_first_not_of(" \t");
                 size_t end = token.find_last_not_of(" \t");
                 if (start != std::string::npos) {
-                    excludedSet.insert(token.substr(start, end - start + 1));
+                    std::string trimmed = token.substr(start, end - start + 1);
+                    // Lowercase: Papyrus VM may capitalize string literals
+                    // (e.g., "ambush" → "Ambush") so we normalize to match allTypes[].
+                    std::transform(trimmed.begin(), trimmed.end(), trimmed.begin(), ::tolower);
+                    excludedSet.insert(trimmed);
                 }
                 pos = comma + 1;
             }
@@ -1466,13 +1500,30 @@ namespace IntelEngine::Papyrus {
             "ambush", "stalker", "message", "quest"
         };
 
+        // Log exclude set for diagnostics
+        {
+            std::string excludeLog;
+            for (const auto& e : excludedSet) {
+                if (!excludeLog.empty()) excludeLog += ", ";
+                excludeLog += e;
+            }
+            logger::info("[StoryDM] Exclude set: [{}]", excludeLog);
+        }
+
         std::string json = "{";
         json += "\"candidatePool\":\"" + std::string(dmContext.c_str()) + "\",";
 
-        // Per-type show flags: "1" if allowed, "" if excluded
+        // Per-type show flags: "1" if allowed, "0" if excluded.
+        // MUST always include ALL keys with non-empty values. Inja's variable
+        // resolution falls back to no-argument callbacks/decorators when a key
+        // is missing or empty in the data. SkyrimNet registers decorators that
+        // can shadow template variables (e.g., "show_ambush", "show_message"),
+        // causing Inja to call the decorator and return a truthy value instead
+        // of the intended empty/missing value. Using "0" (always present,
+        // never matches "1") prevents the callback fallback entirely.
         for (const auto* t : allTypes) {
             json += "\"show_" + std::string(t) + "\":\"" +
-                    (excludedSet.count(t) ? "" : "1") + "\",";
+                    (excludedSet.count(t) ? "0" : "1") + "\",";
         }
 
         // Remove trailing comma, close
@@ -1698,6 +1749,23 @@ namespace IntelEngine::Papyrus {
                 _strnicmp(eid, "SocDLC", 6) == 0);
     }
 
+    // FormID fallback for vanilla Skyrim.esm forms whose EditorIDs aren't
+    // queryable at runtime (GetFormEditorID() returns empty for base-game forms).
+    static const std::unordered_map<std::string, RE::FormID> s_vanillaFormIDs = {
+        {"LvlBanditMeleeAny",      0x01E79C},
+        {"LvlBanditMelee2H",       0x01E79D},
+        {"LvlBanditMissile",       0x01E79E},
+        {"LvlBanditBoss",          0x03DF17},
+        {"LvlBanditMelee1H",       0x03DECB},
+        {"LvlBanditMeleeTank",     0x015BE5},
+        {"LvlDraugrMeleeAllMale",  0x055954},
+        {"LvlDraugrMelee1HMale",   0x055953},
+        {"LvlDraugrMissileMale",   0x0A6851},
+        {"LvlDraugrWarlockMale",   0x01E7AC},
+        {"EncDragon01Fire",        0x01CA03},
+        {"EncDragon01Frost",       0x0F80FA},
+    };
+
     static RE::TESBoundObject* LookupLeveledActor(const char* editorID) {
         std::string key(editorID);
 
@@ -1781,7 +1849,25 @@ namespace IntelEngine::Papyrus {
             }
         }
 
+        // FormID fallback: vanilla Skyrim.esm forms whose EditorIDs aren't
+        // available at runtime (SSE strips them to save memory).
+        auto fid = s_vanillaFormIDs.find(key);
+        if (fid != s_vanillaFormIDs.end() && dh) {
+            auto* fallback = dh->LookupForm(fid->second, "Skyrim.esm");
+            if (fallback) {
+                auto ft = fallback->GetFormType();
+                if (ft == RE::FormType::LeveledNPC || ft == RE::FormType::NPC) {
+                    auto* result = static_cast<RE::TESBoundObject*>(fallback);
+                    s_leveledActorCache[key] = result;
+                    logger::info("[IntelEngine] LookupLeveledActor: '{}' found via FormID fallback (0x{:06X})",
+                                editorID, fid->second);
+                    return result;
+                }
+            }
+        }
+
         // Complete miss — cache negative result in exact cache
+        logger::warn("[IntelEngine] LookupLeveledActor: '{}' not found by any method", editorID);
         s_leveledActorCache[key] = nullptr;
         return nullptr;
     }
@@ -1802,17 +1888,17 @@ namespace IntelEngine::Papyrus {
         int maxCount = 1;
 
         if (type == "bandit") {
-            primaryID = "LvlBanditMelee";
+            primaryID = "LvlBanditMeleeAny";
             secondaryID = "LvlBanditMissile";
             minCount = 3;
             maxCount = 5;
         } else if (type == "draugr") {
-            primaryID = "LvlDraugr";
-            secondaryID = "LvlDraugrMelee";
+            primaryID = "LvlDraugrMeleeAllMale";
+            secondaryID = "LvlDraugrMissileMale";
             minCount = 2;
             maxCount = 4;
         } else if (type == "dragon") {
-            primaryID = "EncDragon01";
+            primaryID = "EncDragon01Fire";
             minCount = 1;
             maxCount = 1;
         } else {

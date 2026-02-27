@@ -981,13 +981,14 @@ namespace IntelEngine {
             }
         }
 
-        // Phase 2: Social associates (MemoryDB shared event history — interactions + gossip)
+        // Phase 2: Social associates (MemoryDB shared event history — same hold only)
+        std::string senderHold = GetNPCHoldName(sender);
         auto* memDB = MemoryDB::GetSingleton();
         if (memDB) {
             auto ranked = memDB->GetRelatedCandidateFormIDs(sender->GetFormID(), 10);
             for (const auto& [formId, name, score] : ranked) {
                 auto* actor = ResolveFromMemoryDB(formId, name);
-                if (isValidMessenger(actor)) {
+                if (isValidMessenger(actor) && !senderHold.empty() && GetNPCHoldName(actor) == senderHold) {
                     logger::info("FindMessengerForSender: associate '{}' for '{}' (score: {:.1f})",
                         actor->GetDisplayFullName(), sender->GetDisplayFullName(), score);
                     return actor;
@@ -996,16 +997,15 @@ namespace IntelEngine {
         }
 
         // Phases 3+4: Single loaded-actor scan for guards AND civilians
-        std::string senderHold = GetNPCHoldName(sender);
         std::vector<RE::Actor*> guards;
-        std::vector<RE::Actor*> civilians;
+        std::vector<RE::Actor*> sameHoldCivilians;
         ProcessUtils::ForEachLoadedActor([&](RE::Actor* actor) {
             if (!isValidMessenger(actor)) return false;
             std::string archetype = ClassifyNPCArchetype(actor);
             if (archetype == "GUARD" && !senderHold.empty() && GetNPCHoldName(actor) == senderHold) {
                 guards.push_back(actor);
-            } else if (archetype == "CIVILIAN") {
-                civilians.push_back(actor);
+            } else if (archetype == "CIVILIAN" && !senderHold.empty() && GetNPCHoldName(actor) == senderHold) {
+                sameHoldCivilians.push_back(actor);
             }
             return false;
         });
@@ -1020,11 +1020,11 @@ namespace IntelEngine {
             return guard;
         }
 
-        // Phase 4: Any eligible civilian ("courier boy" fallback)
-        if (!civilians.empty()) {
+        // Phase 4: Same-hold civilian
+        if (!sameHoldCivilians.empty()) {
             static thread_local std::mt19937 rng(std::random_device{}());
-            std::uniform_int_distribution<size_t> dist(0, civilians.size() - 1);
-            auto* civ = civilians[dist(rng)];
+            std::uniform_int_distribution<size_t> dist(0, sameHoldCivilians.size() - 1);
+            auto* civ = sameHoldCivilians[dist(rng)];
             logger::info("FindMessengerForSender: civilian '{}' for '{}'",
                 civ->GetDisplayFullName(), sender->GetDisplayFullName());
             return civ;
@@ -1089,6 +1089,79 @@ namespace IntelEngine {
         }
 
         return "CIVILIAN";
+    }
+
+    bool NPCIndex::IsJarl(RE::Actor* actor) {
+        if (!actor) return false;
+
+        // Cache the faction pointer — LookupByEditorID is cheap but no need to call it per-NPC
+        static RE::TESFaction* s_jarlFaction = nullptr;
+        static bool s_looked = false;
+        if (!s_looked) {
+            s_jarlFaction = RE::TESForm::LookupByEditorID<RE::TESFaction>("JobJarlFaction");
+            s_looked = true;
+            if (!s_jarlFaction)
+                logger::warn("IsJarl: JobJarlFaction not found by editor ID");
+        }
+        if (!s_jarlFaction) return false;
+
+        bool found = false;
+        actor->VisitFactions([&](RE::TESFaction* f, std::int8_t) -> bool {
+            if (f == s_jarlFaction) { found = true; return false; }  // stop visiting
+            return true;  // keep visiting
+        });
+        return found;
+    }
+
+    std::string NPCIndex::GetEligibleStoryTypes(RE::Actor* actor,
+        const std::string& archetype, bool dangerous, bool interior) {
+
+        // show_ flags from the Papyrus exclude list are handled separately in the prompt.
+        // This function produces per-candidate constraints based on WHO the NPC is and
+        // WHERE the player is. The DM must pick a type that appears in BOTH the global
+        // show_ list AND this candidate's eligible list.
+
+        bool isJarl = IsJarl(actor);
+        bool isCivilian = (archetype == "CIVILIAN");
+
+        // Jarls: message + quest only — they NEVER travel personally
+        // (quest supports courier delivery: Jarl as sender, courier as npc)
+        if (isJarl) return "message, quest";
+
+        std::vector<const char*> types;
+
+        // seek_player: civilians can't enter danger zones
+        if (!(isCivilian && dangerous))
+            types.push_back("seek_player");
+
+        // informant: never in danger zones (gossip isn't worth risking your life)
+        if (!dangerous)
+            types.push_back("informant");
+
+        // road_encounter: exterior only
+        if (!interior)
+            types.push_back("road_encounter");
+
+        // ambush: combat-capable only
+        if (!isCivilian)
+            types.push_back("ambush");
+
+        // stalker: exterior only, not civilian (needs stealth capability)
+        if (!interior && !isCivilian)
+            types.push_back("stalker");
+
+        // message: anyone can send a message (messenger selection is automatic)
+        types.push_back("message");
+
+        // quest: anyone can give a quest (civilians ask for help, warriors offer jobs)
+        types.push_back("quest");
+
+        std::string result;
+        for (size_t i = 0; i < types.size(); ++i) {
+            if (i > 0) result += ", ";
+            result += types[i];
+        }
+        return result;
     }
 
     std::string NPCIndex::GetNPCBioLine(RE::Actor* actor) {
@@ -1558,10 +1631,12 @@ namespace IntelEngine {
             snprintf(uuid, sizeof(uuid), "0x%08X", actor->GetFormID());
 
             std::string bio = GetNPCBioLine(actor);
+            std::string eligibleTypes = GetEligibleStoryTypes(actor, archetype, dangerous, interior);
 
             md += "### ";  md += std::to_string(i + 1);  md += ". ";  md += name;
             md += " [";    md += archetype;  md += ", ";  md += gender;  md += "] - ";  md += loc;
             md += " (";    md += uuid;       md += ")\n";
+            md += "Eligible: ";  md += eligibleTypes;  md += "\n";
             if (!bio.empty()) {
                 md += "Bio: ";  md += bio;  md += "\n";
             }

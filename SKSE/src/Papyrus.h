@@ -228,6 +228,7 @@ namespace IntelEngine::Papyrus {
     RE::TESObjectREFR* GetPlayerHomeExteriorDoor(RE::StaticFunctionTag*);
     RE::TESObjectREFR* GetPlayerHomeInteriorDoor(RE::StaticFunctionTag*);
     bool IsCivilianClass(RE::StaticFunctionTag*, RE::Actor* actor);
+    bool IsJarl(RE::StaticFunctionTag*, RE::Actor* actor);
     bool StoryResponseShouldAct(RE::StaticFunctionTag*, RE::BSFixedString response);
     RE::BSFixedString StoryResponseGetField(RE::StaticFunctionTag*, RE::BSFixedString json,
                                             RE::BSFixedString fieldName);
@@ -264,6 +265,9 @@ namespace IntelEngine::Papyrus {
     // Returns keyword hint (0=nothing, 1=meeting, 2=fetch, 3=delivery).
     // Stores the NPC internally — retrieve with GetSafetyNetNPC().
     int RunSafetyNetCheck(RE::StaticFunctionTag*);
+
+    // Signal that new dialogue occurred — re-enables safety net polling.
+    void NotifyNewDialogue(RE::StaticFunctionTag*);
 
     // Returns the NPC from the last positive RunSafetyNetCheck() call.
     RE::Actor* GetSafetyNetNPC(RE::StaticFunctionTag*);

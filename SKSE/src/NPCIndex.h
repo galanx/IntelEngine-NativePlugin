@@ -191,6 +191,18 @@ namespace IntelEngine {
         static std::string ClassifyNPCArchetype(RE::Actor* actor);
 
         /**
+         * Check if an NPC is a Jarl (has JobJarlFaction).
+         */
+        static bool IsJarl(RE::Actor* actor);
+
+        /**
+         * Build comma-separated list of eligible story types for a candidate.
+         * Considers archetype, Jarl status, environment (interior/danger).
+         */
+        static std::string GetEligibleStoryTypes(RE::Actor* actor,
+            const std::string& archetype, bool dangerous, bool interior);
+
+        /**
          * Set danger zone dispatch policy (synced from MCM via Papyrus).
          */
         void SetDangerZonePolicy(bool blockCivilians, bool blockAll);
