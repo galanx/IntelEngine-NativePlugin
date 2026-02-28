@@ -32,7 +32,8 @@ namespace IntelEngine::Papyrus {
     RE::BSFixedString RenderGossipHeardSection(RE::StaticFunctionTag*, std::vector<RE::BSFixedString>, std::vector<RE::BSFixedString>, std::vector<float>, float);
     RE::BSFixedString RenderGossipToldSection(RE::StaticFunctionTag*, std::vector<RE::BSFixedString>, std::vector<RE::BSFixedString>, std::vector<float>, float);
     RE::BSFixedString RenderTaskHistorySection(RE::StaticFunctionTag*, std::vector<RE::BSFixedString>, std::vector<float>, float);
-    void SetDangerZonePolicy(RE::StaticFunctionTag*, bool, bool);
+    void SetDangerZonePolicy(RE::StaticFunctionTag*, int);
+    bool IsPotentialFollower(RE::StaticFunctionTag*, RE::Actor*);
     bool IsPlayerInBlockedLocation(RE::StaticFunctionTag*);
 
     bool Register(RE::BSScript::IVirtualMachine* a_vm) {
@@ -151,6 +152,7 @@ namespace IntelEngine::Papyrus {
         a_vm->RegisterFunction("IsCivilianClass", SCRIPT_NAME, IsCivilianClass); ++count;
         a_vm->RegisterFunction("IsJarl", SCRIPT_NAME, IsJarl); ++count;
         a_vm->RegisterFunction("SetDangerZonePolicy", SCRIPT_NAME, SetDangerZonePolicy); ++count;
+        a_vm->RegisterFunction("IsPotentialFollower", SCRIPT_NAME, IsPotentialFollower); ++count;
         a_vm->RegisterFunction("IsPlayerInBlockedLocation", SCRIPT_NAME, IsPlayerInBlockedLocation); ++count;
         a_vm->RegisterFunction("StoryResponseShouldAct", SCRIPT_NAME, StoryResponseShouldAct); ++count;
         a_vm->RegisterFunction("StoryResponseGetField", SCRIPT_NAME, StoryResponseGetField); ++count;
@@ -1120,8 +1122,12 @@ namespace IntelEngine::Papyrus {
         return NPCIndex::IsJarl(actor);
     }
 
-    void SetDangerZonePolicy(RE::StaticFunctionTag*, bool blockCivilians, bool blockAll) {
-        NPCIndex::GetSingleton()->SetDangerZonePolicy(blockCivilians, blockAll);
+    void SetDangerZonePolicy(RE::StaticFunctionTag*, int policy) {
+        NPCIndex::GetSingleton()->SetDangerZonePolicy(policy);
+    }
+
+    bool IsPotentialFollower(RE::StaticFunctionTag*, RE::Actor* actor) {
+        return NPCIndex::IsPotentialFollower(actor);
     }
 
     bool IsPlayerInBlockedLocation(RE::StaticFunctionTag*) {

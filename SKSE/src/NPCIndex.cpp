@@ -5,6 +5,7 @@
  */
 
 #include "NPCIndex.h"
+#include <algorithm>
 #include "CellAnalyzer.h"
 #include "LocationResolver.h"
 #include "MemoryDB.h"
@@ -115,9 +116,17 @@ namespace IntelEngine {
     }
 
     // ── Danger Zone Policy ──
-    void NPCIndex::SetDangerZonePolicy(bool blockCivilians, bool blockAll) {
-        m_blockCiviliansInDanger.store(blockCivilians, std::memory_order_relaxed);
-        m_blockAllInDanger.store(blockAll, std::memory_order_relaxed);
+    void NPCIndex::SetDangerZonePolicy(int policy) {
+        m_dangerZonePolicy.store(std::clamp(policy, 0, 3), std::memory_order_relaxed);
+    }
+
+    bool NPCIndex::IsPotentialFollower(RE::Actor* actor) {
+        if (!actor) return false;
+        static RE::TESFaction* s_potentialFollowerFaction = nullptr;
+        if (!s_potentialFollowerFaction) {
+            s_potentialFollowerFaction = RE::TESForm::LookupByID<RE::TESFaction>(0x0005C84D);
+        }
+        return s_potentialFollowerFaction && actor->IsInFaction(s_potentialFollowerFaction);
     }
 
     // ── Location Blocklist (populated from plugin config) ──
@@ -699,14 +708,11 @@ namespace IntelEngine {
 
         // Danger zone candidate filtering (MCM-controlled)
         {
-            auto* npcIndex = NPCIndex::GetSingleton();
-            if (npcIndex->m_blockAllInDanger.load(std::memory_order_relaxed) ||
-                npcIndex->m_blockCiviliansInDanger.load(std::memory_order_relaxed)) {
-                if (CellAnalyzer::GetSingleton()->IsPlayerInDangerousLocation()) {
-                    if (npcIndex->m_blockAllInDanger.load(std::memory_order_relaxed)) return false;
-                    if (npcIndex->m_blockCiviliansInDanger.load(std::memory_order_relaxed) &&
-                        ClassifyNPCArchetype(actor) == "CIVILIAN") return false;
-                }
+            int policy = NPCIndex::GetSingleton()->m_dangerZonePolicy.load(std::memory_order_relaxed);
+            if (policy > 0 && CellAnalyzer::GetSingleton()->IsPlayerInDangerousLocation()) {
+                if (policy == 3) return false;
+                if (policy == 2 && !IsPotentialFollower(actor)) return false;
+                if (policy == 1 && ClassifyNPCArchetype(actor) == "CIVILIAN") return false;
             }
         }
 
@@ -772,19 +778,19 @@ namespace IntelEngine {
 
         // Danger zone candidate filtering (MCM-controlled)
         {
-            auto* npcIndex = NPCIndex::GetSingleton();
-            if (npcIndex->m_blockAllInDanger.load(std::memory_order_relaxed) ||
-                npcIndex->m_blockCiviliansInDanger.load(std::memory_order_relaxed)) {
-                if (CellAnalyzer::GetSingleton()->IsPlayerInDangerousLocation()) {
-                    if (npcIndex->m_blockAllInDanger.load(std::memory_order_relaxed)) {
-                        logger::debug("[StoryDM] Rejected '{}': danger zone (block all)", displayName);
-                        return false;
-                    }
-                    if (npcIndex->m_blockCiviliansInDanger.load(std::memory_order_relaxed) &&
-                        ClassifyNPCArchetype(actor) == "CIVILIAN") {
-                        logger::debug("[StoryDM] Rejected '{}': danger zone (civilian)", displayName);
-                        return false;
-                    }
+            int policy = NPCIndex::GetSingleton()->m_dangerZonePolicy.load(std::memory_order_relaxed);
+            if (policy > 0 && CellAnalyzer::GetSingleton()->IsPlayerInDangerousLocation()) {
+                if (policy == 3) {
+                    logger::debug("[StoryDM] Rejected '{}': danger zone (block all)", displayName);
+                    return false;
+                }
+                if (policy == 2 && !IsPotentialFollower(actor)) {
+                    logger::debug("[StoryDM] Rejected '{}': danger zone (followers only)", displayName);
+                    return false;
+                }
+                if (policy == 1 && ClassifyNPCArchetype(actor) == "CIVILIAN") {
+                    logger::debug("[StoryDM] Rejected '{}': danger zone (civilian)", displayName);
+                    return false;
                 }
             }
         }

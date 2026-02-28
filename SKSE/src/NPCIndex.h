@@ -204,8 +204,14 @@ namespace IntelEngine {
 
         /**
          * Set danger zone dispatch policy (synced from MCM via Papyrus).
+         * 0=allow all, 1=block civilians, 2=followers only, 3=block all
          */
-        void SetDangerZonePolicy(bool blockCivilians, bool blockAll);
+        void SetDangerZonePolicy(int policy);
+
+        /**
+         * Check if actor is in PotentialFollowerFaction (can be recruited as follower).
+         */
+        static bool IsPotentialFollower(RE::Actor* actor);
 
         /**
          * Check if the player is in a location on the blocklist.
@@ -334,8 +340,8 @@ namespace IntelEngine {
         bool m_indexBuilt = false;
 
         // Danger zone dispatch policy (MCM-synced)
-        std::atomic<bool> m_blockCiviliansInDanger{true};
-        std::atomic<bool> m_blockAllInDanger{false};
+        // 0=allow all, 1=block civilians, 2=followers only, 3=block all
+        std::atomic<int> m_dangerZonePolicy{1};
     };
 
 }  // namespace IntelEngine
