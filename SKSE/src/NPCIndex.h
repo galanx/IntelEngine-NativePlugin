@@ -209,6 +209,12 @@ namespace IntelEngine {
         void SetDangerZonePolicy(int policy);
 
         /**
+         * Set player home visit policy (synced from MCM via Papyrus).
+         * 0=allow all, 1=block civilians, 2=followers only, 3=block all
+         */
+        void SetPlayerHomePolicy(int policy);
+
+        /**
          * Check if actor is in PotentialFollowerFaction (can be recruited as follower).
          */
         static bool IsPotentialFollower(RE::Actor* actor);
@@ -342,6 +348,10 @@ namespace IntelEngine {
         // Danger zone dispatch policy (MCM-synced)
         // 0=allow all, 1=block civilians, 2=followers only, 3=block all
         std::atomic<int> m_dangerZonePolicy{1};
+
+        // Player home visit policy (MCM-synced)
+        // 0=allow all, 1=block civilians, 2=followers only, 3=block all
+        std::atomic<int> m_playerHomePolicy{0};
     };
 
 }  // namespace IntelEngine

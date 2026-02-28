@@ -120,6 +120,10 @@ namespace IntelEngine {
         m_dangerZonePolicy.store(std::clamp(policy, 0, 3), std::memory_order_relaxed);
     }
 
+    void NPCIndex::SetPlayerHomePolicy(int policy) {
+        m_playerHomePolicy.store(std::clamp(policy, 0, 3), std::memory_order_relaxed);
+    }
+
     bool NPCIndex::IsPotentialFollower(RE::Actor* actor) {
         if (!actor) return false;
         static RE::TESFaction* s_potentialFollowerFaction = nullptr;
@@ -716,6 +720,16 @@ namespace IntelEngine {
             }
         }
 
+        // Player home candidate filtering (MCM-controlled)
+        {
+            int policy = NPCIndex::GetSingleton()->m_playerHomePolicy.load(std::memory_order_relaxed);
+            if (policy > 0 && CellAnalyzer::GetSingleton()->IsPlayerInOwnHome()) {
+                if (policy == 3) return false;
+                if (policy == 2 && !IsPotentialFollower(actor)) return false;
+                if (policy == 1 && ClassifyNPCArchetype(actor) == "CIVILIAN") return false;
+            }
+        }
+
         return true;
     }
 
@@ -790,6 +804,25 @@ namespace IntelEngine {
                 }
                 if (policy == 1 && ClassifyNPCArchetype(actor) == "CIVILIAN") {
                     logger::debug("[StoryDM] Rejected '{}': danger zone (civilian)", displayName);
+                    return false;
+                }
+            }
+        }
+
+        // Player home candidate filtering (MCM-controlled)
+        {
+            int policy = NPCIndex::GetSingleton()->m_playerHomePolicy.load(std::memory_order_relaxed);
+            if (policy > 0 && CellAnalyzer::GetSingleton()->IsPlayerInOwnHome()) {
+                if (policy == 3) {
+                    logger::debug("[StoryDM] Rejected '{}': player home (block all)", displayName);
+                    return false;
+                }
+                if (policy == 2 && !IsPotentialFollower(actor)) {
+                    logger::debug("[StoryDM] Rejected '{}': player home (followers only)", displayName);
+                    return false;
+                }
+                if (policy == 1 && ClassifyNPCArchetype(actor) == "CIVILIAN") {
+                    logger::debug("[StoryDM] Rejected '{}': player home (civilian)", displayName);
                     return false;
                 }
             }

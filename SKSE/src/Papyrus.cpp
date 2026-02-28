@@ -33,6 +33,7 @@ namespace IntelEngine::Papyrus {
     RE::BSFixedString RenderGossipToldSection(RE::StaticFunctionTag*, std::vector<RE::BSFixedString>, std::vector<RE::BSFixedString>, std::vector<float>, float);
     RE::BSFixedString RenderTaskHistorySection(RE::StaticFunctionTag*, std::vector<RE::BSFixedString>, std::vector<float>, float);
     void SetDangerZonePolicy(RE::StaticFunctionTag*, int);
+    void SetPlayerHomePolicy(RE::StaticFunctionTag*, int);
     bool IsPotentialFollower(RE::StaticFunctionTag*, RE::Actor*);
     bool IsPlayerInBlockedLocation(RE::StaticFunctionTag*);
 
@@ -152,6 +153,7 @@ namespace IntelEngine::Papyrus {
         a_vm->RegisterFunction("IsCivilianClass", SCRIPT_NAME, IsCivilianClass); ++count;
         a_vm->RegisterFunction("IsJarl", SCRIPT_NAME, IsJarl); ++count;
         a_vm->RegisterFunction("SetDangerZonePolicy", SCRIPT_NAME, SetDangerZonePolicy); ++count;
+        a_vm->RegisterFunction("SetPlayerHomePolicy", SCRIPT_NAME, SetPlayerHomePolicy); ++count;
         a_vm->RegisterFunction("IsPotentialFollower", SCRIPT_NAME, IsPotentialFollower); ++count;
         a_vm->RegisterFunction("IsPlayerInBlockedLocation", SCRIPT_NAME, IsPlayerInBlockedLocation); ++count;
         a_vm->RegisterFunction("StoryResponseShouldAct", SCRIPT_NAME, StoryResponseShouldAct); ++count;
@@ -1124,6 +1126,10 @@ namespace IntelEngine::Papyrus {
 
     void SetDangerZonePolicy(RE::StaticFunctionTag*, int policy) {
         NPCIndex::GetSingleton()->SetDangerZonePolicy(policy);
+    }
+
+    void SetPlayerHomePolicy(RE::StaticFunctionTag*, int policy) {
+        NPCIndex::GetSingleton()->SetPlayerHomePolicy(policy);
     }
 
     bool IsPotentialFollower(RE::StaticFunctionTag*, RE::Actor* actor) {
