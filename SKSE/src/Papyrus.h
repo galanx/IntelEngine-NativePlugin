@@ -247,6 +247,36 @@ namespace IntelEngine::Papyrus {
     std::vector<RE::Actor*> SpawnQuestEnemies(RE::StaticFunctionTag*, RE::TESObjectREFR* location,
                                         RE::BSFixedString enemyType);
 
+    // Quest chest spawning — creates a container with a specific named item inside.
+    // Used by find_item quest sub-type.
+    RE::TESObjectREFR* SpawnQuestChest(RE::StaticFunctionTag*, RE::TESObjectREFR* location,
+                                        RE::BSFixedString itemName);
+
+    // Validate that an item name exists in the ItemIndex.
+    bool ValidateQuestItem(RE::StaticFunctionTag*, RE::BSFixedString itemName);
+
+    // Get a random valuable item name from the ItemIndex (fallback for LLM misses).
+    // Excludes recently used items for rotation variety.
+    RE::BSFixedString GetRandomQuestItemName(RE::StaticFunctionTag*, int minGoldValue);
+
+    // Notify that a quest item was used (for rotation tracking).
+    void NotifyQuestItemUsed(RE::StaticFunctionTag*, RE::BSFixedString itemName);
+
+    // Notify that a rescue victim was used (for rotation tracking).
+    void NotifyRescueVictimUsed(RE::StaticFunctionTag*, RE::BSFixedString victimName);
+
+    // Quest boss spawning — spawns a boss-tier leveled actor near a location.
+    RE::Actor* SpawnQuestBoss(RE::StaticFunctionTag*, RE::TESObjectREFR* location,
+                              RE::BSFixedString enemyType);
+
+    // Find a deeper spawn point in an interior cell by scanning for dungeon landmarks
+    // (word walls, boss chests, coffins, shrines) then falling back to door traversal.
+    RE::TESObjectREFR* FindDeeperSpawnPoint(RE::StaticFunctionTag*, RE::Actor* actor);
+
+    // Check if the specific quest item is still inside a container.
+    bool IsQuestItemInChest(RE::StaticFunctionTag*, RE::TESObjectREFR* container,
+                            RE::BSFixedString itemName);
+
     // ==========================================================================
     // MemoryDB Functions (SkyrimNet SQLite reader)
     // ==========================================================================
@@ -256,6 +286,7 @@ namespace IntelEngine::Papyrus {
     RE::BSFixedString GetActiveStoryNPCs(RE::StaticFunctionTag*, int maxCount);
     RE::BSFixedString GetNPCRelationshipSummary(RE::StaticFunctionTag*, RE::Actor* akActor1, RE::Actor* akActor2);
     RE::BSFixedString IsMemoryDBConnected(RE::StaticFunctionTag*);
+    int GetPlayerInteractionCount(RE::StaticFunctionTag*, RE::Actor* actor);
 
     // ==========================================================================
     // Dialogue Safety Net Functions

@@ -32,6 +32,7 @@ set(SOURCES
     src/Plugin.cpp
     src/Papyrus.cpp
     src/NPCIndex.cpp
+    src/ItemIndex.cpp
     src/LocationResolver.cpp
     src/CellAnalyzer.cpp
     src/ActionValidator.cpp

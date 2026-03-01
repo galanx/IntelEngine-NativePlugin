@@ -6,6 +6,7 @@
 
 #include "Papyrus.h"
 #include "NPCIndex.h"
+#include "ItemIndex.h"
 #include <random>
 #include <algorithm>
 #include <chrono>
@@ -166,6 +167,14 @@ namespace IntelEngine::Papyrus {
         a_vm->RegisterFunction("NotifyStoryTypePicked", SCRIPT_NAME, NotifyStoryTypePicked); ++count;
         a_vm->RegisterFunction("GetDMCandidatePoolFormIDs", SCRIPT_NAME, GetDMCandidatePoolFormIDs); ++count;
         a_vm->RegisterFunction("SpawnQuestEnemies", SCRIPT_NAME, SpawnQuestEnemies); ++count;
+        a_vm->RegisterFunction("SpawnQuestBoss", SCRIPT_NAME, SpawnQuestBoss); ++count;
+        a_vm->RegisterFunction("SpawnQuestChest", SCRIPT_NAME, SpawnQuestChest); ++count;
+        a_vm->RegisterFunction("FindDeeperSpawnPoint", SCRIPT_NAME, FindDeeperSpawnPoint); ++count;
+        a_vm->RegisterFunction("IsQuestItemInChest", SCRIPT_NAME, IsQuestItemInChest); ++count;
+        a_vm->RegisterFunction("ValidateQuestItem", SCRIPT_NAME, ValidateQuestItem); ++count;
+        a_vm->RegisterFunction("GetRandomQuestItemName", SCRIPT_NAME, GetRandomQuestItemName); ++count;
+        a_vm->RegisterFunction("NotifyQuestItemUsed", SCRIPT_NAME, NotifyQuestItemUsed); ++count;
+        a_vm->RegisterFunction("NotifyRescueVictimUsed", SCRIPT_NAME, NotifyRescueVictimUsed); ++count;
 
         // MemoryDB Functions (SkyrimNet SQLite reader)
         a_vm->RegisterFunction("GetNPCMemories", SCRIPT_NAME, GetNPCMemories); ++count;
@@ -173,6 +182,7 @@ namespace IntelEngine::Papyrus {
         a_vm->RegisterFunction("GetActiveStoryNPCs", SCRIPT_NAME, GetActiveStoryNPCs); ++count;
         a_vm->RegisterFunction("GetNPCRelationshipSummary", SCRIPT_NAME, GetNPCRelationshipSummary); ++count;
         a_vm->RegisterFunction("IsMemoryDBConnected", SCRIPT_NAME, IsMemoryDBConnected); ++count;
+        a_vm->RegisterFunction("GetPlayerInteractionCount", SCRIPT_NAME, GetPlayerInteractionCount); ++count;
 
         // Dialogue Safety Net Functions
         a_vm->RegisterFunction("RunSafetyNetCheck", SCRIPT_NAME, RunSafetyNetCheck); ++count;
@@ -1336,6 +1346,28 @@ namespace IntelEngine::Papyrus {
         return MemoryDB::GetSingleton()->IsConnected() ? "true" : "false";
     }
 
+    int GetPlayerInteractionCount(RE::StaticFunctionTag*, RE::Actor* actor) {
+        if (!actor) return 0;
+
+        auto* memDB = MemoryDB::GetSingleton();
+        if (!memDB->IsConnected()) {
+            logger::warn("GetPlayerInteractionCount: MemoryDB not connected");
+            return 0;
+        }
+
+        // Use GetRecentDialogueForActor — queries SkyrimNet's GetRecentDialogue API
+        // which resolves UUIDs by FormID and returns actual dialogue events.
+        // Returns empty string if no dialogue history exists.
+        RE::FormID formId = actor->GetFormID();
+        auto result = memDB->GetRecentDialogueForActor(formId, 1);
+
+        bool hasMet = !result.empty();
+        logger::info("GetPlayerInteractionCount: {} (0x{:X}) hasMet={} (dialogue={})",
+            actor->GetName(), formId, hasMet, hasMet ? "yes" : "none");
+
+        return hasMet ? 1 : 0;
+    }
+
     // ==========================================================================
     // Dialogue Safety Net Functions
     // ==========================================================================
@@ -1509,7 +1541,8 @@ namespace IntelEngine::Papyrus {
 
         static const char* allTypes[] = {
             "seek_player", "informant", "road_encounter",
-            "ambush", "stalker", "message", "quest"
+            "ambush", "stalker", "message", "quest",
+            "quest_combat", "quest_rescue", "quest_find_item"
         };
 
         // Log exclude set for diagnostics
@@ -1576,8 +1609,9 @@ namespace IntelEngine::Papyrus {
 
         std::string result = "## Things I Know\n\n";
 
-        // Reverse order (most recent first), matching template behavior
-        for (int i = static_cast<int>(facts.size()) - 1; i >= 0; --i) {
+        // Chronological order (oldest first, newest last) — LLMs weight
+        // end-of-prompt content more, so recent facts get higher attention.
+        for (int i = 0; i < static_cast<int>(facts.size()); ++i) {
             auto idx = static_cast<size_t>(i);
             std::string timeLabel = "some time ago";
             if (idx < factTimes.size()) {
@@ -1657,8 +1691,9 @@ namespace IntelEngine::Papyrus {
 
         std::string result = "### Past Tasks\nWhat I've done:\n";
 
-        // Reverse order (most recent first)
-        for (int i = static_cast<int>(descs.size()) - 1; i >= 0; --i) {
+        // Chronological order (oldest first, newest last) — LLMs weight
+        // end-of-prompt content more, so recent tasks get higher attention.
+        for (int i = 0; i < static_cast<int>(descs.size()); ++i) {
             auto idx = static_cast<size_t>(i);
             std::string timeLabel = "some time ago";
             if (idx < descTimes.size()) {
@@ -1960,6 +1995,286 @@ namespace IntelEngine::Papyrus {
         logger::info("[IntelEngine] SpawnQuestEnemies: {} {} spawned at {}",
                     result.size(), type, location->GetName());
         return result;
+    }
+
+    // =========================================================================
+    // Quest Chest Spawning (find_item sub-type)
+    // =========================================================================
+
+    RE::TESObjectREFR* SpawnQuestChest(RE::StaticFunctionTag*, RE::TESObjectREFR* location,
+                                        RE::BSFixedString itemName) {
+        if (!location) {
+            logger::error("[IntelEngine] SpawnQuestChest: location is null");
+            return nullptr;
+        }
+
+        std::string nameStr(itemName.c_str());
+        if (nameStr.empty()) {
+            logger::error("[IntelEngine] SpawnQuestChest: itemName is empty");
+            return nullptr;
+        }
+
+        // Resolve item via ItemIndex
+        auto* itemObj = ItemIndex::GetSingleton()->FindByName(nameStr);
+        if (!itemObj) {
+            logger::error("[IntelEngine] SpawnQuestChest: item '{}' not found in ItemIndex", nameStr);
+            return nullptr;
+        }
+
+        // Look up a vanilla chest base form to use as the container
+        // TreasBossBanditChest is a good choice — large, unlocked, visible
+        auto* dh = RE::TESDataHandler::GetSingleton();
+        RE::TESBoundObject* chestBase = nullptr;
+        if (dh) {
+            // Try EditorID lookup first (most reliable)
+            static const char* chestEditorIDs[] = {
+                "TreasBossBanditChest",
+                "TreasBanditChest",
+                "TreasChestLarge",
+                nullptr
+            };
+            for (int ci = 0; chestEditorIDs[ci] && !chestBase; ++ci) {
+                auto* form = RE::TESForm::LookupByEditorID(chestEditorIDs[ci]);
+                if (form && form->GetFormType() == RE::FormType::Container) {
+                    chestBase = form->As<RE::TESBoundObject>();
+                    logger::info("[IntelEngine] SpawnQuestChest: using chest base '{}'", chestEditorIDs[ci]);
+                }
+            }
+        }
+
+        if (!chestBase) {
+            logger::error("[IntelEngine] SpawnQuestChest: could not find chest base form");
+            return nullptr;
+        }
+
+        // Spawn the chest at the location
+        auto spawned = location->PlaceObjectAtMe(chestBase, false);
+        if (!spawned) {
+            logger::error("[IntelEngine] SpawnQuestChest: PlaceObjectAtMe failed for chest");
+            return nullptr;
+        }
+
+        auto* chestRef = spawned.get();
+        if (!chestRef) {
+            logger::error("[IntelEngine] SpawnQuestChest: spawned chest ref is null");
+            return nullptr;
+        }
+
+        // Add the specific item to the chest
+        auto* container = chestRef->As<RE::TESObjectREFR>();
+        if (container) {
+            auto* invChanges = container->GetInventoryChanges();
+            if (!invChanges) {
+                // Force inventory creation
+                container->InitInventoryIfRequired();
+                invChanges = container->GetInventoryChanges();
+            }
+
+            // Use AddObjectToContainer to add the item
+            container->AddObjectToContainer(itemObj, nullptr, 1, nullptr);
+            logger::info("[IntelEngine] SpawnQuestChest: added '{}' (FormID {:08X}) to chest",
+                        itemObj->GetName(), itemObj->GetFormID());
+        }
+
+        logger::info("[IntelEngine] SpawnQuestChest: chest spawned at {} with '{}'",
+                    location->GetName(), nameStr);
+        return chestRef;
+    }
+
+    bool ValidateQuestItem(RE::StaticFunctionTag*, RE::BSFixedString itemName) {
+        std::string nameStr(itemName.c_str());
+        if (nameStr.empty()) return false;
+        return ItemIndex::GetSingleton()->ValidateName(nameStr);
+    }
+
+    RE::BSFixedString GetRandomQuestItemName(RE::StaticFunctionTag*, int minGoldValue) {
+        // Exclude recently used quest items for variety
+        auto recentItems = NPCIndex::GetSingleton()->GetRecentQuestItemNames();
+        auto name = ItemIndex::GetSingleton()->GetRandomValuableName(minGoldValue, recentItems);
+        return RE::BSFixedString(name.c_str());
+    }
+
+    void NotifyQuestItemUsed(RE::StaticFunctionTag*, RE::BSFixedString itemName) {
+        NPCIndex::GetSingleton()->NotifyQuestItemUsed(itemName.c_str());
+    }
+
+    void NotifyRescueVictimUsed(RE::StaticFunctionTag*, RE::BSFixedString victimName) {
+        NPCIndex::GetSingleton()->NotifyRescueVictimUsed(victimName.c_str());
+    }
+
+    // =========================================================================
+    // Quest Boss Spawning (find_item sub-type)
+    // =========================================================================
+
+    RE::Actor* SpawnQuestBoss(RE::StaticFunctionTag*, RE::TESObjectREFR* location,
+                              RE::BSFixedString enemyType) {
+        if (!location) {
+            logger::error("[IntelEngine] SpawnQuestBoss: location is null");
+            return nullptr;
+        }
+
+        std::string type = StringUtils::ToLowerStd(enemyType.c_str());
+
+        const char* bossID = nullptr;
+        if (type == "bandit") {
+            bossID = "LvlBanditBoss";           // 0x03DF17
+        } else if (type == "draugr") {
+            bossID = "LvlDraugrWarlockMale";    // 0x01E7AC
+        } else if (type == "dragon") {
+            bossID = "EncDragon01Fire";          // 0x01CA03
+        } else {
+            logger::error("[IntelEngine] SpawnQuestBoss: unknown enemy type '{}'", type);
+            return nullptr;
+        }
+
+        auto* bossBase = LookupLeveledActor(bossID);
+        if (!bossBase) {
+            logger::error("[IntelEngine] SpawnQuestBoss: boss '{}' not found", bossID);
+            return nullptr;
+        }
+
+        auto spawned = location->PlaceObjectAtMe(bossBase, true);
+        if (!spawned) {
+            logger::error("[IntelEngine] SpawnQuestBoss: PlaceObjectAtMe failed");
+            return nullptr;
+        }
+
+        // Spawn boss close to location (small offset)
+        std::uniform_real_distribution<float> spreadDist(-150.0f, 150.0f);
+        auto basePos = location->GetPosition();
+        RE::NiPoint3 bossPos{basePos.x + spreadDist(s_rng), basePos.y + spreadDist(s_rng), basePos.z};
+        spawned->SetPosition(bossPos);
+
+        auto* actor = spawned->As<RE::Actor>();
+        if (actor) {
+            logger::info("[IntelEngine] SpawnQuestBoss: spawned '{}' boss at ({:.0f}, {:.0f})",
+                        bossBase->GetName(), bossPos.x, bossPos.y);
+        }
+        return actor;
+    }
+
+    // =========================================================================
+    // Deeper Spawn Point Discovery (find_item sub-type)
+    // =========================================================================
+
+    RE::TESObjectREFR* FindDeeperSpawnPoint(RE::StaticFunctionTag*, RE::Actor* actor) {
+        if (!actor) return nullptr;
+
+        auto* cell = actor->GetParentCell();
+        if (!cell || !cell->IsInteriorCell()) return nullptr;
+
+        // Scan current cell for deep-dungeon landmark references
+        // Priority: word walls > boss chests > coffins/sarcophagi > shrines/altars
+        RE::TESObjectREFR* wordWall = nullptr;
+        RE::TESObjectREFR* bossChest = nullptr;
+        RE::TESObjectREFR* coffin = nullptr;
+        RE::TESObjectREFR* shrine = nullptr;
+
+        cell->ForEachReference([&](RE::TESObjectREFR& ref) {
+            if (ref.IsDisabled()) return RE::BSContainer::ForEachResult::kContinue;
+
+            auto* baseObj = ref.GetBaseObject();
+            if (!baseObj) return RE::BSContainer::ForEachResult::kContinue;
+
+            auto editorId = baseObj->GetFormEditorID();
+            std::string editorIdStr = editorId ? StringUtils::ToLowerStd(editorId) : "";
+            auto refName = ref.GetName();
+            std::string nameStr = refName ? StringUtils::ToLowerStd(refName) : "";
+
+            auto formType = baseObj->GetFormType();
+
+            // Word Walls — TESObjectSTAT with "wordwall" in editor ID
+            if (!wordWall && formType == RE::FormType::Static) {
+                if (editorIdStr.find("wordwall") != std::string::npos ||
+                    editorIdStr.find("word_wall") != std::string::npos) {
+                    wordWall = &ref;
+                    logger::info("[IntelEngine] FindDeeperSpawnPoint: word wall '{}'", editorIdStr);
+                }
+            }
+
+            // Boss Chests — TESObjectCONT with "boss" in editor ID
+            if (!bossChest && formType == RE::FormType::Container) {
+                if (editorIdStr.find("boss") != std::string::npos) {
+                    bossChest = &ref;
+                    logger::info("[IntelEngine] FindDeeperSpawnPoint: boss chest '{}'", editorIdStr);
+                }
+            }
+
+            // Coffins/Sarcophagi — Static or Furniture
+            if (!coffin && (formType == RE::FormType::Static || formType == RE::FormType::Furniture)) {
+                if (StringUtils::ContainsAny(editorIdStr, {"coffin", "sarcophag"}) ||
+                    StringUtils::ContainsAny(nameStr, {"coffin", "sarcophag"})) {
+                    coffin = &ref;
+                    logger::info("[IntelEngine] FindDeeperSpawnPoint: coffin '{}'", editorIdStr);
+                }
+            }
+
+            // Shrines/Altars — Activator or Static
+            if (!shrine && (formType == RE::FormType::Activator || formType == RE::FormType::Static)) {
+                if (StringUtils::ContainsAny(editorIdStr, {"shrine", "altar"}) ||
+                    StringUtils::ContainsAny(nameStr, {"shrine", "altar"})) {
+                    shrine = &ref;
+                    logger::info("[IntelEngine] FindDeeperSpawnPoint: shrine/altar '{}'", editorIdStr);
+                }
+            }
+
+            // Early exit if we found a word wall (highest priority)
+            if (wordWall) return RE::BSContainer::ForEachResult::kStop;
+
+            return RE::BSContainer::ForEachResult::kContinue;
+        });
+
+        // Return highest-priority landmark
+        if (wordWall)  return wordWall;
+        if (bossChest) return bossChest;
+        if (coffin)    return coffin;
+        if (shrine)    return shrine;
+
+        // Fallback: door traversal (find a door leading deeper)
+        auto* analyzer = CellAnalyzer::GetSingleton();
+        auto doors = analyzer->GetDoors(actor);
+
+        for (auto* door : doors) {
+            if (analyzer->IsDoorDownward(door) || analyzer->IsDoorNameDownward(door)) {
+                auto* dest = analyzer->GetDoorDestination(door);
+                if (dest) {
+                    logger::info("[IntelEngine] FindDeeperSpawnPoint: fallback to deeper door");
+                    return dest;
+                }
+            }
+        }
+
+        logger::info("[IntelEngine] FindDeeperSpawnPoint: no landmarks or deeper doors in '{}'",
+                    cell->GetName());
+        return nullptr;
+    }
+
+    // =========================================================================
+    // Quest Item Retrieval Check (find_item sub-type)
+    // =========================================================================
+
+    bool IsQuestItemInChest(RE::StaticFunctionTag*, RE::TESObjectREFR* container,
+                            RE::BSFixedString itemName) {
+        if (!container) return false;
+
+        std::string nameStr(itemName.c_str());
+        if (nameStr.empty()) return false;
+
+        // Resolve item via ItemIndex
+        auto* itemObj = ItemIndex::GetSingleton()->FindByName(nameStr);
+        if (!itemObj) return false;
+
+        // Check if the container still has this item
+        auto inventory = container->GetInventory();
+        for (auto& [form, data] : inventory) {
+            if (form && form->GetFormID() == itemObj->GetFormID()) {
+                if (data.first > 0) {
+                    return true;  // Item still in chest
+                }
+            }
+        }
+
+        return false;  // Item not found — player took it
     }
 
 }  // namespace IntelEngine::Papyrus

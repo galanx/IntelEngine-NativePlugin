@@ -8,6 +8,7 @@
 #include "Plugin.h"
 #include "Papyrus.h"
 #include "NPCIndex.h"
+#include "ItemIndex.h"
 #include "LocationResolver.h"
 #include "SlotTracker.h"
 #include "MemoryDB.h"
@@ -100,6 +101,7 @@ namespace IntelEngine {
                 MemoryDB::GetSingleton()->InitializeAPI();
                 NPCIndex::GetSingleton()->BuildIndex();
                 LocationResolver::GetSingleton()->BuildLocationIndex();
+                ItemIndex::GetSingleton()->BuildIndex();
                 break;
 
             case SKSE::MessagingInterface::kNewGame:

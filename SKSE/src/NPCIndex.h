@@ -16,6 +16,7 @@
 #include "StringUtils.h"
 #include "SlotTracker.h"
 
+#include <deque>
 #include <unordered_map>
 #include <unordered_set>
 #include <shared_mutex>
@@ -196,8 +197,14 @@ namespace IntelEngine {
         static bool IsJarl(RE::Actor* actor);
 
         /**
+         * Check if an NPC holds a high-status position (Jarl, steward, court wizard, housecarl).
+         * These NPCs should never travel personally — they send couriers/messengers.
+         */
+        static bool IsHighStatus(RE::Actor* actor);
+
+        /**
          * Build comma-separated list of eligible story types for a candidate.
-         * Considers archetype, Jarl status, environment (interior/danger).
+         * Considers archetype, high-status role, environment (interior/danger).
          */
         static std::string GetEligibleStoryTypes(RE::Actor* actor,
             const std::string& archetype, bool dangerous, bool interior);
@@ -256,6 +263,40 @@ namespace IntelEngine {
          * Used to build type count stats for DM prompt balancing.
          */
         void NotifyStoryTypePicked(const std::string& storyType);
+
+        /**
+         * Record a quest item that was used in a find_item quest.
+         * Tracks last N items for rotation (prevents repeats in DM prompt + fallback).
+         */
+        void NotifyQuestItemUsed(const std::string& itemName);
+
+        /**
+         * Record an NPC that was used as a rescue victim.
+         * Tracks last N victims for rotation (prevents repeats in DM prompt).
+         */
+        void NotifyRescueVictimUsed(const std::string& victimName);
+
+        /**
+         * Get recent quest items as comma-separated string for DM context.
+         */
+        std::string GetRecentQuestItemsString() const;
+
+        /**
+         * Get recent rescue victims as comma-separated string for DM context.
+         */
+        std::string GetRecentRescueVictimsString() const;
+
+        /**
+         * Get recent quest item names as a set (for fallback exclusion).
+         */
+        std::unordered_set<std::string> GetRecentQuestItemNames() const;
+
+        /**
+         * Get household member names for a candidate NPC.
+         * Returns comma-separated "Name (relationship)" string.
+         * Uses LocationResolver's home index (bed-ownership based).
+         */
+        static std::string GetHouseholdString(RE::Actor* actor);
 
         /**
          * Build markdown snippet showing story type pick counts.
@@ -342,6 +383,14 @@ namespace IntelEngine {
 
         // Story type pick counts (volatile per session, for DM prompt balancing)
         std::unordered_map<std::string, int> m_storyTypeCounts;
+
+        // Recent quest items FIFO (volatile per session, for rotation)
+        static constexpr int MAX_RECENT_QUEST_ITEMS = 8;
+        std::deque<std::string> m_recentQuestItems;
+
+        // Recent rescue victims FIFO (volatile per session, for rotation)
+        static constexpr int MAX_RECENT_RESCUE_VICTIMS = 6;
+        std::deque<std::string> m_recentRescueVictims;
 
         bool m_indexBuilt = false;
 

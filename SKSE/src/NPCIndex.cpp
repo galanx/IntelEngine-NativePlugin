@@ -1152,6 +1152,45 @@ namespace IntelEngine {
         return found;
     }
 
+    bool NPCIndex::IsHighStatus(RE::Actor* actor) {
+        if (!actor) return false;
+
+        // Check Jarl first (already cached)
+        if (IsJarl(actor)) return true;
+
+        // Cache high-status faction pointers (lazy init, game data doesn't change)
+        static std::vector<RE::TESFaction*> s_highStatusFactions;
+        static bool s_initialized = false;
+        if (!s_initialized) {
+            s_initialized = true;
+            const char* factionEditorIDs[] = {
+                "JobCourtWizardFaction",
+                "JobStewardFaction",
+                "JobHousecarlFaction",
+            };
+            for (auto editorID : factionEditorIDs) {
+                auto* faction = RE::TESForm::LookupByEditorID<RE::TESFaction>(editorID);
+                if (faction) {
+                    s_highStatusFactions.push_back(faction);
+                    logger::debug("IsHighStatus: cached faction '{}'", editorID);
+                } else {
+                    logger::warn("IsHighStatus: faction '{}' not found", editorID);
+                }
+            }
+        }
+
+        if (s_highStatusFactions.empty()) return false;
+
+        bool found = false;
+        actor->VisitFactions([&](RE::TESFaction* f, std::int8_t) -> bool {
+            for (auto* hsFaction : s_highStatusFactions) {
+                if (f == hsFaction) { found = true; return false; }
+            }
+            return true;
+        });
+        return found;
+    }
+
     std::string NPCIndex::GetEligibleStoryTypes(RE::Actor* actor,
         const std::string& archetype, bool dangerous, bool interior) {
 
@@ -1160,12 +1199,12 @@ namespace IntelEngine {
         // WHERE the player is. The DM must pick a type that appears in BOTH the global
         // show_ list AND this candidate's eligible list.
 
-        bool isJarl = IsJarl(actor);
         bool isCivilian = (archetype == "CIVILIAN");
 
-        // Jarls: message + quest only — they NEVER travel personally
-        // (quest supports courier delivery: Jarl as sender, courier as npc)
-        if (isJarl) return "message, quest";
+        // High-status NPCs (Jarls, stewards, court wizards, housecarls):
+        // message + quest only — they NEVER travel personally.
+        // For quest, the DM prompt enforces courier mode (NPC as sender, not courier).
+        if (IsHighStatus(actor)) return "message, quest";
 
         std::vector<const char*> types;
 
@@ -1713,6 +1752,12 @@ namespace IntelEngine {
                 }
                 md += "\n";
             }
+
+            // Household members (housemates from bed-ownership index)
+            auto household = GetHouseholdString(actor);
+            if (!household.empty()) {
+                md += "Household: ";  md += household;  md += "\n";
+            }
             md += "\n";
         }
 
@@ -1725,6 +1770,20 @@ namespace IntelEngine {
             md += "## Story Type Picks This Session\n";
             md += typeCounts;
             md += "\n\n";
+        }
+
+        // Rotation hints — recently used quest items and rescue victims
+        auto recentItems = GetRecentQuestItemsString();
+        auto recentVictims = GetRecentRescueVictimsString();
+        if (!recentItems.empty() || !recentVictims.empty()) {
+            md += "## Recent Quest History (avoid repeats)\n";
+            if (!recentItems.empty()) {
+                md += "- Recent find_item targets: ";  md += recentItems;  md += "\n";
+            }
+            if (!recentVictims.empty()) {
+                md += "- Recent rescue victims: ";  md += recentVictims;  md += "\n";
+            }
+            md += "\n";
         }
 
         logger::info("[StoryDM] DM context: {} candidates, {} chars",
@@ -1939,6 +1998,94 @@ namespace IntelEngine {
             result += ": ";
             result += std::to_string(count);
             first = false;
+        }
+        return result;
+    }
+
+    // =========================================================================
+    // Quest Item / Victim Rotation Tracking
+    // =========================================================================
+
+    void NPCIndex::NotifyQuestItemUsed(const std::string& itemName) {
+        if (itemName.empty()) return;
+        std::unique_lock lock(m_mutex);
+        // Avoid duplicate consecutive entries
+        if (!m_recentQuestItems.empty() && m_recentQuestItems.back() == itemName) return;
+        m_recentQuestItems.push_back(itemName);
+        if (static_cast<int>(m_recentQuestItems.size()) > MAX_RECENT_QUEST_ITEMS) {
+            m_recentQuestItems.pop_front();
+        }
+        logger::info("[StoryDM] Tracked quest item: '{}' (history: {})", itemName, m_recentQuestItems.size());
+    }
+
+    void NPCIndex::NotifyRescueVictimUsed(const std::string& victimName) {
+        if (victimName.empty()) return;
+        std::unique_lock lock(m_mutex);
+        if (!m_recentRescueVictims.empty() && m_recentRescueVictims.back() == victimName) return;
+        m_recentRescueVictims.push_back(victimName);
+        if (static_cast<int>(m_recentRescueVictims.size()) > MAX_RECENT_RESCUE_VICTIMS) {
+            m_recentRescueVictims.pop_front();
+        }
+        logger::info("[StoryDM] Tracked rescue victim: '{}' (history: {})", victimName, m_recentRescueVictims.size());
+    }
+
+    std::string NPCIndex::GetRecentQuestItemsString() const {
+        std::shared_lock lock(m_mutex);
+        if (m_recentQuestItems.empty()) return "";
+        std::string result;
+        for (size_t i = 0; i < m_recentQuestItems.size(); ++i) {
+            if (i > 0) result += ", ";
+            result += m_recentQuestItems[i];
+        }
+        return result;
+    }
+
+    std::string NPCIndex::GetRecentRescueVictimsString() const {
+        std::shared_lock lock(m_mutex);
+        if (m_recentRescueVictims.empty()) return "";
+        std::string result;
+        for (size_t i = 0; i < m_recentRescueVictims.size(); ++i) {
+            if (i > 0) result += ", ";
+            result += m_recentRescueVictims[i];
+        }
+        return result;
+    }
+
+    std::unordered_set<std::string> NPCIndex::GetRecentQuestItemNames() const {
+        std::shared_lock lock(m_mutex);
+        std::unordered_set<std::string> result;
+        for (const auto& name : m_recentQuestItems) {
+            result.insert(StringUtils::ToLowerStd(name));
+        }
+        return result;
+    }
+
+    std::string NPCIndex::GetHouseholdString(RE::Actor* actor) {
+        if (!actor) return "";
+
+        auto* locResolver = LocationResolver::GetSingleton();
+        auto householdFormIds = locResolver->GetHouseholdMembers(actor);
+        if (householdFormIds.empty()) return "";
+
+        std::string result;
+        int count = 0;
+        for (auto baseFormId : householdFormIds) {
+            if (count >= 4) break;  // Cap at 4 housemates per candidate
+
+            auto* baseForm = RE::TESForm::LookupByID<RE::TESNPC>(baseFormId);
+            if (!baseForm) continue;
+
+            auto name = baseForm->GetFullName();
+            if (!name || name[0] == '\0') continue;
+
+            // Skip dead or disabled household members — prevents DM from picking
+            // dead NPCs as rescue victims
+            auto* memberActor = GetSingleton()->FindByName(name);
+            if (memberActor && (memberActor->IsDead() || memberActor->IsDisabled())) continue;
+
+            if (count > 0) result += ", ";
+            result += name;
+            count++;
         }
         return result;
     }

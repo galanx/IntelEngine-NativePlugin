@@ -1705,9 +1705,21 @@ namespace IntelEngine {
             logger::debug("  Semantic resolution exhausted");
         }
 
-        // Phase 2.5: NPC name as destination → resolve to their home
+        // Phase 3: Named location resolution (try this BEFORE NPC name)
+        // Location names take priority over NPC names because fuzzy NPC matching
+        // can produce false positives (e.g., "Nilheim" → "Wilhelm" at distance 4,
+        // resolving a dungeon quest to the innkeeper's home instead).
+        logger::debug("  Trying named location: '{}'", destination);
+        auto* namedResult = FindTravelTarget(destination);
+        if (namedResult) {
+            logger::debug("  Resolved via named location");
+            return namedResult;
+        }
+
+        // Phase 3.5: NPC name as destination → resolve to their home
         // Catches "Camilla", "Camilla Valerius", "Alvor" used as a bare destination.
         // Only when semantic intent was NONE (not already handled as home).
+        // Runs AFTER named location so location names always win over NPC names.
         if (intent.type == SemanticIntent::NONE) {
             auto* npcIndex = NPCIndex::GetSingleton();
             auto* targetActor = npcIndex->FindByNameNear(destination, actor, true);
@@ -1725,19 +1737,10 @@ namespace IntelEngine {
                             return homeResult;
                         }
                     }
-                    // NPC found but no home — fall through to named location
-                    // (destination might coincidentally be a location name too)
+                    // NPC found but no home — fall through to extraction
                     logger::debug("  NPC '{}' found but no home indexed, falling through", destination);
                 }
             }
-        }
-
-        // Phase 3: Named location resolution
-        logger::debug("  Trying named location: '{}'", destination);
-        auto* namedResult = FindTravelTarget(destination);
-        if (namedResult) {
-            logger::debug("  Resolved via named location");
-            return namedResult;
         }
 
         // Phase 4: Extract location name from string (last resort)
@@ -1991,62 +1994,13 @@ namespace IntelEngine {
         }
 
         if (unlock) {
-            // Fast path: if door is already unlocked AND cell is already public,
-            // check if WE made it public (refCount > 0) or if it's naturally public.
-            // If we made it public, bump refCount so restore doesn't fire too early.
-            // If naturally public, skip entirely.
+            // Already unlocked and public? Skip — idempotent.
             bool doorAlreadyOpen = !interiorDoor->IsLocked();
             bool cellAlreadyPublic = homeCell->cellFlags.any(RE::TESObjectCELL::Flag::kPublicArea);
             if (doorAlreadyOpen && cellAlreadyPublic) {
-                auto existingIt = m_cellOriginalStates.find(cellFormId);
-                if (existingIt != m_cellOriginalStates.end()) {
-                    // We previously unlocked this cell — another slot also needs it.
-                    // Bump refCount so restore waits for all slots to release.
-                    existingIt->second.refCount++;
-                    logger::debug("SetHomeDoorAccess: Cell '{}' ({:08X}) already open by us, refCount -> {}",
-                                 cellName ? cellName : "unnamed", cellFormId, existingIt->second.refCount);
-                } else {
-                    // Naturally public (inn, shop) — nothing to track
-                    logger::debug("SetHomeDoorAccess: Cell '{}' ({:08X}) already open & public, skipping",
-                                 cellName ? cellName : "unnamed", cellFormId);
-                }
+                logger::debug("SetHomeDoorAccess: Cell '{}' ({:08X}) already open & public, skipping",
+                             cellName ? cellName : "unnamed", cellFormId);
                 return interiorDoor;
-            }
-
-            // Save original state BEFORE modifying — so we only restore what we changed.
-            // Without this, public locations (inns, shops) get set PRIVATE on cleanup,
-            // triggering the vanilla trespass system on buildings that were never restricted.
-            //
-            // Reference-counted: multiple slots can share the same cell. Only save state
-            // on first unlock; increment refCount on subsequent unlocks. Restore only
-            // happens when refCount drops to zero (last slot releases the cell).
-            auto stateIt = m_cellOriginalStates.find(cellFormId);
-            bool firstUnlock = (stateIt == m_cellOriginalStates.end());
-
-            if (firstUnlock) {
-                CellOriginalState origState;
-                origState.cellWasPublic = homeCell->cellFlags.any(RE::TESObjectCELL::Flag::kPublicArea);
-                origState.interiorDoorWasLocked = interiorDoor->IsLocked();
-                origState.refCount = 1;
-
-                // Check exterior door lock state before modifying
-                auto* teleport = interiorDoor->extraList.GetByType<RE::ExtraTeleport>();
-                if (teleport && teleport->teleportData) {
-                    auto linkedDoor = teleport->teleportData->linkedDoor.get();
-                    if (linkedDoor) {
-                        auto* extDoor = linkedDoor.get();
-                        if (extDoor) {
-                            origState.exteriorDoorWasLocked = extDoor->IsLocked();
-                        }
-                    }
-                }
-
-                m_cellOriginalStates[cellFormId] = origState;
-            } else {
-                // Another slot is also using this cell — just bump the ref count
-                stateIt->second.refCount++;
-                logger::debug("SetHomeDoorAccess: Cell '{}' ({:08X}) refCount incremented to {}",
-                             cellName ? cellName : "unnamed", cellFormId, stateIt->second.refCount);
             }
 
             // Unlock interior door for pathfinding
@@ -2074,72 +2028,17 @@ namespace IntelEngine {
                 }
             }
 
-            // Make cell public (no trespass) — always set, idempotent
-            if (!homeCell->cellFlags.any(RE::TESObjectCELL::Flag::kPublicArea)) {
+            // Make cell public (no trespass) — idempotent
+            if (!cellAlreadyPublic) {
                 homeCell->SetPublic(true);
                 logger::info("SetHomeDoorAccess: Set cell '{}' ({:08X}) PUBLIC for anti-trespass",
                             cellName ? cellName : "unnamed", cellFormId);
-            } else {
-                logger::info("SetHomeDoorAccess: Cell '{}' ({:08X}) already public, no change needed",
-                            cellName ? cellName : "unnamed", cellFormId);
             }
         } else {
-            // Restore to original state — only when last user releases the cell
-            auto stateIt = m_cellOriginalStates.find(cellFormId);
-            if (stateIt == m_cellOriginalStates.end()) {
-                // No saved state — we never unlocked this cell, so don't touch it
-                logger::warn("SetHomeDoorAccess: No saved state for cell {:08X}, skipping restore", cellFormId);
-                return interiorDoor;
-            }
-
-            // Decrement ref count — only restore when last slot releases
-            stateIt->second.refCount--;
-            if (stateIt->second.refCount > 0) {
-                logger::debug("SetHomeDoorAccess: Cell '{}' ({:08X}) refCount decremented to {}, keeping public",
-                             cellName ? cellName : "unnamed", cellFormId, stateIt->second.refCount);
-                return interiorDoor;
-            }
-
-            const auto& origState = stateIt->second;
-
-            // Only re-lock interior door if it was originally locked
-            if (origState.interiorDoorWasLocked) {
-                auto* lock = interiorDoor->GetLock();
-                if (lock) {
-                    lock->SetLocked(true);
-                    logger::info("SetHomeDoorAccess: Re-locked door in '{}'", cellName ? cellName : "unnamed");
-                }
-            }
-
-            // Only re-lock exterior door if it was originally locked
-            if (origState.exteriorDoorWasLocked) {
-                auto* teleport = interiorDoor->extraList.GetByType<RE::ExtraTeleport>();
-                if (teleport && teleport->teleportData) {
-                    auto linkedDoor = teleport->teleportData->linkedDoor.get();
-                    if (linkedDoor) {
-                        auto* extDoor = linkedDoor.get();
-                        if (extDoor) {
-                            auto* extLock = extDoor->GetLock();
-                            if (extLock) {
-                                extLock->SetLocked(true);
-                                logger::info("SetHomeDoorAccess: Re-locked exterior door");
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Only restore private if cell was originally private
-            if (!origState.cellWasPublic) {
-                homeCell->SetPublic(false);
-                logger::info("SetHomeDoorAccess: Set cell '{}' ({:08X}) PRIVATE (restored original)",
-                            cellName ? cellName : "unnamed", cellFormId);
-            } else {
-                logger::info("SetHomeDoorAccess: Cell '{}' ({:08X}) was originally public, leaving as-is",
-                            cellName ? cellName : "unnamed", cellFormId);
-            }
-
-            m_cellOriginalStates.erase(stateIt);
+            // Never re-lock doors — let vanilla handle door locking/unlocking.
+            // IntelEngine only unlocks to enable NPC pathfinding.
+            logger::debug("SetHomeDoorAccess: Lock request for '{}' ({:08X}) ignored — vanilla handles re-locking",
+                         cellName ? cellName : "unnamed", cellFormId);
         }
 
         return interiorDoor;
