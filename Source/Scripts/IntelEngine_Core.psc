@@ -746,12 +746,21 @@ EndFunction
 ; =============================================================================
 
 Bool Function CancelCurrentTask(Actor akNPC)
-    {Cancel the NPC's current task entirely. Called by CancelCurrentTask action.}
+    {Cancel the NPC's current task entirely. Called by CancelCurrentTask action.
+    Blocked while the player is within LINGER_RELEASE_DISTANCE — the linger
+    system handles task cleanup when the player walks away.}
     If akNPC == None
         Return false
     EndIf
     Int slot = FindSlotByAgent(akNPC)
     If slot < 0
+        Return false
+    EndIf
+
+    ; Block cancellation while player is nearby — prevents premature LLM task clearing.
+    ; The linger release mechanism will clean up when the player walks away.
+    If !ShouldReleaseLinger(akNPC)
+        DebugMsg(akNPC.GetDisplayName() + " cancel blocked: player nearby")
         Return false
     EndIf
 
@@ -1554,104 +1563,6 @@ Bool Function IntelAvailable_Eligibility(Actor akActor, String contextJson, Stri
 EndFunction
 
 
-; =============================================================================
-; DIALOGUE SAFETY NET
-; =============================================================================
-
-Function RunDialogueSafetyNet()
-    {Called from Story Engine tick. C++ handles MemoryDB query, keyword matching.
-    Papyrus checks schedule slots and fires LLM call if C++ found keywords.}
-
-    ; C++ does all heavy lifting: new dialogue check, keyword match, NPC validation
-    Int keywordHint = IntelEngine.RunSafetyNetCheck()
-    If keywordHint == 0
-        Return
-    EndIf
-
-    Actor npc = IntelEngine.GetSafetyNetNPC()
-    If npc == None || npc.IsDead()
-        Return
-    EndIf
-
-    ; Schedule slot check (schedule slots are not mirrored in C++)
-    If Schedule.FindScheduleSlotByAgent(npc) >= 0
-        Return
-    EndIf
-
-    ; Core slot check: skip if NPC already has an active task matching the keyword hint.
-    ; keywordHint 2 = fetch, 3 = delivery.  An NPC already executing fetch_npc doesn't
-    ; need the safety net to schedule a duplicate fetch.
-    Int coreSlot = FindSlotByAgent(npc)
-    If coreSlot >= 0
-        String activeType = SlotTaskTypes[coreSlot]
-        If (keywordHint == 2 && activeType == "fetch_npc") || \
-           (keywordHint == 3 && activeType == "deliver_message")
-            Return
-        EndIf
-    EndIf
-
-    ; C++ builds the entire context JSON (proper escaping, no Papyrus casing bugs)
-    String contextJson = IntelEngine.BuildSafetyNetContextJson(npc, keywordHint)
-    If contextJson == ""
-        Return
-    EndIf
-
-    DebugMsg("SafetyNet: keywords detected for " + npc.GetDisplayName() + ", firing LLM verification")
-
-    Int result = SkyrimNetApi.SendCustomPromptToLLM("intel_schedule_safety_net", "intel_story_dm", contextJson, \
-        Self as Quest, "IntelEngine_Core", "OnScheduleSafetyNetResponse")
-    If result < 0
-        DebugMsg("SafetyNet: LLM call failed, code " + result)
-    EndIf
-EndFunction
-
-Function OnScheduleSafetyNetResponse(String response, Int success)
-    {Callback from LLM schedule verification. Dispatches schedule action if confirmed.}
-    Actor npc = IntelEngine.GetSafetyNetNPC()
-    If success != 1 || npc == None || npc.IsDead()
-        DebugMsg("SafetyNet response: rejected (success=" + success + ", npc=" + (npc != None) + ")")
-        Return
-    EndIf
-
-    ; Re-check schedule slots (may have been filled while LLM was processing)
-    If Schedule.FindScheduleSlotByAgent(npc) >= 0
-        DebugMsg("SafetyNet response: " + npc.GetDisplayName() + " already has a schedule slot, skipping")
-        Return
-    EndIf
-
-    If IntelEngine.StringContains(response, "\"schedule\":true") || IntelEngine.StringContains(response, "\"schedule\": true")
-        String actionType = IntelEngine.StoryResponseGetField(response, "type")
-        String destination = IntelEngine.StoryResponseGetField(response, "destination")
-        String timeCondition = IntelEngine.StoryResponseGetField(response, "timeCondition")
-        String targetName = IntelEngine.StoryResponseGetField(response, "targetName")
-        String msgContent = IntelEngine.StoryResponseGetField(response, "msgContent")
-
-        ; Type-aware Core slot check: an NPC already executing fetch_npc doesn't
-        ; need a scheduled duplicate fetch. Story dispatches (seek_player, etc.)
-        ; can still schedule future tasks because their Core task type won't match.
-        Int coreSlot = FindSlotByAgent(npc)
-        If coreSlot >= 0
-            String activeType = SlotTaskTypes[coreSlot]
-            If (actionType == "fetch" && activeType == "fetch_npc") || \
-               (actionType == "delivery" && activeType == "deliver_message")
-                DebugMsg("SafetyNet response: " + npc.GetDisplayName() + " already executing " + activeType + ", skipping duplicate " + actionType)
-                Return
-            EndIf
-        EndIf
-
-        DebugMsg("SafetyNet confirmed: type=" + actionType + " dest=" + destination + " time=" + timeCondition)
-
-        If actionType == "meeting" && destination != "" && timeCondition != ""
-            Schedule.ScheduleMeeting(npc, destination, timeCondition)
-        ElseIf actionType == "fetch" && targetName != "" && timeCondition != ""
-            Schedule.ScheduleFetch(npc, targetName, timeCondition)
-        ElseIf actionType == "delivery" && targetName != "" && msgContent != "" && timeCondition != ""
-            Schedule.ScheduleDelivery(npc, targetName, msgContent, timeCondition)
-        Else
-            DebugMsg("SafetyNet: LLM confirmed but missing required params")
-        EndIf
-    EndIf
-EndFunction
 
 
 ; =============================================================================
