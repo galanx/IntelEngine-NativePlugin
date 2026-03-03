@@ -204,6 +204,10 @@ namespace IntelEngine {
         // Returns cached summary or reads from disk on first call. Empty if no bio file exists.
         std::string GetNPCBioSummary(RE::FormID formId);
 
+        // Get the bio relationships ({% block relationships %}) for an NPC.
+        // Populated as a side effect of GetNPCBioSummary (same file read).
+        std::string GetNPCBioRelationships(RE::FormID formId);
+
     private:
         MemoryDB() = default;
         ~MemoryDB() = default;
@@ -236,6 +240,9 @@ namespace IntelEngine {
 
         // Bio summary cache: FormID -> extracted {% block summary %} content
         std::unordered_map<RE::FormID, std::string> m_bioSummaryCache;
+
+        // Bio relationships cache: FormID -> extracted {% block relationships %} content
+        std::unordered_map<RE::FormID, std::string> m_bioRelationshipsCache;
 
         // Cached current DB time (refreshed on GetCurrentDBHours)
         float m_cachedCurrentTime = 0.0f;

@@ -199,11 +199,13 @@ Function Maintenance(Bool isFirstLoad = false)
         Actor player = Game.GetPlayer()
         StorageUtil.SetIntValue(player, "Intel_TaskConfirmPrompt", 1)
         StorageUtil.SetIntValue(player, "Intel_DeliveryReportBack", 1)
-        StorageUtil.SetFloatValue(player, "Intel_MeetingTimeoutHours", 3.0)
+        StorageUtil.SetFloatValue(player, "Intel_MeetingTimeoutHours", 5.0)
     EndIf
 
-    ; Initialize arrays if needed
-    If SlotStates == None || SlotStates.Length != MAX_SLOTS
+    ; Initialize arrays if needed (split check — Papyrus doesn't short-circuit ||)
+    If SlotStates == None
+        InitializeSlotArrays()
+    ElseIf SlotStates.Length != MAX_SLOTS
         InitializeSlotArrays()
     EndIf
 
@@ -213,10 +215,6 @@ Function Maintenance(Bool isFirstLoad = false)
     If !isFirstLoad
         RecoverActiveTasks()
     EndIf
-
-    ; Register SkyrimNet tag for action eligibility filtering.
-    ; This allows SkyrimNet to filter out NPCs with active tasks.
-    RegisterSkyrimNetTag()
 
     ; Self-heal script references if CK properties were lost (e.g. after
     ; console stopquest/startquest). All scripts live on the same quest,
@@ -669,15 +667,22 @@ Function ClearSlot(Int slot, Bool restoreNPC = true, Bool intelPackagesOnly = fa
             IntelEngine.ResetOffScreenSlot(slot)
             StorageUtil.UnsetFloatValue(agent, "Intel_OffscreenArrival")
 
-            ; Clear scheduled meeting flag + schedule slot arrays
-            ; Without clearing the arrays, OnUpdateGameTime can re-dispatch
-            ; the same meeting if Intel_ScheduledState gets reset to 0 here.
+            ; Clear current meeting flag (always — this task is done)
             StorageUtil.UnsetIntValue(agent, "Intel_IsScheduledMeeting")
+
+            ; Only clear schedule arrays + keys if the NPC has no FUTURE schedule.
+            ; A new schedule (e.g., "meet me tomorrow" during linger) must survive.
+            Bool hasFutureSchedule = false
             If Schedule
-                Schedule.ClearScheduleSlotByAgent(agent)
+                hasFutureSchedule = Schedule.HasFutureScheduleForAgent(agent)
+                If !hasFutureSchedule
+                    Schedule.ClearScheduleSlotByAgent(agent)
+                EndIf
             EndIf
-            StorageUtil.UnsetIntValue(agent, "Intel_ScheduledState")
-            StorageUtil.UnsetFloatValue(agent, "Intel_ScheduledDepartureHours")
+            If !hasFutureSchedule
+                StorageUtil.UnsetIntValue(agent, "Intel_ScheduledState")
+                StorageUtil.UnsetFloatValue(agent, "Intel_ScheduledDepartureHours")
+            EndIf
 
             ; Clear meeting tracking data (NOT outcome data — that persists for prompts)
             ; Intel_MeetingPlayerName is kept — outcome prompt (0199) needs it after slot cleanup
@@ -694,6 +699,7 @@ Function ClearSlot(Int slot, Bool restoreNPC = true, Bool intelPackagesOnly = fa
             StorageUtil.UnsetIntValue(agent, "Intel_ApproachTick")
             StorageUtil.UnsetIntValue(agent, "Intel_ApproachStuckNarrated")
             StorageUtil.UnsetIntValue(agent, "Intel_TaskStuckNarrated")
+            StorageUtil.UnsetIntValue(agent, "Intel_SelfMotivatedLogged")
 
             ; Clear travel linger flags
             StorageUtil.UnsetIntValue(agent, "Intel_TravelLingering")
@@ -725,6 +731,7 @@ Function ClearSlot(Int slot, Bool restoreNPC = true, Bool intelPackagesOnly = fa
         If target
             RemoveIntelPackages(target)
             ClearLinkedRefs(target)
+            StorageUtil.UnsetIntValue(target, "Intel_WasAccompanying")
             target.EvaluatePackage()
         EndIf
         targetAlias.Clear()
@@ -1327,20 +1334,6 @@ Function SyncSlotTrackerFromArrays()
     DebugMsg("C++ SlotTracker synced from Papyrus arrays")
 EndFunction
 
-Function RegisterSkyrimNetTag()
-    {Register the intel_available tag with SkyrimNet for action eligibility filtering.
-    Called on every game load to ensure the tag is available for action evaluation.}
-
-    Int result = SkyrimNetApi.RegisterTag("intel_available", "IntelEngine_Core", "IntelAvailable_Eligibility")
-
-    If result == 0
-        DebugMsg("Registered SkyrimNet tag: intel_available")
-    Else
-        DebugMsg("WARNING: Failed to register SkyrimNet tag intel_available (error " + result + ")")
-    EndIf
-
-EndFunction
-
 ; NOTE: No OnUpdate here. IntelEngine_Travel and IntelEngine_NPCTasks each
 ; run their own update loops and handle their own slot monitoring. Core
 ; only provides shared slot/package infrastructure.
@@ -1546,24 +1539,6 @@ Function NotifyPlayer(String msgText)
     Debug.Trace("IntelEngine: " + msgText)
 EndFunction
 
-; =============================================================================
-; SKYRIMNET TAG ELIGIBILITY (for action filtering)
-; =============================================================================
-
-Bool Function IntelAvailable_Eligibility(Actor akActor, String contextJson, String paramsJson) Global
-    {SkyrimNet tag eligibility function for intel_available tag.
-    Returns true if actor can accept new tasks (no active task + no cooldown).
-    Registered via SkyrimNetApi.RegisterTag() during init.
-
-    Parameters:
-    - akActor: The actor being checked for eligibility
-    - contextJson: Context information from SkyrimNet (unused)
-    - paramsJson: Parameters from SkyrimNet (unused)}
-    Return IntelEngine.IsActorAvailable(akActor)
-EndFunction
-
-
-
 
 ; =============================================================================
 ; MCM SETTINGS (StorageUtil-backed, survives ESP redeployment)
@@ -1619,7 +1594,7 @@ Bool Function IsStoryEngineEnabled()
 EndFunction
 
 Float Function GetStoryEngineInterval()
-    return GetSettingFloat("Intel_MCM_StoryInterval", 2.0)
+    return GetSettingFloat("Intel_MCM_StoryInterval", 3.0)
 EndFunction
 
 Float Function GetStoryEngineCooldown()

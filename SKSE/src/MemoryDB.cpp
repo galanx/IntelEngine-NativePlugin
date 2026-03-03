@@ -44,6 +44,7 @@ namespace IntelEngine {
     void MemoryDB::ClearCaches() {
         std::lock_guard lock(m_mutex);
         m_bioSummaryCache.clear();
+        m_bioRelationshipsCache.clear();
         m_cachedCurrentTime = 0.0f;
         logger::info("MemoryDB: Caches cleared");
     }
@@ -115,6 +116,7 @@ namespace IntelEngine {
         }
 
         std::string summary;
+        std::string relationships;
         if (!filePath.empty()) {
             std::ifstream file(filePath);
             if (file.is_open()) {
@@ -122,19 +124,39 @@ namespace IntelEngine {
                                      std::istreambuf_iterator<char>());
                 file.close();
 
-                // Extract {% block summary %}...{% endblock %}
-                const std::string startTag = "{% block summary %}";
                 const std::string endTag = "{% endblock %}";
-                auto startPos = content.find(startTag);
-                if (startPos != std::string::npos) {
-                    startPos += startTag.size();
-                    auto endPos = content.find(endTag, startPos);
-                    if (endPos != std::string::npos) {
-                        summary = content.substr(startPos, endPos - startPos);
-                        while (!summary.empty() && (summary.front() == ' ' || summary.front() == '\n' || summary.front() == '\r'))
-                            summary.erase(summary.begin());
-                        while (!summary.empty() && (summary.back() == ' ' || summary.back() == '\n' || summary.back() == '\r'))
-                            summary.pop_back();
+
+                // Extract {% block summary %}...{% endblock %}
+                {
+                    const std::string startTag = "{% block summary %}";
+                    auto startPos = content.find(startTag);
+                    if (startPos != std::string::npos) {
+                        startPos += startTag.size();
+                        auto endPos = content.find(endTag, startPos);
+                        if (endPos != std::string::npos) {
+                            summary = content.substr(startPos, endPos - startPos);
+                            while (!summary.empty() && (summary.front() == ' ' || summary.front() == '\n' || summary.front() == '\r'))
+                                summary.erase(summary.begin());
+                            while (!summary.empty() && (summary.back() == ' ' || summary.back() == '\n' || summary.back() == '\r'))
+                                summary.pop_back();
+                        }
+                    }
+                }
+
+                // Extract {% block relationships %}...{% endblock %}
+                {
+                    const std::string startTag = "{% block relationships %}";
+                    auto startPos = content.find(startTag);
+                    if (startPos != std::string::npos) {
+                        startPos += startTag.size();
+                        auto endPos = content.find(endTag, startPos);
+                        if (endPos != std::string::npos) {
+                            relationships = content.substr(startPos, endPos - startPos);
+                            while (!relationships.empty() && (relationships.front() == ' ' || relationships.front() == '\n' || relationships.front() == '\r'))
+                                relationships.erase(relationships.begin());
+                            while (!relationships.empty() && (relationships.back() == ' ' || relationships.back() == '\n' || relationships.back() == '\r'))
+                                relationships.pop_back();
+                        }
                     }
                 }
             }
@@ -151,9 +173,31 @@ namespace IntelEngine {
         {
             std::lock_guard lock(m_mutex);
             m_bioSummaryCache[formId] = summary;
+            m_bioRelationshipsCache[formId] = relationships;
         }
 
         return summary;
+    }
+
+    std::string MemoryDB::GetNPCBioRelationships(RE::FormID formId) {
+        // Check cache first — populated as side effect of GetNPCBioSummary
+        {
+            std::lock_guard lock(m_mutex);
+            auto cacheIt = m_bioRelationshipsCache.find(formId);
+            if (cacheIt != m_bioRelationshipsCache.end()) {
+                return cacheIt->second;
+            }
+        }
+        // Cache miss — trigger bio file load (populates both caches)
+        GetNPCBioSummary(formId);
+        {
+            std::lock_guard lock(m_mutex);
+            auto cacheIt = m_bioRelationshipsCache.find(formId);
+            if (cacheIt != m_bioRelationshipsCache.end()) {
+                return cacheIt->second;
+            }
+        }
+        return "";
     }
 
     // =========================================================================

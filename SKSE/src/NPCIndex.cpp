@@ -1661,31 +1661,6 @@ namespace IntelEngine {
         md += "- Hold: ";    md += holdName;   md += "\n";
         md += "- Time: ";    md += timeStr;    md += "\n\n";
 
-        // --- Fetch NPC-NPC relationships within pool ---
-        // Use dbFormIds for MemoryDB queries (UUID cache maps DB FormIDs, not current game FormIDs)
-        std::vector<RE::FormID> poolFormIds;
-        poolFormIds.reserve(pool.size());
-        for (const auto& c : pool) {
-            poolFormIds.push_back(c.dbFormId);
-        }
-        auto pairRelationships = memDB->GetPoolRelationships(poolFormIds);
-
-        // Build lookup: dbFormId -> list of (otherName, sharedEvents)
-        // Uses dbFormId (not actor->GetFormID()) because GetPoolRelationships returns DB FormIDs
-        std::unordered_map<RE::FormID, std::vector<std::pair<std::string, int>>> connectionMap;
-        for (const auto& pair : pairRelationships) {
-            // Find names from pool using dbFormId
-            std::string name1, name2;
-            for (const auto& c : pool) {
-                if (c.dbFormId == pair.formId1) name1 = c.actor->GetDisplayFullName();
-                if (c.dbFormId == pair.formId2) name2 = c.actor->GetDisplayFullName();
-            }
-            if (!name1.empty() && !name2.empty()) {
-                connectionMap[pair.formId1].push_back({name2, pair.sharedEvents});
-                connectionMap[pair.formId2].push_back({name1, pair.sharedEvents});
-            }
-        }
-
         // --- Candidate pool (ascending score: most important candidates last for LLM attention) ---
         std::reverse(pool.begin(), pool.end());
         md += "## Candidate Pool\n\n";
@@ -1719,6 +1694,13 @@ namespace IntelEngine {
                 md += "Bio: ";  md += bio;  md += "\n";
             }
 
+            // Bio relationships — canonical connections from character prompt file
+            // (family, faction members, friends/rivals — authored, not event-based)
+            auto bioRels = memDB->GetNPCBioRelationships(actor->GetFormID());
+            if (!bioRels.empty()) {
+                md += "Relationships:\n";  md += bioRels;  md += "\n";
+            }
+
             // Use dbFormId for MemoryDB queries — the DB's FormID is in the UUID cache.
             // actor->GetFormID() may differ if resolved via name (stale FormID workaround).
             RE::FormID queryFormId = pool[i].dbFormId;
@@ -1739,25 +1721,21 @@ namespace IntelEngine {
                 md += "Recent:\n";  md += recentEvents;  md += "\n";
             }
 
-            // NPC-NPC connections within the pool (keyed by dbFormId)
-            auto connIt = connectionMap.find(queryFormId);
-            if (connIt != connectionMap.end() && !connIt->second.empty()) {
-                md += "Knows: ";
-                for (size_t j = 0; j < connIt->second.size(); ++j) {
-                    if (j > 0) md += ", ";
-                    md += connIt->second[j].first;
-                    md += " (";
-                    md += std::to_string(connIt->second[j].second);
-                    md += " events)";
+            // In-game connections — NPCs with shared event history from MemoryDB.
+            // Supplements bio relationships with dynamic in-game interactions.
+            auto relatedNPCs = memDB->GetRelatedCandidateFormIDs(queryFormId, 5);
+            if (!relatedNPCs.empty()) {
+                md += "In-game connections: ";
+                bool firstRel = true;
+                for (const auto& rel : relatedNPCs) {
+                    if (rel.formId == queryFormId) continue;  // skip self
+                    if (!firstRel) md += ", ";
+                    md += rel.name;
+                    firstRel = false;
                 }
                 md += "\n";
             }
 
-            // Household members (housemates from bed-ownership index)
-            auto household = GetHouseholdString(actor);
-            if (!household.empty()) {
-                md += "Household: ";  md += household;  md += "\n";
-            }
             md += "\n";
         }
 
