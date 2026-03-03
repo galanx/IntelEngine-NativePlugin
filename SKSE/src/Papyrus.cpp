@@ -1355,17 +1355,41 @@ namespace IntelEngine::Papyrus {
             return 0;
         }
 
-        // Use GetRecentDialogueForActor — queries SkyrimNet's GetRecentDialogue API
-        // which resolves UUIDs by FormID and returns actual dialogue events.
-        // Returns empty string if no dialogue history exists.
+        // Returns 3-tier awareness level:
+        //   0 = true stranger (no record at all)
+        //   1 = seen before (shared events but no direct dialogue or memories)
+        //   2 = acquainted (has dialogue, memories, or direct history)
         RE::FormID formId = actor->GetFormID();
-        auto result = memDB->GetRecentDialogueForActor(formId, 1);
 
-        bool hasMet = !result.empty();
-        logger::info("GetPlayerInteractionCount: {} (0x{:X}) hasMet={} (dialogue={})",
-            actor->GetName(), formId, hasMet, hasMet ? "yes" : "none");
+        // Tier 2: direct dialogue with the player
+        auto dialogue = memDB->GetRecentDialogueForActor(formId, 1);
+        if (!dialogue.empty()) {
+            logger::info("GetPlayerInteractionCount: {} (0x{:X}) tier=2 (has dialogue)",
+                actor->GetName(), formId);
+            return 2;
+        }
 
-        return hasMet ? 1 : 0;
+        // Tier 2: has memories (memories are player-facing — if they exist, NPC knows the player)
+        auto memories = memDB->GetFormattedMemories(formId, 1);
+        if (!memories.empty()) {
+            logger::info("GetPlayerInteractionCount: {} (0x{:X}) tier=2 (has memories)",
+                actor->GetName(), formId);
+            return 2;
+        }
+
+        // Tier 1: shared events with the player (witnessed, nearby, narrations)
+        auto related = memDB->GetRelatedCandidateFormIDs(formId, 15);
+        for (const auto& rel : related) {
+            if (rel.formId == 0x14) {  // player FormID
+                logger::info("GetPlayerInteractionCount: {} (0x{:X}) tier=1 (shared events, no dialogue)",
+                    actor->GetName(), formId);
+                return 1;
+            }
+        }
+
+        logger::info("GetPlayerInteractionCount: {} (0x{:X}) tier=0 (true stranger)",
+            actor->GetName(), formId);
+        return 0;
     }
 
     // ==========================================================================
@@ -1968,27 +1992,24 @@ namespace IntelEngine::Papyrus {
         }
 
         std::uniform_int_distribution<int> countDist(minCount, maxCount);
-        std::uniform_real_distribution<float> spreadDist(-300.0f, 300.0f);
-
         int count = countDist(s_rng);
-        auto basePos = location->GetPosition();
 
         for (int i = 0; i < count; ++i) {
             auto* baseToSpawn = (secondaryBase && i % 2 == 1) ? secondaryBase : primaryBase;
 
+            // PlaceObjectAtMe spawns at the anchor's navmesh position.
+            // Don't offset with SetPosition — raw coordinate offsets ignore
+            // navmesh/collision and land inside walls in tight interiors.
+            // Let AI combat behavior handle natural spreading.
             auto spawned = location->PlaceObjectAtMe(baseToSpawn, true);
             if (spawned) {
-                float sx = spreadDist(s_rng);
-                float sy = spreadDist(s_rng);
-                RE::NiPoint3 newPos{basePos.x + sx, basePos.y + sy, basePos.z};
-                spawned->SetPosition(newPos);
-
                 auto* actor = spawned->As<RE::Actor>();
                 if (actor) {
                     result.push_back(actor);
                 }
+                auto pos = spawned->GetPosition();
                 logger::info("[IntelEngine] SpawnQuestEnemies: spawned '{}' at ({:.0f}, {:.0f})",
-                            baseToSpawn->GetName(), newPos.x, newPos.y);
+                            baseToSpawn->GetName(), pos.x, pos.y);
             }
         }
 
