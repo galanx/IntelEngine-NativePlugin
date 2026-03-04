@@ -98,6 +98,11 @@ namespace IntelEngine {
         RE::TESObjectREFR* GetDoorDestination(RE::TESObjectREFR* door);
 
         /**
+         * Check if a BGSLocation has dangerous keywords (dungeon, crypt, cave, etc.).
+         */
+        bool IsLocationDangerous(RE::BGSLocation* location);
+
+        /**
          * Check if the player is in a dangerous location (dungeon, crypt, cave, etc.).
          * Used by Story Engine to avoid dispatching NPCs into danger zones.
          */

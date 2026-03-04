@@ -195,6 +195,18 @@ namespace IntelEngine {
         else                    return "late night";
     }
 
+    // Validate a cached Actor* from m_npcIndex is still alive.
+    // Raw pointers in m_npcIndex become dangling when NPCs unload.
+    // Cross-checks against the engine's form table to catch stale pointers.
+    static RE::Actor* ValidateCachedActor(RE::Actor* cached) {
+        if (!cached) return nullptr;
+        auto formId = cached->GetFormID();
+        if (formId == 0) return nullptr;
+        auto* form = RE::TESForm::LookupByID(formId);
+        if (form != cached || form->IsDeleted()) return nullptr;
+        return cached;
+    }
+
     void NPCIndex::BuildIndex() {
         std::unique_lock lock(m_mutex);
 
@@ -272,12 +284,27 @@ namespace IntelEngine {
         // Quick refresh - update loaded actors from ALL four process list tiers
         std::unique_lock lock(m_mutex);
 
+        // Evict stale Actor* entries (NPCs that unloaded since last refresh)
+        size_t evicted = 0;
+        for (auto it = m_npcIndex.begin(); it != m_npcIndex.end(); ) {
+            if (!ValidateCachedActor(it->second)) {
+                it = m_npcIndex.erase(it);
+                evicted++;
+            } else {
+                ++it;
+            }
+        }
+
         ProcessUtils::ForEachLoadedActor([this](RE::Actor* actor) {
             IndexLoadedNPC(actor);
             return false;
         });
 
-        logger::info("NPC index refreshed: {} NPCs", m_npcIndex.size());
+        if (evicted > 0) {
+            logger::info("NPC index refreshed: {} NPCs ({} stale evicted)", m_npcIndex.size(), evicted);
+        } else {
+            logger::info("NPC index refreshed: {} NPCs", m_npcIndex.size());
+        }
     }
 
     void NPCIndex::RebuildIndex() {
@@ -294,9 +321,12 @@ namespace IntelEngine {
 
         // 1. Exact match in loaded NPCs
         auto exactIt = m_npcIndex.find(lowerSearch);
-        if (exactIt != m_npcIndex.end() && exactIt->second) {
-            logger::debug("FindNPCByName('{}') -> Exact match (loaded)", searchTerm);
-            return exactIt->second;
+        if (exactIt != m_npcIndex.end()) {
+            if (auto* valid = ValidateCachedActor(exactIt->second)) {
+                logger::debug("FindNPCByName('{}') -> Exact match (loaded)", searchTerm);
+                return valid;
+            }
+            // Stale pointer — fall through to other strategies
         }
 
         // 2. Fuzzy match with Levenshtein distance
@@ -307,10 +337,12 @@ namespace IntelEngine {
             matchedName = fuzzy.match;
             // First try loaded actor
             auto loadedIt = m_npcIndex.find(matchedName);
-            if (loadedIt != m_npcIndex.end() && loadedIt->second) {
-                logger::debug("FindNPCByName('{}') -> Fuzzy match '{}' (loaded, distance={})",
-                             searchTerm, matchedName, fuzzy.distance);
-                return loadedIt->second;
+            if (loadedIt != m_npcIndex.end()) {
+                if (auto* valid = ValidateCachedActor(loadedIt->second)) {
+                    logger::debug("FindNPCByName('{}') -> Fuzzy match '{}' (loaded, distance={})",
+                                 searchTerm, matchedName, fuzzy.distance);
+                    return valid;
+                }
             }
 
             // Not loaded - try to get from FormID
@@ -331,9 +363,11 @@ namespace IntelEngine {
                 lowerSearch.find(name) != std::string::npos) {
 
                 auto loadedIt = m_npcIndex.find(name);
-                if (loadedIt != m_npcIndex.end() && loadedIt->second) {
-                    logger::debug("FindNPCByName('{}') -> Partial match '{}' (loaded)", searchTerm, name);
-                    return loadedIt->second;
+                if (loadedIt != m_npcIndex.end()) {
+                    if (auto* valid = ValidateCachedActor(loadedIt->second)) {
+                        logger::debug("FindNPCByName('{}') -> Partial match '{}' (loaded)", searchTerm, name);
+                        return valid;
+                    }
                 }
 
                 // Try FormID
@@ -652,8 +686,10 @@ namespace IntelEngine {
         if (fuzzy) {
             // Return original case from the actor
             auto it = m_npcIndex.find(fuzzy.match);
-            if (it != m_npcIndex.end() && it->second) {
-                return it->second->GetDisplayFullName();
+            if (it != m_npcIndex.end()) {
+                if (auto* valid = ValidateCachedActor(it->second)) {
+                    return valid->GetDisplayFullName();
+                }
             }
         }
 
@@ -1750,11 +1786,15 @@ namespace IntelEngine {
             md += "\n\n";
         }
 
-        // Rotation hints — recently used quest items and rescue victims
+        // Rotation hints — recently used quest items, rescue victims, and locations
         auto recentItems = GetRecentQuestItemsString();
         auto recentVictims = GetRecentRescueVictimsString();
-        if (!recentItems.empty() || !recentVictims.empty()) {
+        auto recentLocations = GetRecentQuestLocationsString();
+        if (!recentItems.empty() || !recentVictims.empty() || !recentLocations.empty()) {
             md += "## Recent Quest History (avoid repeats)\n";
+            if (!recentLocations.empty()) {
+                md += "- Recent quest locations: ";  md += recentLocations;  md += "\n";
+            }
             if (!recentItems.empty()) {
                 md += "- Recent find_item targets: ";  md += recentItems;  md += "\n";
             }
@@ -2007,6 +2047,28 @@ namespace IntelEngine {
         logger::info("[StoryDM] Tracked rescue victim: '{}' (history: {})", victimName, m_recentRescueVictims.size());
     }
 
+    void NPCIndex::NotifyQuestLocationUsed(const std::string& locationName) {
+        if (locationName.empty()) return;
+        std::unique_lock lock(m_mutex);
+        if (!m_recentQuestLocations.empty() && m_recentQuestLocations.back() == locationName) return;
+        m_recentQuestLocations.push_back(locationName);
+        if (static_cast<int>(m_recentQuestLocations.size()) > MAX_RECENT_QUEST_LOCATIONS) {
+            m_recentQuestLocations.pop_front();
+        }
+        logger::info("[StoryDM] Tracked quest location: '{}' (history: {})", locationName, m_recentQuestLocations.size());
+    }
+
+    std::string NPCIndex::GetRecentQuestLocationsString() const {
+        std::shared_lock lock(m_mutex);
+        if (m_recentQuestLocations.empty()) return "";
+        std::string result;
+        for (size_t i = 0; i < m_recentQuestLocations.size(); ++i) {
+            if (i > 0) result += ", ";
+            result += m_recentQuestLocations[i];
+        }
+        return result;
+    }
+
     std::string NPCIndex::GetRecentQuestItemsString() const {
         std::shared_lock lock(m_mutex);
         if (m_recentQuestItems.empty()) return "";
@@ -2080,7 +2142,10 @@ namespace IntelEngine {
 
     float NPCIndex::GetStoryCooldownHours() {
         static auto* global = RE::TESForm::LookupByEditorID<RE::TESGlobal>("IntelEngine_StoryEngineCooldown");
-        return global ? global->value : 24.0f;
+        float mcmCooldown = global ? global->value : 24.0f;
+        // Dispatched NPCs must stay out for at least the absence period too
+        float absenceHours = Settings::GetSingleton()->storyMinAbsenceDays * 24.0f;
+        return std::max(mcmCooldown, absenceHours);
     }
 
     void NPCIndex::NotifyStoryCooldown(RE::FormID formId, float gameTime) {

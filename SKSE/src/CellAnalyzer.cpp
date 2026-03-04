@@ -533,13 +533,8 @@ namespace IntelEngine {
         logger::debug("CellAnalyzer: Cached {} dangerous location keywords", m_dangerousKeywords.size());
     }
 
-    bool CellAnalyzer::IsPlayerInDangerousLocation() {
-        auto* player = RE::PlayerCharacter::GetSingleton();
-        if (!player) return false;
-
-        auto* location = player->GetCurrentLocation();
+    bool CellAnalyzer::IsLocationDangerous(RE::BGSLocation* location) {
         if (!location) return false;
-
         EnsureDangerousKeywordsCached();
         for (auto* keyword : m_dangerousKeywords) {
             if (location->HasKeyword(keyword)) {
@@ -547,6 +542,12 @@ namespace IntelEngine {
             }
         }
         return false;
+    }
+
+    bool CellAnalyzer::IsPlayerInDangerousLocation() {
+        auto* player = RE::PlayerCharacter::GetSingleton();
+        if (!player) return false;
+        return IsLocationDangerous(player->GetCurrentLocation());
     }
 
     bool CellAnalyzer::IsPlayerInOwnHome() {

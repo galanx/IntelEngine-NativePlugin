@@ -227,6 +227,19 @@ namespace IntelEngine {
          */
         std::vector<RE::FormID> GetHouseholdMembers(RE::Actor* actor);
 
+        // ==========================================================================
+        // Dungeon Boss Anchor (pre-placement for rescue/find_item quests)
+        // ==========================================================================
+
+        /**
+         * Get the boss room anchor for a dungeon location.
+         * Uses DungeonIndex built from BGSLocation::specialRefs at startup.
+         * Returns a persistent ref in the boss room (accessible even unloaded).
+         * @return Boss anchor ref, or nullptr if dungeon not indexed
+         */
+        RE::TESObjectREFR* GetDungeonBossAnchor(RE::BGSLocation* loc);
+        RE::TESObjectREFR* GetDungeonBossAnchor(const std::string& locationName);
+
     private:
         LocationResolver() = default;
         ~LocationResolver() = default;
@@ -319,6 +332,16 @@ namespace IntelEngine {
 
         // Last home cell resolved by ResolveAnyDestination (for Papyrus to query)
         RE::FormID m_lastResolvedHomeCellId = 0;
+
+        // Dungeon index: BGSLocation FormID → boss room endpoint
+        struct DungeonEndpoint {
+            RE::FormID anchorRefId = 0;   // boss ref FormID (persistent, works unloaded)
+            RE::FormID cellFormId = 0;    // cell containing the anchor
+        };
+        std::unordered_map<RE::FormID, DungeonEndpoint> m_dungeonIndex;
+
+        // Build dungeon endpoint index from BGSLocation::specialRefs
+        void BuildDungeonIndex();
 
         bool m_indexBuilt = false;
     };

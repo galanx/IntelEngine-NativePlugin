@@ -27,6 +27,7 @@ namespace IntelEngine::Papyrus {
     RE::Actor* ResolveStoryCandidate(RE::StaticFunctionTag*, RE::BSFixedString);
     RE::Actor* FindMessengerForSender(RE::StaticFunctionTag*, RE::Actor*);
     void NotifyStoryCooldown(RE::StaticFunctionTag*, RE::Actor*, float);
+    bool IsActorOnStoryCooldown(RE::StaticFunctionTag*, RE::Actor*);
     void NotifyStoryTypePicked(RE::StaticFunctionTag*, RE::BSFixedString);
     std::vector<int> GetDMCandidatePoolFormIDs(RE::StaticFunctionTag*);
     RE::BSFixedString RenderFactsSection(RE::StaticFunctionTag*, std::vector<RE::BSFixedString>, std::vector<float>, float);
@@ -37,6 +38,10 @@ namespace IntelEngine::Papyrus {
     void SetPlayerHomePolicy(RE::StaticFunctionTag*, int);
     bool IsPotentialFollower(RE::StaticFunctionTag*, RE::Actor*);
     bool IsPlayerInBlockedLocation(RE::StaticFunctionTag*);
+    RE::TESObjectREFR* FindRescueAnchor(RE::StaticFunctionTag*, RE::Actor*);
+    RE::TESObjectREFR* FindUsablePrisonerFurniture(RE::StaticFunctionTag*, RE::Actor*);
+    RE::TESObjectREFR* ScanAheadForAnchor(RE::StaticFunctionTag*, RE::Actor*);
+    RE::TESObjectREFR* GetDungeonBossAnchor(RE::StaticFunctionTag*, RE::BSFixedString);
 
     bool Register(RE::BSScript::IVirtualMachine* a_vm) {
         if (!a_vm) {
@@ -148,6 +153,7 @@ namespace IntelEngine::Papyrus {
         a_vm->RegisterFunction("GetRelatedCandidate", SCRIPT_NAME, GetRelatedCandidate); ++count;
         a_vm->RegisterFunction("GetActorUUID", SCRIPT_NAME, GetActorUUID); ++count;
         a_vm->RegisterFunction("IsPlayerInDangerousLocation", SCRIPT_NAME, IsPlayerInDangerousLocation); ++count;
+        a_vm->RegisterFunction("HasNearbyDungeonEntrance", SCRIPT_NAME, HasNearbyDungeonEntrance); ++count;
         a_vm->RegisterFunction("IsPlayerInOwnHome", SCRIPT_NAME, IsPlayerInOwnHome); ++count;
         a_vm->RegisterFunction("GetPlayerHomeExteriorDoor", SCRIPT_NAME, GetPlayerHomeExteriorDoor); ++count;
         a_vm->RegisterFunction("GetPlayerHomeInteriorDoor", SCRIPT_NAME, GetPlayerHomeInteriorDoor); ++count;
@@ -164,17 +170,24 @@ namespace IntelEngine::Papyrus {
         a_vm->RegisterFunction("BuildNPCInteractionContext", SCRIPT_NAME, BuildNPCInteractionContext); ++count;
         a_vm->RegisterFunction("BuildNPCInteractionRequestJson", SCRIPT_NAME, BuildNPCInteractionRequestJson); ++count;
         a_vm->RegisterFunction("NotifyStoryCooldown", SCRIPT_NAME, NotifyStoryCooldown); ++count;
+        a_vm->RegisterFunction("IsActorOnStoryCooldown", SCRIPT_NAME, IsActorOnStoryCooldown); ++count;
         a_vm->RegisterFunction("NotifyStoryTypePicked", SCRIPT_NAME, NotifyStoryTypePicked); ++count;
         a_vm->RegisterFunction("GetDMCandidatePoolFormIDs", SCRIPT_NAME, GetDMCandidatePoolFormIDs); ++count;
         a_vm->RegisterFunction("SpawnQuestEnemies", SCRIPT_NAME, SpawnQuestEnemies); ++count;
         a_vm->RegisterFunction("SpawnQuestBoss", SCRIPT_NAME, SpawnQuestBoss); ++count;
         a_vm->RegisterFunction("SpawnQuestChest", SCRIPT_NAME, SpawnQuestChest); ++count;
         a_vm->RegisterFunction("FindDeeperSpawnPoint", SCRIPT_NAME, FindDeeperSpawnPoint); ++count;
+        a_vm->RegisterFunction("FindPrisonerFurniture", SCRIPT_NAME, FindPrisonerFurniture); ++count;
+        a_vm->RegisterFunction("FindUsablePrisonerFurniture", SCRIPT_NAME, FindUsablePrisonerFurniture); ++count;
+        a_vm->RegisterFunction("FindRescueAnchor", SCRIPT_NAME, FindRescueAnchor); ++count;
+        a_vm->RegisterFunction("ScanAheadForAnchor", SCRIPT_NAME, ScanAheadForAnchor); ++count;
+        a_vm->RegisterFunction("GetDungeonBossAnchor", SCRIPT_NAME, GetDungeonBossAnchor); ++count;
         a_vm->RegisterFunction("IsQuestItemInChest", SCRIPT_NAME, IsQuestItemInChest); ++count;
         a_vm->RegisterFunction("ValidateQuestItem", SCRIPT_NAME, ValidateQuestItem); ++count;
         a_vm->RegisterFunction("GetRandomQuestItemName", SCRIPT_NAME, GetRandomQuestItemName); ++count;
         a_vm->RegisterFunction("NotifyQuestItemUsed", SCRIPT_NAME, NotifyQuestItemUsed); ++count;
         a_vm->RegisterFunction("NotifyRescueVictimUsed", SCRIPT_NAME, NotifyRescueVictimUsed); ++count;
+        a_vm->RegisterFunction("NotifyQuestLocationUsed", SCRIPT_NAME, NotifyQuestLocationUsed); ++count;
 
         // MemoryDB Functions (SkyrimNet SQLite reader)
         a_vm->RegisterFunction("GetNPCMemories", SCRIPT_NAME, GetNPCMemories); ++count;
@@ -217,15 +230,21 @@ namespace IntelEngine::Papyrus {
     // ==========================================================================
 
     RE::Actor* FindNPCByName(RE::StaticFunctionTag*, RE::BSFixedString searchTerm) {
-        return NPCIndex::GetSingleton()->FindByName(searchTerm.c_str());
+        auto* str = searchTerm.c_str();
+        if (!str || !*str) return nullptr;
+        return NPCIndex::GetSingleton()->FindByName(str);
     }
 
     RE::Actor* FindNPCByNameNear(RE::StaticFunctionTag*, RE::BSFixedString searchTerm, RE::Actor* nearActor) {
-        return NPCIndex::GetSingleton()->FindByNameNear(searchTerm.c_str(), nearActor);
+        auto* str = searchTerm.c_str();
+        if (!str || !*str) return nullptr;
+        return NPCIndex::GetSingleton()->FindByNameNear(str, nearActor);
     }
 
     RE::Actor* ResolveStoryCandidate(RE::StaticFunctionTag*, RE::BSFixedString name) {
-        return NPCIndex::GetSingleton()->ResolveStoryCandidate(name.c_str());
+        auto* str = name.c_str();
+        if (!str || !*str) return nullptr;
+        return NPCIndex::GetSingleton()->ResolveStoryCandidate(str);
     }
 
     RE::Actor* FindMessengerForSender(RE::StaticFunctionTag*, RE::Actor* sender) {
@@ -247,7 +266,9 @@ namespace IntelEngine::Papyrus {
     }
 
     RE::BSFixedString GetNPCNameSuggestion(RE::StaticFunctionTag*, RE::BSFixedString searchTerm) {
-        return NPCIndex::GetSingleton()->GetSuggestion(searchTerm.c_str());
+        auto* str = searchTerm.c_str();
+        if (!str || !*str) return "";
+        return NPCIndex::GetSingleton()->GetSuggestion(str);
     }
 
     // ==========================================================================
@@ -1113,6 +1134,61 @@ namespace IntelEngine::Papyrus {
         return CellAnalyzer::GetSingleton()->IsPlayerInDangerousLocation();
     }
 
+    // =========================================================================
+    // Quest Interior Anchor Discovery
+    // Scans exterior doors near a quest marker for dangerous interior cells.
+    // Priority: prisoner furniture > door destination in dangerous interior > nullptr.
+    // =========================================================================
+
+    bool HasNearbyDungeonEntrance(RE::StaticFunctionTag*, RE::TESObjectREFR* questLocation) {
+        if (!questLocation) return false;
+
+        auto* cell = questLocation->GetParentCell();
+        if (!cell || cell->IsInteriorCell()) return false;
+
+        auto* analyzer = CellAnalyzer::GetSingleton();
+        auto markerPos = questLocation->GetPosition();
+        bool found = false;
+
+        cell->ForEachReference([&](RE::TESObjectREFR& doorRef) {
+            if (found) return RE::BSContainer::ForEachResult::kStop;
+            if (doorRef.IsDisabled()) return RE::BSContainer::ForEachResult::kContinue;
+
+            auto* base = doorRef.GetBaseObject();
+            if (!base || base->GetFormType() != RE::FormType::Door)
+                return RE::BSContainer::ForEachResult::kContinue;
+
+            if (markerPos.GetDistance(doorRef.GetPosition()) > 3000.0f)
+                return RE::BSContainer::ForEachResult::kContinue;
+
+            auto* teleport = doorRef.extraList.GetByType<RE::ExtraTeleport>();
+            if (!teleport || !teleport->teleportData)
+                return RE::BSContainer::ForEachResult::kContinue;
+
+            auto* linkedDoor = teleport->teleportData->linkedDoor.get().get();
+            if (!linkedDoor) return RE::BSContainer::ForEachResult::kContinue;
+
+            auto* destCell = linkedDoor->GetSaveParentCell();
+            if (!destCell) destCell = linkedDoor->GetParentCell();
+            if (!destCell || !destCell->IsInteriorCell()) return RE::BSContainer::ForEachResult::kContinue;
+
+            auto* destLoc = destCell->GetLocation();
+            if (destLoc && analyzer->IsLocationDangerous(destLoc)) {
+                found = true;
+                logger::info("[IntelEngine] HasNearbyDungeonEntrance: door to dangerous interior '{}'",
+                            destCell->GetName());
+            }
+
+            return found ? RE::BSContainer::ForEachResult::kStop
+                         : RE::BSContainer::ForEachResult::kContinue;
+        });
+
+        if (!found) {
+            logger::info("[IntelEngine] HasNearbyDungeonEntrance: no dungeon entrance near quest marker");
+        }
+        return found;
+    }
+
     bool IsPlayerInOwnHome(RE::StaticFunctionTag*) {
         return CellAnalyzer::GetSingleton()->IsPlayerInOwnHome();
     }
@@ -1290,6 +1366,12 @@ namespace IntelEngine::Papyrus {
     void NotifyStoryCooldown(RE::StaticFunctionTag*, RE::Actor* akActor, float gameTime) {
         if (!akActor) return;
         NPCIndex::GetSingleton()->NotifyStoryCooldown(akActor->GetFormID(), gameTime);
+    }
+
+    bool IsActorOnStoryCooldown(RE::StaticFunctionTag*, RE::Actor* akActor) {
+        if (!akActor) return true;  // null = treat as on cooldown (reject)
+        return NPCIndex::GetSingleton()->IsOnStoryCooldown(
+            akActor->GetFormID(), NPCIndex::GetStoryCooldownHours());
     }
 
     void NotifyStoryTypePicked(RE::StaticFunctionTag*, RE::BSFixedString storyType) {
@@ -2123,6 +2205,12 @@ namespace IntelEngine::Papyrus {
         NPCIndex::GetSingleton()->NotifyRescueVictimUsed(victimName.c_str());
     }
 
+    void NotifyQuestLocationUsed(RE::StaticFunctionTag*, RE::BSFixedString locationName) {
+        auto* str = locationName.c_str();
+        if (!str || !*str) return;
+        NPCIndex::GetSingleton()->NotifyQuestLocationUsed(str);
+    }
+
     // =========================================================================
     // Quest Boss Spawning (find_item sub-type)
     // =========================================================================
@@ -2185,9 +2273,10 @@ namespace IntelEngine::Papyrus {
         if (!cell || !cell->IsInteriorCell()) return nullptr;
 
         // Scan current cell for deep-dungeon landmark references
-        // Priority: word walls > boss chests > coffins/sarcophagi > shrines/altars
+        // Priority: word walls > boss chests > regular chests > coffins/sarcophagi > shrines/altars
         RE::TESObjectREFR* wordWall = nullptr;
         RE::TESObjectREFR* bossChest = nullptr;
+        RE::TESObjectREFR* chest = nullptr;
         RE::TESObjectREFR* coffin = nullptr;
         RE::TESObjectREFR* shrine = nullptr;
 
@@ -2221,6 +2310,15 @@ namespace IntelEngine::Papyrus {
                 }
             }
 
+            // Regular Chests — TESObjectCONT with "chest" or "treas" (not already matched as boss)
+            if (!chest && !bossChest && formType == RE::FormType::Container) {
+                if (editorIdStr.find("chest") != std::string::npos ||
+                    editorIdStr.find("treas") != std::string::npos) {
+                    chest = &ref;
+                    logger::info("[IntelEngine] FindDeeperSpawnPoint: chest '{}'", editorIdStr);
+                }
+            }
+
             // Coffins/Sarcophagi — Static or Furniture
             if (!coffin && (formType == RE::FormType::Static || formType == RE::FormType::Furniture)) {
                 if (StringUtils::ContainsAny(editorIdStr, {"coffin", "sarcophag"}) ||
@@ -2248,6 +2346,7 @@ namespace IntelEngine::Papyrus {
         // Return highest-priority landmark
         if (wordWall)  return wordWall;
         if (bossChest) return bossChest;
+        if (chest)     return chest;
         if (coffin)    return coffin;
         if (shrine)    return shrine;
 
@@ -2259,8 +2358,15 @@ namespace IntelEngine::Papyrus {
             if (analyzer->IsDoorDownward(door) || analyzer->IsDoorNameDownward(door)) {
                 auto* dest = analyzer->GetDoorDestination(door);
                 if (dest) {
-                    logger::info("[IntelEngine] FindDeeperSpawnPoint: fallback to deeper door");
-                    return dest;
+                    // Only use doors that lead deeper into the dungeon (another interior),
+                    // never doors that lead back outside.
+                    auto* destCell = dest->GetSaveParentCell();
+                    if (!destCell) destCell = dest->GetParentCell();
+                    if (destCell && destCell->IsInteriorCell()) {
+                        logger::info("[IntelEngine] FindDeeperSpawnPoint: fallback to deeper door");
+                        return dest;
+                    }
+                    logger::info("[IntelEngine] FindDeeperSpawnPoint: skipped door to exterior cell");
                 }
             }
         }
@@ -2268,6 +2374,307 @@ namespace IntelEngine::Papyrus {
         logger::info("[IntelEngine] FindDeeperSpawnPoint: no landmarks or deeper doors in '{}'",
                     cell->GetName());
         return nullptr;
+    }
+
+    // =========================================================================
+    // Prisoner Furniture Discovery (rescue sub-type)
+    // =========================================================================
+
+    // Scan a single cell for prisoner furniture. Returns best match by priority.
+    // furnitureOnly=true: only Furniture form type (NPCs can use via Activate — idle markers).
+    // furnitureOnly=false: also Statics/Activators (cage meshes, decorative props — for positioning).
+    static RE::TESObjectREFR* ScanCellForPrisonerFurnitureImpl(RE::TESObjectCELL* cell, bool furnitureOnly) {
+        if (!cell) return nullptr;
+
+        RE::TESObjectREFR* shackle = nullptr;
+        RE::TESObjectREFR* cage = nullptr;
+        RE::TESObjectREFR* stocks = nullptr;
+        RE::TESObjectREFR* prison = nullptr;
+
+        const char* tag = furnitureOnly ? "UsablePrisonerScan" : "PrisonerScan";
+
+        cell->ForEachReference([&](RE::TESObjectREFR& ref) {
+            if (ref.IsDisabled()) return RE::BSContainer::ForEachResult::kContinue;
+
+            auto* baseObj = ref.GetBaseObject();
+            if (!baseObj) return RE::BSContainer::ForEachResult::kContinue;
+
+            auto formType = baseObj->GetFormType();
+            if (furnitureOnly) {
+                if (formType != RE::FormType::Furniture) {
+                    return RE::BSContainer::ForEachResult::kContinue;
+                }
+            } else {
+                if (formType != RE::FormType::Furniture &&
+                    formType != RE::FormType::Static &&
+                    formType != RE::FormType::Activator &&
+                    formType != RE::FormType::MovableStatic) {
+                    return RE::BSContainer::ForEachResult::kContinue;
+                }
+            }
+
+            auto editorId = baseObj->GetFormEditorID();
+            std::string editorIdStr = editorId ? StringUtils::ToLowerStd(editorId) : "";
+            if (editorIdStr.empty()) return RE::BSContainer::ForEachResult::kContinue;
+
+            if (!shackle && StringUtils::ContainsAny(editorIdStr, {"shackle", "manacle"})) {
+                shackle = &ref;
+                logger::info("[IntelEngine] {}: shackle '{}' in '{}'", tag, editorIdStr, cell->GetName());
+            }
+            if (!cage && StringUtils::ContainsAny(editorIdStr, {"cage", "gibbet"})) {
+                cage = &ref;
+                logger::info("[IntelEngine] {}: cage '{}' in '{}'", tag, editorIdStr, cell->GetName());
+            }
+            if (!stocks && StringUtils::ContainsAny(editorIdStr, {"stock", "pillory"})) {
+                if (editorIdStr.find("livestock") == std::string::npos) {
+                    stocks = &ref;
+                    logger::info("[IntelEngine] {}: stocks '{}' in '{}'", tag, editorIdStr, cell->GetName());
+                }
+            }
+            if (!prison && StringUtils::ContainsAny(editorIdStr, {"prison", "captive", "torture"})) {
+                prison = &ref;
+                logger::info("[IntelEngine] {}: prison furniture '{}' in '{}'", tag, editorIdStr, cell->GetName());
+            }
+
+            if (shackle) return RE::BSContainer::ForEachResult::kStop;
+            return RE::BSContainer::ForEachResult::kContinue;
+        });
+
+        if (shackle) return shackle;
+        if (cage)    return cage;
+        if (stocks)  return stocks;
+        if (prison)  return prison;
+        return nullptr;
+    }
+
+    static RE::TESObjectREFR* ScanCellForPrisonerFurniture(RE::TESObjectCELL* cell) {
+        return ScanCellForPrisonerFurnitureImpl(cell, false);
+    }
+
+    // Scan a single cell for dungeon landmarks (same priority as FindDeeperSpawnPoint).
+    static RE::TESObjectREFR* ScanCellForLandmarks(RE::TESObjectCELL* cell) {
+        if (!cell) return nullptr;
+
+        RE::TESObjectREFR* wordWall = nullptr;
+        RE::TESObjectREFR* bossChest = nullptr;
+        RE::TESObjectREFR* chest = nullptr;
+        RE::TESObjectREFR* coffin = nullptr;
+        RE::TESObjectREFR* shrine = nullptr;
+
+        cell->ForEachReference([&](RE::TESObjectREFR& ref) {
+            if (ref.IsDisabled()) return RE::BSContainer::ForEachResult::kContinue;
+            auto* baseObj = ref.GetBaseObject();
+            if (!baseObj) return RE::BSContainer::ForEachResult::kContinue;
+
+            auto editorId = baseObj->GetFormEditorID();
+            std::string editorIdStr = editorId ? StringUtils::ToLowerStd(editorId) : "";
+            auto refName = ref.GetName();
+            std::string nameStr = refName ? StringUtils::ToLowerStd(refName) : "";
+            auto formType = baseObj->GetFormType();
+
+            if (!wordWall && formType == RE::FormType::Static) {
+                if (editorIdStr.find("wordwall") != std::string::npos ||
+                    editorIdStr.find("word_wall") != std::string::npos) {
+                    wordWall = &ref;
+                }
+            }
+            if (!bossChest && formType == RE::FormType::Container) {
+                if (editorIdStr.find("boss") != std::string::npos) {
+                    bossChest = &ref;
+                }
+            }
+            if (!chest && !bossChest && formType == RE::FormType::Container) {
+                if (editorIdStr.find("chest") != std::string::npos ||
+                    editorIdStr.find("treas") != std::string::npos) {
+                    chest = &ref;
+                }
+            }
+            if (!coffin && (formType == RE::FormType::Static || formType == RE::FormType::Furniture)) {
+                if (StringUtils::ContainsAny(editorIdStr, {"coffin", "sarcophag"}) ||
+                    StringUtils::ContainsAny(nameStr, {"coffin", "sarcophag"})) {
+                    coffin = &ref;
+                }
+            }
+            if (!shrine && (formType == RE::FormType::Activator || formType == RE::FormType::Static)) {
+                if (StringUtils::ContainsAny(editorIdStr, {"shrine", "altar"}) ||
+                    StringUtils::ContainsAny(nameStr, {"shrine", "altar"})) {
+                    shrine = &ref;
+                }
+            }
+            if (wordWall) return RE::BSContainer::ForEachResult::kStop;
+            return RE::BSContainer::ForEachResult::kContinue;
+        });
+
+        if (wordWall)  return wordWall;
+        if (bossChest) return bossChest;
+        if (chest)     return chest;
+        if (coffin)    return coffin;
+        if (shrine)    return shrine;
+        return nullptr;
+    }
+
+    RE::TESObjectREFR* FindPrisonerFurniture(RE::StaticFunctionTag*, RE::Actor* actor) {
+        if (!actor) return nullptr;
+        auto* cell = actor->GetParentCell();
+        if (!cell || !cell->IsInteriorCell()) return nullptr;
+
+        auto* result = ScanCellForPrisonerFurniture(cell);
+        if (!result) {
+            logger::info("[IntelEngine] FindPrisonerFurniture: no prisoner furniture in '{}'",
+                        cell->GetName());
+        }
+        return result;
+    }
+
+    static RE::TESObjectREFR* ScanCellForUsablePrisonerFurniture(RE::TESObjectCELL* cell) {
+        return ScanCellForPrisonerFurnitureImpl(cell, true);
+    }
+
+    RE::TESObjectREFR* FindUsablePrisonerFurniture(RE::StaticFunctionTag*, RE::Actor* actor) {
+        if (!actor) return nullptr;
+        auto* cell = actor->GetParentCell();
+        if (!cell || !cell->IsInteriorCell()) return nullptr;
+
+        auto* result = ScanCellForUsablePrisonerFurniture(cell);
+        if (result) {
+            logger::info("[IntelEngine] FindUsablePrisonerFurniture: found usable furniture in '{}'",
+                        cell->GetName());
+        } else {
+            logger::info("[IntelEngine] FindUsablePrisonerFurniture: no usable furniture in '{}'",
+                        cell->GetName());
+        }
+        return result;
+    }
+
+    // =========================================================================
+    // Rescue Anchor — deep dungeon scan following doors (rescue sub-type)
+    // =========================================================================
+
+    RE::TESObjectREFR* FindRescueAnchor(RE::StaticFunctionTag*, RE::Actor* actor) {
+        if (!actor) return nullptr;
+
+        auto* playerCell = actor->GetParentCell();
+        if (!playerCell || !playerCell->IsInteriorCell()) return nullptr;
+
+        // Phase 1: Scan player's current cell for prisoner furniture
+        auto* result = ScanCellForPrisonerFurniture(playerCell);
+        if (result) {
+            logger::info("[IntelEngine] FindRescueAnchor: prisoner furniture in current cell");
+            return result;
+        }
+
+        // Phase 2: Follow doors to adjacent interior cells
+        auto* analyzer = CellAnalyzer::GetSingleton();
+        auto doors = analyzer->GetDoors(actor);
+
+        // Collect reachable interior cells behind doors
+        std::vector<RE::TESObjectCELL*> adjacentCells;
+        for (auto* door : doors) {
+            auto* dest = analyzer->GetDoorDestination(door);
+            if (!dest) continue;
+            auto* destCell = dest->GetSaveParentCell();
+            if (!destCell) destCell = dest->GetParentCell();
+            if (!destCell || !destCell->IsInteriorCell()) continue;
+            if (destCell == playerCell) continue;  // skip doors back to same cell
+            adjacentCells.push_back(destCell);
+        }
+
+        // Phase 2a: Scan adjacent cells for prisoner furniture (priority)
+        for (auto* adjCell : adjacentCells) {
+            result = ScanCellForPrisonerFurniture(adjCell);
+            if (result) {
+                logger::info("[IntelEngine] FindRescueAnchor: prisoner furniture behind door in '{}'",
+                            adjCell->GetName());
+                return result;
+            }
+        }
+
+        // Phase 2b: Scan adjacent cells for landmarks (fallback)
+        for (auto* adjCell : adjacentCells) {
+            result = ScanCellForLandmarks(adjCell);
+            if (result) {
+                logger::info("[IntelEngine] FindRescueAnchor: landmark behind door in '{}'",
+                            adjCell->GetName());
+                return result;
+            }
+        }
+
+        // Phase 3: Scan current cell for landmarks (last resort before nullptr)
+        result = ScanCellForLandmarks(playerCell);
+        if (result) {
+            logger::info("[IntelEngine] FindRescueAnchor: landmark in current cell");
+            return result;
+        }
+
+        logger::info("[IntelEngine] FindRescueAnchor: nothing found in '{}' or adjacent cells",
+                    playerCell->GetName());
+        return nullptr;
+    }
+
+    // =========================================================================
+    // Scan Ahead — find anchor in cells BEYOND doors (not current cell)
+    // =========================================================================
+
+    RE::TESObjectREFR* ScanAheadForAnchor(RE::StaticFunctionTag*, RE::Actor* actor) {
+        if (!actor) return nullptr;
+
+        auto* playerCell = actor->GetParentCell();
+        if (!playerCell || !playerCell->IsInteriorCell()) return nullptr;
+
+        auto* analyzer = CellAnalyzer::GetSingleton();
+        auto doors = analyzer->GetDoors(actor);
+
+        // Collect adjacent interior cells (through doors, excluding current cell)
+        std::vector<RE::TESObjectCELL*> aheadCells;
+        for (auto* door : doors) {
+            auto* dest = analyzer->GetDoorDestination(door);
+            if (!dest) continue;
+            auto* destCell = dest->GetSaveParentCell();
+            if (!destCell) destCell = dest->GetParentCell();
+            if (!destCell || !destCell->IsInteriorCell()) continue;
+            if (destCell == playerCell) continue;
+            aheadCells.push_back(destCell);
+        }
+
+        if (aheadCells.empty()) {
+            logger::info("[IntelEngine] ScanAheadForAnchor: no adjacent interior cells from '{}'",
+                        playerCell->GetName());
+            return nullptr;
+        }
+
+        // Priority 1: prisoner furniture in ahead cells
+        for (auto* cell : aheadCells) {
+            auto* result = ScanCellForPrisonerFurniture(cell);
+            if (result) {
+                logger::info("[IntelEngine] ScanAheadForAnchor: prisoner furniture in '{}'",
+                            cell->GetName());
+                return result;
+            }
+        }
+
+        // Priority 2: landmarks (boss chests, word walls, etc.) in ahead cells
+        for (auto* cell : aheadCells) {
+            auto* result = ScanCellForLandmarks(cell);
+            if (result) {
+                logger::info("[IntelEngine] ScanAheadForAnchor: landmark in '{}'",
+                            cell->GetName());
+                return result;
+            }
+        }
+
+        logger::info("[IntelEngine] ScanAheadForAnchor: nothing found ahead from '{}'",
+                    playerCell->GetName());
+        return nullptr;
+    }
+
+    // =========================================================================
+    // Dungeon Boss Anchor (pre-placement for rescue/find_item quests)
+    // =========================================================================
+
+    RE::TESObjectREFR* GetDungeonBossAnchor(RE::StaticFunctionTag*, RE::BSFixedString locationName) {
+        auto* str = locationName.c_str();
+        if (!str || !*str) return nullptr;
+        return LocationResolver::GetSingleton()->GetDungeonBossAnchor(str);
     }
 
     // =========================================================================

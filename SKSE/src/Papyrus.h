@@ -224,6 +224,7 @@ namespace IntelEngine::Papyrus {
     RE::Actor* GetRelatedCandidate(RE::StaticFunctionTag*, RE::Actor* relatedTo);
     RE::BSFixedString GetActorUUID(RE::StaticFunctionTag*, RE::Actor* actor);
     bool IsPlayerInDangerousLocation(RE::StaticFunctionTag*);
+    bool HasNearbyDungeonEntrance(RE::StaticFunctionTag*, RE::TESObjectREFR* questLocation);
     bool IsPlayerInOwnHome(RE::StaticFunctionTag*);
     RE::TESObjectREFR* GetPlayerHomeExteriorDoor(RE::StaticFunctionTag*);
     RE::TESObjectREFR* GetPlayerHomeInteriorDoor(RE::StaticFunctionTag*);
@@ -265,6 +266,9 @@ namespace IntelEngine::Papyrus {
     // Notify that a rescue victim was used (for rotation tracking).
     void NotifyRescueVictimUsed(RE::StaticFunctionTag*, RE::BSFixedString victimName);
 
+    // Notify that a quest location was used (for rotation tracking).
+    void NotifyQuestLocationUsed(RE::StaticFunctionTag*, RE::BSFixedString locationName);
+
     // Quest boss spawning — spawns a boss-tier leveled actor near a location.
     RE::Actor* SpawnQuestBoss(RE::StaticFunctionTag*, RE::TESObjectREFR* location,
                               RE::BSFixedString enemyType);
@@ -272,6 +276,29 @@ namespace IntelEngine::Papyrus {
     // Find a deeper spawn point in an interior cell by scanning for dungeon landmarks
     // (word walls, boss chests, coffins, shrines) then falling back to door traversal.
     RE::TESObjectREFR* FindDeeperSpawnPoint(RE::StaticFunctionTag*, RE::Actor* actor);
+
+    // Scan current interior cell for prisoner furniture (shackles, cages, stocks).
+    // Returns the highest-priority prisoner furniture ref, or nullptr if none found.
+    // Includes Statics/Activators (cage meshes) — use for positioning near props.
+    RE::TESObjectREFR* FindPrisonerFurniture(RE::StaticFunctionTag*, RE::Actor* actor);
+
+    // Scan current interior cell for USABLE prisoner furniture (FormType::Furniture only).
+    // Only returns objects NPCs can actually sit in (shackles, stocks with idle markers).
+    // Excludes Statics/Activators (cage meshes, doors). Use for Activate() path.
+    RE::TESObjectREFR* FindUsablePrisonerFurniture(RE::StaticFunctionTag*, RE::Actor* actor);
+
+    // Deep rescue anchor — scans current cell + cells behind doors for prisoner
+    // furniture or landmarks. Used for rescue sub-type victim placement.
+    RE::TESObjectREFR* FindRescueAnchor(RE::StaticFunctionTag*, RE::Actor* actor);
+
+    // Scan cells AHEAD of the player (through doors, not current cell) for prisoner
+    // furniture or landmarks. Returns an anchor in the next cell — invisible to player.
+    // Used by the dungeon depth-tracking fallback to find placement as player explores.
+    RE::TESObjectREFR* ScanAheadForAnchor(RE::StaticFunctionTag*, RE::Actor* actor);
+
+    // Get the boss room anchor for a dungeon location (from DungeonIndex).
+    // Returns a persistent ref deep inside the dungeon, accessible even unloaded.
+    RE::TESObjectREFR* GetDungeonBossAnchor(RE::StaticFunctionTag*, RE::BSFixedString locationName);
 
     // Check if the specific quest item is still inside a container.
     bool IsQuestItemInChest(RE::StaticFunctionTag*, RE::TESObjectREFR* container,

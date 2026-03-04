@@ -107,9 +107,12 @@ namespace IntelEngine {
         // Build NPC home index from bed ownership data
         BuildHomeIndex();
 
+        // Build dungeon boss anchor index from BGSLocation::specialRefs
+        BuildDungeonIndex();
+
         m_indexBuilt = true;
-        logger::info("Location index built: {} cells, {} locations, {} NPC homes",
-                     m_allCellNames.size(), m_allLocationNames.size(), m_npcHomeIndex.size());
+        logger::info("Location index built: {} cells, {} locations, {} NPC homes, {} dungeon endpoints",
+                     m_allCellNames.size(), m_allLocationNames.size(), m_npcHomeIndex.size(), m_dungeonIndex.size());
     }
 
     RE::TESObjectCELL* LocationResolver::ResolveCell(const std::string& locationName) {
@@ -1065,6 +1068,222 @@ namespace IntelEngine {
 
         logger::info("NPC home index built: {} beds scanned, {} actor-owned, {} faction-mapped, {} total NPCs with homes",
                      bedsScanned, actorOwned, factionOwned, m_npcHomeIndex.size());
+    }
+
+    // =========================================================================
+    // Dungeon Boss Anchor Index
+    // =========================================================================
+
+    void LocationResolver::BuildDungeonIndex() {
+        m_dungeonIndex.clear();
+
+        auto* dataHandler = RE::TESDataHandler::GetSingleton();
+        if (!dataHandler) return;
+
+        logger::info("Building dungeon index...");
+
+        // Step 1: Enumerate ALL BGSLocationRefType forms and log them.
+        // This tells us exactly what LocRefTypes exist in the load order.
+        std::unordered_set<RE::FormID> priorityRefTypes;  // Boss, BossContainer, etc.
+        {
+            auto& locRefTypes = dataHandler->GetFormArray<RE::BGSLocationRefType>();
+            logger::info("DungeonIndex: {} LocRefType forms in load order:", locRefTypes.size());
+            for (auto* lrt : locRefTypes) {
+                if (!lrt) continue;
+                auto edId = lrt->GetFormEditorID();
+                std::string name = edId ? edId : "(null)";
+                logger::info("  LocRefType {:08X} '{}'", lrt->GetFormID(), name);
+
+                // Flag priority types — these are most likely to be interior anchors
+                std::string lower = name;
+                std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+                if (lower.find("boss") != std::string::npos ||
+                    lower.find("captive") != std::string::npos ||
+                    lower.find("center") != std::string::npos) {
+                    priorityRefTypes.insert(lrt->GetFormID());
+                }
+            }
+        }
+
+        // Step 2: Cache dungeon-type keywords
+        std::vector<RE::BGSKeyword*> dungeonKeywords;
+        static const char* dungeonKeywordEditorIDs[] = {
+            "LocTypeDungeon", "LocTypeCrypt", "LocTypeRuin",
+            "LocTypeCave", "LocTypeMine", "LocTypeMilitaryFort"
+        };
+        for (auto* editorID : dungeonKeywordEditorIDs) {
+            auto* kw = RE::TESForm::LookupByEditorID<RE::BGSKeyword>(editorID);
+            if (kw) dungeonKeywords.push_back(kw);
+        }
+        if (dungeonKeywords.empty()) {
+            logger::warn("DungeonIndex: no dungeon keywords found");
+            return;
+        }
+
+        // Step 3: Build parent → children map
+        std::unordered_map<RE::FormID, std::vector<RE::BGSLocation*>> childMap;
+        for (auto* loc : dataHandler->GetFormArray<RE::BGSLocation>()) {
+            if (loc && loc->parentLoc) {
+                childMap[loc->parentLoc->GetFormID()].push_back(loc);
+            }
+        }
+
+        // Helper: check if a specialRef resolves to an interior cell.
+        // Tries parentSpaceID first, then resolves the actual ref and checks GetParentCell().
+        auto isInteriorRef = [](const RE::SpecialRefData& sref) -> RE::TESObjectCELL* {
+            // Method 1: parentSpaceID is an interior cell FormID
+            if (sref.refData.parentSpaceID != 0) {
+                auto* parentSpace = RE::TESForm::LookupByID(sref.refData.parentSpaceID);
+                if (parentSpace) {
+                    auto* cell = parentSpace->As<RE::TESObjectCELL>();
+                    if (cell && cell->IsInteriorCell()) return cell;
+                }
+            }
+            // Method 2: resolve the ref itself and check its actual cell.
+            // Some persistent refs have worldspace as parentSpaceID in ESP data
+            // but are actually placed in an interior cell at runtime.
+            if (sref.refData.refID != 0) {
+                auto* ref = RE::TESForm::LookupByID<RE::TESObjectREFR>(sref.refData.refID);
+                if (ref) {
+                    auto* cell = ref->GetSaveParentCell();
+                    if (!cell) cell = ref->GetParentCell();
+                    if (cell && cell->IsInteriorCell()) return cell;
+                }
+            }
+            return nullptr;
+        };
+
+        // Helper: scan a location's specialRefs for an interior anchor.
+        // Priority: priority LocRefType (Boss/BossContainer/etc.) > any interior ref.
+        auto scanLocationRefs = [&](RE::BGSLocation* scanLoc, DungeonEndpoint& outEndpoint,
+                                     bool& outFoundPriority, std::uint32_t& extSkipped) {
+            for (auto& sref : scanLoc->specialRefs) {
+                if (!sref.type) continue;
+                if (sref.refData.refID == 0) continue;
+
+                auto* interiorCell = isInteriorRef(sref);
+                if (!interiorCell) {
+                    extSkipped++;
+                    continue;
+                }
+
+                bool isPriority = priorityRefTypes.count(sref.type->GetFormID()) > 0;
+                if (isPriority) {
+                    outEndpoint.anchorRefId = sref.refData.refID;
+                    outEndpoint.cellFormId = interiorCell->GetFormID();
+                    outFoundPriority = true;
+                    return;  // priority type in interior = best possible
+                }
+
+                // Store first interior ref as fallback
+                if (outEndpoint.anchorRefId == 0) {
+                    outEndpoint.anchorRefId = sref.refData.refID;
+                    outEndpoint.cellFormId = interiorCell->GetFormID();
+                }
+            }
+        };
+
+        std::uint32_t locationsChecked = 0;
+        std::uint32_t priorityMatches = 0;
+        std::uint32_t fallbackMatches = 0;
+        std::uint32_t exteriorSkipped = 0;
+        std::uint32_t childResolved = 0;
+        std::uint32_t refResolvedInterior = 0;  // refs where Method 2 found interior
+
+        for (auto* loc : dataHandler->GetFormArray<RE::BGSLocation>()) {
+            if (!loc) continue;
+
+            bool isDungeon = false;
+            for (auto* kw : dungeonKeywords) {
+                if (loc->HasKeyword(kw)) { isDungeon = true; break; }
+            }
+            if (!isDungeon) continue;
+            locationsChecked++;
+
+            // Phase 1: scan this location's own specialRefs
+            DungeonEndpoint bestEndpoint;
+            bool foundPriority = false;
+            scanLocationRefs(loc, bestEndpoint, foundPriority, exteriorSkipped);
+
+            // Phase 2: scan child sub-locations if no interior ref found
+            if (bestEndpoint.anchorRefId == 0) {
+                auto childIt = childMap.find(loc->GetFormID());
+                if (childIt != childMap.end()) {
+                    for (auto* child : childIt->second) {
+                        scanLocationRefs(child, bestEndpoint, foundPriority, exteriorSkipped);
+                        if (foundPriority) break;
+                    }
+                    if (bestEndpoint.anchorRefId != 0) childResolved++;
+                }
+            }
+
+            if (bestEndpoint.anchorRefId != 0) {
+                m_dungeonIndex[loc->GetFormID()] = bestEndpoint;
+                if (foundPriority) priorityMatches++;
+                else fallbackMatches++;
+            } else {
+                // Log dungeons with NO interior anchor for diagnostics
+                auto locName = loc->GetFullName();
+                if (locName && locName[0]) {
+                    logger::info("DungeonIndex: NO interior anchor for '{}' ({:08X}), {} specialRefs",
+                                 locName, loc->GetFormID(), loc->specialRefs.size());
+                    for (auto& sref : loc->specialRefs) {
+                        auto typeEd = sref.type ? (sref.type->GetFormEditorID() ? sref.type->GetFormEditorID() : "?") : "null";
+                        logger::info("  specialRef: type='{}' refID={:08X} parentSpace={:08X}",
+                                     typeEd, sref.refData.refID, sref.refData.parentSpaceID);
+                    }
+                }
+            }
+        }
+
+        logger::info("DungeonIndex: {} dungeons checked, {} priority, {} fallback, {} children, {} ext skipped, {} total indexed",
+                     locationsChecked, priorityMatches, fallbackMatches, childResolved, exteriorSkipped, m_dungeonIndex.size());
+    }
+
+    RE::TESObjectREFR* LocationResolver::GetDungeonBossAnchor(RE::BGSLocation* loc) {
+        if (!loc) return nullptr;
+
+        std::shared_lock lock(m_mutex);
+        auto it = m_dungeonIndex.find(loc->GetFormID());
+        if (it == m_dungeonIndex.end()) return nullptr;
+
+        auto* ref = RE::TESForm::LookupByID<RE::TESObjectREFR>(it->second.anchorRefId);
+        if (ref) {
+            auto* cell = RE::TESForm::LookupByID<RE::TESObjectCELL>(it->second.cellFormId);
+            auto pos = ref->GetPosition();
+            logger::info("[IntelEngine] GetDungeonBossAnchor: '{}' → ref {:08X} '{}' in cell {:08X} '{}' pos({:.0f},{:.0f},{:.0f})",
+                         loc->GetFullName() ? loc->GetFullName() : "?",
+                         it->second.anchorRefId,
+                         ref->GetName() ? ref->GetName() : "unnamed",
+                         it->second.cellFormId,
+                         cell ? (cell->GetName() ? cell->GetName() : "unnamed") : "null",
+                         pos.x, pos.y, pos.z);
+        }
+        return ref;
+    }
+
+    RE::TESObjectREFR* LocationResolver::GetDungeonBossAnchor(const std::string& locationName) {
+        if (locationName.empty()) return nullptr;
+
+        // Resolve location name to BGSLocation
+        auto* loc = ResolveLocation(locationName);
+        if (!loc) {
+            logger::info("[IntelEngine] GetDungeonBossAnchor: location '{}' not resolved", locationName);
+            return nullptr;
+        }
+
+        // Check this location
+        auto* result = GetDungeonBossAnchor(loc);
+        if (result) return result;
+
+        // Also check parent location (dungeon sub-locations may nest under the main one)
+        if (loc->parentLoc) {
+            result = GetDungeonBossAnchor(loc->parentLoc);
+            if (result) return result;
+        }
+
+        logger::info("[IntelEngine] GetDungeonBossAnchor: '{}' not in dungeon index", locationName);
+        return nullptr;
     }
 
     RE::TESObjectREFR* LocationResolver::FindExteriorDoorInCell(RE::TESObjectCELL* cell) {

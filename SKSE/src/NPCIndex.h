@@ -277,6 +277,12 @@ namespace IntelEngine {
         void NotifyRescueVictimUsed(const std::string& victimName);
 
         /**
+         * Record a quest location that was used.
+         * Tracks last N locations for rotation (prevents repeats in DM prompt).
+         */
+        void NotifyQuestLocationUsed(const std::string& locationName);
+
+        /**
          * Get recent quest items as comma-separated string for DM context.
          */
         std::string GetRecentQuestItemsString() const;
@@ -285,6 +291,11 @@ namespace IntelEngine {
          * Get recent rescue victims as comma-separated string for DM context.
          */
         std::string GetRecentRescueVictimsString() const;
+
+        /**
+         * Get recent quest locations as comma-separated string for DM context.
+         */
+        std::string GetRecentQuestLocationsString() const;
 
         /**
          * Get recent quest item names as a set (for fallback exclusion).
@@ -343,6 +354,11 @@ namespace IntelEngine {
          */
         static std::string GetNPCHoldName(RE::Actor* actor);
 
+        // Cached lookup of IntelEngine_StoryEngineCooldown global (default 24h)
+        // Returns max(MCM cooldown, absence days * 24) to ensure dispatched NPCs
+        // stay out of the pool for at least the absence period.
+        static float GetStoryCooldownHours();
+
     private:
         NPCIndex() = default;
         ~NPCIndex() = default;
@@ -351,9 +367,6 @@ namespace IntelEngine {
 
         // Index loaded NPC (used during BuildIndex - includes location tracking)
         void IndexLoadedNPC(RE::Actor* actor);
-
-        // Cached lookup of IntelEngine_StoryEngineCooldown global (default 24h)
-        static float GetStoryCooldownHours();
 
         // Thread-safe access
         mutable std::shared_mutex m_mutex;
@@ -391,6 +404,10 @@ namespace IntelEngine {
         // Recent rescue victims FIFO (volatile per session, for rotation)
         static constexpr int MAX_RECENT_RESCUE_VICTIMS = 6;
         std::deque<std::string> m_recentRescueVictims;
+
+        // Recent quest locations FIFO (volatile per session, for rotation)
+        static constexpr int MAX_RECENT_QUEST_LOCATIONS = 8;
+        std::deque<std::string> m_recentQuestLocations;
 
         bool m_indexBuilt = false;
 
