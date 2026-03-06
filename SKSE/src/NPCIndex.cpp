@@ -181,6 +181,54 @@ namespace IntelEngine {
         return false;
     }
 
+    // ── NPC Name Blocklist (populated from plugin config) ──
+    static std::vector<std::string> s_blockedNPCNames;  // lowercase
+    static std::mutex s_npcNameMutex;
+    static std::chrono::steady_clock::time_point s_npcNameBlocklistLastRefresh;
+
+    static void RefreshNPCNameBlocklist() {
+        auto now = std::chrono::steady_clock::now();
+        {
+            std::lock_guard<std::mutex> lock(s_npcNameMutex);
+            if (now - s_npcNameBlocklistLastRefresh < std::chrono::seconds(30)) return;
+            s_npcNameBlocklistLastRefresh = now;
+        }
+
+        if (!SkyrimNetAPI::GetPluginConfigValue) return;
+        std::string csv = SkyrimNetAPI::GetPluginConfigValue(
+            "IntelEngine", "story.npc_blocklist", "");
+
+        std::vector<std::string> newList;
+        if (!csv.empty()) {
+            std::stringstream ss(csv);
+            std::string token;
+            while (std::getline(ss, token, ',')) {
+                auto start = token.find_first_not_of(" \t");
+                auto end = token.find_last_not_of(" \t");
+                if (start != std::string::npos) {
+                    newList.push_back(StringUtils::ToLowerStd(token.substr(start, end - start + 1)));
+                }
+            }
+        }
+        std::lock_guard<std::mutex> lock(s_npcNameMutex);
+        s_blockedNPCNames = std::move(newList);
+        if (!s_blockedNPCNames.empty()) {
+            logger::info("NPC name blocklist refreshed: {} entries", s_blockedNPCNames.size());
+        }
+    }
+
+    static bool IsBlockedByName(RE::Actor* actor) {
+        std::lock_guard<std::mutex> lock(s_npcNameMutex);
+        if (s_blockedNPCNames.empty()) return false;
+        auto displayName = actor->GetDisplayFullName();
+        if (!displayName || !displayName[0]) return false;
+        std::string nameLower = StringUtils::ToLowerStd(displayName);
+        for (const auto& blocked : s_blockedNPCNames) {
+            if (nameLower == blocked) return true;
+        }
+        return false;
+    }
+
     // Shared time-of-day string from timescale-aware game time
     static const char* GetTimeOfDayString() {
         float gameTime = RE::Calendar::GetSingleton()->GetCurrentGameTime();
@@ -746,6 +794,10 @@ namespace IntelEngine {
         RefreshFactionBlocklist();
         if (IsInBlockedFaction(actor)) return false;
 
+        // Plugin-configured NPC name blocklist (refreshes every 30s)
+        RefreshNPCNameBlocklist();
+        if (IsBlockedByName(actor)) return false;
+
         // Danger zone candidate filtering (MCM-controlled)
         {
             int policy = NPCIndex::GetSingleton()->m_dangerZonePolicy.load(std::memory_order_relaxed);
@@ -823,6 +875,13 @@ namespace IntelEngine {
         RefreshFactionBlocklist();
         if (IsInBlockedFaction(actor)) {
             logger::debug("[StoryDM] Rejected '{}': blocked faction", displayName);
+            return false;
+        }
+
+        // Plugin-configured NPC name blocklist (shared with IsEligibleStoryCandidate)
+        RefreshNPCNameBlocklist();
+        if (IsBlockedByName(actor)) {
+            logger::debug("[StoryDM] Rejected '{}': blocked by name", displayName);
             return false;
         }
 
