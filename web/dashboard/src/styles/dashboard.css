@@ -1,0 +1,88 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg-panel: rgba(15, 15, 20, 0.92);
+  --bg-slot: rgba(30, 30, 40, 0.9);
+  --bg-slot-hover: rgba(40, 40, 55, 0.95);
+  --border-color: rgba(100, 100, 120, 0.3);
+}
+
+body {
+  background: transparent !important;
+}
+
+.dashboard-panel {
+  background: var(--bg-panel);
+  border: 1px solid var(--border-color);
+  backdrop-filter: blur(12px);
+}
+
+.slot-card {
+  background: var(--bg-slot);
+  border: 1px solid var(--border-color);
+  transition: background 0.15s ease;
+}
+.slot-card:hover {
+  background: var(--bg-slot-hover);
+}
+
+.section-header {
+  @apply text-[11px] font-semibold text-gray-400 uppercase tracking-wider;
+}
+
+.empty-state {
+  @apply text-center text-gray-600 py-4 text-xs;
+}
+
+.btn-icon {
+  @apply text-gray-400 hover:text-gray-200 text-xs px-2 py-1 rounded hover:bg-white/5 transition-colors;
+}
+
+.btn-cancel {
+  @apply text-gray-600 hover:text-red-400 text-[10px] w-5 h-5 flex items-center justify-center rounded hover:bg-red-500/10 transition-colors;
+}
+
+/* Pulse animation for active tasks */
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+.pulse-dot {
+  animation: pulse-dot 1.5s ease-in-out infinite;
+}
+
+/* Range slider styling */
+.slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #60a5fa;
+  cursor: pointer;
+}
+.slider::-moz-range-thumb {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #60a5fa;
+  cursor: pointer;
+  border: none;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar {
+  width: 4px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(100, 100, 120, 0.4);
+  border-radius: 2px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(100, 100, 120, 0.6);
+}

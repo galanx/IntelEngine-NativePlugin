@@ -79,6 +79,12 @@ namespace IntelEngine {
         int FindSlotByActor(RE::Actor* actor) const;
 
         /**
+         * Serialize all slots to JSON for the dashboard UI.
+         * Returns a JSON array of slot objects.
+         */
+        std::string SerializeToJson() const;
+
+        /**
          * Clear all slots (on game load / new game).
          */
         void ClearAll();

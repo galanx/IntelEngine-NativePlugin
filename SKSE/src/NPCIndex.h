@@ -258,11 +258,21 @@ namespace IntelEngine {
          */
         bool IsOnStoryCooldown(RE::FormID formId, float cooldownHours) const;
 
+        /** Record that an NPC was picked for a social interaction at the given game time. */
+        void NotifySocialCooldown(RE::FormID formId, float gameTime, float cooldownHours);
+
+        /** Check if an NPC is on social cooldown. Uses last reported cooldown hours. */
+        bool IsOnSocialCooldown(RE::FormID formId) const;
+
+        /** Get the social cooldown hours (last reported from Papyrus MCM). */
+        float GetSocialCooldownHours() const;
+
         /**
          * Record that the LLM picked a story type. Volatile (per session).
          * Used to build type count stats for DM prompt balancing.
          */
         void NotifyStoryTypePicked(const std::string& storyType);
+        std::string GetPreferredNPCType() const;
 
         /**
          * Record a quest item that was used in a find_item quest.
@@ -341,6 +351,10 @@ namespace IntelEngine {
          * Used by Papyrus to pre-warm cooldowns from StorageUtil before the DM call.
          */
         std::vector<RE::FormID> GetDMCandidatePoolFormIDs() const;
+        std::vector<RE::FormID> GetNPCCandidatePoolFormIDs() const;
+
+        /** Scan loaded actors for those running one of the given packages. Returns JSON array. */
+        std::string ScanActorsWithPackages(const std::vector<RE::FormID>& packageFormIDs);
 
         /**
          * Get location name for an NPC, with fallback for unloaded actors.
@@ -393,6 +407,8 @@ namespace IntelEngine {
         // Story cooldown mirror: FormID -> game time when last picked
         // Volatile (empty on load), self-heals after first tick
         std::unordered_map<RE::FormID, float> m_storyCooldowns;
+        std::unordered_map<RE::FormID, float> m_socialCooldowns;
+        std::atomic<float> m_socialCooldownHours{24.0f};  // updated from Papyrus MCM
 
         // Story type pick counts (volatile per session, for DM prompt balancing)
         std::unordered_map<std::string, int> m_storyTypeCounts;

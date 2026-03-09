@@ -98,7 +98,65 @@ if (-not $DeployOnly) {
 }
 
 # =============================================================================
-# Step 3: Sync SKSE assets → Data folder
+# Step 2b: Build Dashboard UI (React/webpack -> Data/PrismaUI/views/)
+# =============================================================================
+$dashboardDir = "$ModRoot\web\dashboard"
+$dashboardDist = "$dashboardDir\dist"
+$dashboardDest = "$DataDir\PrismaUI\views\IntelEngine\dashboard"
+if (Test-Path "$dashboardDir\package.json") {
+    # Check if npm is available (also check default install location for fresh installs)
+    $npmCmd = Get-Command npm -ErrorAction SilentlyContinue
+    if (-not $npmCmd -and (Test-Path "C:\Program Files\nodejs\npm.cmd")) {
+        $env:PATH = "C:\Program Files\nodejs;" + $env:PATH
+        $npmCmd = Get-Command npm -ErrorAction SilentlyContinue
+    }
+    if ($npmCmd) {
+        # Install deps if needed (first time only)
+        if (-not (Test-Path "$dashboardDir\node_modules")) {
+            Write-Host "`n--- Installing Dashboard UI dependencies ---" -ForegroundColor Cyan
+            Push-Location $dashboardDir
+            & npm install --silent 2>&1 | Out-Null
+            Pop-Location
+            Write-Host "  npm install complete"
+        }
+
+        Write-Host "`n--- Building Dashboard UI ---" -ForegroundColor Cyan
+        Push-Location $dashboardDir
+        $npmResult = & npm run build 2>&1 | Out-String
+        Pop-Location
+
+        if ($LASTEXITCODE -eq 0 -and (Test-Path "$dashboardDist\index.html")) {
+            if (-not (Test-Path $dashboardDest)) {
+                New-Item -ItemType Directory -Path $dashboardDest -Force | Out-Null
+            }
+            Copy-Item "$dashboardDist\*" $dashboardDest -Recurse -Force
+            $uiFiles = (Get-ChildItem $dashboardDist -Recurse -File).Count
+            Write-Host "  Dashboard UI built ($uiFiles files)" -ForegroundColor Green
+        } else {
+            Write-Host "  WARN: Dashboard UI build failed (non-fatal)" -ForegroundColor Yellow
+            if ($npmResult) {
+                $npmResult -split "`n" | Select-Object -Last 5 | ForEach-Object {
+                    Write-Host "    $_" -ForegroundColor Yellow
+                }
+            }
+        }
+    } else {
+        Write-Host "`n--- Dashboard UI ---" -ForegroundColor Cyan
+        # If a previous build exists, still deploy it
+        if (Test-Path "$dashboardDist\index.html") {
+            if (-not (Test-Path $dashboardDest)) {
+                New-Item -ItemType Directory -Path $dashboardDest -Force | Out-Null
+            }
+            Copy-Item "$dashboardDist\*" $dashboardDest -Recurse -Force
+            Write-Host "  npm not found - deploying cached build" -ForegroundColor Yellow
+        } else {
+            Write-Host "  SKIP: npm not found (install Node.js to build Dashboard UI)" -ForegroundColor Yellow
+        }
+    }
+}
+
+# =============================================================================
+# Step 3: Sync SKSE assets -> Data folder
 # =============================================================================
 Write-Host "`n--- Syncing SKSE assets to Data ---" -ForegroundColor Cyan
 
@@ -151,7 +209,7 @@ Get-ChildItem "$SourceDir\IntelEngine*.psc" | ForEach-Object {
 Write-Host "  Source scripts synced to Data"
 
 # =============================================================================
-# Step 4: Deploy Data folder → Testing + Vanilla Test + CK (unless -SkipDeploy)
+# Step 4: Deploy Data folder -> Testing + Vanilla Test + CK (unless -SkipDeploy)
 # =============================================================================
 if (-not $SkipDeploy) {
     Write-Host "`n--- Deploying Data to Testing + Vanilla Test + CK ---" -ForegroundColor Cyan

@@ -101,16 +101,15 @@ namespace IntelEngine {
         for (const auto& blocked : s_blockedFactions) {
             if (!actor->IsInFaction(blocked.faction)) continue;
             if (blocked.maxBlockedRank == -1) return true;  // block all ranks
-            // Use VisitFactions to find the actor's rank in this faction
-            bool shouldBlock = false;
-            actor->VisitFactions([&](RE::TESFaction* f, std::int8_t rank) -> bool {
-                if (f == blocked.faction) {
-                    shouldBlock = (rank <= blocked.maxBlockedRank);
-                    return false;  // stop visiting
+            // Check rank from base NPC record (VisitFactions only sees runtime changes)
+            auto* base = actor->GetActorBase();
+            if (base) {
+                for (const auto& fr : base->factions) {
+                    if (fr.faction == blocked.faction && fr.rank <= blocked.maxBlockedRank) {
+                        return true;
+                    }
                 }
-                return true;  // keep visiting
-            });
-            if (shouldBlock) return true;
+            }
         }
         return false;
     }
@@ -1228,7 +1227,7 @@ namespace IntelEngine {
     bool NPCIndex::IsJarl(RE::Actor* actor) {
         if (!actor) return false;
 
-        // Cache the faction pointer — LookupByEditorID is cheap but no need to call it per-NPC
+        // Cache the faction pointer
         static RE::TESFaction* s_jarlFaction = nullptr;
         static bool s_looked = false;
         if (!s_looked) {
@@ -1237,14 +1236,20 @@ namespace IntelEngine {
             if (!s_jarlFaction)
                 logger::warn("IsJarl: JobJarlFaction not found by editor ID");
         }
-        if (!s_jarlFaction) return false;
 
-        bool found = false;
-        actor->VisitFactions([&](RE::TESFaction* f, std::int8_t) -> bool {
-            if (f == s_jarlFaction) { found = true; return false; }  // stop visiting
-            return true;  // keep visiting
-        });
-        return found;
+        // IsInFaction checks both base NPC record and runtime faction changes
+        // (VisitFactions only visits runtime ExtraFactionChanges, missing base factions)
+        if (s_jarlFaction && actor->IsInFaction(s_jarlFaction))
+            return true;
+
+        // Name-based fallback for modded games that strip vanilla factions
+        auto name = actor->GetDisplayFullName();
+        if (name && std::string_view(name).substr(0, 5) == "Jarl ") {
+            logger::debug("IsJarl: '{}' matched by name prefix (faction check failed)", name);
+            return true;
+        }
+
+        return false;
     }
 
     bool NPCIndex::IsHighStatus(RE::Actor* actor) {
@@ -1276,14 +1281,11 @@ namespace IntelEngine {
 
         if (s_highStatusFactions.empty()) return false;
 
-        bool found = false;
-        actor->VisitFactions([&](RE::TESFaction* f, std::int8_t) -> bool {
-            for (auto* hsFaction : s_highStatusFactions) {
-                if (f == hsFaction) { found = true; return false; }
-            }
-            return true;
-        });
-        return found;
+        // IsInFaction checks both base NPC record and runtime faction changes
+        for (auto* hsFaction : s_highStatusFactions) {
+            if (actor->IsInFaction(hsFaction)) return true;
+        }
+        return false;
     }
 
     std::string NPCIndex::GetEligibleStoryTypes(RE::Actor* actor,
@@ -1299,7 +1301,11 @@ namespace IntelEngine {
         // High-status NPCs (Jarls, stewards, court wizards, housecarls):
         // message + quest only — they NEVER travel personally.
         // For quest, the DM prompt enforces courier mode (NPC as sender, not courier).
-        if (IsHighStatus(actor)) return "message, quest";
+        if (IsHighStatus(actor)) {
+            auto name = actor->GetDisplayFullName();
+            logger::debug("GetEligibleStoryTypes: '{}' is high-status -> message, quest only", name ? name : "?");
+            return "message, quest";
+        }
 
         std::vector<const char*> types;
 
@@ -1911,6 +1917,8 @@ namespace IntelEngine {
             }
             // Full MCM cooldown — prevents wasted LLM turns
             if (IsOnStoryCooldown(actor->GetFormID(), GetStoryCooldownHours())) return false;
+            // Social cooldown — prevents LLM picking pairs that Papyrus will reject
+            if (IsOnSocialCooldown(actor->GetFormID())) return false;
 
             std::string loc = GetNPCLocationName(actor);
             if (loc.empty()) return false;
@@ -2042,7 +2050,7 @@ namespace IntelEngine {
             md += "\n";
         }
 
-        // Story type usage stats for NPC DM balancing (only types this prompt can pick)
+        // Story type usage stats (informational only — balancing handled by preferredType)
         static const std::unordered_set<std::string> npcTypes = {
             "npc_interaction", "npc_gossip"
         };
@@ -2077,6 +2085,20 @@ namespace IntelEngine {
             first = false;
         }
         return result;
+    }
+
+    std::string NPCIndex::GetPreferredNPCType() const {
+        std::shared_lock lock(m_mutex);
+        int interactionN = 0, gossipN = 0;
+        auto it1 = m_storyTypeCounts.find("npc_interaction");
+        auto it2 = m_storyTypeCounts.find("npc_gossip");
+        if (it1 != m_storyTypeCounts.end()) interactionN = it1->second;
+        if (it2 != m_storyTypeCounts.end()) gossipN = it2->second;
+
+        // Force underrepresented type when diff >= 2; no preference otherwise
+        if (gossipN - interactionN >= 2) return "npc_interaction";
+        if (interactionN - gossipN >= 2) return "npc_gossip";
+        return "";
     }
 
     // =========================================================================
@@ -2199,12 +2221,70 @@ namespace IntelEngine {
         return result;
     }
 
+    std::vector<RE::FormID> NPCIndex::GetNPCCandidatePoolFormIDs() const {
+        std::shared_lock lock(m_mutex);
+        std::vector<RE::FormID> result;
+        result.reserve(m_npcCandidatePool.size());
+        for (const auto& [name, formId] : m_npcCandidatePool) {
+            result.push_back(formId);
+        }
+        return result;
+    }
+
     float NPCIndex::GetStoryCooldownHours() {
         static auto* global = RE::TESForm::LookupByEditorID<RE::TESGlobal>("IntelEngine_StoryEngineCooldown");
         float mcmCooldown = global ? global->value : 24.0f;
         // Dispatched NPCs must stay out for at least the absence period too
         float absenceHours = Settings::GetSingleton()->storyMinAbsenceDays * 24.0f;
         return std::max(mcmCooldown, absenceHours);
+    }
+
+    std::string NPCIndex::ScanActorsWithPackages(const std::vector<RE::FormID>& packageFormIDs) {
+        // Map FormIDs to package index (0-2 = travel, 3 = stalk, 4 = sandbox, 5 = sandbox near player)
+        std::unordered_map<RE::FormID, int> pkgMap;
+        for (int i = 0; i < static_cast<int>(packageFormIDs.size()); ++i) {
+            if (packageFormIDs[i] != 0)
+                pkgMap[packageFormIDs[i]] = i;
+        }
+        if (pkgMap.empty()) return "[]";
+
+        static const char* PKG_LABELS[] = {
+            "Travel (Walk)", "Travel (Jog)", "Travel (Run)",
+            "Travel (Stalk)", "Sandbox", "Sandbox (Near Player)"
+        };
+
+        auto* player = RE::PlayerCharacter::GetSingleton();
+        std::string json = "[";
+        bool first = true;
+
+        ProcessUtils::ForEachLoadedActor([&](RE::Actor* actor) {
+            if (!actor || actor == player) return false;
+            if (actor->IsDead() || actor->IsDisabled()) return false;
+
+            auto* currentPkg = actor->GetCurrentPackage();
+            if (!currentPkg) return false;
+
+            auto it = pkgMap.find(currentPkg->GetFormID());
+            if (it != pkgMap.end()) {
+                if (!first) json += ",";
+                first = false;
+                json += "{\"name\":\"";
+                auto name = actor->GetDisplayFullName();
+                std::string nameStr = name ? name : "Unknown";
+                for (auto& c : nameStr) { if (c == '"') c = '\''; }
+                json += nameStr;
+                json += "\",\"formId\":";
+                json += std::to_string(actor->GetFormID());
+                json += ",\"pkgType\":\"";
+                int idx = it->second;
+                json += (idx >= 0 && idx < 6) ? PKG_LABELS[idx] : "Unknown";
+                json += "\"}";
+            }
+            return false;
+        });
+
+        json += "]";
+        return json;
     }
 
     void NPCIndex::NotifyStoryCooldown(RE::FormID formId, float gameTime) {
@@ -2235,6 +2315,40 @@ namespace IntelEngine {
         float currentGameTime = calendar->GetCurrentGameTime();
         float cooldownDays = cooldownHours / 24.0f;
         return (currentGameTime - it->second) < cooldownDays;
+    }
+
+    void NPCIndex::NotifySocialCooldown(RE::FormID formId, float gameTime, float cooldownHours) {
+        std::unique_lock lock(m_mutex);
+        m_socialCooldowns[formId] = gameTime;
+        m_socialCooldownHours.store(cooldownHours, std::memory_order_relaxed);
+
+        if (m_socialCooldowns.size() > 100) {
+            float cooldownDays = cooldownHours / 24.0f;
+            auto* calendar = RE::Calendar::GetSingleton();
+            if (calendar) {
+                float now = calendar->GetCurrentGameTime();
+                std::erase_if(m_socialCooldowns, [&, cooldownDays](const auto& pair) {
+                    return (now - pair.second) >= cooldownDays;
+                });
+            }
+        }
+    }
+
+    bool NPCIndex::IsOnSocialCooldown(RE::FormID formId) const {
+        std::shared_lock lock(m_mutex);
+        auto it = m_socialCooldowns.find(formId);
+        if (it == m_socialCooldowns.end()) return false;
+
+        auto* calendar = RE::Calendar::GetSingleton();
+        if (!calendar) return false;
+
+        float currentGameTime = calendar->GetCurrentGameTime();
+        float cooldownDays = m_socialCooldownHours.load(std::memory_order_relaxed) / 24.0f;
+        return (currentGameTime - it->second) < cooldownDays;
+    }
+
+    float NPCIndex::GetSocialCooldownHours() const {
+        return m_socialCooldownHours.load(std::memory_order_relaxed);
     }
 
 }  // namespace IntelEngine

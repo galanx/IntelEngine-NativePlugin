@@ -96,6 +96,7 @@ namespace IntelEngine::Papyrus {
     bool StringEndsWith(RE::StaticFunctionTag*, RE::BSFixedString text, RE::BSFixedString suffix);
     int LevenshteinDistance(RE::StaticFunctionTag*, RE::BSFixedString a, RE::BSFixedString b);
     RE::BSFixedString StringTrim(RE::StaticFunctionTag*, RE::BSFixedString text);
+    RE::BSFixedString StringEscapeJson(RE::StaticFunctionTag*, RE::BSFixedString text);
     std::vector<RE::BSFixedString> StringSplit(RE::StaticFunctionTag*,
                                                 RE::BSFixedString text,
                                                 RE::BSFixedString delimiter);
@@ -343,6 +344,31 @@ namespace IntelEngine::Papyrus {
     RE::BSFixedString BuildStoryDMRequestJson(RE::StaticFunctionTag*,
                                                RE::BSFixedString dmContext,
                                                RE::BSFixedString excludedTypes);
+
+    // ==========================================================================
+    // Dashboard Config Functions
+    // ==========================================================================
+
+    // Notify the dashboard UI that slot data changed (triggers JS refresh)
+    void NotifyDashboardSlotChanged(RE::StaticFunctionTag*);
+
+    // Get the current dashboard hotkey VK code (-1 = disabled)
+    int GetDashboardHotkey(RE::StaticFunctionTag*);
+
+    // Set the dashboard hotkey VK code and persist to settings.yaml
+    bool SetDashboardHotkey(RE::StaticFunctionTag*, int vkCode);
+
+    // Hot-reload the dashboard UI from disk (destroy + recreate PrismaUI view)
+    void ReloadDashboardUI(RE::StaticFunctionTag*);
+
+    // Re-read hotkey config from settings.yaml without touching the view
+    void ReloadDashboardConfig(RE::StaticFunctionTag*);
+
+    // Push comprehensive dashboard state JSON to the PrismaUI frontend
+    void PushDashboardFullState(RE::StaticFunctionTag*, RE::BSFixedString json);
+
+    // Check if dashboard is currently visible
+    bool IsDashboardOpen(RE::StaticFunctionTag*);
 
     // ==========================================================================
     // Debug Functions

@@ -13,6 +13,8 @@
 #include "SlotTracker.h"
 #include "MemoryDB.h"
 #include "Settings.h"
+#include "DashboardConfig.h"
+#include "DashboardUIManager.h"
 
 #include <fstream>
 
@@ -99,6 +101,8 @@ namespace IntelEngine {
                 // Game data is loaded - initialize SkyrimNet API and build NPC index
                 logger::info("Data loaded - initializing SkyrimNet API and NPC index");
                 MemoryDB::GetSingleton()->InitializeAPI();
+                DashboardConfig::GetSingleton()->Load();
+                DashboardUIManager::GetSingleton()->Initialize();
                 NPCIndex::GetSingleton()->BuildIndex();
                 LocationResolver::GetSingleton()->BuildLocationIndex();
                 ItemIndex::GetSingleton()->BuildIndex();

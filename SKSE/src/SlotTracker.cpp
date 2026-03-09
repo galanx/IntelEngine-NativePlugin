@@ -7,6 +7,7 @@
 
 #include "SlotTracker.h"
 #include <chrono>
+#include <nlohmann/json.hpp>
 
 namespace IntelEngine {
 
@@ -138,6 +139,42 @@ namespace IntelEngine {
             }
         }
         return -1;
+    }
+
+    std::string SlotTracker::SerializeToJson() const {
+        std::shared_lock lock(m_mutex);
+
+        float now = GetRealTimeSeconds();
+        nlohmann::json slots = nlohmann::json::array();
+
+        for (int i = 0; i < MAX_SLOTS; ++i) {
+            const auto& s = m_slots[i];
+            nlohmann::json slot;
+            slot["index"] = i;
+            slot["state"] = s.state;
+            slot["taskType"] = s.taskType;
+            slot["targetName"] = s.targetName;
+            slot["agentName"] = (s.agent && s.state != 0)
+                ? s.agent->GetDisplayFullName() : "";
+            slot["agentFormId"] = (s.agent && s.state != 0)
+                ? static_cast<int>(s.agent->GetFormID()) : 0;
+
+            // Remaining cooldown in seconds (0 if not on cooldown)
+            float cooldownRemaining = 0.0f;
+            if (s.agent && s.cooldownExpiry > now) {
+                cooldownRemaining = s.cooldownExpiry - now;
+            } else if (s.agent) {
+                auto it = m_cooldowns.find(s.agent->GetFormID());
+                if (it != m_cooldowns.end() && it->second > now) {
+                    cooldownRemaining = it->second - now;
+                }
+            }
+            slot["cooldownRemaining"] = cooldownRemaining;
+
+            slots.push_back(slot);
+        }
+
+        return slots.dump();
     }
 
     void SlotTracker::ClearAll() {

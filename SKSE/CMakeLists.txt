@@ -42,6 +42,8 @@ set(SOURCES
     src/OffScreenTracker.cpp
     src/SlotTracker.cpp
     src/MemoryDB.cpp
+    src/DashboardConfig.cpp
+    src/DashboardUIManager.cpp
 )
 
 # =============================================================================

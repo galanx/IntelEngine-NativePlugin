@@ -20,6 +20,9 @@
 #include "SlotTracker.h"
 #include "MemoryDB.h"
 #include "Settings.h"
+#include "DashboardConfig.h"
+#include "DashboardUIManager.h"
+#include <Windows.h>
 
 namespace IntelEngine::Papyrus {
 
@@ -28,8 +31,11 @@ namespace IntelEngine::Papyrus {
     RE::Actor* FindMessengerForSender(RE::StaticFunctionTag*, RE::Actor*);
     void NotifyStoryCooldown(RE::StaticFunctionTag*, RE::Actor*, float);
     bool IsActorOnStoryCooldown(RE::StaticFunctionTag*, RE::Actor*);
+    void NotifySocialCooldown(RE::StaticFunctionTag*, RE::Actor*, float, float);
     void NotifyStoryTypePicked(RE::StaticFunctionTag*, RE::BSFixedString);
     std::vector<int> GetDMCandidatePoolFormIDs(RE::StaticFunctionTag*);
+    std::vector<int> GetNPCCandidatePoolFormIDs(RE::StaticFunctionTag*);
+    RE::BSFixedString ScanActorsWithPackages(RE::StaticFunctionTag*, std::vector<int>);
     RE::BSFixedString RenderFactsSection(RE::StaticFunctionTag*, std::vector<RE::BSFixedString>, std::vector<float>, float);
     RE::BSFixedString RenderGossipHeardSection(RE::StaticFunctionTag*, std::vector<RE::BSFixedString>, std::vector<RE::BSFixedString>, std::vector<float>, float);
     RE::BSFixedString RenderGossipToldSection(RE::StaticFunctionTag*, std::vector<RE::BSFixedString>, std::vector<RE::BSFixedString>, std::vector<float>, float);
@@ -42,6 +48,15 @@ namespace IntelEngine::Papyrus {
     RE::TESObjectREFR* FindUsablePrisonerFurniture(RE::StaticFunctionTag*, RE::Actor*);
     RE::TESObjectREFR* ScanAheadForAnchor(RE::StaticFunctionTag*, RE::Actor*);
     RE::TESObjectREFR* GetDungeonBossAnchor(RE::StaticFunctionTag*, RE::BSFixedString);
+    void NotifyDashboardSlotChanged(RE::StaticFunctionTag*);
+    int GetDashboardHotkey(RE::StaticFunctionTag*);
+    bool SetDashboardHotkey(RE::StaticFunctionTag*, int);
+    void ReloadDashboardUI(RE::StaticFunctionTag*);
+    void ReloadDashboardConfig(RE::StaticFunctionTag*);
+    void PushDashboardFullState(RE::StaticFunctionTag*, RE::BSFixedString);
+    bool IsDashboardOpen(RE::StaticFunctionTag*);
+    RE::BSFixedString GetPendingDirectorParam(RE::StaticFunctionTag*, RE::BSFixedString);
+    void ClearPendingDirectorParams(RE::StaticFunctionTag*);
 
     bool Register(RE::BSScript::IVirtualMachine* a_vm) {
         if (!a_vm) {
@@ -85,6 +100,7 @@ namespace IntelEngine::Papyrus {
         a_vm->RegisterFunction("StringEndsWith", SCRIPT_NAME, StringEndsWith); ++count;
         a_vm->RegisterFunction("LevenshteinDistance", SCRIPT_NAME, LevenshteinDistance); ++count;
         a_vm->RegisterFunction("StringTrim", SCRIPT_NAME, StringTrim); ++count;
+        a_vm->RegisterFunction("StringEscapeJson", SCRIPT_NAME, StringEscapeJson); ++count;
         a_vm->RegisterFunction("StringSplit", SCRIPT_NAME, StringSplit); ++count;
 
         // Index Management Functions
@@ -171,8 +187,11 @@ namespace IntelEngine::Papyrus {
         a_vm->RegisterFunction("BuildNPCInteractionRequestJson", SCRIPT_NAME, BuildNPCInteractionRequestJson); ++count;
         a_vm->RegisterFunction("NotifyStoryCooldown", SCRIPT_NAME, NotifyStoryCooldown); ++count;
         a_vm->RegisterFunction("IsActorOnStoryCooldown", SCRIPT_NAME, IsActorOnStoryCooldown); ++count;
+        a_vm->RegisterFunction("NotifySocialCooldown", SCRIPT_NAME, NotifySocialCooldown); ++count;
         a_vm->RegisterFunction("NotifyStoryTypePicked", SCRIPT_NAME, NotifyStoryTypePicked); ++count;
         a_vm->RegisterFunction("GetDMCandidatePoolFormIDs", SCRIPT_NAME, GetDMCandidatePoolFormIDs); ++count;
+        a_vm->RegisterFunction("GetNPCCandidatePoolFormIDs", SCRIPT_NAME, GetNPCCandidatePoolFormIDs); ++count;
+        a_vm->RegisterFunction("ScanActorsWithPackages", SCRIPT_NAME, ScanActorsWithPackages); ++count;
         a_vm->RegisterFunction("SpawnQuestEnemies", SCRIPT_NAME, SpawnQuestEnemies); ++count;
         a_vm->RegisterFunction("SpawnQuestBoss", SCRIPT_NAME, SpawnQuestBoss); ++count;
         a_vm->RegisterFunction("SpawnQuestChest", SCRIPT_NAME, SpawnQuestChest); ++count;
@@ -212,6 +231,17 @@ namespace IntelEngine::Papyrus {
         a_vm->RegisterFunction("RenderGossipHeardSection", SCRIPT_NAME, RenderGossipHeardSection); ++count;
         a_vm->RegisterFunction("RenderGossipToldSection", SCRIPT_NAME, RenderGossipToldSection); ++count;
         a_vm->RegisterFunction("RenderTaskHistorySection", SCRIPT_NAME, RenderTaskHistorySection); ++count;
+
+        // Dashboard Config Functions
+        a_vm->RegisterFunction("NotifyDashboardSlotChanged", SCRIPT_NAME, NotifyDashboardSlotChanged); ++count;
+        a_vm->RegisterFunction("GetDashboardHotkey", SCRIPT_NAME, GetDashboardHotkey); ++count;
+        a_vm->RegisterFunction("SetDashboardHotkey", SCRIPT_NAME, SetDashboardHotkey); ++count;
+        a_vm->RegisterFunction("ReloadDashboardUI", SCRIPT_NAME, ReloadDashboardUI); ++count;
+        a_vm->RegisterFunction("ReloadDashboardConfig", SCRIPT_NAME, ReloadDashboardConfig); ++count;
+        a_vm->RegisterFunction("PushDashboardFullState", SCRIPT_NAME, PushDashboardFullState); ++count;
+        a_vm->RegisterFunction("IsDashboardOpen", SCRIPT_NAME, IsDashboardOpen); ++count;
+        a_vm->RegisterFunction("GetPendingDirectorParam", SCRIPT_NAME, GetPendingDirectorParam); ++count;
+        a_vm->RegisterFunction("ClearPendingDirectorParams", SCRIPT_NAME, ClearPendingDirectorParams); ++count;
 
         // Debug Functions
         a_vm->RegisterFunction("TestNPCSearch", SCRIPT_NAME, TestNPCSearch); ++count;
@@ -400,6 +430,23 @@ namespace IntelEngine::Papyrus {
 
     RE::BSFixedString StringTrim(RE::StaticFunctionTag*, RE::BSFixedString text) {
         return StringUtils::Trim(text.c_str());
+    }
+
+    RE::BSFixedString StringEscapeJson(RE::StaticFunctionTag*, RE::BSFixedString text) {
+        std::string input(text.c_str());
+        std::string output;
+        output.reserve(input.size() + 8);
+        for (char c : input) {
+            switch (c) {
+                case '"':  output += "\\\""; break;
+                case '\\': output += "\\\\"; break;
+                case '\n': output += "\\n"; break;
+                case '\r': output += "\\r"; break;
+                case '\t': output += "\\t"; break;
+                default:   output += c; break;
+            }
+        }
+        return RE::BSFixedString(output);
     }
 
     std::vector<RE::BSFixedString> StringSplit(RE::StaticFunctionTag*,
@@ -1358,8 +1405,11 @@ namespace IntelEngine::Papyrus {
     RE::BSFixedString BuildNPCInteractionRequestJson(RE::StaticFunctionTag*,
                                                       RE::BSFixedString npcContext) {
         // npcContext is already JSON-escaped by BuildNPCInteractionContext — do NOT double-escape
+        auto preferred = NPCIndex::GetSingleton()->GetPreferredNPCType();
         std::string json = "{";
-        json += "\"npcPairPool\":\"" + std::string(npcContext.c_str()) + "\"}";
+        json += "\"npcPairPool\":\"" + std::string(npcContext.c_str()) + "\"";
+        json += ",\"preferredType\":\"" + preferred + "\"";
+        json += "}";
         return RE::BSFixedString(json);
     }
 
@@ -1372,6 +1422,11 @@ namespace IntelEngine::Papyrus {
         if (!akActor) return true;  // null = treat as on cooldown (reject)
         return NPCIndex::GetSingleton()->IsOnStoryCooldown(
             akActor->GetFormID(), NPCIndex::GetStoryCooldownHours());
+    }
+
+    void NotifySocialCooldown(RE::StaticFunctionTag*, RE::Actor* akActor, float gameTime, float cooldownHours) {
+        if (!akActor) return;
+        NPCIndex::GetSingleton()->NotifySocialCooldown(akActor->GetFormID(), gameTime, cooldownHours);
     }
 
     void NotifyStoryTypePicked(RE::StaticFunctionTag*, RE::BSFixedString storyType) {
@@ -1388,6 +1443,26 @@ namespace IntelEngine::Papyrus {
         for (auto fid : formIds) {
             result.push_back(static_cast<int>(fid));
         }
+        return result;
+    }
+
+    std::vector<int> GetNPCCandidatePoolFormIDs(RE::StaticFunctionTag*) {
+        auto formIds = NPCIndex::GetSingleton()->GetNPCCandidatePoolFormIDs();
+        std::vector<int> result;
+        result.reserve(formIds.size());
+        for (auto fid : formIds) {
+            result.push_back(static_cast<int>(fid));
+        }
+        return result;
+    }
+
+    RE::BSFixedString ScanActorsWithPackages(RE::StaticFunctionTag*, std::vector<int> packageFormIDs) {
+        std::vector<RE::FormID> formIds;
+        formIds.reserve(packageFormIDs.size());
+        for (auto fid : packageFormIDs) {
+            formIds.push_back(static_cast<RE::FormID>(fid));
+        }
+        auto result = NPCIndex::GetSingleton()->ScanActorsWithPackages(formIds);
         return result;
     }
 
@@ -1813,6 +1888,59 @@ namespace IntelEngine::Papyrus {
         }
 
         return RE::BSFixedString(result);
+    }
+
+    // ==========================================================================
+    // Dashboard Config Functions
+    // ==========================================================================
+
+    void NotifyDashboardSlotChanged(RE::StaticFunctionTag*) {
+        DashboardUIManager::GetSingleton()->PushSlotData();
+    }
+
+    int GetDashboardHotkey(RE::StaticFunctionTag*) {
+        // SkyUI MCM expects DirectInput scancodes; we store VK codes internally
+        int vk = DashboardConfig::GetSingleton()->GetHotkey();
+        if (vk <= 0) return vk;
+        return static_cast<int>(MapVirtualKeyA(vk, MAPVK_VK_TO_VSC));
+    }
+
+    bool SetDashboardHotkey(RE::StaticFunctionTag*, int dxScancode) {
+        // SkyUI MCM gives DirectInput scancodes; convert to VK for storage
+        if (dxScancode == -1) {
+            return DashboardConfig::GetSingleton()->SetHotkey(-1);
+        }
+        if (dxScancode < 0 || dxScancode > 255) {
+            logger::warn("SetDashboardHotkey: Invalid scancode {}", dxScancode);
+            return false;
+        }
+        int vk = static_cast<int>(MapVirtualKeyA(dxScancode, MAPVK_VSC_TO_VK));
+        return DashboardConfig::GetSingleton()->SetHotkey(vk);
+    }
+
+    void ReloadDashboardUI(RE::StaticFunctionTag*) {
+        DashboardUIManager::GetSingleton()->ReloadView();
+    }
+
+    void ReloadDashboardConfig(RE::StaticFunctionTag*) {
+        DashboardConfig::GetSingleton()->Reload();
+        logger::info("[Dashboard] Config reloaded from settings.yaml");
+    }
+
+    void PushDashboardFullState(RE::StaticFunctionTag*, RE::BSFixedString json) {
+        DashboardUIManager::GetSingleton()->PushFullState(json.c_str());
+    }
+
+    bool IsDashboardOpen(RE::StaticFunctionTag*) {
+        return DashboardUIManager::GetSingleton()->IsOpen();
+    }
+
+    RE::BSFixedString GetPendingDirectorParam(RE::StaticFunctionTag*, RE::BSFixedString key) {
+        return DashboardUIManager::GetPendingParam(key.c_str());
+    }
+
+    void ClearPendingDirectorParams(RE::StaticFunctionTag*) {
+        DashboardUIManager::ClearPendingParams();
     }
 
     // ==========================================================================
