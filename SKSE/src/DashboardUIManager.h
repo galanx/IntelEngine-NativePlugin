@@ -92,8 +92,6 @@ namespace IntelEngine {
         // Send SKSE ModEvent to Papyrus
         void SendModEvent(const std::string& eventName, const std::string& strArg = "", float numArg = 0.0f);
 
-        std::string GetDashboardHtmlPath() const;
-
         // Action YAML metadata for Director/Actions tabs
         struct ActionParam {
             std::string name;

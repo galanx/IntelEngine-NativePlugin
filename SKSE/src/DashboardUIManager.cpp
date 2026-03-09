@@ -124,11 +124,8 @@ namespace IntelEngine {
     bool DashboardUIManager::CreateViewIfNeeded() {
         if (dashboardView_ != 0 && prismaUI_->IsValid(dashboardView_)) return true;
 
-        auto htmlPath = GetDashboardHtmlPath();
-        if (!std::filesystem::exists(htmlPath)) {
-            logger::error("[Dashboard] HTML not found at: {}", htmlPath);
-            return false;
-        }
+        // Don't check std::filesystem::exists — MO2's VFS makes the file visible
+        // to PrismaUI but not to the real filesystem. Let CreateView handle resolution.
 
         domReady_.store(false);
 
@@ -863,10 +860,6 @@ namespace IntelEngine {
             isOpen_.store(true);
             prismaUI_->Show(dashboardView_);
         }
-    }
-
-    std::string DashboardUIManager::GetDashboardHtmlPath() const {
-        return "Data/PrismaUI/views/IntelEngine/dashboard/index.html";
     }
 
 }  // namespace IntelEngine
