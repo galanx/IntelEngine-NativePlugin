@@ -104,9 +104,10 @@ function App() {
 
   const activeCount = (state.tasks || []).filter(s => s.state !== 0).length;
   const scheduledCount = (state.scheduled || []).filter(s => s.agent).length;
+  const uiScale = state.pluginConfig?.['ui.scale'] || 1.3;
 
   return (
-    <div className="fixed top-4 right-4 w-[540px] max-h-[calc(100vh-2rem)] flex flex-col">
+    <div className="fixed top-4 right-4 w-[540px] max-h-[calc(100vh-2rem)] flex flex-col origin-top-right" style={{ zoom: uiScale }}>
       <div className="dashboard-panel rounded-lg overflow-hidden flex flex-col max-h-[calc(100vh-2rem)]">
         {/* Header */}
         <div className="flex items-center justify-between px-4 py-2.5 border-b border-white/10">

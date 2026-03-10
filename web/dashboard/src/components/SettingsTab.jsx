@@ -321,8 +321,15 @@ function SettingsTab({ config, onSettingChange, pluginConfig, onPluginConfigChan
 
           {/* Dashboard UI */}
           <section>
-            <h2 className="section-header mb-2">Dashboard Hotkey</h2>
+            <h2 className="section-header mb-2">Dashboard</h2>
             <div className="space-y-2">
+              <SliderRow
+                label="UI Scale"
+                value={pluginConfig['ui.scale'] || 1}
+                min={0.8} max={2.0} step={0.1}
+                onCommit={v => onPluginConfigChange('ui.scale', v)}
+                hint="Scale the dashboard for high-DPI / 4K monitors. 1.0 = default, 1.5-2.0 recommended for 4K."
+              />
               <HotkeyRow
                 value={pluginConfig['ui.dashboard_hotkey'] ?? 118}
                 modifiers={pluginConfig['ui.dashboard_modifiers'] ?? 2}

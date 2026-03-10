@@ -191,6 +191,7 @@ namespace IntelEngine {
                 try {
                     pc["ui.dashboard_hotkey"] = std::stoi(rv("ui.dashboard_hotkey", "118"));
                     pc["ui.dashboard_modifiers"] = std::stoi(rv("ui.dashboard_modifiers", "2"));
+                    pc["ui.scale"] = std::stof(rv("ui.scale", "1.3"));
                     pc["story.faction_blocklist"] = rv("story.faction_blocklist", "");
                     pc["story.location_blocklist"] = rv("story.location_blocklist", "");
                     pc["story.npc_blocklist"] = rv("story.npc_blocklist", "");
