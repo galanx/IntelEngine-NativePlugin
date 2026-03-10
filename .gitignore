@@ -8,6 +8,9 @@ Data/
 # CMake build output (massive — rebuild locally)
 SKSE/build/
 
+# Node.js dependencies (rebuild with npm install)
+node_modules/
+
 # Compiled PEX output (built from Source/Scripts/*.psc)
 Output/
 
