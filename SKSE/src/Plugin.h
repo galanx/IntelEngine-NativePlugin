@@ -15,3 +15,9 @@
 using namespace std::literals;
 
 namespace logger = SKSE::log;
+
+namespace IntelEngine {
+    /** Get the unique save ID for the current playthrough.
+     *  Generated on new game, persisted via SKSE serialization. */
+    std::string GetSaveUniqueID();
+}

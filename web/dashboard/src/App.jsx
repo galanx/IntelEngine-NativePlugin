@@ -5,10 +5,12 @@ import PackagesTab from './components/PackagesTab';
 import SettingsTab from './components/SettingsTab';
 import DirectorTab from './components/DirectorTab';
 import ActionsTab from './components/ActionsTab';
+import PoliticsTab from './components/PoliticsTab';
 
 const TABS = [
   { id: 'tasks', label: 'Tasks' },
   { id: 'story', label: 'Story' },
+  { id: 'politics', label: 'Politics' },
   { id: 'director', label: 'Director' },
   { id: 'actions', label: 'Actions' },
   { id: 'packages', label: 'Packages' },
@@ -156,6 +158,12 @@ function App() {
               quest={state.quest}
               social={state.social}
               npcSocialLog={state.npcSocialLog}
+              sendAction={sendAction}
+            />
+          )}
+          {activeTab === 'politics' && (
+            <PoliticsTab
+              politics={state.politics}
               sendAction={sendAction}
             />
           )}

@@ -31,6 +31,13 @@ const MOD_FLAGS = [
 ];
 
 function SettingsTab({ config, onSettingChange, pluginConfig, onPluginConfigChange }) {
+  // Track which accordion sections are open (by key)
+  const [openSections, setOpenSections] = useState({ storyEngine: true, tasks: true });
+
+  const toggle = useCallback((key) => {
+    setOpenSections(prev => ({ ...prev, [key]: !prev[key] }));
+  }, []);
+
   if (!config) {
     return (
       <div className="p-3">
@@ -40,83 +47,74 @@ function SettingsTab({ config, onSettingChange, pluginConfig, onPluginConfigChan
   }
 
   return (
-    <div className="p-3 space-y-4">
+    <div className="p-3 space-y-1">
       {/* Story Engine */}
-      <section>
-        <h2 className="section-header mb-2">Story Engine</h2>
-        <div className="space-y-2">
-          <ToggleRow
-            label="Story Engine"
-            value={config.storyEnabled}
-            onChange={v => onSettingChange('storyEnabled', v)}
-            hint="NPCs with unfinished business autonomously seek you out based on shared history."
-          />
-          <SliderRow
-            label="Check Interval"
-            value={config.storyInterval}
-            min={0.5} max={12} step={0.5}
-            unit="hrs"
-            onCommit={v => onSettingChange('storyInterval', v)}
-            hint="How often (game hours) the Story Engine checks for NPCs with reasons to find you."
-          />
-          <SliderRow
-            label="NPC Cooldown"
-            value={config.storyCooldown}
-            min={6} max={72} step={6}
-            unit="hrs"
-            onCommit={v => onSettingChange('storyCooldown', v)}
-            hint="How long a picked NPC's priority stays reduced. Higher = more variety, lower = favorites return sooner."
-          />
-          <SliderRow
-            label="Long Absence"
-            value={config.longAbsenceDays}
-            min={1} max={14} step={1}
-            unit="days"
-            onCommit={v => onSettingChange('longAbsenceDays', v)}
-            hint="Minimum game days since last interaction before an NPC becomes a Story Engine candidate."
-          />
-          <SliderRow
-            label="Max Travel Time"
-            value={config.maxTravelDays}
-            min={0.25} max={3} step={0.25}
-            unit="days"
-            onCommit={v => onSettingChange('maxTravelDays', v)}
-            hint="Max game days an NPC will travel before being teleported. Lower = faster, higher = more realistic."
-          />
-          <ToggleRow
-            label="Teleport When Stuck"
-            value={config.allowStuckTeleport}
-            onChange={v => onSettingChange('allowStuckTeleport', v)}
-            hint="When enabled, stuck NPCs are teleported to the target. When disabled, the NPC gives up instead."
-          />
-        </div>
-      </section>
+      <Accordion title="Story Engine" isOpen={openSections.storyEngine} onToggle={() => toggle('storyEngine')}>
+        <ToggleRow
+          label="Story Engine"
+          value={config.storyEnabled}
+          onChange={v => onSettingChange('storyEnabled', v)}
+          hint="NPCs with unfinished business autonomously seek you out based on shared history."
+        />
+        <SliderRow
+          label="Check Interval"
+          value={config.storyInterval}
+          min={0.5} max={12} step={0.5}
+          unit="hrs"
+          onCommit={v => onSettingChange('storyInterval', v)}
+          hint="How often (game hours) the Story Engine checks for NPCs with reasons to find you."
+        />
+        <SliderRow
+          label="NPC Cooldown"
+          value={config.storyCooldown}
+          min={6} max={72} step={6}
+          unit="hrs"
+          onCommit={v => onSettingChange('storyCooldown', v)}
+          hint="How long a picked NPC's priority stays reduced. Higher = more variety."
+        />
+        <SliderRow
+          label="Long Absence"
+          value={config.longAbsenceDays}
+          min={1} max={14} step={1}
+          unit="days"
+          onCommit={v => onSettingChange('longAbsenceDays', v)}
+          hint="Minimum game days since last interaction before an NPC becomes a Story Engine candidate."
+        />
+        <SliderRow
+          label="Max Travel Time"
+          value={config.maxTravelDays}
+          min={0.25} max={3} step={0.25}
+          unit="days"
+          onCommit={v => onSettingChange('maxTravelDays', v)}
+          hint="Max game days an NPC will travel before being teleported."
+        />
+        <ToggleRow
+          label="Teleport When Stuck"
+          value={config.allowStuckTeleport}
+          onChange={v => onSettingChange('allowStuckTeleport', v)}
+          hint="When disabled, stuck NPCs give up instead of being teleported."
+        />
+      </Accordion>
 
-      {/* Policies */}
-      <section>
-        <h2 className="section-header mb-2">NPC Policies</h2>
-        <div className="space-y-2">
-          <PolicyRow
-            label="Danger Zones"
-            value={config.dangerZonePolicy}
-            options={DANGER_POLICIES}
-            hints={DANGER_HINTS}
-            onChange={v => onSettingChange('dangerZonePolicy', v)}
-          />
-          <PolicyRow
-            label="Player Home"
-            value={config.playerHomePolicy}
-            options={HOME_POLICIES}
-            hints={HOME_HINTS}
-            onChange={v => onSettingChange('playerHomePolicy', v)}
-          />
-        </div>
-      </section>
-
-      {/* NPC Social */}
-      <section>
-        <h2 className="section-header mb-2">NPC Social</h2>
-        <div className="space-y-2">
+      {/* NPC Behavior */}
+      <Accordion title="NPC Behavior" isOpen={openSections.npcBehavior} onToggle={() => toggle('npcBehavior')}>
+        <span className="text-[10px] text-gray-500 uppercase tracking-wider block mb-1">Danger Zones</span>
+        <PolicyRow
+          label=""
+          value={config.dangerZonePolicy}
+          options={DANGER_POLICIES}
+          hints={DANGER_HINTS}
+          onChange={v => onSettingChange('dangerZonePolicy', v)}
+        />
+        <span className="text-[10px] text-gray-500 uppercase tracking-wider block mb-1 mt-2">Player Home</span>
+        <PolicyRow
+          label=""
+          value={config.playerHomePolicy}
+          options={HOME_POLICIES}
+          hints={HOME_HINTS}
+          onChange={v => onSettingChange('playerHomePolicy', v)}
+        />
+        <div className="border-t border-white/5 mt-2 pt-2">
           <ToggleRow
             label="NPC Interactions"
             value={config.npcTickEnabled}
@@ -129,7 +127,7 @@ function SettingsTab({ config, onSettingChange, pluginConfig, onPluginConfigChan
             min={0.5} max={6} step={0.5}
             unit="hrs"
             onCommit={v => onSettingChange('npcTickInterval', v)}
-            hint="How often (game hours) the NPC social system checks for NPC-to-NPC interactions."
+            hint="How often the NPC social system checks for NPC-to-NPC interactions."
           />
           <SliderRow
             label="Social Cooldown"
@@ -137,208 +135,246 @@ function SettingsTab({ config, onSettingChange, pluginConfig, onPluginConfigChan
             min={6} max={72} step={6}
             unit="hrs"
             onCommit={v => onSettingChange('npcSocialCooldown', v)}
-            hint="How long before an NPC can be picked for another social interaction. Separate from story cooldown."
+            hint="How long before an NPC can be picked for another social interaction."
           />
         </div>
-      </section>
+      </Accordion>
 
-      {/* Task Settings */}
-      <section>
-        <h2 className="section-header mb-2">Task Settings</h2>
-        <div className="space-y-2">
-          <SliderRow
-            label="Max Concurrent"
-            value={config.maxTasks}
-            min={1} max={5} step={1}
-            onCommit={v => onSettingChange('maxTasks', v)}
-            hint="Maximum number of NPCs that can be on tasks at once."
-          />
-          <SliderRow
-            label="Default Wait Hours"
-            value={config.defaultWaitHours}
-            min={6} max={168} step={6}
-            unit="hrs"
-            onCommit={v => onSettingChange('defaultWaitHours', v)}
-            hint="How long NPCs wait at travel destinations before returning home. Does not affect scheduled meetings."
-          />
-          <SliderRow
-            label="Release Distance"
-            value={config.releaseDistance}
-            min={200} max={2000} step={100}
-            unit="u"
-            onCommit={v => onSettingChange('releaseDistance', v)}
-            hint="How far you must walk before an NPC stops lingering and returns to normal. Affects all systems."
-          />
-          <SliderRow
-            label="Meeting Timeout"
-            value={config.meetingTimeoutHours}
-            min={1} max={12} step={0.5}
-            unit="hrs"
-            onCommit={v => onSettingChange('meetingTimeoutHours', v)}
-            hint="How long an NPC waits at the meeting spot after the scheduled time before giving up."
-          />
-          <SliderRow
-            label="Meeting Grace Period"
-            value={config.meetingGracePeriod}
-            min={0} max={2} step={0.1}
-            unit="hrs"
-            onCommit={v => onSettingChange('meetingGracePeriod', v)}
-            hint="Arrival tolerance for meetings. Handles Dynamic Time Scaling mods. Set higher if using variable timescales."
-          />
-          <ToggleRow
-            label="Report Back (Delivery)"
-            value={config.reportBack}
-            onChange={v => onSettingChange('reportBack', v)}
-            hint="When enabled, messengers return to you after delivering a message off-screen and report back."
-          />
-          <ToggleRow
-            label="Task Confirmation Prompt"
-            value={config.taskConfirmPrompt}
-            onChange={v => onSettingChange('taskConfirmPrompt', v)}
-            hint="When enabled, a prompt appears before an NPC starts a task. You can Allow, Deny, or Deny Silently."
-          />
-        </div>
-      </section>
+      {/* Tasks & Meetings */}
+      <Accordion title="Tasks & Meetings" isOpen={openSections.tasks} onToggle={() => toggle('tasks')}>
+        <SliderRow
+          label="Max Concurrent"
+          value={config.maxTasks}
+          min={1} max={5} step={1}
+          onCommit={v => onSettingChange('maxTasks', v)}
+          hint="Maximum number of NPCs that can be on tasks at once."
+        />
+        <SliderRow
+          label="Default Wait Hours"
+          value={config.defaultWaitHours}
+          min={6} max={168} step={6}
+          unit="hrs"
+          onCommit={v => onSettingChange('defaultWaitHours', v)}
+          hint="How long NPCs wait at destinations before returning home."
+        />
+        <SliderRow
+          label="Release Distance"
+          value={config.releaseDistance}
+          min={200} max={2000} step={100}
+          unit="u"
+          onCommit={v => onSettingChange('releaseDistance', v)}
+          hint="How far you must walk before an NPC stops lingering."
+        />
+        <SliderRow
+          label="Meeting Timeout"
+          value={config.meetingTimeoutHours}
+          min={1} max={12} step={0.5}
+          unit="hrs"
+          onCommit={v => onSettingChange('meetingTimeoutHours', v)}
+          hint="How long an NPC waits at the meeting spot before giving up."
+        />
+        <SliderRow
+          label="Meeting Grace Period"
+          value={config.meetingGracePeriod}
+          min={0} max={2} step={0.1}
+          unit="hrs"
+          onCommit={v => onSettingChange('meetingGracePeriod', v)}
+          hint="Arrival tolerance for meetings. Set higher if using variable timescales."
+        />
+        <ToggleRow
+          label="Report Back (Delivery)"
+          value={config.reportBack}
+          onChange={v => onSettingChange('reportBack', v)}
+          hint="Messengers return to you after delivering a message off-screen."
+        />
+        <ToggleRow
+          label="Task Confirmation Prompt"
+          value={config.taskConfirmPrompt}
+          onChange={v => onSettingChange('taskConfirmPrompt', v)}
+          hint="Prompt appears before an NPC starts a task. You can Allow, Deny, or Deny Silently."
+        />
+      </Accordion>
 
-      {/* Quest Sub-Types */}
-      <section>
-        <h2 className="section-header mb-2">Quest Types</h2>
-        <div className="space-y-2">
-          <ToggleRow label="Combat (Clear Enemies)" value={config.questCombat} onChange={v => onSettingChange('questCombat', v)}
-            hint="NPC asks you to kill bandits, draugr, or dragons at a location." />
-          <ToggleRow label="Rescue (Save Captive)" value={config.questRescue} onChange={v => onSettingChange('questRescue', v)}
-            hint="A real NPC is teleported to the location and held captive by enemies." />
-          <ToggleRow label="Find Item" value={config.questFindItem} onChange={v => onSettingChange('questFindItem', v)}
-            hint="A valuable item spawns in a chest guarded by enemies." />
-          <ToggleRow
-            label="Allow NPC Death (Rescue)"
-            value={config.questAllowVictimDeath}
-            onChange={v => onSettingChange('questAllowVictimDeath', v)}
-            hint="WARNING: Rescued NPCs can die during combat. This can break main quests if essential NPCs are killed!"
-          />
-          <SliderRow
-            label="Quest Timeout"
-            value={config.questTimeoutDays}
-            min={1} max={30} step={1}
-            unit="days"
-            onCommit={v => onSettingChange('questTimeoutDays', v)}
-            hint="Days before an unfinished quest auto-expires. The quest giver remembers you never showed up."
-          />
-        </div>
-      </section>
+      {/* Quest Types */}
+      <Accordion title="Quest Types" isOpen={openSections.quests} onToggle={() => toggle('quests')}>
+        <ToggleRow label="Combat (Clear Enemies)" value={config.questCombat} onChange={v => onSettingChange('questCombat', v)}
+          hint="NPC asks you to kill bandits, draugr, or dragons at a location." />
+        <ToggleRow label="Rescue (Save Captive)" value={config.questRescue} onChange={v => onSettingChange('questRescue', v)}
+          hint="A real NPC is teleported to the location and held captive by enemies." />
+        <ToggleRow label="Find Item" value={config.questFindItem} onChange={v => onSettingChange('questFindItem', v)}
+          hint="A valuable item spawns in a chest guarded by enemies." />
+        <ToggleRow
+          label="Allow NPC Death (Rescue)"
+          value={config.questAllowVictimDeath}
+          onChange={v => onSettingChange('questAllowVictimDeath', v)}
+          hint="WARNING: Rescued NPCs can die during combat. Can break main quests!"
+        />
+        <SliderRow
+          label="Quest Timeout"
+          value={config.questTimeoutDays}
+          min={1} max={30} step={1}
+          unit="days"
+          onCommit={v => onSettingChange('questTimeoutDays', v)}
+          hint="Days before an unfinished quest auto-expires."
+        />
+      </Accordion>
+
+      {/* Faction Politics */}
+      <Accordion title="Faction Politics" isOpen={openSections.politics} onToggle={() => toggle('politics')}>
+        {pluginConfig && onPluginConfigChange ? (
+          <>
+            <ToggleRow
+              label="Politics Enabled"
+              value={pluginConfig['politics.enabled'] !== false && pluginConfig['politics.enabled'] !== 'false'}
+              onChange={v => onPluginConfigChange('politics.enabled', v)}
+              hint="Factions autonomously trade, negotiate, scheme, and go to war."
+            />
+            <SliderRow
+              label="Tick Interval"
+              value={parseInt(pluginConfig['politics.tick_interval_hours']) || 6}
+              min={1} max={24} step={1}
+              unit="hrs"
+              onCommit={v => onPluginConfigChange('politics.tick_interval_hours', v)}
+              hint="How often the Political DM evaluates faction relations."
+            />
+            <SliderRow
+              label="Max Relation Change"
+              value={parseInt(pluginConfig['politics.max_relation_change_per_tick']) || 15}
+              min={5} max={30} step={1}
+              onCommit={v => onPluginConfigChange('politics.max_relation_change_per_tick', v)}
+              hint="Maximum relation score change per political tick."
+            />
+            <SliderRow
+              label="Max Active Wars"
+              value={parseInt(pluginConfig['politics.max_active_wars']) || 2}
+              min={1} max={5} step={1}
+              onCommit={v => onPluginConfigChange('politics.max_active_wars', v)}
+              hint="Maximum number of simultaneous faction wars."
+            />
+          </>
+        ) : (
+          <span className="text-[10px] text-gray-600">Plugin config not available.</span>
+        )}
+      </Accordion>
 
       {/* Debug */}
-      <section>
-        <h2 className="section-header mb-2">Debug</h2>
-        <div className="space-y-2">
-          <ToggleRow
-            label="Debug Mode"
-            value={config.debugMode}
-            onChange={v => onSettingChange('debugMode', v)}
-            hint="Enable debug notifications and logging."
-          />
-        </div>
-      </section>
+      <Accordion title="Debug" isOpen={openSections.debug} onToggle={() => toggle('debug')}>
+        <ToggleRow
+          label="Debug Mode"
+          value={config.debugMode}
+          onChange={v => onSettingChange('debugMode', v)}
+          hint="Enable debug notifications and logging."
+        />
+      </Accordion>
 
-      {/* ── Plugin Configuration (from settings.yaml) ── */}
+      {/* ── Plugin Configuration ── */}
       {pluginConfig && onPluginConfigChange && (
         <>
-          <div className="border-t border-white/10 pt-3 mt-3">
+          <div className="border-t border-white/10 pt-2 mt-2">
             <span className="text-[10px] text-gray-600 uppercase tracking-wider">Plugin Configuration</span>
           </div>
 
-          {/* Blocklists */}
-          <section>
-            <h2 className="section-header mb-2">Blocklists</h2>
-            <div className="space-y-2">
-              <TextInputRow
-                label="Faction Blocklist"
-                hint="Comma-separated EditorIDs (e.g. PrisonerFaction,BanditFaction:1)"
-                value={pluginConfig['story.faction_blocklist'] || ''}
-                onCommit={v => onPluginConfigChange('story.faction_blocklist', v)}
-              />
-              <TextInputRow
-                label="Location Blocklist"
-                hint="Comma-separated location names"
-                value={pluginConfig['story.location_blocklist'] || ''}
-                onCommit={v => onPluginConfigChange('story.location_blocklist', v)}
-              />
-              <TextInputRow
-                label="NPC Blocklist"
-                hint="Comma-separated NPC display names"
-                value={pluginConfig['story.npc_blocklist'] || ''}
-                onCommit={v => onPluginConfigChange('story.npc_blocklist', v)}
-              />
-            </div>
-          </section>
+          <Accordion title="Blocklists" isOpen={openSections.blocklists} onToggle={() => toggle('blocklists')}>
+            <TextInputRow
+              label="Faction Blocklist"
+              hint="Comma-separated EditorIDs (e.g. PrisonerFaction,BanditFaction:1)"
+              value={pluginConfig['story.faction_blocklist'] || ''}
+              onCommit={v => onPluginConfigChange('story.faction_blocklist', v)}
+            />
+            <TextInputRow
+              label="Location Blocklist"
+              hint="Comma-separated location names"
+              value={pluginConfig['story.location_blocklist'] || ''}
+              onCommit={v => onPluginConfigChange('story.location_blocklist', v)}
+            />
+            <TextInputRow
+              label="NPC Blocklist"
+              hint="Comma-separated NPC display names"
+              value={pluginConfig['story.npc_blocklist'] || ''}
+              onCommit={v => onPluginConfigChange('story.npc_blocklist', v)}
+            />
+          </Accordion>
 
-          {/* LLM Overrides */}
-          <section>
-            <h2 className="section-header mb-2">LLM Overrides</h2>
+          <Accordion title="LLM Overrides" isOpen={openSections.llm} onToggle={() => toggle('llm')}>
             <p className="text-[10px] text-gray-600 mb-2">Leave empty to use base SkyrimNet config</p>
-            <div className="space-y-2">
-              <TextInputRow
-                label="API Endpoint"
-                hint="e.g. http://localhost:5000/v1"
-                value={pluginConfig['llm.endpoint'] || ''}
-                onCommit={v => onPluginConfigChange('llm.endpoint', v)}
-              />
-              <TextInputRow
-                label="API Key"
-                value={pluginConfig['llm.api_key'] || ''}
-                onCommit={v => onPluginConfigChange('llm.api_key', v)}
-                secret
-              />
-              <TextInputRow
-                label="Model"
-                value={pluginConfig['llm.model_name'] || ''}
-                onCommit={v => onPluginConfigChange('llm.model_name', v)}
-              />
-              <NumberInputRow
-                label="Temperature"
-                value={pluginConfig['llm.temperature'] || 0}
-                min={0} max={2} step={0.1}
-                onCommit={v => onPluginConfigChange('llm.temperature', v)}
-                hint="0 = use base config"
-              />
-              <NumberInputRow
-                label="Max Tokens"
-                value={pluginConfig['llm.max_tokens'] || 0}
-                min={0} max={4096} step={1}
-                onCommit={v => onPluginConfigChange('llm.max_tokens', v)}
-                hint="0 = use base config"
-              />
-              <NumberInputRow
-                label="Timeout"
-                value={pluginConfig['llm.timeout'] || 0}
-                min={0} max={120} step={1}
-                unit="sec"
-                onCommit={v => onPluginConfigChange('llm.timeout', v)}
-                hint="0 = use base config"
-              />
-            </div>
-          </section>
+            <TextInputRow
+              label="API Endpoint"
+              hint="e.g. http://localhost:5000/v1"
+              value={pluginConfig['llm.endpoint'] || ''}
+              onCommit={v => onPluginConfigChange('llm.endpoint', v)}
+            />
+            <TextInputRow
+              label="API Key"
+              value={pluginConfig['llm.api_key'] || ''}
+              onCommit={v => onPluginConfigChange('llm.api_key', v)}
+              secret
+            />
+            <TextInputRow
+              label="Model"
+              value={pluginConfig['llm.model_name'] || ''}
+              onCommit={v => onPluginConfigChange('llm.model_name', v)}
+            />
+            <NumberInputRow
+              label="Temperature"
+              value={pluginConfig['llm.temperature'] || 0}
+              min={0} max={2} step={0.1}
+              onCommit={v => onPluginConfigChange('llm.temperature', v)}
+              hint="0 = use base config"
+            />
+            <NumberInputRow
+              label="Max Tokens"
+              value={pluginConfig['llm.max_tokens'] || 0}
+              min={0} max={4096} step={1}
+              onCommit={v => onPluginConfigChange('llm.max_tokens', v)}
+              hint="0 = use base config"
+            />
+            <NumberInputRow
+              label="Timeout"
+              value={pluginConfig['llm.timeout'] || 0}
+              min={0} max={120} step={1}
+              unit="sec"
+              onCommit={v => onPluginConfigChange('llm.timeout', v)}
+              hint="0 = use base config"
+            />
+          </Accordion>
 
-          {/* Dashboard UI */}
-          <section>
-            <h2 className="section-header mb-2">Dashboard</h2>
-            <div className="space-y-2">
-              <SliderRow
-                label="UI Scale"
-                value={pluginConfig['ui.scale'] || 1}
-                min={0.8} max={2.0} step={0.1}
-                onCommit={v => onPluginConfigChange('ui.scale', v)}
-                hint="Scale the dashboard for high-DPI / 4K monitors. 1.0 = default, 1.5-2.0 recommended for 4K."
-              />
-              <HotkeyRow
-                value={pluginConfig['ui.dashboard_hotkey'] ?? 118}
-                modifiers={pluginConfig['ui.dashboard_modifiers'] ?? 2}
-                onChangeKey={v => onPluginConfigChange('ui.dashboard_hotkey', v)}
-                onChangeMods={v => onPluginConfigChange('ui.dashboard_modifiers', v)}
-              />
-            </div>
-          </section>
+          <Accordion title="Dashboard" isOpen={openSections.dashboard} onToggle={() => toggle('dashboard')}>
+            <SliderRow
+              label="UI Scale"
+              value={pluginConfig['ui.scale'] || 1}
+              min={0.8} max={2.0} step={0.1}
+              onCommit={v => onPluginConfigChange('ui.scale', v)}
+              hint="Scale for high-DPI / 4K monitors. 1.5-2.0 recommended for 4K."
+            />
+            <HotkeyRow
+              value={pluginConfig['ui.dashboard_hotkey'] ?? 118}
+              modifiers={pluginConfig['ui.dashboard_modifiers'] ?? 2}
+              onChangeKey={v => onPluginConfigChange('ui.dashboard_hotkey', v)}
+              onChangeMods={v => onPluginConfigChange('ui.dashboard_modifiers', v)}
+            />
+          </Accordion>
         </>
+      )}
+    </div>
+  );
+}
+
+// ── Accordion ──
+
+function Accordion({ title, isOpen, onToggle, children }) {
+  return (
+    <div className="border border-white/5 rounded overflow-hidden">
+      <button
+        onClick={onToggle}
+        className="w-full flex items-center justify-between px-3 py-1.5 bg-white/[0.02] hover:bg-white/[0.04] transition-colors"
+      >
+        <span className="text-xs font-medium text-gray-300">{title}</span>
+        <span className={`text-[10px] text-gray-500 transition-transform ${isOpen ? 'rotate-180' : ''}`}>▼</span>
+      </button>
+      {isOpen && (
+        <div className="px-3 py-2 space-y-1 border-t border-white/5">
+          {children}
+        </div>
       )}
     </div>
   );
@@ -410,7 +446,7 @@ function SliderRow({ label, value, min, max, step, unit, onCommit, hint }) {
 function PolicyRow({ label, value, options, hints, onChange }) {
   return (
     <div className="py-1">
-      <span className="text-xs text-gray-300 block mb-1">{label}</span>
+      {label && <span className="text-xs text-gray-300 block mb-1">{label}</span>}
       <div className="flex gap-1">
         {options.map((opt, i) => (
           <button

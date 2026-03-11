@@ -371,6 +371,81 @@ namespace IntelEngine::Papyrus {
     bool IsDashboardOpen(RE::StaticFunctionTag*);
 
     // ==========================================================================
+    // Faction Politics Functions
+    // ==========================================================================
+
+    /** Get relation score (-100 to +100) between two factions. */
+    int GetFactionRelation(RE::StaticFunctionTag*, RE::BSFixedString factionA, RE::BSFixedString factionB);
+
+    /** Adjust relation between factions by delta. Returns new score. */
+    int AdjustFactionRelation(RE::StaticFunctionTag*, RE::BSFixedString factionA,
+                               RE::BSFixedString factionB, int delta);
+
+    /** Get player standing with a faction (-100 to +100). */
+    int GetPlayerFactionStanding(RE::StaticFunctionTag*, RE::BSFixedString factionId);
+
+    /** Adjust player standing with a faction by delta. Returns new standing. */
+    int AdjustPlayerFactionStanding(RE::StaticFunctionTag*, RE::BSFixedString factionId, int delta);
+
+    /** Check if two factions are at war (score below war threshold). */
+    bool IsFactionAtWar(RE::StaticFunctionTag*, RE::BSFixedString factionA, RE::BSFixedString factionB);
+
+    /** Get factionA's morale in an active war against factionB. Returns -1 if no war. */
+    int GetWarMorale(RE::StaticFunctionTag*, RE::BSFixedString factionA, RE::BSFixedString factionB);
+
+    /** Get human-readable relation status string (Alliance/Friendly/Neutral/Tense/Hostile/War). */
+    RE::BSFixedString GetRelationStatus(RE::StaticFunctionTag*, RE::BSFixedString factionA, RE::BSFixedString factionB);
+
+    /** Build full political context JSON for the Political DM prompt. */
+    RE::BSFixedString BuildPoliticalContext(RE::StaticFunctionTag*, float currentGameTime);
+
+    /** Build compact political dashboard JSON for PrismaUI. */
+    RE::BSFixedString BuildPoliticalDashboardJson(RE::StaticFunctionTag*);
+
+    /** Record a political event. Returns event ID (-1 on failure). */
+    int RecordPoliticalEvent(RE::StaticFunctionTag*, RE::BSFixedString factionA,
+                              RE::BSFixedString factionB, RE::BSFixedString eventType,
+                              RE::BSFixedString description, int relationDelta, float gameTime);
+
+    /** Check if the faction politics system is enabled. */
+    bool IsPoliticsEnabled(RE::StaticFunctionTag*);
+
+    /** Get the politics tick interval in game hours. */
+    int GetPoliticsTickInterval(RE::StaticFunctionTag*);
+
+    /** Hot-reload factions.yaml config. */
+    void ReloadFactionConfig(RE::StaticFunctionTag*);
+
+    /** Get loaded Actor references for faction leaders (for fact injection). */
+    std::vector<RE::Actor*> GetFactionLeaderActors(RE::StaticFunctionTag*, RE::BSFixedString factionId);
+
+    /** Get FormIDs of faction leaders (works even if actors aren't loaded). */
+    std::vector<int> GetFactionLeaderFormIds(RE::StaticFunctionTag*, RE::BSFixedString factionId);
+
+    /** Parse LLM player standing response JSON and apply standing changes. Returns count applied. */
+    int ApplyPlayerStandingChanges(RE::StaticFunctionTag*, RE::BSFixedString responseJson);
+
+    /** Process player conduct with cross-faction consequences. Returns standings changed (1-2). */
+    int ProcessPlayerConduct(RE::StaticFunctionTag*, RE::Actor* reporter,
+                              RE::BSFixedString factionId, RE::BSFixedString sentiment,
+                              RE::BSFixedString reason);
+
+    /** Check crime gold against political factions, apply standing penalties for increases. Returns count changed. */
+    int CheckCrimeGoldStandings(RE::StaticFunctionTag*);
+
+    /** Decay all non-zero player standings by decayRate toward 0. Returns count decayed. */
+    int DecayPlayerStandings(RE::StaticFunctionTag*, int decayRate);
+
+    /** Write political_state.json for pull-based NPC awareness. Call after standing changes. */
+    void WritePoliticalStateFile(RE::StaticFunctionTag*);
+
+    /** Set politics enabled/disabled at runtime. */
+    void SetPoliticsEnabled(RE::StaticFunctionTag*, bool enabled);
+
+    /** Set politics tick interval (hours) at runtime. */
+    void SetPoliticsTickInterval(RE::StaticFunctionTag*, int hours);
+
+    // ==========================================================================
     // Debug Functions
     // ==========================================================================
 

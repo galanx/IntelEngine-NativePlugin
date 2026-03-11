@@ -15,10 +15,125 @@
 #include "Settings.h"
 #include "DashboardConfig.h"
 #include "DashboardUIManager.h"
+#include "PoliticalDB.h"
+#include "FactionPolitics.h"
 
 #include <fstream>
+#include <chrono>
+#include <random>
+#include <sstream>
+#include <filesystem>
 
 namespace IntelEngine {
+
+    // =========================================================================
+    // SKSE Serialization — Per-Save Unique ID
+    // =========================================================================
+
+    constexpr uint32_t SERIALIZATION_ID = 'IEPS';  // IntelEngine Plugin Serialization
+    constexpr uint32_t SAVE_ID_RECORD = 'IEID';    // IntelEngine Save ID
+    constexpr uint32_t SAVE_ID_VERSION = 1;
+
+    static std::string g_currentSaveID;
+    static bool g_hasReverted = false;
+
+    /** Generate a unique per-save ID (timestamp + random suffix) for DB path isolation. */
+    static std::string GenerateUniqueID() {
+        auto now = std::chrono::system_clock::now();
+        auto epoch = now.time_since_epoch();
+        auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(epoch).count();
+
+        std::mt19937 rng(static_cast<unsigned int>(ms));
+        std::uniform_int_distribution<int> dist(0, 999999);
+
+        std::stringstream ss;
+        ss << ms << "-" << dist(rng);
+        logger::info("Generated new IntelEngine Save ID: {}", ss.str());
+        return ss.str();
+    }
+
+    std::string GetSaveUniqueID() {
+        if (g_currentSaveID.empty()) {
+            g_currentSaveID = GenerateUniqueID();
+        }
+        return g_currentSaveID;
+    }
+
+    void SaveCallback(SKSE::SerializationInterface* a_intfc) {
+        if (!a_intfc->OpenRecord(SAVE_ID_RECORD, SAVE_ID_VERSION)) {
+            logger::error("SaveCallback: Failed to open IEID record");
+            return;
+        }
+
+        std::string id = GetSaveUniqueID();
+        uint32_t len = static_cast<uint32_t>(id.size());
+        a_intfc->WriteRecordData(&len, sizeof(len));
+        a_intfc->WriteRecordData(id.data(), len);
+        logger::info("SaveCallback: Wrote save ID '{}'", id);
+    }
+
+    void LoadCallback(SKSE::SerializationInterface* a_intfc) {
+        uint32_t type, version, length;
+        while (a_intfc->GetNextRecordInfo(type, version, length)) {
+            if (type == SAVE_ID_RECORD) {
+                if (version != SAVE_ID_VERSION) {
+                    logger::warn("LoadCallback: Unknown IEID version {}", version);
+                    continue;
+                }
+                uint32_t strLen = 0;
+                a_intfc->ReadRecordData(&strLen, sizeof(strLen));
+                if (strLen > 0 && strLen < 256) {
+                    std::string id(strLen, '\0');
+                    a_intfc->ReadRecordData(id.data(), strLen);
+                    g_currentSaveID = id;
+                    logger::info("LoadCallback: Loaded save ID '{}'", g_currentSaveID);
+                }
+            }
+        }
+    }
+
+    void RevertCallback(SKSE::SerializationInterface*) {
+        g_currentSaveID.clear();
+        g_hasReverted = true;
+        logger::info("RevertCallback: Save ID cleared");
+    }
+
+    /** Initialize PoliticalDB with per-save database path + timeline cleanup. */
+    static void InitializePoliticalDB() {
+        std::string saveID = GetSaveUniqueID();
+
+        // Build path: Data/SKSE/Plugins/IntelEngine/data/IntelEngine-{saveID}.db
+        std::filesystem::path dbDir = std::filesystem::current_path() / "Data" / "SKSE" / "Plugins" / "IntelEngine" / "data";
+        if (!std::filesystem::exists(dbDir)) {
+            std::filesystem::create_directories(dbDir);
+        }
+        std::filesystem::path dbPath = dbDir / ("IntelEngine-" + saveID + ".db");
+
+        auto* db = PoliticalDB::GetSingleton();
+
+        // Close existing connection if switching saves
+        if (db->IsReady()) {
+            db->Shutdown();
+        }
+
+        if (!db->Initialize(dbPath.string())) {
+            logger::error("Failed to initialize PoliticalDB at: {}", dbPath.string());
+            return;
+        }
+
+        // Timeline cleanup: delete events from the future (save-scumming)
+        auto* calendar = RE::Calendar::GetSingleton();
+        if (calendar) {
+            float currentGameTime = calendar->GetCurrentGameTime();
+            int cleaned = db->CleanupFutureEvents(currentGameTime);
+            if (cleaned > 0) {
+                logger::info("PoliticalDB: Cleaned {} future events (game time: {:.2f})", cleaned, currentGameTime);
+            }
+        }
+
+        // Clear FactionPolitics in-memory caches
+        FactionPolitics::GetSingleton()->ClearCaches();
+    }
 
     // =========================================================================
     // Papyrus Maintenance Bootstrap
@@ -99,6 +214,8 @@ namespace IntelEngine {
         switch (a_msg->type) {
             case SKSE::MessagingInterface::kDataLoaded:
                 // Game data is loaded - initialize SkyrimNet API and build NPC index
+                // Note: PoliticalDB + FactionPolitics init deferred to kNewGame/kPostLoadGame
+                // (requires save ID for per-save database path)
                 logger::info("Data loaded - initializing SkyrimNet API and NPC index");
                 MemoryDB::GetSingleton()->InitializeAPI();
                 DashboardConfig::GetSingleton()->Load();
@@ -106,6 +223,7 @@ namespace IntelEngine {
                 NPCIndex::GetSingleton()->BuildIndex();
                 LocationResolver::GetSingleton()->BuildLocationIndex();
                 ItemIndex::GetSingleton()->BuildIndex();
+                FactionPolitics::GetSingleton()->LoadSettings();
                 break;
 
             case SKSE::MessagingInterface::kNewGame:
@@ -114,6 +232,9 @@ namespace IntelEngine {
                 SlotTracker::GetSingleton()->ClearAll();
                 NPCIndex::GetSingleton()->RefreshIndex();
                 MemoryDB::GetSingleton()->ClearCaches();
+                // Initialize per-save political DB (new save ID generated)
+                InitializePoliticalDB();
+                FactionPolitics::GetSingleton()->Initialize();
                 // Bootstrap: start quest and call Maintenance for first install
                 {
                     auto* task = SKSE::GetTaskInterface();
@@ -129,6 +250,12 @@ namespace IntelEngine {
                 SlotTracker::GetSingleton()->ClearAll();
                 NPCIndex::GetSingleton()->RefreshIndex();
                 MemoryDB::GetSingleton()->ClearCaches();
+                // Initialize per-save political DB (save ID restored via serialization)
+                if (g_hasReverted) {
+                    g_hasReverted = false;
+                    InitializePoliticalDB();
+                    FactionPolitics::GetSingleton()->Initialize();
+                }
                 // Bootstrap: call Maintenance since OnPlayerLoadGame doesn't fire reliably
                 {
                     auto* task = SKSE::GetTaskInterface();
@@ -207,6 +334,14 @@ SKSEPluginLoad(const SKSE::LoadInterface* skse) {
         logger::error("Failed to register Papyrus functions");
         return false;
     }
+
+    // Register SKSE serialization for per-save unique ID
+    auto serialization = SKSE::GetSerializationInterface();
+    serialization->SetUniqueID(IntelEngine::SERIALIZATION_ID);
+    serialization->SetSaveCallback(IntelEngine::SaveCallback);
+    serialization->SetLoadCallback(IntelEngine::LoadCallback);
+    serialization->SetRevertCallback(IntelEngine::RevertCallback);
+    logger::info("SKSE serialization registered (per-save DB support)");
 
     logger::info("IntelEngine loaded successfully");
     return true;

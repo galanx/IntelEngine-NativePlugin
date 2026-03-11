@@ -22,6 +22,8 @@
 #include "Settings.h"
 #include "DashboardConfig.h"
 #include "DashboardUIManager.h"
+#include "FactionPolitics.h"
+#include "PoliticalDB.h"
 #include <Windows.h>
 
 namespace IntelEngine::Papyrus {
@@ -57,6 +59,32 @@ namespace IntelEngine::Papyrus {
     bool IsDashboardOpen(RE::StaticFunctionTag*);
     RE::BSFixedString GetPendingDirectorParam(RE::StaticFunctionTag*, RE::BSFixedString);
     void ClearPendingDirectorParams(RE::StaticFunctionTag*);
+
+    // Political system forward declarations
+    int GetFactionRelation(RE::StaticFunctionTag*, RE::BSFixedString, RE::BSFixedString);
+    int AdjustFactionRelation(RE::StaticFunctionTag*, RE::BSFixedString, RE::BSFixedString, int);
+    int GetPlayerFactionStanding(RE::StaticFunctionTag*, RE::BSFixedString);
+    int AdjustPlayerFactionStanding(RE::StaticFunctionTag*, RE::BSFixedString, int);
+    bool IsFactionAtWar(RE::StaticFunctionTag*, RE::BSFixedString, RE::BSFixedString);
+    int GetWarMorale(RE::StaticFunctionTag*, RE::BSFixedString, RE::BSFixedString);
+    RE::BSFixedString GetRelationStatus(RE::StaticFunctionTag*, RE::BSFixedString, RE::BSFixedString);
+    RE::BSFixedString BuildPoliticalContext(RE::StaticFunctionTag*, float);
+    RE::BSFixedString BuildPoliticalDashboardJson(RE::StaticFunctionTag*);
+    int RecordPoliticalEvent(RE::StaticFunctionTag*, RE::BSFixedString, RE::BSFixedString,
+                             RE::BSFixedString, RE::BSFixedString, int, float);
+    bool IsPoliticsEnabled(RE::StaticFunctionTag*);
+    int GetPoliticsTickInterval(RE::StaticFunctionTag*);
+    void ReloadFactionConfig(RE::StaticFunctionTag*);
+    std::vector<RE::Actor*> GetFactionLeaderActors(RE::StaticFunctionTag*, RE::BSFixedString);
+    std::vector<int> GetFactionLeaderFormIds(RE::StaticFunctionTag*, RE::BSFixedString);
+    int ApplyPlayerStandingChanges(RE::StaticFunctionTag*, RE::BSFixedString);
+    int ProcessPlayerConduct(RE::StaticFunctionTag*, RE::Actor*, RE::BSFixedString,
+                              RE::BSFixedString, RE::BSFixedString);
+    int CheckCrimeGoldStandings(RE::StaticFunctionTag*);
+    int DecayPlayerStandings(RE::StaticFunctionTag*, int);
+    void WritePoliticalStateFile(RE::StaticFunctionTag*);
+    void SetPoliticsEnabled(RE::StaticFunctionTag*, bool);
+    void SetPoliticsTickInterval(RE::StaticFunctionTag*, int);
 
     bool Register(RE::BSScript::IVirtualMachine* a_vm) {
         if (!a_vm) {
@@ -242,6 +270,30 @@ namespace IntelEngine::Papyrus {
         a_vm->RegisterFunction("IsDashboardOpen", SCRIPT_NAME, IsDashboardOpen); ++count;
         a_vm->RegisterFunction("GetPendingDirectorParam", SCRIPT_NAME, GetPendingDirectorParam); ++count;
         a_vm->RegisterFunction("ClearPendingDirectorParams", SCRIPT_NAME, ClearPendingDirectorParams); ++count;
+
+        // Faction Politics Functions
+        a_vm->RegisterFunction("GetFactionRelation", SCRIPT_NAME, GetFactionRelation); ++count;
+        a_vm->RegisterFunction("AdjustFactionRelation", SCRIPT_NAME, AdjustFactionRelation); ++count;
+        a_vm->RegisterFunction("GetPlayerFactionStanding", SCRIPT_NAME, GetPlayerFactionStanding); ++count;
+        a_vm->RegisterFunction("AdjustPlayerFactionStanding", SCRIPT_NAME, AdjustPlayerFactionStanding); ++count;
+        a_vm->RegisterFunction("IsFactionAtWar", SCRIPT_NAME, IsFactionAtWar); ++count;
+        a_vm->RegisterFunction("GetWarMorale", SCRIPT_NAME, GetWarMorale); ++count;
+        a_vm->RegisterFunction("GetRelationStatus", SCRIPT_NAME, GetRelationStatus); ++count;
+        a_vm->RegisterFunction("BuildPoliticalContext", SCRIPT_NAME, BuildPoliticalContext); ++count;
+        a_vm->RegisterFunction("BuildPoliticalDashboardJson", SCRIPT_NAME, BuildPoliticalDashboardJson); ++count;
+        a_vm->RegisterFunction("RecordPoliticalEvent", SCRIPT_NAME, RecordPoliticalEvent); ++count;
+        a_vm->RegisterFunction("IsPoliticsEnabled", SCRIPT_NAME, IsPoliticsEnabled); ++count;
+        a_vm->RegisterFunction("GetPoliticsTickInterval", SCRIPT_NAME, GetPoliticsTickInterval); ++count;
+        a_vm->RegisterFunction("ReloadFactionConfig", SCRIPT_NAME, ReloadFactionConfig); ++count;
+        a_vm->RegisterFunction("GetFactionLeaderActors", SCRIPT_NAME, GetFactionLeaderActors); ++count;
+        a_vm->RegisterFunction("GetFactionLeaderFormIds", SCRIPT_NAME, GetFactionLeaderFormIds); ++count;
+        a_vm->RegisterFunction("ApplyPlayerStandingChanges", SCRIPT_NAME, ApplyPlayerStandingChanges); ++count;
+        a_vm->RegisterFunction("ProcessPlayerConduct", SCRIPT_NAME, ProcessPlayerConduct); ++count;
+        a_vm->RegisterFunction("CheckCrimeGoldStandings", SCRIPT_NAME, CheckCrimeGoldStandings); ++count;
+        a_vm->RegisterFunction("DecayPlayerStandings", SCRIPT_NAME, DecayPlayerStandings); ++count;
+        a_vm->RegisterFunction("WritePoliticalStateFile", SCRIPT_NAME, WritePoliticalStateFile); ++count;
+        a_vm->RegisterFunction("SetPoliticsEnabled", SCRIPT_NAME, SetPoliticsEnabled); ++count;
+        a_vm->RegisterFunction("SetPoliticsTickInterval", SCRIPT_NAME, SetPoliticsTickInterval); ++count;
 
         // Debug Functions
         a_vm->RegisterFunction("TestNPCSearch", SCRIPT_NAME, TestNPCSearch); ++count;
@@ -1309,20 +1361,31 @@ namespace IntelEngine::Papyrus {
             return "";
         }
 
-        // Find opening quote of value (use original sv for value extraction)
-        auto quoteStart = sv.find('"', pos + needle.size());
-        if (quoteStart == std::string_view::npos) return "";
+        // Skip whitespace after colon to find start of value
+        auto valStart = pos + needle.size();
+        while (valStart < sv.size() && (sv[valStart] == ' ' || sv[valStart] == '\t')) ++valStart;
+        if (valStart >= sv.size()) return "";
 
-        // Find closing quote (handle escaped quotes)
-        auto i = quoteStart + 1;
-        while (i < sv.size()) {
-            if (sv[i] == '"' && (i == 0 || sv[i - 1] != '\\')) break;
-            ++i;
+        if (sv[valStart] == '"') {
+            // String value — find closing quote (handle escaped quotes)
+            auto i = valStart + 1;
+            while (i < sv.size()) {
+                if (sv[i] == '"' && (i == 0 || sv[i - 1] != '\\')) break;
+                ++i;
+            }
+            if (i >= sv.size()) return "";
+            auto value = sv.substr(valStart + 1, i - valStart - 1);
+            return RE::BSFixedString(std::string(value).c_str());
+        } else {
+            // Non-string value (number, bool, null) — extract until delimiter
+            auto i = valStart;
+            while (i < sv.size() && sv[i] != ',' && sv[i] != '}' && sv[i] != ']'
+                   && sv[i] != ' ' && sv[i] != '\t' && sv[i] != '\n' && sv[i] != '\r') {
+                ++i;
+            }
+            auto value = sv.substr(valStart, i - valStart);
+            return RE::BSFixedString(std::string(value).c_str());
         }
-        if (i >= sv.size()) return "";
-
-        auto value = sv.substr(quoteStart + 1, i - quoteStart - 1);
-        return RE::BSFixedString(std::string(value).c_str());
     }
 
     RE::BSFixedString BuildActorContextJson(RE::StaticFunctionTag*, RE::Actor* actor,
@@ -1798,7 +1861,7 @@ namespace IntelEngine::Papyrus {
             if (idx < factTimes.size()) {
                 timeLabel = FormatRelativeTimeFromDays(currentGameDays, factTimes[idx]);
             }
-            result += "- I ";
+            result += "- ";
             result += facts[idx].c_str();
             result += " (";
             result += timeLabel;
@@ -2831,6 +2894,245 @@ namespace IntelEngine::Papyrus {
         }
 
         return false;  // Item not found — player took it
+    }
+
+    // ==========================================================================
+    // Faction Politics Functions
+    // ==========================================================================
+
+    int GetFactionRelation(RE::StaticFunctionTag*, RE::BSFixedString factionA, RE::BSFixedString factionB) {
+        auto* db = PoliticalDB::GetSingleton();
+        if (!db->IsReady()) return 0;
+        return db->GetRelation(factionA.c_str(), factionB.c_str());
+    }
+
+    int AdjustFactionRelation(RE::StaticFunctionTag*, RE::BSFixedString factionA,
+                               RE::BSFixedString factionB, int delta) {
+        auto* db = PoliticalDB::GetSingleton();
+        if (!db->IsReady()) return 0;
+        return db->AdjustRelation(factionA.c_str(), factionB.c_str(), delta);
+    }
+
+    int GetPlayerFactionStanding(RE::StaticFunctionTag*, RE::BSFixedString factionId) {
+        auto* db = PoliticalDB::GetSingleton();
+        if (!db->IsReady()) return 0;
+        return db->GetPlayerStanding(factionId.c_str());
+    }
+
+    int AdjustPlayerFactionStanding(RE::StaticFunctionTag*, RE::BSFixedString factionId, int delta) {
+        auto* db = PoliticalDB::GetSingleton();
+        if (!db->IsReady()) return 0;
+        float gameTime = RE::Calendar::GetSingleton() ? RE::Calendar::GetSingleton()->GetHoursPassed() : 0.0f;
+        return db->AdjustPlayerStanding(factionId.c_str(), delta, gameTime);
+    }
+
+    bool IsFactionAtWar(RE::StaticFunctionTag*, RE::BSFixedString factionA, RE::BSFixedString factionB) {
+        auto* politics = FactionPolitics::GetSingleton();
+        if (!politics->IsReady()) return false;
+        return politics->IsAtWar(factionA.c_str(), factionB.c_str());
+    }
+
+    int GetWarMorale(RE::StaticFunctionTag*, RE::BSFixedString factionA, RE::BSFixedString factionB) {
+        auto* db = PoliticalDB::GetSingleton();
+        if (!db->IsReady()) return 0;
+        auto war = db->GetActiveWar(factionA.c_str(), factionB.c_str());
+        if (!war.has_value()) return 0;
+        // Return factionA's morale in this war
+        std::string query = factionA.c_str();
+        if (query == war->factionA) return war->factionAMorale;
+        if (query == war->factionB) return war->factionBMorale;
+        return 0;
+    }
+
+    RE::BSFixedString GetRelationStatus(RE::StaticFunctionTag*, RE::BSFixedString factionA, RE::BSFixedString factionB) {
+        auto* db = PoliticalDB::GetSingleton();
+        if (!db->IsReady()) return RE::BSFixedString("Neutral");
+        int score = db->GetRelation(factionA.c_str(), factionB.c_str());
+        return RE::BSFixedString(FactionPolitics::GetRelationStatus(score).c_str());
+    }
+
+    RE::BSFixedString BuildPoliticalContext(RE::StaticFunctionTag*, float currentGameTime) {
+        auto* politics = FactionPolitics::GetSingleton();
+        if (!politics->IsReady()) return RE::BSFixedString("{}");
+        return RE::BSFixedString(politics->BuildPoliticalContext(currentGameTime).c_str());
+    }
+
+    RE::BSFixedString BuildPoliticalDashboardJson(RE::StaticFunctionTag*) {
+        auto* politics = FactionPolitics::GetSingleton();
+        if (!politics->IsReady()) return RE::BSFixedString("{}");
+        return RE::BSFixedString(politics->BuildDashboardJson().c_str());
+    }
+
+    int RecordPoliticalEvent(RE::StaticFunctionTag*, RE::BSFixedString factionA,
+                              RE::BSFixedString factionB, RE::BSFixedString eventType,
+                              RE::BSFixedString description, int relationDelta, float gameTime) {
+        auto* politics = FactionPolitics::GetSingleton();
+        auto* db = PoliticalDB::GetSingleton();
+        if (!politics->IsReady() || !db->IsReady()) return -1;
+
+        std::string fA = factionA.c_str();
+        std::string fB = factionB.c_str();
+        std::string eType = eventType.c_str();
+
+        // Validate
+        if (!politics->ValidateEvent(fA, fB, eType, relationDelta)) return -1;
+
+        // Clamp delta
+        int maxDelta = politics->GetMaxRelationChangePerTick();
+        relationDelta = std::clamp(relationDelta, -maxDelta, maxDelta);
+
+        // Record event
+        int eventId = db->RecordEvent(fA, fB, eType, description.c_str(), relationDelta, gameTime);
+
+        // Apply relation delta
+        if (!fB.empty() && relationDelta != 0) {
+            db->AdjustRelation(fA, fB, relationDelta);
+        }
+
+        // Update political_state.json for pull-based NPC awareness
+        if (eventId >= 0) {
+            politics->WritePoliticalStateFile();
+        }
+
+        return eventId;
+    }
+
+    bool IsPoliticsEnabled(RE::StaticFunctionTag*) {
+        return FactionPolitics::GetSingleton()->IsEnabled();
+    }
+
+    int GetPoliticsTickInterval(RE::StaticFunctionTag*) {
+        return FactionPolitics::GetSingleton()->GetTickIntervalHours();
+    }
+
+    void ReloadFactionConfig(RE::StaticFunctionTag*) {
+        FactionPolitics::GetSingleton()->Reload();
+        logger::info("FactionPolitics: Config reloaded via Papyrus");
+    }
+
+    std::vector<RE::Actor*> GetFactionLeaderActors(RE::StaticFunctionTag*, RE::BSFixedString factionId) {
+        std::vector<RE::Actor*> result;
+        auto cfg = FactionPolitics::GetSingleton()->GetFaction(factionId.c_str());
+        if (!cfg) return result;
+
+        auto* npcIndex = NPCIndex::GetSingleton();
+        for (const auto& leaderName : cfg->leaderNames) {
+            auto* actor = npcIndex->FindByName(leaderName);
+            if (actor) {
+                result.push_back(actor);
+            }
+        }
+        return result;
+    }
+
+    std::vector<int> GetFactionLeaderFormIds(RE::StaticFunctionTag*, RE::BSFixedString factionId) {
+        std::vector<int> result;
+        auto cfg = FactionPolitics::GetSingleton()->GetFaction(factionId.c_str());
+        if (!cfg) return result;
+
+        auto* npcIndex = NPCIndex::GetSingleton();
+        for (const auto& leaderName : cfg->leaderNames) {
+            RE::FormID formId = npcIndex->FindFormIdByName(leaderName);
+            if (formId != 0) {
+                result.push_back(static_cast<int>(formId));
+            } else {
+                logger::debug("GetFactionLeaderFormIds: '{}' not found in NPC index", leaderName);
+            }
+        }
+        return result;
+    }
+
+    int ApplyPlayerStandingChanges(RE::StaticFunctionTag*, RE::BSFixedString responseJson) {
+        // Parse player_standing_changes array from Political DM response.
+        // Format: [{"faction":"ImperialFaction","delta":5,"reason":"spoke favorably"}]
+        auto* db = PoliticalDB::GetSingleton();
+        if (!db->IsReady()) return 0;
+
+        std::string json = responseJson.c_str();
+        if (json.empty()) return 0;
+
+        // Find the player_standing_changes array in the response
+        auto pos = json.find("\"player_standing_changes\"");
+        if (pos == std::string::npos) return 0;
+
+        // Find the opening bracket
+        auto bracketStart = json.find('[', pos);
+        if (bracketStart == std::string::npos) return 0;
+
+        // Find matching closing bracket
+        int depth = 0;
+        size_t bracketEnd = bracketStart;
+        for (size_t i = bracketStart; i < json.size(); ++i) {
+            if (json[i] == '[') depth++;
+            else if (json[i] == ']') { depth--; if (depth == 0) { bracketEnd = i; break; } }
+        }
+        if (bracketEnd == bracketStart) return 0;
+
+        std::string arrayStr = json.substr(bracketStart, bracketEnd - bracketStart + 1);
+
+        int applied = 0;
+        try {
+            auto changes = nlohmann::json::parse(arrayStr);
+            if (!changes.is_array()) return 0;
+
+            auto* cal = RE::Calendar::GetSingleton();
+            float gameTime = cal ? cal->GetCurrentGameTime() : 0.0f;
+            auto* politics = FactionPolitics::GetSingleton();
+            int maxDelta = politics->GetMaxRelationChangePerTick();
+
+            for (const auto& change : changes) {
+                if (!change.contains("faction") || !change.contains("delta")) continue;
+                std::string faction = change.value("faction", "");
+                int delta = change.value("delta", 0);
+                std::string reason = change.value("reason", "");
+
+                // Validate faction ID exists
+                if (!politics->GetFaction(faction).has_value()) {
+                    logger::warn("Politics: Unknown faction '{}' in player standing change", faction);
+                    continue;
+                }
+
+                delta = std::clamp(delta, -maxDelta, maxDelta);
+                if (delta == 0) continue;
+
+                int newStanding = db->AdjustPlayerStanding(faction, delta, gameTime);
+                logger::info("Politics: Player standing with {} changed by {} -> {} ({})",
+                             faction, delta, newStanding, reason);
+                ++applied;
+            }
+        } catch (const std::exception& e) {
+            logger::warn("Politics: Failed to parse player_standing_changes: {}", e.what());
+        }
+
+        return applied;
+    }
+
+    int ProcessPlayerConduct(RE::StaticFunctionTag*, RE::Actor* reporter,
+                              RE::BSFixedString factionId, RE::BSFixedString sentiment,
+                              RE::BSFixedString reason) {
+        if (!reporter) return 0;
+        return FactionPolitics::GetSingleton()->ProcessPlayerConduct(
+            reporter, factionId.c_str(), sentiment.c_str(), reason.c_str());
+    }
+
+    int CheckCrimeGoldStandings(RE::StaticFunctionTag*) {
+        return FactionPolitics::GetSingleton()->CheckCrimeGoldStandings();
+    }
+
+    int DecayPlayerStandings(RE::StaticFunctionTag*, int decayRate) {
+        return FactionPolitics::GetSingleton()->DecayPlayerStandings(decayRate);
+    }
+
+    void WritePoliticalStateFile(RE::StaticFunctionTag*) {
+        FactionPolitics::GetSingleton()->WritePoliticalStateFile();
+    }
+
+    void SetPoliticsEnabled(RE::StaticFunctionTag*, bool enabled) {
+        FactionPolitics::GetSingleton()->SetEnabled(enabled);
+    }
+
+    void SetPoliticsTickInterval(RE::StaticFunctionTag*, int hours) {
+        FactionPolitics::GetSingleton()->SetTickIntervalHours(hours);
     }
 
 }  // namespace IntelEngine::Papyrus

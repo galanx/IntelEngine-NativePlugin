@@ -7,6 +7,7 @@
 #include "NPCIndex.h"
 #include <algorithm>
 #include "CellAnalyzer.h"
+#include "FactionPolitics.h"
 #include "LocationResolver.h"
 #include "MemoryDB.h"
 #include "SlotTracker.h"
@@ -293,6 +294,56 @@ namespace IntelEngine {
 
         logger::info("Phase 1 complete: {} unique NPCs indexed from base forms", m_allNames.size());
 
+        // Shared resolver: upgrades base FormIDs to Actor reference FormIDs for unique NPCs
+        auto resolveBaseFormIDs = [this](RE::TESObjectCELL* cell, int& count) {
+            cell->ForEachReference([&](RE::TESObjectREFR& ref) {
+                auto* actor = ref.As<RE::Actor>();
+                if (!actor || actor->IsDeleted()) return RE::BSContainer::ForEachResult::kContinue;
+
+                auto* base = actor->GetActorBase();
+                if (!base || !base->IsUnique()) return RE::BSContainer::ForEachResult::kContinue;
+
+                auto baseName = base->GetFullName();
+                if (!baseName || strlen(baseName) == 0) return RE::BSContainer::ForEachResult::kContinue;
+
+                std::string lowerName = StringUtils::ToLowerStd(baseName);
+                auto it = m_npcFormIds.find(lowerName);
+                if (it != m_npcFormIds.end() && it->second == base->GetFormID()) {
+                    it->second = actor->GetFormID();
+                    count++;
+                }
+                return RE::BSContainer::ForEachResult::kContinue;
+            });
+        };
+
+        // PHASE 1.5: Resolve base FormIDs → Actor reference FormIDs via persistent cells
+        // Unique NPCs have persistent references stored in worldspace persistent cells even when
+        // unloaded. Scan ALL worldspaces (Tamriel, Solstheim, DLC, etc.) so NPCs in any worldspace
+        // get resolved — not just NPCs in the player's current worldspace.
+        int resolvedCount = 0;
+        auto* dataHandler = RE::TESDataHandler::GetSingleton();
+        if (dataHandler) {
+            const auto& worldspaces = dataHandler->GetFormArray<RE::TESWorldSpace>();
+            for (auto* worldspace : worldspaces) {
+                if (!worldspace || !worldspace->persistentCell) continue;
+                resolveBaseFormIDs(worldspace->persistentCell, resolvedCount);
+            }
+        }
+        logger::info("Phase 1.5 complete: {} base FormIDs resolved to Actor reference FormIDs across all worldspaces", resolvedCount);
+
+        // PHASE 1.6: Resolve remaining base FormIDs via interior cells
+        // Some unique NPCs (especially mod-added) may have persistent references in standalone
+        // interior cells that aren't part of any worldspace. Scan dataHandler->interiorCells
+        // to catch these. Only resolves NPCs still at base FormID (not already resolved by 1.5).
+        int interiorResolved = 0;
+        if (dataHandler) {
+            for (auto* cell : dataHandler->interiorCells) {
+                if (!cell) continue;
+                resolveBaseFormIDs(cell, interiorResolved);
+            }
+        }
+        logger::info("Phase 1.6 complete: {} additional base FormIDs resolved via interior cells", interiorResolved);
+
         // PHASE 2: Update index with loaded actor references (higher priority)
         // Search ALL four process list tiers to cover every actor the engine tracks
         ProcessUtils::ForEachLoadedActor([this](RE::Actor* actor) {
@@ -315,6 +366,9 @@ namespace IntelEngine {
 
         // Update with actual Actor reference
         m_npcIndex[lowerName] = actor;
+
+        // Update FormID to Actor reference ID (base form ID won't cast to Actor in Papyrus)
+        m_npcFormIds[lowerName] = actor->GetFormID();
 
         // Update current location
         if (auto* cell = actor->GetParentCell()) {
@@ -1762,6 +1816,13 @@ namespace IntelEngine {
         md += "- Hold: ";    md += holdName;   md += "\n";
         md += "- Time: ";    md += timeStr;    md += "\n\n";
 
+        // Political climate (so Story DM can dispatch politically-motivated stories)
+        auto politicalSummary = FactionPolitics::GetSingleton()->BuildPoliticalSummary();
+        if (!politicalSummary.empty()) {
+            md += politicalSummary;
+            md += "\n";
+        }
+
         // --- Candidate pool (ascending score: most important candidates last for LLM attention) ---
         std::reverse(pool.begin(), pool.end());
         md += "## Candidate Pool\n\n";
@@ -2013,6 +2074,13 @@ namespace IntelEngine {
         md += "- Player: ";  md += player->GetDisplayFullName();
         md += " at ";        md += playerLoc;  md += "\n";
         md += "- Time: ";    md += timeStr;    md += "\n\n";
+
+        // Political climate (so NPC DM can reference faction events in gossip)
+        auto politicalSummary = FactionPolitics::GetSingleton()->BuildPoliticalSummary();
+        if (!politicalSummary.empty()) {
+            md += politicalSummary;
+            md += "\n";
+        }
 
         md += "## NPC Groups by Location\n";
 

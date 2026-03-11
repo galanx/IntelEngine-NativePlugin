@@ -8,6 +8,7 @@
     "commonlibsse-ng",
     "fmt",
     "rapidfuzz",
-    "nlohmann-json"
+    "nlohmann-json",
+    "sqlite3"
   ]
 }
