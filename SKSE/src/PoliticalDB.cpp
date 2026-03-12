@@ -109,9 +109,26 @@ namespace IntelEngine {
                 UNIQUE(faction_a, faction_b, start_time)
             );
 
+            CREATE TABLE IF NOT EXISTS war_battles (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                war_id INTEGER NOT NULL,
+                location_name TEXT NOT NULL,
+                game_time REAL,
+                attacker TEXT NOT NULL,
+                defender TEXT NOT NULL,
+                result TEXT,
+                attacker_losses INTEGER DEFAULT 0,
+                defender_losses INTEGER DEFAULT 0,
+                player_participated BOOLEAN DEFAULT 0,
+                player_side TEXT,
+                narrative TEXT,
+                FOREIGN KEY (war_id) REFERENCES faction_wars(id)
+            );
+
             CREATE INDEX IF NOT EXISTS idx_events_game_time ON faction_events(game_time DESC);
             CREATE INDEX IF NOT EXISTS idx_events_faction ON faction_events(faction_a, faction_b);
             CREATE INDEX IF NOT EXISTS idx_wars_active ON faction_wars(end_time) WHERE end_time IS NULL;
+            CREATE INDEX IF NOT EXISTS idx_battles_war ON war_battles(war_id);
         )SQL";
 
         return Execute(schema);
@@ -541,6 +558,19 @@ namespace IntelEngine {
             }
         }
 
+        // Delete battles from future wars (before deleting the wars themselves)
+        {
+            const char* sql = "DELETE FROM war_battles WHERE war_id IN (SELECT id FROM faction_wars WHERE start_time > ?)";
+            sqlite3_stmt* stmt = nullptr;
+            if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) == SQLITE_OK) {
+                sqlite3_bind_double(stmt, 1, gameTime);
+                if (sqlite3_step(stmt) == SQLITE_DONE) {
+                    totalDeleted += sqlite3_changes(db_);
+                }
+                sqlite3_finalize(stmt);
+            }
+        }
+
         // Delete wars that started in the future
         {
             const char* sql = "DELETE FROM faction_wars WHERE start_time > ?";
@@ -620,6 +650,260 @@ namespace IntelEngine {
             return false;
         }
         return true;
+    }
+
+    // =========================================================================
+    // War Lifecycle
+    // =========================================================================
+
+    int PoliticalDB::StartWar(const std::string& factionA, const std::string& factionB,
+                               float startTime, int strengthA, int strengthB) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (!db_) return -1;
+
+        auto [a, b] = OrderFactions(factionA, factionB);
+
+        // If OrderFactions swapped the pair, swap strengths to match
+        if (a != factionA) {
+            std::swap(strengthA, strengthB);
+        }
+
+        // Check no active war already exists between these factions
+        {
+            const char* checkSql = "SELECT id FROM faction_wars WHERE faction_a = ? AND faction_b = ? AND end_time IS NULL";
+            sqlite3_stmt* checkStmt = nullptr;
+            if (sqlite3_prepare_v2(db_, checkSql, -1, &checkStmt, nullptr) == SQLITE_OK) {
+                sqlite3_bind_text(checkStmt, 1, a.c_str(), -1, SQLITE_TRANSIENT);
+                sqlite3_bind_text(checkStmt, 2, b.c_str(), -1, SQLITE_TRANSIENT);
+                bool exists = sqlite3_step(checkStmt) == SQLITE_ROW;
+                sqlite3_finalize(checkStmt);
+                if (exists) {
+                    logger::warn("PoliticalDB: War already active between {} and {}", a, b);
+                    return -1;
+                }
+            }
+        }
+
+        const char* sql = R"SQL(
+            INSERT INTO faction_wars (faction_a, faction_b, start_time, faction_a_morale, faction_b_morale,
+                                      faction_a_strength, faction_b_strength)
+            VALUES (?, ?, ?, 100, 100, ?, ?)
+        )SQL";
+
+        sqlite3_stmt* stmt = nullptr;
+        if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK) return -1;
+
+        sqlite3_bind_text(stmt, 1, a.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(stmt, 2, b.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_double(stmt, 3, startTime);
+        sqlite3_bind_int(stmt, 4, strengthA);
+        sqlite3_bind_int(stmt, 5, strengthB);
+
+        int warId = -1;
+        if (sqlite3_step(stmt) == SQLITE_DONE) {
+            warId = static_cast<int>(sqlite3_last_insert_rowid(db_));
+        }
+        sqlite3_finalize(stmt);
+
+        // Update war_active flag on the relation row
+        if (warId >= 0) {
+            const char* updateSql = "UPDATE faction_relations SET war_active = 1 WHERE faction_a = ? AND faction_b = ?";
+            sqlite3_stmt* updateStmt = nullptr;
+            if (sqlite3_prepare_v2(db_, updateSql, -1, &updateStmt, nullptr) == SQLITE_OK) {
+                sqlite3_bind_text(updateStmt, 1, a.c_str(), -1, SQLITE_TRANSIENT);
+                sqlite3_bind_text(updateStmt, 2, b.c_str(), -1, SQLITE_TRANSIENT);
+                sqlite3_step(updateStmt);
+                sqlite3_finalize(updateStmt);
+            }
+        }
+
+        logger::info("PoliticalDB: War #{} started between {} and {} (strength {}/{})",
+                     warId, a, b, strengthA, strengthB);
+        return warId;
+    }
+
+    bool PoliticalDB::UpdateWarState(int warId, int moraleA, int moraleB,
+                                      int strengthA, int strengthB, int battlesFought) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (!db_) return false;
+
+        const char* sql = R"SQL(
+            UPDATE faction_wars SET
+                faction_a_morale = ?, faction_b_morale = ?,
+                faction_a_strength = ?, faction_b_strength = ?,
+                battles_fought = ?
+            WHERE id = ? AND end_time IS NULL
+        )SQL";
+
+        sqlite3_stmt* stmt = nullptr;
+        if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK) return false;
+
+        sqlite3_bind_int(stmt, 1, std::clamp(moraleA, 0, 100));
+        sqlite3_bind_int(stmt, 2, std::clamp(moraleB, 0, 100));
+        sqlite3_bind_int(stmt, 3, std::clamp(strengthA, 0, 100));
+        sqlite3_bind_int(stmt, 4, std::clamp(strengthB, 0, 100));
+        sqlite3_bind_int(stmt, 5, battlesFought);
+        sqlite3_bind_int(stmt, 6, warId);
+
+        bool ok = sqlite3_step(stmt) == SQLITE_DONE && sqlite3_changes(db_) > 0;
+        sqlite3_finalize(stmt);
+        return ok;
+    }
+
+    bool PoliticalDB::EndWar(int warId, const std::string& victor, float endTime) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (!db_) return false;
+
+        // Get faction pair before ending (for war_active flag update)
+        std::string factionA, factionB;
+        {
+            const char* getSql = "SELECT faction_a, faction_b FROM faction_wars WHERE id = ?";
+            sqlite3_stmt* getStmt = nullptr;
+            if (sqlite3_prepare_v2(db_, getSql, -1, &getStmt, nullptr) == SQLITE_OK) {
+                sqlite3_bind_int(getStmt, 1, warId);
+                if (sqlite3_step(getStmt) == SQLITE_ROW) {
+                    factionA = SafeColumnText(getStmt, 0);
+                    factionB = SafeColumnText(getStmt, 1);
+                }
+                sqlite3_finalize(getStmt);
+            }
+        }
+
+        const char* sql = "UPDATE faction_wars SET end_time = ?, victor = ? WHERE id = ? AND end_time IS NULL";
+        sqlite3_stmt* stmt = nullptr;
+        if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK) return false;
+
+        sqlite3_bind_double(stmt, 1, endTime);
+        sqlite3_bind_text(stmt, 2, victor.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_int(stmt, 3, warId);
+
+        bool ok = sqlite3_step(stmt) == SQLITE_DONE && sqlite3_changes(db_) > 0;
+        sqlite3_finalize(stmt);
+
+        // Clear war_active flag on the relation row
+        if (ok && !factionA.empty()) {
+            const char* updateSql = "UPDATE faction_relations SET war_active = 0 WHERE faction_a = ? AND faction_b = ?";
+            sqlite3_stmt* updateStmt = nullptr;
+            if (sqlite3_prepare_v2(db_, updateSql, -1, &updateStmt, nullptr) == SQLITE_OK) {
+                sqlite3_bind_text(updateStmt, 1, factionA.c_str(), -1, SQLITE_TRANSIENT);
+                sqlite3_bind_text(updateStmt, 2, factionB.c_str(), -1, SQLITE_TRANSIENT);
+                sqlite3_step(updateStmt);
+                sqlite3_finalize(updateStmt);
+            }
+        }
+
+        logger::info("PoliticalDB: War #{} ended, victor: {}", warId, victor);
+        return ok;
+    }
+
+    int PoliticalDB::RecordBattle(int warId, const std::string& locationName, float gameTime,
+                                   const std::string& attacker, const std::string& defender,
+                                   const std::string& result, int attackerLosses, int defenderLosses,
+                                   const std::string& narrative) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (!db_) return -1;
+
+        std::string safeNarrative = narrative;
+        if (safeNarrative.size() > MAX_EVENT_DESCRIPTION_LENGTH) {
+            safeNarrative.resize(MAX_EVENT_DESCRIPTION_LENGTH);
+            safeNarrative += "...";
+        }
+
+        const char* sql = R"SQL(
+            INSERT INTO war_battles (war_id, location_name, game_time, attacker, defender,
+                                     result, attacker_losses, defender_losses, narrative)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        )SQL";
+
+        sqlite3_stmt* stmt = nullptr;
+        if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK) return -1;
+
+        sqlite3_bind_int(stmt, 1, warId);
+        sqlite3_bind_text(stmt, 2, locationName.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_double(stmt, 3, gameTime);
+        sqlite3_bind_text(stmt, 4, attacker.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(stmt, 5, defender.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(stmt, 6, result.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_int(stmt, 7, attackerLosses);
+        sqlite3_bind_int(stmt, 8, defenderLosses);
+        sqlite3_bind_text(stmt, 9, safeNarrative.c_str(), -1, SQLITE_TRANSIENT);
+
+        int battleId = -1;
+        if (sqlite3_step(stmt) == SQLITE_DONE) {
+            battleId = static_cast<int>(sqlite3_last_insert_rowid(db_));
+        }
+        sqlite3_finalize(stmt);
+
+        return battleId;
+    }
+
+    std::vector<BattleRow> PoliticalDB::GetBattlesForWar(int warId, int maxCount) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        std::vector<BattleRow> battles;
+        if (!db_) return battles;
+
+        const char* sql = R"SQL(
+            SELECT id, war_id, location_name, game_time, attacker, defender,
+                   result, attacker_losses, defender_losses, narrative
+            FROM war_battles WHERE war_id = ?
+            ORDER BY game_time DESC LIMIT ?
+        )SQL";
+
+        sqlite3_stmt* stmt = nullptr;
+        if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK) return battles;
+
+        sqlite3_bind_int(stmt, 1, warId);
+        sqlite3_bind_int(stmt, 2, maxCount);
+
+        while (sqlite3_step(stmt) == SQLITE_ROW) {
+            BattleRow b;
+            b.id = sqlite3_column_int(stmt, 0);
+            b.warId = sqlite3_column_int(stmt, 1);
+            b.locationName = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 2));
+            b.gameTime = static_cast<float>(sqlite3_column_double(stmt, 3));
+            b.attacker = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 4));
+            b.defender = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 5));
+            if (sqlite3_column_text(stmt, 6)) b.result = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 6));
+            b.attackerLosses = sqlite3_column_int(stmt, 7);
+            b.defenderLosses = sqlite3_column_int(stmt, 8);
+            if (sqlite3_column_text(stmt, 9)) b.narrative = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 9));
+            battles.push_back(b);
+        }
+        sqlite3_finalize(stmt);
+        return battles;
+    }
+
+    std::optional<FactionWar> PoliticalDB::GetMostRecentWar(const std::string& factionA, const std::string& factionB) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (!db_) return std::nullopt;
+
+        auto [a, b] = OrderFactions(factionA, factionB);
+
+        // Selects end_time (col 9) and victor (col 10) in addition to standard war columns
+        const char* sql = R"SQL(
+            SELECT id, faction_a, faction_b, start_time, battles_fought,
+                   faction_a_morale, faction_b_morale, faction_a_strength, faction_b_strength,
+                   end_time, victor
+            FROM faction_wars WHERE faction_a = ? AND faction_b = ?
+            ORDER BY start_time DESC LIMIT 1
+        )SQL";
+
+        sqlite3_stmt* stmt = nullptr;
+        if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK) return std::nullopt;
+
+        sqlite3_bind_text(stmt, 1, a.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(stmt, 2, b.c_str(), -1, SQLITE_TRANSIENT);
+
+        std::optional<FactionWar> result;
+        if (sqlite3_step(stmt) == SQLITE_ROW) {
+            auto w = ReadWarRow(stmt);
+            // ReadWarRow only reads cols 0-8; manually read end_time and victor
+            w.endTime = static_cast<float>(sqlite3_column_double(stmt, 9));
+            w.victor = SafeColumnText(stmt, 10);
+            result = w;
+        }
+        sqlite3_finalize(stmt);
+        return result;
     }
 
 }  // namespace IntelEngine

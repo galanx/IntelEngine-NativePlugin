@@ -157,10 +157,13 @@ namespace IntelEngine {
         tickIntervalHours_.store(readInt("politics.tick_interval_hours", "tick_interval_hours", 6));
         maxRelationChangePerTick_.store(readInt("politics.max_relation_change_per_tick", "max_relation_change_per_tick", 15));
         maxActiveWars_.store(readInt("politics.max_active_wars", "max_active_wars", 2));
+        warDeclarationCooldownDays_.store(readInt("politics.war_declaration_cooldown_days", "war_declaration_cooldown_days", 7));
+        moraleDecayPerTick_.store(readInt("politics.morale_decay_per_tick", "morale_decay_per_tick", 2));
 
-        logger::info("FactionPolitics: Settings loaded - enabled={}, tick={}h, maxDelta={}, maxWars={}",
+        logger::info("FactionPolitics: Settings loaded - enabled={}, tick={}h, maxDelta={}, maxWars={}, warCooldown={}d, moraleDecay={}",
                      enabled_.load(), tickIntervalHours_.load(),
-                     maxRelationChangePerTick_.load(), maxActiveWars_.load());
+                     maxRelationChangePerTick_.load(), maxActiveWars_.load(),
+                     warDeclarationCooldownDays_.load(), moraleDecayPerTick_.load());
     }
 
     // =========================================================================
@@ -190,7 +193,7 @@ namespace IntelEngine {
         if (score >= RELATION_NEUTRAL)  return "Neutral";
         if (score >= RELATION_TENSE)    return "Tense";
         if (score >= RELATION_HOSTILE)  return "Hostile";
-        return "War";
+        return "Critical";
     }
 
     bool FactionPolitics::IsAtWar(const std::string& factionA, const std::string& factionB) {
@@ -296,8 +299,9 @@ namespace IntelEngine {
         }
         state["relations"] = relationsJson;
 
-        // Recent events (last 10)
-        auto recentEvents = db->GetRecentEvents(10);
+        // Recent events (last 15, oldest first so most recent is last = stronger LLM signal)
+        auto recentEvents = db->GetRecentEvents(15);
+        std::reverse(recentEvents.begin(), recentEvents.end());
         nlohmann::json eventsJson = nlohmann::json::array();
         for (const auto& e : recentEvents) {
             nlohmann::json ej;
@@ -306,11 +310,19 @@ namespace IntelEngine {
             if (!e.factionB.empty()) ej["faction_b"] = e.factionB;
             ej["description"] = e.description;
             ej["delta"] = e.relationDelta;
+            float daysAgoF = currentGameTime - e.gameTime;
+            int daysAgo = static_cast<int>(daysAgoF);
+            ej["days_ago"] = daysAgo;
+            // Human-readable recency for LLM context
+            if (daysAgoF < 0.25f) ej["when"] = "just now";
+            else if (daysAgoF < 1.0f) ej["when"] = "earlier today";
+            else if (daysAgo == 1) ej["when"] = "yesterday";
+            else ej["when"] = std::to_string(daysAgo) + " days ago";
             eventsJson.push_back(ej);
         }
         state["recent_events"] = eventsJson;
 
-        // Active wars
+        // Active wars (with duration and recent battle history for DM context)
         auto activeWars = db->GetActiveWars();
         nlohmann::json warsJson = nlohmann::json::array();
         for (const auto& w : activeWars) {
@@ -322,9 +334,63 @@ namespace IntelEngine {
             wj["morale_b"] = w.factionBMorale;
             wj["strength_a"] = w.factionAStrength;
             wj["strength_b"] = w.factionBStrength;
+            float warDays = currentGameTime - w.startTime;
+            wj["war_days"] = static_cast<int>(warDays);
+
+            // Embed recent battle history (oldest first, most recent last for LLM recency)
+            auto battles = db->GetBattlesForWar(w.id, 5);
+            if (!battles.empty()) {
+                std::reverse(battles.begin(), battles.end());
+                nlohmann::json battlesJson = nlohmann::json::array();
+                for (const auto& b : battles) {
+                    nlohmann::json bj;
+                    bj["location"] = b.locationName;
+                    bj["attacker"] = b.attacker;
+                    bj["result"] = b.result;
+                    bj["victor"] = (b.result == "attacker_victory") ? b.attacker : (b.result == "defender_victory") ? b.defender : "draw";
+                    bj["attacker_losses"] = b.attackerLosses;
+                    bj["defender_losses"] = b.defenderLosses;
+                    float daysAgoF = currentGameTime - b.gameTime;
+                    int daysAgo = static_cast<int>(daysAgoF);
+                    bj["days_ago"] = daysAgo;
+                    if (daysAgoF < 0.25f) bj["when"] = "just now";
+                    else if (daysAgoF < 1.0f) bj["when"] = "earlier today";
+                    else if (daysAgo == 1) bj["when"] = "yesterday";
+                    else bj["when"] = std::to_string(daysAgo) + " days ago";
+                    if (!b.narrative.empty()) bj["narrative"] = b.narrative;
+                    battlesJson.push_back(bj);
+                }
+                wj["recent_battles"] = battlesJson;
+            }
+
             warsJson.push_back(wj);
         }
         state["active_wars"] = warsJson;
+
+        // War cooldowns — faction pairs that recently ended a war and can't redeclare yet
+        int cooldownDays = warDeclarationCooldownDays_.load();
+        if (cooldownDays > 0) {
+            nlohmann::json cooldownsJson = nlohmann::json::array();
+            // Check all relations for Critical pairs with recent war history
+            for (const auto& r : allRelations) {
+                if (!r.warActive) {  // Only check pairs not currently at war
+                    auto recentWar = db->GetMostRecentWar(r.factionA, r.factionB);
+                    if (recentWar && recentWar->endTime > 0.0f) {
+                        float daysSinceEnd = currentGameTime - recentWar->endTime;
+                        if (daysSinceEnd < static_cast<float>(cooldownDays)) {
+                            nlohmann::json cj;
+                            cj["faction_a"] = r.factionA;
+                            cj["faction_b"] = r.factionB;
+                            cj["days_remaining"] = cooldownDays - static_cast<int>(daysSinceEnd);
+                            cooldownsJson.push_back(cj);
+                        }
+                    }
+                }
+            }
+            if (!cooldownsJson.empty()) {
+                state["war_cooldowns"] = cooldownsJson;
+            }
+        }
 
         // Player standings
         auto standings = db->GetAllPlayerStandings();
@@ -399,7 +465,7 @@ namespace IntelEngine {
         }
         dashboard["relations"] = relationsJson;
 
-        auto recentEvents = db->GetRecentEvents(20);
+        auto recentEvents = db->GetRecentEvents(10);
         nlohmann::json eventsJson = nlohmann::json::array();
         for (const auto& e : recentEvents) {
             nlohmann::json ej;
@@ -426,6 +492,25 @@ namespace IntelEngine {
             wj["morale_b"] = w.factionBMorale;
             wj["strength_a"] = w.factionAStrength;
             wj["strength_b"] = w.factionBStrength;
+
+            // Battle history for dashboard display
+            auto battles = db->GetBattlesForWar(w.id, 10);
+            if (!battles.empty()) {
+                nlohmann::json battlesJson = nlohmann::json::array();
+                for (const auto& b : battles) {
+                    nlohmann::json bj;
+                    bj["location"] = b.locationName;
+                    bj["attacker"] = b.attacker;
+                    bj["defender"] = b.defender;
+                    bj["result"] = b.result;
+                    bj["attacker_losses"] = b.attackerLosses;
+                    bj["defender_losses"] = b.defenderLosses;
+                    if (!b.narrative.empty()) bj["narrative"] = b.narrative;
+                    battlesJson.push_back(bj);
+                }
+                wj["recent_battles"] = battlesJson;
+            }
+
             warsJson.push_back(wj);
         }
         dashboard["wars"] = warsJson;
@@ -739,6 +824,236 @@ namespace IntelEngine {
     }
 
     // =========================================================================
+    // War Lifecycle
+    // =========================================================================
+
+    int FactionPolitics::DeclareWar(const std::string& factionA, const std::string& factionB, float gameTime) {
+        if (!initialized_.load()) return -1;
+
+        auto cfgA = GetFaction(factionA);
+        auto cfgB = GetFaction(factionB);
+        if (!cfgA || !cfgB) {
+            logger::warn("FactionPolitics::DeclareWar: Invalid faction(s): {} / {}", factionA, factionB);
+            return -1;
+        }
+
+        auto* db = PoliticalDB::GetSingleton();
+        if (!db->IsReady()) return -1;
+
+        // Check max active wars
+        auto activeWars = db->GetActiveWars();
+        if (static_cast<int>(activeWars.size()) >= maxActiveWars_.load()) {
+            logger::info("FactionPolitics::DeclareWar: Max active wars ({}) reached", maxActiveWars_.load());
+            return -1;
+        }
+
+        // Check cooldown — no war between these factions within cooldown period
+        int cooldownDays = warDeclarationCooldownDays_.load();
+        auto recentWar = db->GetMostRecentWar(factionA, factionB);
+        if (recentWar && recentWar->endTime > 0.0f) {
+            float daysSinceEnd = gameTime - recentWar->endTime;
+            if (daysSinceEnd < static_cast<float>(cooldownDays)) {
+                logger::info("FactionPolitics::DeclareWar: Cooldown active ({:.1f} days since last war, need {})",
+                             daysSinceEnd, cooldownDays);
+                return -1;
+            }
+        }
+
+        // Use base army strength from config
+        int strengthA = cfgA->baseArmyStrength > 0 ? cfgA->baseArmyStrength : 50;
+        int strengthB = cfgB->baseArmyStrength > 0 ? cfgB->baseArmyStrength : 50;
+        // Normalize to percentage scale (0-100) relative to the stronger side
+        int maxStrength = (std::max)(strengthA, strengthB);
+        if (maxStrength > 0) {
+            strengthA = (strengthA * 100) / maxStrength;
+            strengthB = (strengthB * 100) / maxStrength;
+        }
+
+        int warId = db->StartWar(factionA, factionB, gameTime, strengthA, strengthB);
+        if (warId < 0) return -1;
+
+        logger::info("FactionPolitics: WAR #{} declared: {} vs {} (strength {}/{})",
+                     warId, factionA, factionB, strengthA, strengthB);
+
+        WritePoliticalStateFile();
+        return warId;
+    }
+
+    std::string FactionPolitics::ProcessWarTick(float gameTime) {
+        if (!initialized_.load()) return "[]";
+
+        auto* db = PoliticalDB::GetSingleton();
+        if (!db->IsReady()) return "[]";
+
+        auto activeWars = db->GetActiveWars();
+        if (activeWars.empty()) return "[]";
+
+        int decayRate = moraleDecayPerTick_.load();
+        nlohmann::json updates = nlohmann::json::array();
+
+        for (auto& war : activeWars) {
+            // Apply morale decay to both sides
+            int newMoraleA = (std::max)(0, war.factionAMorale - decayRate);
+            int newMoraleB = (std::max)(0, war.factionBMorale - decayRate);
+
+            nlohmann::json update;
+            update["war_id"] = war.id;
+            update["faction_a"] = war.factionA;
+            update["faction_b"] = war.factionB;
+            update["morale_a"] = newMoraleA;
+            update["morale_b"] = newMoraleB;
+            update["strength_a"] = war.factionAStrength;
+            update["strength_b"] = war.factionBStrength;
+            update["battles"] = war.battlesFought;
+
+            // Check surrender conditions: morale < 20
+            bool aCollapsed = newMoraleA < 20;
+            bool bCollapsed = newMoraleB < 20;
+
+            if (aCollapsed && bCollapsed) {
+                // Both collapsed — the side with higher morale wins (or draw)
+                std::string victor = (newMoraleA >= newMoraleB) ? war.factionA : war.factionB;
+                update["ended"] = true;
+                update["victor"] = victor;
+                update["end_reason"] = "mutual_exhaustion";
+                db->EndWar(war.id, victor, gameTime);
+                logger::info("FactionPolitics: War #{} ended — mutual exhaustion, victor: {}", war.id, victor);
+            } else if (aCollapsed) {
+                update["ended"] = true;
+                update["victor"] = war.factionB;
+                update["end_reason"] = "surrender";
+                db->EndWar(war.id, war.factionB, gameTime);
+                logger::info("FactionPolitics: War #{} ended — {} surrendered to {}", war.id, war.factionA, war.factionB);
+            } else if (bCollapsed) {
+                update["ended"] = true;
+                update["victor"] = war.factionA;
+                update["end_reason"] = "surrender";
+                db->EndWar(war.id, war.factionA, gameTime);
+                logger::info("FactionPolitics: War #{} ended — {} surrendered to {}", war.id, war.factionB, war.factionA);
+            } else {
+                // Update morale in DB
+                db->UpdateWarState(war.id, newMoraleA, newMoraleB,
+                                   war.factionAStrength, war.factionBStrength, war.battlesFought);
+            }
+
+            updates.push_back(update);
+        }
+
+        if (!updates.empty()) {
+            WritePoliticalStateFile();
+        }
+
+        return updates.dump();
+    }
+
+    bool FactionPolitics::EndWar(const std::string& factionA, const std::string& factionB,
+                                  const std::string& victor, float gameTime) {
+        if (!initialized_.load()) return false;
+
+        auto* db = PoliticalDB::GetSingleton();
+        if (!db->IsReady()) return false;
+
+        auto war = db->GetActiveWar(factionA, factionB);
+        if (!war) {
+            logger::warn("FactionPolitics::EndWar: No active war between {} and {}", factionA, factionB);
+            return false;
+        }
+
+        bool ok = db->EndWar(war->id, victor, gameTime);
+        if (ok) {
+            // Improve relations slightly on peace
+            db->AdjustRelation(factionA, factionB, 10);
+            WritePoliticalStateFile();
+        }
+        return ok;
+    }
+
+    int FactionPolitics::GetActiveWarCount() {
+        auto* db = PoliticalDB::GetSingleton();
+        if (!db->IsReady()) return 0;
+        return static_cast<int>(db->GetActiveWars().size());
+    }
+
+    int FactionPolitics::GetWarStrength(const std::string& factionA, const std::string& factionB,
+                                         const std::string& queryFaction) {
+        auto* db = PoliticalDB::GetSingleton();
+        if (!db->IsReady()) return 0;
+
+        auto war = db->GetActiveWar(factionA, factionB);
+        if (!war) return 0;
+
+        if (queryFaction == war->factionA) return war->factionAStrength;
+        if (queryFaction == war->factionB) return war->factionBStrength;
+        return 0;
+    }
+
+    int FactionPolitics::GetWarMorale(const std::string& factionA, const std::string& factionB,
+                                       const std::string& queryFaction) {
+        auto* db = PoliticalDB::GetSingleton();
+        if (!db->IsReady()) return -1;
+
+        auto war = db->GetActiveWar(factionA, factionB);
+        if (!war) return -1;
+
+        if (queryFaction == war->factionA) return war->factionAMorale;
+        if (queryFaction == war->factionB) return war->factionBMorale;
+        return -1;
+    }
+
+    int FactionPolitics::RecordOffScreenBattle(const std::string& factionA, const std::string& factionB,
+                                                const std::string& location, const std::string& result,
+                                                const std::string& narrative, int attackerLosses,
+                                                int defenderLosses, const std::string& victor) {
+        auto* db = PoliticalDB::GetSingleton();
+        if (!db->IsReady()) return -1;
+
+        auto war = db->GetActiveWar(factionA, factionB);
+        if (!war) {
+            logger::warn("FactionPolitics::RecordOffScreenBattle: No active war between {} and {}", factionA, factionB);
+            return -1;
+        }
+
+        auto* cal = RE::Calendar::GetSingleton();
+        float gameTime = cal ? cal->GetCurrentGameTime() : 0.0f;
+
+        int battleId = db->RecordBattle(war->id, location, gameTime,
+                                         factionA, factionB, result,
+                                         attackerLosses, defenderLosses, narrative);
+
+        // Map caller's attacker/defender losses to alphabetical war factions.
+        // Caller's factionA = attacker, factionB = defender.
+        // War struct stores factions in alphabetical order.
+        bool callerAIsWarA = (factionA == war->factionA);
+        int lossForWarA = callerAIsWarA ? attackerLosses : defenderLosses;
+        int lossForWarB = callerAIsWarA ? defenderLosses : attackerLosses;
+
+        int moraleA = war->factionAMorale;
+        int moraleB = war->factionBMorale;
+        int strengthA = war->factionAStrength;
+        int strengthB = war->factionBStrength;
+
+        if (victor == war->factionA) {
+            moraleA = (std::min)(100, moraleA + 10);
+            moraleB = (std::max)(0, moraleB - 15);
+        } else if (victor == war->factionB) {
+            moraleB = (std::min)(100, moraleB + 10);
+            moraleA = (std::max)(0, moraleA - 15);
+        } else {
+            // Draw
+            moraleA = (std::max)(0, moraleA - 5);
+            moraleB = (std::max)(0, moraleB - 5);
+        }
+
+        strengthA = (std::max)(0, strengthA - lossForWarA);
+        strengthB = (std::max)(0, strengthB - lossForWarB);
+
+        db->UpdateWarState(war->id, moraleA, moraleB, strengthA, strengthB, war->battlesFought + 1);
+
+        WritePoliticalStateFile();
+        return battleId;
+    }
+
+    // =========================================================================
     // Political State File (pull-based NPC awareness)
     // =========================================================================
 
@@ -774,7 +1089,9 @@ namespace IntelEngine {
             return (it != idToName.end()) ? it->second : id;
         };
 
-        // Recent events (last 10, newest first) — include display names
+        // Recent events (last 10, oldest first — most recent last for LLM recency)
+        std::reverse(recentEvents.begin(), recentEvents.end());
+        float stateGameTime = RE::Calendar::GetSingleton() ? RE::Calendar::GetSingleton()->GetCurrentGameTime() : 0.0f;
         nlohmann::json eventsJson = nlohmann::json::array();
         for (const auto& e : recentEvents) {
             nlohmann::json ej;
@@ -787,7 +1104,12 @@ namespace IntelEngine {
             }
             ej["description"] = e.description;
             ej["delta"] = e.relationDelta;
-            ej["time"] = e.gameTime;
+            float daysAgoF = stateGameTime - e.gameTime;
+            int daysAgo = static_cast<int>(daysAgoF);
+            if (daysAgoF < 0.25f) ej["when"] = "just now";
+            else if (daysAgoF < 1.0f) ej["when"] = "earlier today";
+            else if (daysAgo == 1) ej["when"] = "yesterday";
+            else ej["when"] = std::to_string(daysAgo) + " days ago";
             eventsJson.push_back(ej);
         }
         state["recent_events"] = eventsJson;

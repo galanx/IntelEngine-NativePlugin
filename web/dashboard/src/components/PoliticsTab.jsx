@@ -6,6 +6,7 @@ const STATUS_COLORS = {
   Neutral: 'text-gray-400',
   Tense: 'text-yellow-400',
   Hostile: 'text-orange-400',
+  Critical: 'text-red-400',
   War: 'text-red-400',
 };
 
@@ -14,6 +15,21 @@ const TYPE_LABELS = {
   guild: 'Guild',
   political: 'Political',
 };
+
+function MoraleBar({ value, label }) {
+  const color = value > 60 ? 'bg-green-500' : value > 30 ? 'bg-yellow-500' : 'bg-red-500';
+  return (
+    <div className="flex-1">
+      <div className="flex justify-between text-[10px] mb-0.5">
+        <span className="text-gray-400 truncate">{label}</span>
+        <span className={value > 60 ? 'text-green-400' : value > 30 ? 'text-yellow-400' : 'text-red-400'}>{value}%</span>
+      </div>
+      <div className="h-1.5 bg-white/5 rounded-full overflow-hidden">
+        <div className={`h-full ${color} rounded-full transition-all`} style={{ width: `${value}%` }} />
+      </div>
+    </div>
+  );
+}
 
 function PoliticsTab({ politics, sendAction }) {
   if (!politics || !politics.enabled) {
@@ -40,38 +56,96 @@ function PoliticsTab({ politics, sendAction }) {
     factionNames[f.id] = f.name;
   }
 
+  // Separate war events for special display
+  const warEvents = events.filter(e => e.type === 'war_declaration' || e.type === 'battle_result' || e.type === 'surrender');
+  const otherEvents = events.filter(e => e.type !== 'war_declaration' && e.type !== 'battle_result' && e.type !== 'surrender');
+
   return (
     <div className="p-3 space-y-4">
       {/* Active Wars */}
       {wars.length > 0 && (
         <section>
-          <h2 className="section-header mb-2">Active Wars</h2>
+          <h2 className="section-header mb-2">
+            Active Wars
+            <span className="ml-2 text-[10px] text-red-400 font-normal">({wars.length})</span>
+          </h2>
           <div className="space-y-2">
-            {wars.map((w, i) => (
-              <div key={i} className="slot-card rounded px-3 py-2 border-l-2 border-red-500">
-                <div className="flex items-center justify-between mb-1">
-                  <span className="text-sm text-red-400 font-medium">
-                    {factionNames[w.faction_a] || w.faction_a} vs {factionNames[w.faction_b] || w.faction_b}
-                  </span>
-                  <span className="text-[10px] text-gray-500">{w.battles} battles</span>
-                </div>
-                <div className="flex gap-4 text-xs">
-                  <div>
-                    <span className="text-gray-500">Morale: </span>
-                    <span className={w.morale_a > 50 ? 'text-green-400' : 'text-red-400'}>{w.morale_a}%</span>
-                    <span className="text-gray-600"> / </span>
-                    <span className={w.morale_b > 50 ? 'text-green-400' : 'text-red-400'}>{w.morale_b}%</span>
+            {wars.map((w, i) => {
+              const nameA = factionNames[w.faction_a] || w.faction_a;
+              const nameB = factionNames[w.faction_b] || w.faction_b;
+              return (
+                <div key={i} className="slot-card rounded px-3 py-2 border-l-2 border-red-500">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-sm text-red-400 font-medium">
+                      {nameA} vs {nameB}
+                    </span>
+                    <span className="text-[10px] text-gray-500">
+                      {w.battles} battle{w.battles !== 1 ? 's' : ''}
+                    </span>
                   </div>
-                  <div>
-                    <span className="text-gray-500">Strength: </span>
-                    <span className="text-gray-300">{w.strength_a}%</span>
-                    <span className="text-gray-600"> / </span>
-                    <span className="text-gray-300">{w.strength_b}%</span>
+                  <div className="space-y-1.5">
+                    <div className="flex gap-3">
+                      <MoraleBar value={w.morale_a} label={`${nameA} morale`} />
+                      <MoraleBar value={w.morale_b} label={`${nameB} morale`} />
+                    </div>
+                    <div className="flex gap-4 text-[10px]">
+                      <div>
+                        <span className="text-gray-500">Strength: </span>
+                        <span className="text-gray-300">{w.strength_a}%</span>
+                        <span className="text-gray-600"> / </span>
+                        <span className="text-gray-300">{w.strength_b}%</span>
+                      </div>
+                    </div>
+                    {/* Battle History */}
+                    {w.recent_battles && w.recent_battles.length > 0 && (
+                      <div className="mt-1.5 pt-1.5 border-t border-white/5 space-y-1">
+                        <div className="text-[10px] text-gray-500 uppercase tracking-wider">Battle History</div>
+                        {w.recent_battles.map((b, bi) => {
+                          const isAttackerVictory = b.result === 'attacker_victory';
+                          const isDefenderVictory = b.result === 'defender_victory';
+                          const victorName = isAttackerVictory
+                            ? (factionNames[b.attacker] || b.attacker)
+                            : isDefenderVictory
+                              ? (factionNames[b.defender] || b.defender)
+                              : null;
+                          return (
+                            <div key={bi} className="flex items-start gap-1.5 text-[10px]">
+                              <span className={isAttackerVictory || isDefenderVictory ? 'text-red-400' : 'text-yellow-400'}>
+                                {isAttackerVictory || isDefenderVictory ? '⚔' : '⚖'}
+                              </span>
+                              <div className="flex-1 min-w-0">
+                                <span className="text-gray-300">{b.narrative || b.location}</span>
+                                <span className="text-gray-600 ml-1">
+                                  {victorName ? `${victorName} wins` : 'Draw'}
+                                  {' · '}-{b.attacker_losses}/-{b.defender_losses}
+                                </span>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
                   </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
+
+          {/* War Events Timeline */}
+          {warEvents.length > 0 && (
+            <div className="mt-2 space-y-1">
+              {warEvents.map((e, i) => (
+                <div key={i} className="slot-card rounded px-3 py-1.5 border-l-2 border-red-500/30">
+                  <div className="flex items-center gap-2">
+                    <span className="text-[10px] text-red-400/70 shrink-0">
+                      {e.type === 'war_declaration' ? 'WAR' : e.type === 'surrender' ? 'PEACE' : 'BATTLE'}
+                    </span>
+                    <span className="text-xs text-gray-300 truncate">{e.description}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
         </section>
       )}
 
@@ -144,14 +218,16 @@ function PoliticsTab({ politics, sendAction }) {
         </div>
       </section>
 
-      {/* Recent Events */}
+      {/* Recent Events (non-war) */}
       <section>
         <h2 className="section-header mb-2">Recent Events</h2>
-        {events.length === 0 ? (
+        {otherEvents.length === 0 && warEvents.length === 0 ? (
           <div className="text-xs text-gray-500">No political events yet.</div>
+        ) : otherEvents.length === 0 ? (
+          <div className="text-xs text-gray-500">Only war events this period.</div>
         ) : (
           <div className="space-y-1.5">
-            {events.map((e, i) => (
+            {otherEvents.map((e, i) => (
               <div key={i} className="slot-card rounded px-3 py-2">
                 <div className="flex items-center justify-between mb-0.5">
                   <span className="text-[10px] text-gray-500">

@@ -63,6 +63,19 @@ namespace IntelEngine {
         int factionBStrength = 100;
     };
 
+    struct BattleRow {
+        int id = 0;
+        int warId = 0;
+        std::string locationName;
+        float gameTime = 0.0f;
+        std::string attacker;
+        std::string defender;
+        std::string result;
+        int attackerLosses = 0;
+        int defenderLosses = 0;
+        std::string narrative;
+    };
+
     class PoliticalDB {
     public:
         static PoliticalDB* GetSingleton() {
@@ -138,6 +151,28 @@ namespace IntelEngine {
 
         /** Get all active wars. */
         std::vector<FactionWar> GetActiveWars();
+
+        /** Start a new war between two factions. Returns war ID or -1 on failure. */
+        int StartWar(const std::string& factionA, const std::string& factionB,
+                     float startTime, int strengthA = 100, int strengthB = 100);
+
+        /** Update morale and strength for an active war. */
+        bool UpdateWarState(int warId, int moraleA, int moraleB, int strengthA, int strengthB, int battlesFought);
+
+        /** End a war by setting victor and end_time. */
+        bool EndWar(int warId, const std::string& victor, float endTime);
+
+        /** Record an off-screen battle result. Returns battle ID or -1 on failure. */
+        int RecordBattle(int warId, const std::string& locationName, float gameTime,
+                         const std::string& attacker, const std::string& defender,
+                         const std::string& result, int attackerLosses, int defenderLosses,
+                         const std::string& narrative);
+
+        /** Get recent battles for a war (most recent first). */
+        std::vector<BattleRow> GetBattlesForWar(int warId, int maxCount = 5);
+
+        /** Get the most recent war between two factions (active or ended). */
+        std::optional<FactionWar> GetMostRecentWar(const std::string& factionA, const std::string& factionB);
 
         // =================================================================
         // Initialization Helpers

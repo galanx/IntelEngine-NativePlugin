@@ -66,7 +66,7 @@ namespace IntelEngine::Papyrus {
     int GetPlayerFactionStanding(RE::StaticFunctionTag*, RE::BSFixedString);
     int AdjustPlayerFactionStanding(RE::StaticFunctionTag*, RE::BSFixedString, int);
     bool IsFactionAtWar(RE::StaticFunctionTag*, RE::BSFixedString, RE::BSFixedString);
-    int GetWarMorale(RE::StaticFunctionTag*, RE::BSFixedString, RE::BSFixedString);
+    int GetWarMorale(RE::StaticFunctionTag*, RE::BSFixedString, RE::BSFixedString, RE::BSFixedString);
     RE::BSFixedString GetRelationStatus(RE::StaticFunctionTag*, RE::BSFixedString, RE::BSFixedString);
     RE::BSFixedString BuildPoliticalContext(RE::StaticFunctionTag*, float);
     RE::BSFixedString BuildPoliticalDashboardJson(RE::StaticFunctionTag*);
@@ -85,6 +85,13 @@ namespace IntelEngine::Papyrus {
     void WritePoliticalStateFile(RE::StaticFunctionTag*);
     void SetPoliticsEnabled(RE::StaticFunctionTag*, bool);
     void SetPoliticsTickInterval(RE::StaticFunctionTag*, int);
+    int DeclareWar(RE::StaticFunctionTag*, RE::BSFixedString, RE::BSFixedString, float);
+    RE::BSFixedString ProcessWarTick(RE::StaticFunctionTag*, float);
+    bool EndFactionWar(RE::StaticFunctionTag*, RE::BSFixedString, RE::BSFixedString, RE::BSFixedString, float);
+    int GetActiveWarCount(RE::StaticFunctionTag*);
+    int GetWarStrength(RE::StaticFunctionTag*, RE::BSFixedString, RE::BSFixedString, RE::BSFixedString);
+    int RecordOffScreenBattle(RE::StaticFunctionTag*, RE::BSFixedString, RE::BSFixedString,
+                              RE::BSFixedString, RE::BSFixedString, RE::BSFixedString, int, int, RE::BSFixedString);
 
     bool Register(RE::BSScript::IVirtualMachine* a_vm) {
         if (!a_vm) {
@@ -294,6 +301,12 @@ namespace IntelEngine::Papyrus {
         a_vm->RegisterFunction("WritePoliticalStateFile", SCRIPT_NAME, WritePoliticalStateFile); ++count;
         a_vm->RegisterFunction("SetPoliticsEnabled", SCRIPT_NAME, SetPoliticsEnabled); ++count;
         a_vm->RegisterFunction("SetPoliticsTickInterval", SCRIPT_NAME, SetPoliticsTickInterval); ++count;
+        a_vm->RegisterFunction("DeclareWar", SCRIPT_NAME, DeclareWar); ++count;
+        a_vm->RegisterFunction("ProcessWarTick", SCRIPT_NAME, ProcessWarTick); ++count;
+        a_vm->RegisterFunction("EndFactionWar", SCRIPT_NAME, EndFactionWar); ++count;
+        a_vm->RegisterFunction("GetActiveWarCount", SCRIPT_NAME, GetActiveWarCount); ++count;
+        a_vm->RegisterFunction("GetWarStrength", SCRIPT_NAME, GetWarStrength); ++count;
+        a_vm->RegisterFunction("RecordOffScreenBattle", SCRIPT_NAME, RecordOffScreenBattle); ++count;
 
         // Debug Functions
         a_vm->RegisterFunction("TestNPCSearch", SCRIPT_NAME, TestNPCSearch); ++count;
@@ -2932,16 +2945,9 @@ namespace IntelEngine::Papyrus {
         return politics->IsAtWar(factionA.c_str(), factionB.c_str());
     }
 
-    int GetWarMorale(RE::StaticFunctionTag*, RE::BSFixedString factionA, RE::BSFixedString factionB) {
-        auto* db = PoliticalDB::GetSingleton();
-        if (!db->IsReady()) return 0;
-        auto war = db->GetActiveWar(factionA.c_str(), factionB.c_str());
-        if (!war.has_value()) return 0;
-        // Return factionA's morale in this war
-        std::string query = factionA.c_str();
-        if (query == war->factionA) return war->factionAMorale;
-        if (query == war->factionB) return war->factionBMorale;
-        return 0;
+    int GetWarMorale(RE::StaticFunctionTag*, RE::BSFixedString factionA, RE::BSFixedString factionB,
+                     RE::BSFixedString queryFaction) {
+        return FactionPolitics::GetSingleton()->GetWarMorale(factionA.c_str(), factionB.c_str(), queryFaction.c_str());
     }
 
     RE::BSFixedString GetRelationStatus(RE::StaticFunctionTag*, RE::BSFixedString factionA, RE::BSFixedString factionB) {
@@ -3133,6 +3139,41 @@ namespace IntelEngine::Papyrus {
 
     void SetPoliticsTickInterval(RE::StaticFunctionTag*, int hours) {
         FactionPolitics::GetSingleton()->SetTickIntervalHours(hours);
+    }
+
+    // =========================================================================
+    // War Lifecycle Natives
+    // =========================================================================
+
+    int DeclareWar(RE::StaticFunctionTag*, RE::BSFixedString factionA, RE::BSFixedString factionB, float gameTime) {
+        return FactionPolitics::GetSingleton()->DeclareWar(factionA.c_str(), factionB.c_str(), gameTime);
+    }
+
+    RE::BSFixedString ProcessWarTick(RE::StaticFunctionTag*, float gameTime) {
+        std::string result = FactionPolitics::GetSingleton()->ProcessWarTick(gameTime);
+        return RE::BSFixedString(result);
+    }
+
+    bool EndFactionWar(RE::StaticFunctionTag*, RE::BSFixedString factionA, RE::BSFixedString factionB,
+                       RE::BSFixedString victor, float gameTime) {
+        return FactionPolitics::GetSingleton()->EndWar(factionA.c_str(), factionB.c_str(), victor.c_str(), gameTime);
+    }
+
+    int GetActiveWarCount(RE::StaticFunctionTag*) {
+        return FactionPolitics::GetSingleton()->GetActiveWarCount();
+    }
+
+    int GetWarStrength(RE::StaticFunctionTag*, RE::BSFixedString factionA, RE::BSFixedString factionB,
+                       RE::BSFixedString queryFaction) {
+        return FactionPolitics::GetSingleton()->GetWarStrength(factionA.c_str(), factionB.c_str(), queryFaction.c_str());
+    }
+
+    int RecordOffScreenBattle(RE::StaticFunctionTag*, RE::BSFixedString factionA, RE::BSFixedString factionB,
+                              RE::BSFixedString location, RE::BSFixedString result, RE::BSFixedString narrative,
+                              int attackerLosses, int defenderLosses, RE::BSFixedString victor) {
+        return FactionPolitics::GetSingleton()->RecordOffScreenBattle(
+            factionA.c_str(), factionB.c_str(), location.c_str(), result.c_str(),
+            narrative.c_str(), attackerLosses, defenderLosses, victor.c_str());
     }
 
 }  // namespace IntelEngine::Papyrus

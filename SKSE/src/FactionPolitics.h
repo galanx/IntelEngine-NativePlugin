@@ -145,12 +145,50 @@ namespace IntelEngine {
         int GetTickIntervalHours() const { return tickIntervalHours_.load(); }
         int GetMaxRelationChangePerTick() const { return maxRelationChangePerTick_.load(); }
         int GetMaxActiveWars() const { return maxActiveWars_.load(); }
+        int GetWarDeclarationCooldownDays() const { return warDeclarationCooldownDays_.load(); }
+        int GetMoraleDecayPerTick() const { return moraleDecayPerTick_.load(); }
 
         void SetEnabled(bool val) { enabled_.store(val); }
         void SetTickIntervalHours(int val) { tickIntervalHours_.store(std::clamp(val, 1, 24)); }
 
         /** Reload politics settings from settings.yaml. */
         void LoadSettings();
+
+        // =================================================================
+        // War Lifecycle
+        // =================================================================
+
+        /** Declare war between two factions.
+         *  Validates: both factions exist, no active war between them, max wars not exceeded,
+         *  cooldown not active. Creates faction_wars row and records war_declaration event.
+         *  Returns war ID or -1 on failure. */
+        int DeclareWar(const std::string& factionA, const std::string& factionB, float gameTime);
+
+        /** Process one war tick for all active wars.
+         *  Applies morale decay, checks surrender conditions.
+         *  Returns JSON string with war updates for Papyrus to dispatch as events. */
+        std::string ProcessWarTick(float gameTime);
+
+        /** End a specific war with a victor. Records surrender event.
+         *  Returns true on success. */
+        bool EndWar(const std::string& factionA, const std::string& factionB,
+                    const std::string& victor, float gameTime);
+
+        /** Get the number of currently active wars. */
+        int GetActiveWarCount();
+
+        /** Get war strength for a faction in an active war. Returns 0 if no war. */
+        int GetWarStrength(const std::string& factionA, const std::string& factionB, const std::string& queryFaction);
+
+        /** Get war morale for a faction in an active war. Returns -1 if no war. */
+        int GetWarMorale(const std::string& factionA, const std::string& factionB, const std::string& queryFaction);
+
+        /** Record an off-screen battle result, applying morale/strength changes.
+         *  Returns battle ID or -1 on failure. */
+        int RecordOffScreenBattle(const std::string& factionA, const std::string& factionB,
+                                  const std::string& location, const std::string& result,
+                                  const std::string& narrative, int attackerLosses, int defenderLosses,
+                                  const std::string& victor);
 
         // =================================================================
         // Player Standing Mechanics
@@ -216,6 +254,8 @@ namespace IntelEngine {
         std::atomic<int> tickIntervalHours_{6};
         std::atomic<int> maxRelationChangePerTick_{15};
         std::atomic<int> maxActiveWars_{2};
+        std::atomic<int> warDeclarationCooldownDays_{7};
+        std::atomic<int> moraleDecayPerTick_{2};
 
         std::atomic<bool> initialized_{false};
 

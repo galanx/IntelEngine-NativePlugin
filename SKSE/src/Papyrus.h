@@ -390,8 +390,8 @@ namespace IntelEngine::Papyrus {
     /** Check if two factions are at war (score below war threshold). */
     bool IsFactionAtWar(RE::StaticFunctionTag*, RE::BSFixedString factionA, RE::BSFixedString factionB);
 
-    /** Get factionA's morale in an active war against factionB. Returns -1 if no war. */
-    int GetWarMorale(RE::StaticFunctionTag*, RE::BSFixedString factionA, RE::BSFixedString factionB);
+    /** Get queryFaction's morale in an active war between factionA and factionB. Returns -1 if no war. */
+    int GetWarMorale(RE::StaticFunctionTag*, RE::BSFixedString factionA, RE::BSFixedString factionB, RE::BSFixedString queryFaction);
 
     /** Get human-readable relation status string (Alliance/Friendly/Neutral/Tense/Hostile/War). */
     RE::BSFixedString GetRelationStatus(RE::StaticFunctionTag*, RE::BSFixedString factionA, RE::BSFixedString factionB);
@@ -444,6 +444,28 @@ namespace IntelEngine::Papyrus {
 
     /** Set politics tick interval (hours) at runtime. */
     void SetPoliticsTickInterval(RE::StaticFunctionTag*, int hours);
+
+    /** Declare war between two factions. Returns war ID or -1. */
+    int DeclareWar(RE::StaticFunctionTag*, RE::BSFixedString factionA, RE::BSFixedString factionB, float gameTime);
+
+    /** Process war tick: morale decay, surrender checks. Returns JSON of updates. */
+    RE::BSFixedString ProcessWarTick(RE::StaticFunctionTag*, float gameTime);
+
+    /** End a specific war with a victor. */
+    bool EndFactionWar(RE::StaticFunctionTag*, RE::BSFixedString factionA, RE::BSFixedString factionB,
+                       RE::BSFixedString victor, float gameTime);
+
+    /** Get number of active wars. */
+    int GetActiveWarCount(RE::StaticFunctionTag*);
+
+    /** Get war strength for a faction in an active war. */
+    int GetWarStrength(RE::StaticFunctionTag*, RE::BSFixedString factionA, RE::BSFixedString factionB,
+                       RE::BSFixedString queryFaction);
+
+    /** Record off-screen battle result. Returns battle ID or -1. */
+    int RecordOffScreenBattle(RE::StaticFunctionTag*, RE::BSFixedString factionA, RE::BSFixedString factionB,
+                              RE::BSFixedString location, RE::BSFixedString result, RE::BSFixedString narrative,
+                              int attackerLosses, int defenderLosses, RE::BSFixedString victor);
 
     // ==========================================================================
     // Debug Functions
