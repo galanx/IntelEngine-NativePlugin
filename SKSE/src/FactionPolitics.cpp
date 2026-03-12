@@ -588,12 +588,21 @@ namespace IntelEngine {
             }
         }
 
-        // Last 5 events (compact — DMs don't need full history)
-        auto recentEvents = db->GetRecentEvents(5);
+        // Last 10 events with timestamps (oldest first, most recent last for LLM recency)
+        auto recentEvents = db->GetRecentEvents(10);
         if (!recentEvents.empty()) {
-            md += "Recent political events:\n";
+            std::reverse(recentEvents.begin(), recentEvents.end());
+            float currentGameTime = RE::Calendar::GetSingleton() ? RE::Calendar::GetSingleton()->GetCurrentGameTime() : 0.0f;
+            md += "Recent political events (oldest first, most recent last):\n";
             for (const auto& e : recentEvents) {
-                md += "- ";
+                md += "- (";
+                float daysAgoF = currentGameTime - e.gameTime;
+                int daysAgo = static_cast<int>(daysAgoF);
+                if (daysAgoF < 0.25f) md += "just now";
+                else if (daysAgoF < 1.0f) md += "earlier today";
+                else if (daysAgo == 1) md += "yesterday";
+                else { md += std::to_string(daysAgo); md += " days ago"; }
+                md += ") ";
                 md += e.description;
                 md += " (";
                 md += getName(e.factionA);
