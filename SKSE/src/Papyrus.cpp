@@ -133,6 +133,9 @@ namespace IntelEngine::Papyrus {
     int GetPendingBattleCount(RE::StaticFunctionTag*);
     RE::BSFixedString GetLastExpiredBattleResult(RE::StaticFunctionTag*);
 
+    // Battle witness forward declarations
+    std::vector<RE::Actor*> GetNearbyWitnessNPCs(RE::StaticFunctionTag*, RE::TESObjectREFR*, float);
+
     // JSON array helper forward declarations
     int GetJsonArrayLength(RE::StaticFunctionTag*, RE::BSFixedString, RE::BSFixedString);
     RE::BSFixedString GetJsonArrayItem(RE::StaticFunctionTag*, RE::BSFixedString, RE::BSFixedString, int);
@@ -386,6 +389,9 @@ namespace IntelEngine::Papyrus {
         a_vm->RegisterFunction("GetPendingBattleInfo", SCRIPT_NAME, GetPendingBattleInfo); ++count;
         a_vm->RegisterFunction("GetPendingBattleCount", SCRIPT_NAME, GetPendingBattleCount); ++count;
         a_vm->RegisterFunction("GetLastExpiredBattleResult", SCRIPT_NAME, GetLastExpiredBattleResult); ++count;
+
+        // Battle Witness Functions
+        a_vm->RegisterFunction("GetNearbyWitnessNPCs", SCRIPT_NAME, GetNearbyWitnessNPCs); ++count;
 
         // JSON Array Helper Functions
         a_vm->RegisterFunction("GetJsonArrayLength", SCRIPT_NAME, GetJsonArrayLength); ++count;
@@ -3455,6 +3461,56 @@ namespace IntelEngine::Papyrus {
 
         logger::info("[IntelEngine] SpawnBattleSoldiers: spawned {}/{} for faction '{}'",
                     result.size(), count, factionId);
+        return result;
+    }
+
+    // ==========================================================================
+    // Battle Witness Functions
+    // ==========================================================================
+
+    std::vector<RE::Actor*> GetNearbyWitnessNPCs(RE::StaticFunctionTag*,
+                                                  RE::TESObjectREFR* center, float radius) {
+        std::vector<RE::Actor*> result;
+        if (!center) return result;
+
+        auto pos = center->GetPosition();
+
+        // Get all battle actor FormIDs to exclude them
+        std::unordered_set<RE::FormID> battleActors;
+        auto* bm = BattleManager::GetSingleton();
+        // BattleSnapshot doesn't include actors, so we check via IsBattleActive
+        // and skip actors that are in battle factions
+
+        auto* processLists = RE::ProcessLists::GetSingleton();
+        if (!processLists) return result;
+
+        for (auto& handle : processLists->highActorHandles) {
+            auto actor = handle.get();
+            if (!actor || !actor.get()) continue;
+            auto* a = actor.get();
+
+            // Skip dead, player, deleted
+            if (a->IsDead() || a->IsPlayerRef() || a->IsDeleted()) continue;
+
+            // Skip unnamed (generic spawns)
+            auto name = a->GetName();
+            if (!name || name[0] == '\0') continue;
+
+            // Skip if too far
+            auto aPos = a->GetPosition();
+            float dx = pos.x - aPos.x;
+            float dy = pos.y - aPos.y;
+            float dist = std::sqrt(dx * dx + dy * dy);
+            if (dist > radius) continue;
+
+            // Skip battle-spawned soldiers (they have temp FormIDs in FF range)
+            if ((a->GetFormID() >> 24) == 0xFF) continue;
+
+            result.push_back(a);
+        }
+
+        logger::info("[IntelEngine] GetNearbyWitnessNPCs: found {} witnesses within {:.0f} units",
+                    result.size(), radius);
         return result;
     }
 
