@@ -48,6 +48,7 @@ set(SOURCES
     src/PoliticalDB.cpp
     src/FactionPolitics.cpp
     src/FactionConfigLoader.cpp
+    src/BattleManager.cpp
 )
 
 # =============================================================================

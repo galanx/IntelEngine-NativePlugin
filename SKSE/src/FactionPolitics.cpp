@@ -8,12 +8,16 @@
 
 #include "FactionPolitics.h"
 #include "FactionConfigLoader.h"
+#include "BattleManager.h"
 #include "DashboardConfig.h"
+#include "NPCIndex.h"
 #include "SkyrimNetAPI.h"
 
 #include <fstream>
 #include <filesystem>
 #include <algorithm>
+#include <chrono>
+#include <random>
 
 namespace IntelEngine {
 
@@ -181,6 +185,13 @@ namespace IntelEngine {
         std::lock_guard<std::mutex> lock(configMutex_);
         auto it = nameToId_.find(ToLower(displayName));
         return (it != nameToId_.end()) ? it->second : "";
+    }
+
+    std::string FactionPolitics::GetSoldierTemplate(const std::string& factionId) const {
+        std::lock_guard<std::mutex> lock(configMutex_);
+        auto it = factionIndex_.find(factionId);
+        if (it == factionIndex_.end()) return "";
+        return factions_[it->second].soldierTemplate;
     }
 
     // =========================================================================
@@ -406,6 +417,60 @@ namespace IntelEngine {
 
         state["current_game_time"] = currentGameTime;
 
+        // Nearby faction leaders — tells the DM which leaders the player can see
+        {
+            auto* player = RE::PlayerCharacter::GetSingleton();
+            auto* npcIndex = NPCIndex::GetSingleton();
+            if (player && npcIndex) {
+                // Snapshot faction leader data under lock, then release
+                struct LeaderInfo { std::string name; std::string factionId; std::string hold; };
+                std::vector<LeaderInfo> leaderSnapshot;
+                {
+                    std::lock_guard<std::mutex> lock(configMutex_);
+                    for (const auto& f : factions_) {
+                        for (const auto& leaderName : f.leaderNames) {
+                            leaderSnapshot.push_back({leaderName, f.id, f.hold});
+                        }
+                    }
+                }
+
+                // Resolve actors and check proximity outside the lock
+                // Only scan when player is in an exterior worldspace — GetWorldspace() returns
+                // nullptr for interiors, causing false matches between different interior cells
+                nlohmann::json nearbyJson = nlohmann::json::array();
+                auto* playerWorld = player->GetWorldspace();
+
+                if (playerWorld) {
+                    for (const auto& info : leaderSnapshot) {
+                        auto* leader = npcIndex->FindByName(info.name);
+                        if (!leader || !leader->Is3DLoaded()) continue;
+
+                        if (leader->GetWorldspace() != playerWorld) continue;
+
+                        float dx = leader->GetPositionX() - player->GetPositionX();
+                        float dy = leader->GetPositionY() - player->GetPositionY();
+                        float dz = leader->GetPositionZ() - player->GetPositionZ();
+                        float dist = std::sqrt(dx * dx + dy * dy + dz * dz);
+                        if (dist < NEARBY_LEADER_DISTANCE) {
+                            nlohmann::json leaderEntry;
+                            leaderEntry["name"] = info.name;
+                            leaderEntry["faction"] = info.factionId;
+                            leaderEntry["hold"] = info.hold;
+                            nearbyJson.push_back(leaderEntry);
+                        }
+                    }
+                }
+
+                if (!nearbyJson.empty()) {
+                    state["player_nearby_leaders"] = nearbyJson;
+                    std::string playerHold = NPCIndex::GetNPCHoldName(player);
+                    if (!playerHold.empty()) {
+                        state["player_hold"] = playerHold;
+                    }
+                }
+            }
+        }
+
         // Recent player dialogues (for player standing analysis)
         if (SkyrimNetAPI::GetRecentDialogue) {
             auto* player = RE::PlayerCharacter::GetSingleton();
@@ -621,6 +686,254 @@ namespace IntelEngine {
     }
 
     // =========================================================================
+    // Shared Helpers
+    // =========================================================================
+
+    bool FactionPolitics::IsPlayerAtInn() {
+        auto* player = RE::PlayerCharacter::GetSingleton();
+        if (!player) return false;
+        auto* loc = player->GetCurrentLocation();
+        if (!loc) return false;
+        auto* innKeyword = RE::TESForm::LookupByEditorID<RE::BGSKeyword>("LocTypeInn");
+        return innKeyword && loc->HasKeyword(innKeyword);
+    }
+
+    std::optional<FactionConfig> FactionPolitics::GetNPCFaction(RE::Actor* actor) const {
+        if (!actor) return std::nullopt;
+
+        std::string actorName = actor->GetDisplayFullName();
+
+        std::lock_guard<std::mutex> lock(configMutex_);
+
+        // Tier 1: Leader name match
+        for (const auto& fac : factions_) {
+            for (const auto& leaderName : fac.leaderNames) {
+                if (leaderName == actorName) return fac;
+            }
+        }
+
+        // Tier 2: Skyrim engine faction membership
+        for (const auto& fac : factions_) {
+            if (fac.skyrimFactionId.empty()) continue;
+            auto* skyrimFaction = RE::TESForm::LookupByEditorID<RE::TESFaction>(fac.skyrimFactionId);
+            if (skyrimFaction && actor->IsInFaction(skyrimFaction)) {
+                return fac;
+            }
+        }
+
+        return std::nullopt;
+    }
+
+    // =========================================================================
+    // Witnessable Event Detection
+    // =========================================================================
+
+    std::string FactionPolitics::GetLatestWitnessableEvent() {
+        if (!initialized_.load() || !enabled_.load()) return "";
+
+        auto* db = PoliticalDB::GetSingleton();
+        if (!db->IsReady()) return "";
+
+        auto* cal = RE::Calendar::GetSingleton();
+        if (!cal) return "";
+
+        float currentTime = cal->GetCurrentGameTime();
+        float tickWindow = static_cast<float>(tickIntervalHours_.load()) / 24.0f;
+
+        auto events = db->GetRecentEvents(1);
+        if (events.empty()) return "";
+
+        const auto& evt = events[0];
+        if ((currentTime - evt.gameTime) > tickWindow) return "";
+
+        static const std::unordered_map<std::string, std::string> witnessableTypes = {
+            {"assassination_attempt", "An assassination attempt"},
+            {"brawl", "A brawl"},
+            {"sabotage", "A sabotage operation"},
+            {"espionage", "An espionage operation"},
+            {"border_skirmish", "A border skirmish"}
+        };
+        auto typeIt = witnessableTypes.find(evt.eventType);
+        if (typeIt == witnessableTypes.end()) return "";
+
+        auto idToName = BuildIdToNameMap();
+        auto getName = [&](const std::string& id) -> std::string {
+            auto it = idToName.find(id);
+            return (it != idToName.end()) ? it->second : id;
+        };
+
+        std::string result = typeIt->second + ": " + evt.description;
+        result += " (" + getName(evt.factionA);
+        if (!evt.factionB.empty()) {
+            result += " / " + getName(evt.factionB);
+        }
+        result += ")";
+
+        logger::info("FactionPolitics: Witnessable event: {}", result);
+        return result;
+    }
+
+    // =========================================================================
+    // Event Manifestation (physical spawning near player)
+    // =========================================================================
+
+    std::string FactionPolitics::CheckEventManifestation(
+        const std::string& factionA, const std::string& factionB,
+        const std::string& eventType)
+    {
+        if (!initialized_.load() || !enabled_.load()) return "";
+
+        // Skip espionage — too subtle for physical manifestation
+        if (eventType == "espionage") return "";
+
+        // Only manifest types with clear physical combat (skip sabotage — no visible target)
+        if (eventType != "assassination_attempt" && eventType != "brawl" &&
+            eventType != "border_skirmish") {
+            return "";
+        }
+
+        // Guard: no active battle (shared soldier factions would conflict)
+        if (BattleManager::GetSingleton()->IsBattleActive()) {
+            logger::info("FactionPolitics: Skipping manifestation — active battle");
+            return "";
+        }
+
+        // Guard: cooldown
+        auto* cal = RE::Calendar::GetSingleton();
+        if (!cal) return "";
+        float currentTime = cal->GetCurrentGameTime();
+        float lastTime = lastManifestationTime_.load();
+        if (lastTime > 0.0f && (currentTime - lastTime) < (MANIFESTATION_COOLDOWN_HOURS / 24.0f)) {
+            logger::info("FactionPolitics: Skipping manifestation — cooldown active");
+            return "";
+        }
+
+        // Guard: player must be in exterior
+        auto* player = RE::PlayerCharacter::GetSingleton();
+        if (!player) return "";
+        auto* playerCell = player->GetParentCell();
+        if (!playerCell || playerCell->IsInteriorCell()) {
+            logger::info("FactionPolitics: Skipping manifestation — player is indoors");
+            return "";
+        }
+
+        // Get player's hold name
+        std::string playerHold = NPCIndex::GetNPCHoldName(player);
+        if (playerHold.empty()) return "";
+
+        // Look up faction configs
+        auto cfgA = GetFaction(factionA);
+        auto cfgB = GetFaction(factionB);
+        if (!cfgA) return "";
+
+        // Determine attacker/target based on which faction's hold the player is in
+        std::string attackerFaction, targetFaction;
+        bool matchedHold = false;
+
+        // For assassination: factionA attacks factionB
+        if (eventType == "assassination_attempt") {
+            if (cfgB && !cfgB->hold.empty() && playerHold == cfgB->hold) {
+                attackerFaction = factionA;
+                targetFaction = factionB;
+                matchedHold = true;
+            }
+        }
+        // For brawl/border_skirmish: either side's hold works
+        else if (eventType == "brawl" || eventType == "border_skirmish") {
+            if (cfgB && !cfgB->hold.empty() && playerHold == cfgB->hold) {
+                attackerFaction = factionA;
+                targetFaction = factionB;
+                matchedHold = true;
+            } else if (cfgA && !cfgA->hold.empty() && playerHold == cfgA->hold) {
+                attackerFaction = factionB;
+                targetFaction = factionA;
+                matchedHold = true;
+            }
+        }
+
+        // Also check if any faction leader is loaded near the player (within 5000 units)
+        if (!matchedHold) {
+            float px = player->GetPositionX();
+            float py = player->GetPositionY();
+            auto* npcIndex = NPCIndex::GetSingleton();
+
+            auto checkLeadersNearby = [&](const FactionConfig& cfg) -> bool {
+                for (const auto& name : cfg.leaderNames) {
+                    auto* actor = npcIndex->FindByName(name);
+                    if (!actor) continue;
+                    float dx = px - actor->GetPositionX();
+                    float dy = py - actor->GetPositionY();
+                    if ((dx * dx + dy * dy) <= NEARBY_LEADER_DISTANCE * NEARBY_LEADER_DISTANCE) return true;
+                }
+                return false;
+            };
+
+            if (eventType == "assassination_attempt") {
+                if (cfgB && checkLeadersNearby(*cfgB)) {
+                    attackerFaction = factionA;
+                    targetFaction = factionB;
+                }
+            } else {
+                if (cfgB && checkLeadersNearby(*cfgB)) {
+                    attackerFaction = factionA;
+                    targetFaction = factionB;
+                } else if (cfgA && checkLeadersNearby(*cfgA)) {
+                    attackerFaction = factionB;
+                    targetFaction = factionA;
+                }
+            }
+        }
+
+        if (attackerFaction.empty()) return "";
+
+        // Determine spawn counts by event type (with variance for immersion)
+        std::mt19937 rng(std::chrono::steady_clock::now().time_since_epoch().count());
+        int spawnCount = 2;
+        bool spawnDefenders = false;
+        int defenderCount = 0;
+
+        if (eventType == "assassination_attempt") {
+            spawnCount = 2 + (rng() % 2);  // 2-3
+        } else if (eventType == "brawl") {
+            spawnCount = 2 + (rng() % 3);  // 2-4
+            spawnDefenders = true;
+            defenderCount = 2 + (rng() % 3);  // 2-4
+        } else if (eventType == "border_skirmish") {
+            spawnCount = 3 + (rng() % 3);  // 3-5
+            spawnDefenders = true;
+            defenderCount = 3 + (rng() % 3);  // 3-5
+        }
+
+        // Note: cooldown is NOT set here — Papyrus calls ConfirmManifestationCooldown()
+        // after verifying that actors actually spawned. This prevents consuming the
+        // cooldown when all SpawnBattleSoldiers calls fail.
+
+        // Build JSON response
+        nlohmann::json result;
+        result["manifest"] = true;
+        result["attacker_faction"] = attackerFaction;
+        result["target_faction"] = targetFaction;
+        result["event_type"] = eventType;
+        result["spawn_count"] = spawnCount;
+        result["spawn_defenders"] = spawnDefenders;
+        result["defender_count"] = defenderCount;
+
+        logger::info("FactionPolitics: Event manifestation — {} attacks {} ({}, {} attackers{})",
+                     attackerFaction, targetFaction, eventType, spawnCount,
+                     spawnDefenders ? ", " + std::to_string(defenderCount) + " defenders" : "");
+
+        return result.dump();
+    }
+
+    void FactionPolitics::ConfirmManifestationCooldown() {
+        auto* cal = RE::Calendar::GetSingleton();
+        if (cal) {
+            lastManifestationTime_.store(cal->GetCurrentGameTime());
+            logger::info("FactionPolitics: Manifestation cooldown confirmed by Papyrus");
+        }
+    }
+
+    // =========================================================================
     // Player Standing Mechanics
     // =========================================================================
 
@@ -764,11 +1077,20 @@ namespace IntelEngine {
         auto* cal = RE::Calendar::GetSingleton();
         float gameTime = cal ? cal->GetCurrentGameTime() : 0.0f;
 
+        // Snapshot battle state once (single lock) — exempt battle factions from crime gold
+        // penalties. Uses playerParticipated (sticky) so exemption survives RemovePlayerFromBattle
+        // clearing the side before EndBattle clears the battle entirely.
+        auto battleSnap = BattleManager::GetSingleton()->GetBattleSnapshot();
+
         int changes = 0;
 
         std::lock_guard<std::mutex> lock(configMutex_);
         for (const auto& fac : factions_) {
             if (fac.skyrimFactionId.empty()) continue;
+
+            // Skip crime gold checks for factions in the active battle when player participated
+            if (battleSnap.active && battleSnap.playerParticipated &&
+                (fac.id == battleSnap.factionA || fac.id == battleSnap.factionB)) continue;
 
             auto* skyrimFaction = RE::TESForm::LookupByEditorID<RE::TESFaction>(fac.skyrimFactionId);
             if (!skyrimFaction) continue;
@@ -981,6 +1303,13 @@ namespace IntelEngine {
         auto* db = PoliticalDB::GetSingleton();
         if (!db->IsReady()) return 0;
         return static_cast<int>(db->GetActiveWars().size());
+    }
+
+    int FactionPolitics::GetActiveWarId(const std::string& factionA, const std::string& factionB) {
+        auto* db = PoliticalDB::GetSingleton();
+        if (!db->IsReady()) return -1;
+        auto war = db->GetActiveWar(factionA, factionB);
+        return war ? war->id : -1;
     }
 
     int FactionPolitics::GetWarStrength(const std::string& factionA, const std::string& factionB,

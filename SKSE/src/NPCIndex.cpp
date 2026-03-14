@@ -1814,7 +1814,10 @@ namespace IntelEngine {
         md += "- Danger: ";  md += dangerous ? "DANGEROUS" : "SAFE";  md += "\n";
         md += "- Environment: ";  md += interior ? "Interior" : "Exterior";  md += "\n";
         md += "- Hold: ";    md += holdName;   md += "\n";
-        md += "- Time: ";    md += timeStr;    md += "\n\n";
+        md += "- Time: ";    md += timeStr;    md += "\n";
+
+        bool playerAtInn = FactionPolitics::IsPlayerAtInn();
+        md += "- At Inn: ";  md += playerAtInn ? "yes" : "no";  md += "\n\n";
 
         // Political climate (so Story DM can dispatch politically-motivated stories)
         auto politicalSummary = FactionPolitics::GetSingleton()->BuildPoliticalSummary();
@@ -1854,6 +1857,12 @@ namespace IntelEngine {
             md += "Eligible: ";  md += eligibleTypes;  md += "\n";
             if (!bio.empty()) {
                 md += "Bio: ";  md += bio;  md += "\n";
+            }
+
+            // Political faction affiliation (single lock scope — avoids TOCTOU)
+            auto npcFaction = FactionPolitics::GetSingleton()->GetNPCFaction(actor);
+            if (npcFaction) {
+                md += "Faction: ";  md += npcFaction->name;  md += "\n";
             }
 
             // Bio relationships — canonical connections from character prompt file

@@ -73,6 +73,19 @@ namespace IntelEngine {
             catch (...) { return def; }
         }
 
+        float ParseFloat(const std::string& val, float def) {
+            try { return std::stof(Trim(val)); }
+            catch (...) { return def; }
+        }
+
+        // Parse inline float array like [1.5, -2.3, 100.0] into float[3]
+        void ParseFloatArray3(const std::string& raw, float out[3]) {
+            auto items = ParseInlineArray(raw);
+            for (int i = 0; i < 3 && i < static_cast<int>(items.size()); ++i) {
+                out[i] = ParseFloat(items[i], 0.0f);
+            }
+        }
+
         size_t GetIndent(const std::string& line) {
             return line.find_first_not_of(" \t");
         }
@@ -202,6 +215,9 @@ namespace IntelEngine {
                         else if (key == "base_army_strength") currentFaction.baseArmyStrength = ParseInt(value, 0);
                         else if (key == "war_threshold") currentFaction.warThreshold = ParseInt(value, -50);
                         else if (key == "conflict_style") currentFaction.conflictStyle = value;
+                        else if (key == "soldier_template") currentFaction.soldierTemplate = value;
+                        else if (key == "prison_location") currentFaction.prisonLocation = value;
+                        else if (key == "prison_marker") ParseFloatArray3(StripComment(lines[i].substr(lines[i].find(':')+1)), currentFaction.prisonMarker);
                         break;
 
                     case Section::DefaultRelations:

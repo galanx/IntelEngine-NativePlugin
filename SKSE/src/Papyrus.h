@@ -422,6 +422,14 @@ namespace IntelEngine::Papyrus {
     /** Get FormIDs of faction leaders (works even if actors aren't loaded). */
     std::vector<int> GetFactionLeaderFormIds(RE::StaticFunctionTag*, RE::BSFixedString factionId);
 
+    /** Check if a political event should physically manifest near the player.
+     *  Returns JSON spawn instructions or empty string. */
+    RE::BSFixedString CheckEventManifestation(RE::StaticFunctionTag*,
+        RE::BSFixedString factionA, RE::BSFixedString factionB, RE::BSFixedString eventType);
+
+    /** Confirm manifestation cooldown after Papyrus verified actors spawned. */
+    void ConfirmManifestationCooldown(RE::StaticFunctionTag*);
+
     /** Parse LLM player standing response JSON and apply standing changes. Returns count applied. */
     int ApplyPlayerStandingChanges(RE::StaticFunctionTag*, RE::BSFixedString responseJson);
 

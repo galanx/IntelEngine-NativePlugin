@@ -50,6 +50,9 @@ namespace IntelEngine {
         int baseArmyStrength = 0;   // Used in Political DM context for event generation
         int warThreshold = -50;
         std::string conflictStyle;  // brawl, sabotage, assassination, proxy — used in Political DM context
+        std::string soldierTemplate; // EditorID of leveled actor list for battle spawning
+        std::string prisonLocation;  // Cell EditorID for prisoner holding (Phase 4)
+        float prisonMarker[3] = {};  // [x, y, z] position within prison cell (Phase 4)
     };
 
     struct DefaultRelation {
@@ -93,6 +96,9 @@ namespace IntelEngine {
         /** Get faction ID by display name (case-insensitive). Empty if not found. */
         std::string GetFactionIdByName(const std::string& displayName) const;
 
+        /** Get soldier template EditorID for a faction. Empty if not configured. */
+        std::string GetSoldierTemplate(const std::string& factionId) const;
+
         // =================================================================
         // Political DM Context Building
         // =================================================================
@@ -108,6 +114,13 @@ namespace IntelEngine {
 
         /** Get human-readable status for a relation score. */
         static std::string GetRelationStatus(int score);
+
+        /** Check if the player is currently at an inn (LocTypeInn keyword). */
+        static bool IsPlayerAtInn();
+
+        /** Get the political faction config for an NPC in one lock scope.
+         *  Combines GetNPCFactionId + GetFaction to avoid TOCTOU between two mutex acquisitions. */
+        std::optional<FactionConfig> GetNPCFaction(RE::Actor* actor) const;
 
         /** Check if a faction pair is at war (score below per-faction threshold). */
         bool IsAtWar(const std::string& factionA, const std::string& factionB);
@@ -131,6 +144,24 @@ namespace IntelEngine {
         /** Build a compact markdown summary for injection into Story DM / NPC DM contexts.
          *  Includes: non-neutral relations, recent events, active wars. Lightweight. */
         std::string BuildPoliticalSummary();
+
+        /** Get the most recent witnessable political event (assassination, brawl,
+         *  sabotage, espionage, border_skirmish) that happened within the current
+         *  tick window. Returns empty string if none. Used by Story DM to hint
+         *  at events the player could witness nearby. */
+        std::string GetLatestWitnessableEvent();
+
+        /** Check if a political event should physically manifest near the player.
+         *  Compares player's hold against involved factions' holds.
+         *  Returns JSON spawn instructions if player is at the event location,
+         *  empty string if not. Guards: cooldown, no active battle, exterior only. */
+        std::string CheckEventManifestation(const std::string& factionA,
+                                            const std::string& factionB,
+                                            const std::string& eventType);
+
+        /** Confirm manifestation cooldown after Papyrus verified actors spawned.
+         *  Called by Papyrus only when at least one actor was successfully created. */
+        void ConfirmManifestationCooldown();
 
         /** Write political_state.json for pull-based NPC awareness.
          *  Called after each political event. The file is read by the prompt template
@@ -176,6 +207,9 @@ namespace IntelEngine {
 
         /** Get the number of currently active wars. */
         int GetActiveWarCount();
+
+        /** Get the DB war ID for an active war between two factions. Returns -1 if no war. */
+        int GetActiveWarId(const std::string& factionA, const std::string& factionB);
 
         /** Get war strength for a faction in an active war. Returns 0 if no war. */
         int GetWarStrength(const std::string& factionA, const std::string& factionB, const std::string& queryFaction);
@@ -258,6 +292,11 @@ namespace IntelEngine {
         std::atomic<int> moraleDecayPerTick_{2};
 
         std::atomic<bool> initialized_{false};
+
+        // Manifestation cooldown — last game time a political event was physically spawned
+        std::atomic<float> lastManifestationTime_{0.0f};
+        static constexpr float MANIFESTATION_COOLDOWN_HOURS = 4.0f;
+        static constexpr float NEARBY_LEADER_DISTANCE = 5000.0f;
 
         // Crime gold baseline — last-known crime gold per faction (factionId → gold)
         // Used to detect NEW crime gold increases since last check
