@@ -15,6 +15,43 @@ const HOME_HINTS = [
   'Nobody visits you at home.',
 ];
 
+const HOLD_POLICIES = ['Any Hold', 'Same Hold (Civ)', 'Same Hold (-Fol)', 'Same Hold (All)', 'Same Town (Civ)', 'Same Town (-Fol)', 'Same Town (All)'];
+const HOLD_HINTS = [
+  'No restriction. NPCs from any hold can be dispatched.',
+  'Civilians must be in the same hold as you. Warriors and followers can cross holds.',
+  'Everyone except followers must be in the same hold.',
+  'All NPCs must be in the same hold as you.',
+  'Civilians must be in the same town/city. Warriors can cross within the hold. Followers go anywhere.',
+  'Everyone except followers must be in the same town/city.',
+  'All NPCs must be in the same town/city as you.',
+];
+const HOLD_TYPES = [
+  { key: 'holdPolicySeekPlayer', label: 'Seek Player' },
+  { key: 'holdPolicyInformant', label: 'Informant' },
+  { key: 'holdPolicyRoadEncounter', label: 'Road Encounter' },
+  { key: 'holdPolicyAmbush', label: 'Ambush' },
+  { key: 'holdPolicyStalker', label: 'Stalker' },
+  { key: 'holdPolicyMessage', label: 'Message' },
+  { key: 'holdPolicyQuest', label: 'Quest' },
+];
+
+const CONFIRM_MODES = ['Disabled', 'Followers Only', 'Everyone'];
+const CONFIRM_HINTS = [
+  'No confirmation prompt. Action executes immediately.',
+  'Prompt only when active followers perform this action.',
+  'Prompt for all NPCs performing this action.',
+];
+const CONFIRM_ACTIONS = [
+  { key: 'confirmGoToLocation', label: 'Go To Location' },
+  { key: 'confirmDeliverMessage', label: 'Deliver Message' },
+  { key: 'confirmFetchPerson', label: 'Fetch Person' },
+  { key: 'confirmEscortTarget', label: 'Escort Target' },
+  { key: 'confirmSearchForActor', label: 'Search For Actor' },
+  { key: 'confirmScheduleMeeting', label: 'Schedule Meeting' },
+  { key: 'confirmScheduleFetch', label: 'Schedule Fetch' },
+  { key: 'confirmScheduleDelivery', label: 'Schedule Delivery' },
+];
+
 const VK_NAMES = {
   '-1': 'Disabled',
   '48': '0', '49': '1', '50': '2', '51': '3', '52': '4',
@@ -59,10 +96,10 @@ function SettingsTab({ config, onSettingChange, pluginConfig, onPluginConfigChan
         <SliderRow
           label="Check Interval"
           value={config.storyInterval}
-          min={0.5} max={12} step={0.5}
+          min={0.5} max={168} step={0.5}
           unit="hrs"
           onCommit={v => onSettingChange('storyInterval', v)}
-          hint="How often (game hours) the Story Engine checks for NPCs with reasons to find you."
+          hint="How often (game hours) the Story Engine checks for NPCs with reasons to find you. Max 168 = 1 week."
         />
         <SliderRow
           label="NPC Cooldown"
@@ -124,10 +161,10 @@ function SettingsTab({ config, onSettingChange, pluginConfig, onPluginConfigChan
           <SliderRow
             label="Interaction Interval"
             value={config.npcTickInterval}
-            min={0.5} max={6} step={0.5}
+            min={0.5} max={168} step={0.5}
             unit="hrs"
             onCommit={v => onSettingChange('npcTickInterval', v)}
-            hint="How often the NPC social system checks for NPC-to-NPC interactions."
+            hint="How often the NPC social system checks for NPC-to-NPC interactions. Max 168 = 1 week."
           />
           <SliderRow
             label="Social Cooldown"
@@ -137,7 +174,38 @@ function SettingsTab({ config, onSettingChange, pluginConfig, onPluginConfigChan
             onCommit={v => onSettingChange('npcSocialCooldown', v)}
             hint="How long before an NPC can be picked for another social interaction."
           />
+          <ToggleRow
+            label="NPC-to-NPC Interactions"
+            value={config.npc_interaction !== false}
+            onChange={v => onSettingChange('npc_interaction', v)}
+            hint="NPCs interact with each other autonomously (arguments, trades, conversations)."
+          />
+          <ToggleRow
+            label="NPC Gossip"
+            value={config.npc_gossip !== false}
+            onChange={v => onSettingChange('npc_gossip', v)}
+            hint="NPCs spread rumors and gossip among themselves."
+          />
         </div>
+      </Accordion>
+
+      {/* Hold Restrictions */}
+      <Accordion title="Hold Restrictions" isOpen={openSections.holdRestrictions} onToggle={() => toggle('holdRestrictions')}>
+        <p className="text-[9px] text-gray-600 mb-2">
+          Restrict NPCs from traveling across holds per story type. Default: same hold for civilians.
+        </p>
+        {HOLD_TYPES.map(type => (
+          <div key={type.key} className="mb-1.5">
+            <span className="text-[10px] text-gray-500 uppercase tracking-wider block mb-0.5">{type.label}</span>
+            <PolicyRow
+              label=""
+              value={config[type.key] ?? 1}
+              options={HOLD_POLICIES}
+              hints={HOLD_HINTS}
+              onChange={v => onSettingChange(type.key, v)}
+            />
+          </div>
+        ))}
       </Accordion>
 
       {/* Tasks & Meetings */}
@@ -187,12 +255,26 @@ function SettingsTab({ config, onSettingChange, pluginConfig, onPluginConfigChan
           onChange={v => onSettingChange('reportBack', v)}
           hint="Messengers return to you after delivering a message off-screen."
         />
-        <ToggleRow
-          label="Task Confirmation Prompt"
-          value={config.taskConfirmPrompt}
-          onChange={v => onSettingChange('taskConfirmPrompt', v)}
-          hint="Prompt appears before an NPC starts a task. You can Allow, Deny, or Deny Silently."
-        />
+      </Accordion>
+
+      {/* Action Confirmation Prompts */}
+      <Accordion title="Action Confirmations" isOpen={openSections.confirmations} onToggle={() => toggle('confirmations')}>
+        <p className="text-[10px] text-gray-500 mb-2">Per-action confirmation prompts (Disabled / Followers Only / Everyone)</p>
+        {CONFIRM_ACTIONS.map(({ key, label }) => {
+          const val = parseInt(config[key]) || 0;
+          return (
+            <div key={key} className="flex items-center justify-between py-1 group">
+              <span className="text-xs text-gray-300">{label}</span>
+              <button
+                className="text-xs px-2 py-0.5 rounded bg-white/5 hover:bg-white/10 text-gray-300 min-w-[100px] text-center"
+                title={CONFIRM_HINTS[val]}
+                onClick={() => onSettingChange(key, (val + 1) % 3)}
+              >
+                {CONFIRM_MODES[val]}
+              </button>
+            </div>
+          );
+        })}
       </Accordion>
 
       {/* Quest Types */}
@@ -203,6 +285,12 @@ function SettingsTab({ config, onSettingChange, pluginConfig, onPluginConfigChan
           hint="A real NPC is teleported to the location and held captive by enemies." />
         <ToggleRow label="Find Item" value={config.questFindItem} onChange={v => onSettingChange('questFindItem', v)}
           hint="A valuable item spawns in a chest guarded by enemies." />
+        <ToggleRow label="Faction Combat" value={config.questFactionCombat} onChange={v => onSettingChange('questFactionCombat', v)}
+          hint="Clear out hostile faction soldiers at a location. Rewards faction standing." />
+        <ToggleRow label="Faction Rescue" value={config.questFactionRescue} onChange={v => onSettingChange('questFactionRescue', v)}
+          hint="Rescue a captive from hostile faction soldiers. Rewards faction standing." />
+        <ToggleRow label="Faction Battle" value={config.questFactionBattle} onChange={v => onSettingChange('questFactionBattle', v)}
+          hint="A friendly faction invites you to join an upcoming battle. Requires high standing (40+)." />
         <ToggleRow
           label="Allow NPC Death (Rescue)"
           value={config.questAllowVictimDeath}
@@ -232,10 +320,10 @@ function SettingsTab({ config, onSettingChange, pluginConfig, onPluginConfigChan
             <SliderRow
               label="Tick Interval"
               value={parseInt(pluginConfig['politics.tick_interval_hours']) || 6}
-              min={1} max={24} step={1}
+              min={1} max={168} step={1}
               unit="hrs"
               onCommit={v => onPluginConfigChange('politics.tick_interval_hours', v)}
-              hint="How often the Political DM evaluates faction relations."
+              hint="How often the Political DM evaluates faction relations. Max 168 = 1 week."
             />
             <SliderRow
               label="Max Relation Change"
@@ -274,7 +362,7 @@ function SettingsTab({ config, onSettingChange, pluginConfig, onPluginConfigChan
             <span className="text-[10px] text-gray-600 uppercase tracking-wider">Plugin Configuration</span>
           </div>
 
-          <Accordion title="Blocklists" isOpen={openSections.blocklists} onToggle={() => toggle('blocklists')}>
+          <Accordion title="Blocklists & Whitelists" isOpen={openSections.blocklists} onToggle={() => toggle('blocklists')}>
             <TextInputRow
               label="Faction Blocklist"
               hint="Comma-separated EditorIDs (e.g. PrisonerFaction,BanditFaction:1)"
@@ -292,6 +380,27 @@ function SettingsTab({ config, onSettingChange, pluginConfig, onPluginConfigChan
               hint="Comma-separated NPC display names"
               value={pluginConfig['story.npc_blocklist'] || ''}
               onCommit={v => onPluginConfigChange('story.npc_blocklist', v)}
+            />
+            <div className="mt-2 pt-2 border-t border-white/5">
+              <p className="text-[10px] text-gray-500 mb-1">Whitelists (empty = all allowed)</p>
+            </div>
+            <TextInputRow
+              label="Faction Whitelist"
+              hint="Comma-separated faction EditorIDs. Only these factions' NPCs can be dispatched."
+              value={pluginConfig['story.faction_whitelist'] || ''}
+              onCommit={v => onPluginConfigChange('story.faction_whitelist', v)}
+            />
+            <TextInputRow
+              label="Location Whitelist"
+              hint="Comma-separated locations. NPCs only visit you at these locations."
+              value={pluginConfig['story.location_whitelist'] || ''}
+              onCommit={v => onPluginConfigChange('story.location_whitelist', v)}
+            />
+            <TextInputRow
+              label="NPC Whitelist"
+              hint="Comma-separated NPC names. Only these NPCs can be dispatched."
+              value={pluginConfig['story.npc_whitelist'] || ''}
+              onCommit={v => onPluginConfigChange('story.npc_whitelist', v)}
             />
           </Accordion>
 
@@ -347,7 +456,7 @@ function SettingsTab({ config, onSettingChange, pluginConfig, onPluginConfigChan
               hint="Scale for high-DPI / 4K monitors. 1.5-2.0 recommended for 4K."
             />
             <HotkeyRow
-              value={pluginConfig['ui.dashboard_hotkey'] ?? 118}
+              value={pluginConfig['ui.dashboard_hotkey'] ?? 55}
               modifiers={pluginConfig['ui.dashboard_modifiers'] ?? 2}
               onChangeKey={v => onPluginConfigChange('ui.dashboard_hotkey', v)}
               onChangeMods={v => onPluginConfigChange('ui.dashboard_modifiers', v)}

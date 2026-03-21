@@ -97,6 +97,11 @@ namespace IntelEngine {
          *  Returns total rows deleted across all tables. */
         int CleanupFutureEvents(float currentGameTime);
 
+        /** Recalculate player standings from history events.
+         *  Resets all standings to 0 and replays player_standing_history chronologically.
+         *  Called after CleanupFutureEvents to handle save-scumming correctly. */
+        void RecalculatePlayerStandings();
+
         // =================================================================
         // Faction Relations
         // =================================================================

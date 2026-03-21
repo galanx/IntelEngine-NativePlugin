@@ -387,6 +387,9 @@ namespace IntelEngine::Papyrus {
     /** Adjust player standing with a faction by delta. Returns new standing. */
     int AdjustPlayerFactionStanding(RE::StaticFunctionTag*, RE::BSFixedString factionId, int delta);
 
+    /** Get a rival faction ID for the given faction (first rival from config). */
+    RE::BSFixedString GetFactionRival(RE::StaticFunctionTag*, RE::BSFixedString factionId);
+
     /** Check if two factions are at war (score below war threshold). */
     bool IsFactionAtWar(RE::StaticFunctionTag*, RE::BSFixedString factionA, RE::BSFixedString factionB);
 

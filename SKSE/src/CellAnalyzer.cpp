@@ -515,33 +515,42 @@ namespace IntelEngine {
         if (m_dangerousKeywordsCached) return;
         m_dangerousKeywordsCached = true;
 
-        static const char* editorIDs[] = {
-            "LocTypeDungeon", "LocTypeCrypt", "LocTypeRuin",
-            "LocTypeCave", "LocTypeMine", "LocTypeMilitaryFort"
+        // Inverted logic: enumerate SAFE location types (small, stable set).
+        // Any interior NOT matching these is considered dangerous.
+        // This catches dungeons, dragon lairs, vampire lairs, warlock lairs,
+        // hagraven nests, animal dens, giant camps, and modded dungeon types
+        // without needing an exhaustive dangerous-type list.
+        static const char* safeEditorIDs[] = {
+            "LocTypeInn", "LocTypeStore", "LocTypeHouse",
+            "LocTypePlayerHouse", "LocTypeTemple", "LocTypeGuild",
+            "LocTypeFarm", "LocTypeLumberMill", "LocTypeCastle",
+            "LocTypeJail"
         };
 
-        for (auto* editorID : editorIDs) {
+        for (auto* editorID : safeEditorIDs) {
             auto* form = RE::TESForm::LookupByEditorID(editorID);
             if (form) {
                 auto* keyword = form->As<RE::BGSKeyword>();
                 if (keyword) {
-                    m_dangerousKeywords.push_back(keyword);
+                    m_safeKeywords.push_back(keyword);
                 }
             }
         }
 
-        logger::debug("CellAnalyzer: Cached {} dangerous location keywords", m_dangerousKeywords.size());
+        logger::debug("CellAnalyzer: Cached {} safe location keywords", m_safeKeywords.size());
     }
 
     bool CellAnalyzer::IsLocationDangerous(RE::BGSLocation* location) {
-        if (!location) return false;
+        if (!location) return true;  // unknown location = assume dangerous
         EnsureDangerousKeywordsCached();
-        for (auto* keyword : m_dangerousKeywords) {
+        // If any safe keyword matches, the location is NOT dangerous
+        for (auto* keyword : m_safeKeywords) {
             if (location->HasKeyword(keyword)) {
-                return true;
+                return false;
             }
         }
-        return false;
+        // No safe keyword found = dangerous (dungeon, lair, camp, etc.)
+        return true;
     }
 
     bool CellAnalyzer::IsPlayerInDangerousLocation() {

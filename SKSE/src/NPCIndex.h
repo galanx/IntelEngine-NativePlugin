@@ -214,12 +214,36 @@ namespace IntelEngine {
          * 0=allow all, 1=block civilians, 2=followers only, 3=block all
          */
         void SetDangerZonePolicy(int policy);
+        int GetDangerZonePolicy() const { return m_dangerZonePolicy.load(std::memory_order_relaxed); }
 
         /**
          * Set player home visit policy (synced from MCM via Papyrus).
          * 0=allow all, 1=block civilians, 2=followers only, 3=block all
          */
         void SetPlayerHomePolicy(int policy);
+        int GetPlayerHomePolicy() const { return m_playerHomePolicy.load(std::memory_order_relaxed); }
+
+        /**
+         * Set per-story-type hold restriction policy (synced from MCM via Papyrus).
+         * 0=no restriction, 1=same hold civilians only, 2=same hold except followers, 3=same hold everyone
+         * @param storyType One of: seek_player, informant, road_encounter, ambush, stalker, message, quest
+         * @param policy Hold restriction level (0-3)
+         */
+        void SetHoldRestrictionPolicy(const std::string& storyType, int policy);
+
+        /**
+         * Get hold restriction policy for a story type.
+         */
+        int GetHoldRestrictionPolicy(const std::string& storyType) const;
+
+        /**
+         * Check if an NPC passes the hold restriction policy.
+         * @param actor NPC to check
+         * @param playerHold Player's current hold name
+         * @param policy Hold restriction level (0-3)
+         * @return true if the NPC is allowed to be dispatched
+         */
+        static bool PassesHoldRestriction(RE::Actor* actor, const std::string& playerHold, int policy);
 
         /**
          * Check if actor is in PotentialFollowerFaction (can be recruited as follower).
@@ -231,6 +255,7 @@ namespace IntelEngine {
          * Uses plugin config API with 30-second cache.
          */
         static bool IsPlayerInBlockedLocation();
+        static bool IsPlayerInWhitelistedLocation();
 
         /**
          * Build a compact bio line for DM context: race + notable factions.
@@ -272,6 +297,16 @@ namespace IntelEngine {
          * Used to build type count stats for DM prompt balancing.
          */
         void NotifyStoryTypePicked(const std::string& storyType);
+
+        /** Set recent gossip context for the Story DM prompt.
+         *  Injects hold names by resolving the first NPC name in each line. */
+        void SetRecentGossipContext(const std::string& gossipLines);
+
+        /** Get game time of last successful story dispatch (0 = never). */
+        float GetLastDispatchGameTime() const {
+            std::unique_lock lock(m_mutex);
+            return m_lastStoryDispatchGameTime;
+        }
         std::string GetPreferredNPCType() const;
 
         /**
@@ -368,6 +403,13 @@ namespace IntelEngine {
          */
         static std::string GetNPCHoldName(RE::Actor* actor);
 
+        /**
+         * Get the settlement name (city/town) for an actor.
+         * Walks up the BGSLocation hierarchy looking for LocTypeCity or LocTypeTown.
+         * Falls back to immediate location name for wilderness NPCs.
+         */
+        static std::string GetActorSettlementName(RE::Actor* actor);
+
         // Cached lookup of IntelEngine_StoryEngineCooldown global (default 24h)
         // Returns max(MCM cooldown, absence days * 24) to ensure dispatched NPCs
         // stay out of the pool for at least the absence period.
@@ -412,6 +454,10 @@ namespace IntelEngine {
 
         // Story type pick counts (volatile per session, for DM prompt balancing)
         std::unordered_map<std::string, int> m_storyTypeCounts;
+        float m_lastStoryDispatchGameTime = 0.f;  // Story DM last dispatch time
+        std::string m_lastStoryDispatchType;      // Story DM last dispatch type
+        float m_lastNPCDispatchGameTime = 0.f;    // NPC DM last dispatch time
+        std::string m_recentGossipContext;   // Pre-built gossip lines for DM context
 
         // Recent quest items FIFO (volatile per session, for rotation)
         static constexpr int MAX_RECENT_QUEST_ITEMS = 8;
@@ -434,6 +480,12 @@ namespace IntelEngine {
         // Player home visit policy (MCM-synced)
         // 0=allow all, 1=block civilians, 2=followers only, 3=block all
         std::atomic<int> m_playerHomePolicy{0};
+
+        // Per-story-type hold restriction policies (MCM-synced)
+        // 0=no restriction, 1=same hold civilians only, 2=same hold except followers, 3=same hold everyone
+        // Protected by m_holdRestrictionMutex (writes rare, reads during candidate pool build)
+        mutable std::mutex m_holdRestrictionMutex;
+        std::unordered_map<std::string, int> m_holdRestrictionPolicies;
     };
 
 }  // namespace IntelEngine

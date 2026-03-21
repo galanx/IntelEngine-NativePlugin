@@ -8,6 +8,7 @@
 #include "Plugin.h"
 #include "Papyrus.h"
 #include "NPCIndex.h"
+#include "BattleManager.h"
 #include "ItemIndex.h"
 #include "LocationResolver.h"
 #include "SlotTracker.h"
@@ -131,6 +132,9 @@ namespace IntelEngine {
             }
         }
 
+        // Recalculate player standings from history (handles save-scumming correctly)
+        db->RecalculatePlayerStandings();
+
         // Clear FactionPolitics in-memory caches
         FactionPolitics::GetSingleton()->ClearCaches();
     }
@@ -139,24 +143,26 @@ namespace IntelEngine {
     // Papyrus Maintenance Bootstrap
     // =========================================================================
 
-    /**
-     * Call Maintenance() on IntelEngine_Core via the Papyrus VM.
-     *
-     * OnPlayerLoadGame on the PlayerAlias doesn't fire reliably (alias fill
-     * issue). This C++ safety net ensures Maintenance always runs on every
-     * game load, re-registering timers and recovering tasks.
-     */
-    void DispatchMaintenanceCall(bool firstInstall) {
+    // Shared quest handle resolution — used by both Maintenance and FixupScriptProperties
+    struct QuestHandleResult {
+        RE::TESQuest* quest = nullptr;
+        RE::BSScript::Internal::VirtualMachine* vm = nullptr;
+        RE::VMHandle handle = 0;
+        bool valid = false;
+    };
+
+    QuestHandleResult ResolveQuestHandle(bool startIfStopped = false) {
+        QuestHandleResult r;
+
         auto* handler = RE::TESDataHandler::GetSingleton();
-        if (!handler) return;
+        if (!handler) return r;
 
         auto* modFile = handler->LookupModByName("IntelEngine.esp"sv);
         if (!modFile) {
-            logger::warn("DispatchMaintenance: IntelEngine.esp not loaded");
-            return;
+            logger::warn("ResolveQuestHandle: IntelEngine.esp not loaded");
+            return r;
         }
 
-        // Compute runtime FormID for quest (local ID 0x000D61)
         RE::FormID questFormId;
         if (modFile->IsLight()) {
             questFormId = 0xFE000000 |
@@ -166,34 +172,45 @@ namespace IntelEngine {
             questFormId = (static_cast<RE::FormID>(modFile->GetCompileIndex()) << 24) | 0x000D61;
         }
 
-        auto* quest = RE::TESForm::LookupByID<RE::TESQuest>(questFormId);
-        if (!quest) {
-            logger::warn("DispatchMaintenance: Quest {:08X} not found", questFormId);
-            return;
+        r.quest = RE::TESForm::LookupByID<RE::TESQuest>(questFormId);
+        if (!r.quest) {
+            logger::warn("ResolveQuestHandle: Quest {:08X} not found", questFormId);
+            return r;
         }
 
-        if (!quest->IsRunning()) {
-            logger::info("DispatchMaintenance: Quest not running, starting it");
-            quest->Start();
+        if (startIfStopped && !r.quest->IsRunning()) {
+            logger::info("ResolveQuestHandle: Quest not running, starting it");
+            r.quest->Start();
         }
 
-        auto* vm = RE::BSScript::Internal::VirtualMachine::GetSingleton();
-        if (!vm) {
-            logger::error("DispatchMaintenance: Papyrus VM not available");
-            return;
+        r.vm = RE::BSScript::Internal::VirtualMachine::GetSingleton();
+        if (!r.vm) {
+            logger::error("ResolveQuestHandle: Papyrus VM not available");
+            return r;
         }
 
-        auto* policy = vm->GetObjectHandlePolicy1();
+        auto* policy = r.vm->GetObjectHandlePolicy1();
         if (!policy) {
-            logger::error("DispatchMaintenance: Handle policy not available");
-            return;
+            logger::error("ResolveQuestHandle: Handle policy not available");
+            return r;
         }
 
-        auto handle = policy->GetHandleForObject(RE::FormType::Quest, quest);
-        if (handle == policy->EmptyHandle()) {
-            logger::error("DispatchMaintenance: Could not get VM handle for quest");
-            return;
+        r.handle = policy->GetHandleForObject(RE::FormType::Quest, r.quest);
+        if (r.handle == policy->EmptyHandle()) {
+            logger::error("ResolveQuestHandle: Could not get VM handle for quest");
+            return r;
         }
+
+        r.valid = true;
+        return r;
+    }
+
+    /**
+     * Call Maintenance() on IntelEngine_Core via the Papyrus VM.
+     */
+    void DispatchMaintenanceCall(bool firstInstall) {
+        auto qh = ResolveQuestHandle(true);
+        if (!qh.valid) return;
 
         auto* args = RE::MakeFunctionArguments(static_cast<bool>(firstInstall));
         RE::BSTSmartPointer<RE::BSScript::IStackCallbackFunctor> callback;
@@ -201,9 +218,99 @@ namespace IntelEngine {
         RE::BSFixedString className("IntelEngine_Core");
         RE::BSFixedString fnName("Maintenance");
 
-        bool ok = vm->DispatchMethodCall2(handle, className, fnName, args, callback);
+        bool ok = qh.vm->DispatchMethodCall2(qh.handle, className, fnName, args, callback);
         logger::info("DispatchMaintenance: {} (firstInstall={})",
             ok ? "queued successfully" : "FAILED to queue", firstInstall);
+
+        // Force-clear any stale battle state in C++ BattleManager.
+        // The Papyrus side may have stale bytecode that never called EndBattle/ResetState,
+        // leaving IsBattleActive() stuck on true forever. The C++ side is authoritative —
+        // clear it here so new battles can start on this load.
+        auto* bm = BattleManager::GetSingleton();
+        if (bm) {
+            // Clean up stale guard teammate/faction flags from previous session
+            bm->CleanupStaleBattleState();
+            if (bm->IsBattleActive()) {
+                logger::warn("DispatchMaintenance: clearing stale battle (save had active battle)");
+                bm->ResetBattleState();
+            }
+        }
+
+        // Safety net: dispatch all subsystem restart calls directly.
+        // Stale save bytecode in Maintenance may skip these, killing subsystems.
+        // The DLL always runs fresh code, so this guarantees all systems restart.
+        auto dispatchNoArgs = [&](const char* script, const char* func) {
+            RE::BSFixedString cls(script);
+            RE::BSFixedString fn(func);
+            auto* a = RE::MakeFunctionArguments();
+            RE::BSTSmartPointer<RE::BSScript::IStackCallbackFunctor> cb;
+            bool r = qh.vm->DispatchMethodCall2(qh.handle, cls, fn, a, cb);
+            logger::info("DispatchSafetyNet: {}.{} -> {}", script, func,
+                r ? "queued" : "FAILED");
+        };
+
+        dispatchNoArgs("IntelEngine_Travel", "RestartMonitoring");
+        dispatchNoArgs("IntelEngine_NPCTasks", "RestartMonitoring");
+        dispatchNoArgs("IntelEngine_Schedule", "RestartMonitoring");
+        dispatchNoArgs("IntelEngine_StoryEngine", "RestartMonitoring");
+        dispatchNoArgs("IntelEngine_StoryEngine", "StartScheduler");
+        dispatchNoArgs("IntelEngine_Politics", "Maintenance");
+        dispatchNoArgs("IntelEngine_Battle", "OnGameReload");
+    }
+
+    // =========================================================================
+    // Script Property Fixup (existing saves)
+    // =========================================================================
+
+    /**
+     * Fix script cross-references that the Papyrus VM cannot resolve on
+     * existing saves.  When a new script property is added to an ESP's VMAD
+     * mid-playthrough, the save's serialised script state doesn't include
+     * the new property.  The Papyrus VM deserialises from the save and
+     * never falls back to the ESP for missing properties, so the value
+     * stays None forever.  Papyrus self-heal code can't help either —
+     * the save also caches stale bytecode, so new .pex code on disk is
+     * ignored for existing script instances.
+     *
+     * The DLL is always loaded fresh from disk, so this is the correct
+     * (and only) place to patch properties on existing saves.
+     */
+    void FixupScriptProperties() {
+        auto qh = ResolveQuestHandle();
+        if (!qh.valid) return;
+
+        // Helper: bind scriptB into scriptA's property named propName
+        auto fixProperty = [&](const char* scriptA, const char* propName,
+                               const char* scriptB) {
+            RE::BSTSmartPointer<RE::BSScript::Object> objA;
+            if (!qh.vm->FindBoundObject(qh.handle, scriptA, objA) || !objA)
+                return;
+
+            auto* prop = objA->GetProperty(propName);
+            if (!prop) return;
+
+            // Already set — nothing to do
+            if (prop->IsObject()) {
+                auto existing = prop->GetObject();
+                if (existing && existing.get()) return;
+            }
+
+            RE::BSTSmartPointer<RE::BSScript::Object> objB;
+            if (!qh.vm->FindBoundObject(qh.handle, scriptB, objB) || !objB) {
+                logger::warn("FixupScriptProperties: {} not bound on quest", scriptB);
+                return;
+            }
+
+            prop->SetObject(objB);
+            logger::info("FixupScriptProperties: {}.{} = {} (recovered)", scriptA, propName, scriptB);
+        };
+
+        // Properties added mid-playthrough — existing saves have them as None.
+        // The Papyrus self-heal in Maintenance handles stopquest/startquest,
+        // but stale save bytecode prevents it from running on first load.
+        fixProperty("IntelEngine_Core", "Battle", "IntelEngine_Battle");
+        fixProperty("IntelEngine_Core", "Politics", "IntelEngine_Politics");
+        fixProperty("IntelEngine_Politics", "Battle", "IntelEngine_Battle");
     }
 
     // =========================================================================
@@ -256,11 +363,14 @@ namespace IntelEngine {
                     InitializePoliticalDB();
                     FactionPolitics::GetSingleton()->Initialize();
                 }
-                // Bootstrap: call Maintenance since OnPlayerLoadGame doesn't fire reliably
+                // Fix stale script properties, then bootstrap Maintenance
                 {
                     auto* task = SKSE::GetTaskInterface();
                     if (task) {
-                        task->AddTask([]() { DispatchMaintenanceCall(false); });
+                        task->AddTask([]() {
+                            FixupScriptProperties();
+                            DispatchMaintenanceCall(false);
+                        });
                     }
                 }
                 break;

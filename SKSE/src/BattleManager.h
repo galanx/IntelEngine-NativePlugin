@@ -147,6 +147,119 @@ namespace IntelEngine {
          *  Used by CheckCrimeGoldStandings to exempt battle kills. */
         bool IsBattleFaction(const std::string& factionId) const;
 
+        // =================================================================
+        // Phase 1 Migration: Logic moved from Papyrus to C++
+        // =================================================================
+
+        /** Finalize a battle: apply standings, record political events, build narrative.
+         *  Returns JSON with all results for Papyrus to display notifications and run cleanup.
+         *  Consolidates: HandleBattleEnd, ApplyPlayerKillStanding, ApplyPostBattleStanding,
+         *  ApplySpectatorConsequences, InjectBattleWitnessMemories, narrative building. */
+        std::string FinalizeBattle(int battleId, const std::string& result,
+                                   const std::string& victor, int deadA, int deadB,
+                                   const std::string& locationName, float gameTime);
+
+        /** Calculate reinforcement spawn positions behind player relative to battle center.
+         *  Returns JSON: {soldierCount, spawnAX/AY, spawnBX/BY, spawnZ} */
+        std::string CalculateReinforcementPositions(float playerX, float playerY, float playerZ,
+                                                     float centerX, float centerY, int waveNum);
+
+        /** Evaluate whether player should auto-join a battle side.
+         *  Returns JSON: {shouldJoin, joinFaction, displayName, isQuestJoin} */
+        std::string EvaluatePlayerJoin(const std::string& questAutoJoinFaction);
+
+        /** Get notification text for a battle event.
+         *  type: "wave1", "wave2", "wave3", "no_survivor_win", "no_survivor_loss",
+         *        "soldier_victory", "soldier_defeat" */
+        std::string GetBattleNotification(const std::string& type,
+                                          const std::string& locationName = "",
+                                          const std::string& victorName = "",
+                                          bool playerWon = false);
+
+        /** Validate that a faction_battle quest can be dispatched.
+         *  Returns JSON: {canStart, enemyFaction, failReason} */
+        std::string ValidateFactionBattleDispatch(const std::string& alliedFaction,
+                                                   const std::string& suggestedEnemy = "");
+
+        /** Spawn reinforcements for an active battle (wave 2+).
+         *  Handles factions, aggression, combat pairs, crime faction removal.
+         *  Returns JSON: {success, sideACount, sideBCount, sideAFormIds, sideBFormIds, playerSide} */
+        std::string SpawnReinforcements(int count, RE::Actor* player,
+                                        RE::TESObjectREFR* spawnAnchor = nullptr);
+
+        /** Calculate mid-battle state for late-arriving player.
+         *  Returns JSON: {soldiersPerSide, moraleLossA, moraleLossB} */
+        std::string CalculateMidBattleState(float scheduledTime, float currentTime);
+
+        /** Get action to take from poll result. Parses stateJson internally.
+         *  Returns JSON: {action: "none"|"spawn_wave"|"battle_end", waveNum, result, victor} */
+        std::string GetPollAction(const std::string& stateJson);
+
+        /** Reset all battle state. Called after cleanup completes. */
+        void ResetBattleState();
+
+        /** Called every Papyrus poll — clears bounty and stops hostile friendly guards. */
+        void SuppressBountyTick();
+
+        /** Enlist nearby friendly guards into the battle (add to battle faction, remove crime factions).
+         *  Tracked in modifiedGuardFormIds_ for reliable cleanup. */
+        void EnlistFriendlyGuards(const std::string& playerFactionId, RE::TESFaction* battleFaction, RE::Actor* player);
+
+        /** Restore all enlisted guards to pre-battle state (remove battle faction, restore crime factions).
+         *  Uses tracked FormIDs — works even if guards unloaded. */
+        void RestoreEnlistedGuards();
+
+        /** Clean up ALL stale battle state — called on game load as safety net. */
+        void CleanupStaleBattleState();
+
+        /** Remove player from hold crime factions (prevents ALL bounty).
+         *  Called at faction quest start. Stays removed until RestorePlayerCrimeFactions. */
+        void RemovePlayerCrimeFactions();
+
+        /** Restore player to hold crime factions and clear residual bounty.
+         *  Called when faction quest fully completes. */
+        void RestorePlayerCrimeFactions();
+
+        /** Execute the ENTIRE battle spawn sequence in C++.
+         *  Handles: player join, position calculation, spawn both sides,
+         *  faction assignment, combat initiation setup.
+         *  spawnAnchor: quest location ObjectReference — soldiers spawn HERE, not at player.
+         *  Returns JSON: {success, sideACount, sideBCount, playerJoined, joinFaction,
+         *                  notification, leaderFormId, sideAFormIds, sideBFormIds}
+         *  Papyrus only does: SetPlayerTeammate, ForceRefTo (quest marker). */
+        std::string ExecuteFullBattleSpawn(const std::string& questAutoJoinFaction,
+                                           RE::Actor* player, float playerAngleZ,
+                                           RE::TESObjectREFR* spawnAnchor);
+
+        /** Get FormIDs of soldiers on a given side ("A" or "B").
+         *  Returns JSON: {"formIds": [...], "count": N, "alive": M} */
+        std::string GetBattleSoldierFormIds(const std::string& side) const;
+
+        /** Set all alive soldiers on a side as player teammates (or clear).
+         *  Used when player manually joins mid-battle. */
+        void SetBattleSoldiersAsTeammates(const std::string& side, bool isTeammate = true);
+
+        /** Count dead soldiers on a given side ("A" or "B"). */
+        int CountDeadSoldiers(const std::string& side) const;
+
+        /** Cleanup battle soldiers by proximity to player.
+         *  Disables+deletes actors behind the player and far enough away.
+         *  Returns count of remaining (not yet cleaned) actors. */
+        int CleanupBattleSoldiers(float playerX, float playerY, float playerZ,
+                                   float playerAngleZ, bool forceAll);
+
+        /** Force cleanup ALL battle soldiers (hard timeout). Disables+deletes all tracked actors. */
+        void ForceCleanupAllSoldiers();
+
+        /** Remove crime factions from battle soldiers (no bounty for kills). Called at spawn. */
+        void SnapshotBounties();
+
+        /** Calculate battle marker offset position for exterior placement.
+         *  Returns JSON: {x, y, z} */
+        std::string CalculateBattleMarkerPosition(float playerX, float playerY,
+                                                   float locX, float locY, float locZ,
+                                                   float offsetUnits);
+
         /** Snapshot of battle state for cross-system queries (single lock acquisition). */
         struct BattleSnapshot {
             bool active = false;
@@ -196,12 +309,31 @@ namespace IntelEngine {
             int playerKillsB = 0;            // soldiers from factionB killed by player
         };
 
+        /** Spawn soldiers for one faction side. Shared by ExecuteFullBattleSpawn and SpawnReinforcements. */
+        std::vector<RE::Actor*> SpawnSoldiersForFaction(
+            const std::string& factionId, RE::TESFaction* battleFaction,
+            int count, RE::TESObjectREFR* spawnRef, RE::Actor* player,
+            float offsetX = 0.f, float offsetY = 0.f, float centerX = 0.f, float centerY = 0.f);
+
+        /** Resolve Intel_BattleSideA and Intel_BattleSideB factions from IntelEngine.esp.
+         *  Returns {nullptr, nullptr} if ESP not found. */
+        std::pair<RE::TESFaction*, RE::TESFaction*> ResolveBattleFactions() const;
+
+        /** Thread-safe random float in [min, max]. */
+        static float RandomFloat(float min, float max);
+
         /** Check if an actor is still alive in the game world. */
         bool IsActorAlive(RE::FormID formId) const;
 
         std::optional<BattleState> activeBattle_;
         mutable std::mutex mutex_;
         int nextBattleId_ = 1;
+        std::atomic<bool> suppressBattleBounty_{false};  // set during active battle with player
+
+        // Non-battle actors modified during battle (guards added to battle faction + teammate).
+        // Tracked for reliable cleanup — ForEachLoadedActor misses unloaded actors.
+        std::vector<RE::FormID> modifiedGuardFormIds_;
+        bool playerCrimeFactionsRemoved_ = false;  // track if player needs crime faction restore
 
         // Pending battles (location-based, waiting for player proximity)
         std::vector<PendingBattle> pendingBattles_;
@@ -210,8 +342,50 @@ namespace IntelEngine {
         static constexpr float PENDING_TRIGGER_DISTANCE = 5000.f;
         static constexpr float PENDING_BATTLE_DURATION = 3.0f / 24.0f;  // 3 game hours in days
 
+        // Standing constants (MUST match Papyrus properties in IntelEngine_Battle.psc lines 40-47)
+        static constexpr int KILL_STANDING_PENALTY_PER_SOLDIER = -5;
+        static constexpr int VICTORY_ALLY_BONUS = 15;
+        static constexpr int VICTORY_ENEMY_PENALTY = -10;
+        static constexpr int DEFEAT_ALLY_BONUS = 5;
+        static constexpr int DEFEAT_ENEMY_PENALTY = -5;
+        static constexpr int SPECTATOR_PENALTY = -5;
+        static constexpr int SPECTATOR_PENALTY_THRESHOLD = 10;
+        static constexpr int AUTO_JOIN_STANDING_THRESHOLD = 20;
+        static constexpr int HOSTILE_STANDING_THRESHOLD = -40;  // faction attacks player on sight
+
+        // Wave soldier counts — MUST match Papyrus GetWaveSoldierCount() in IntelEngine_Battle.psc
+        static constexpr int WAVE1_SOLDIERS = 6;   // vanguard
+        static constexpr int WAVE2_SOLDIERS = 5;   // first reinforcements
+        static constexpr int WAVE3_SOLDIERS = 4;   // second reinforcements
+        static constexpr int WAVE4_SOLDIERS = 4;   // reserves
+        static constexpr int WAVE5_SOLDIERS = 3;   // last stand
+        static constexpr int MAX_SOLDIERS_PER_SIDE = 22;
+
+        // Spawn distances
+        static constexpr float SPAWN_DISTANCE = 400.f;
+        static constexpr float REINFORCEMENT_BEHIND_DISTANCE = 600.f;
+        static constexpr float BATTLE_MARKER_OFFSET = 3000.f;
+
         // Expired battle results queue — consumed one-at-a-time by Papyrus for RESULT notifications
         std::vector<std::string> expiredResults_;  // JSON strings, popped front per read
+
+        // Persistent cleanup list — survives EndBattle/ResetBattleState.
+        // Populated when battle ends, cleared when physical cleanup completes.
+        std::vector<RE::FormID> cleanupFormIds_;
+        mutable std::mutex cleanupMutex_;
+
+        // Hold crime faction FormIDs (Skyrim.esm) — removed from soldiers to prevent bounty
+        static constexpr RE::FormID kCrimeFactionIds[] = {
+            0x00029DB0,  // Whiterun
+            0x00029DB1,  // Rift
+            0x00029DB2,  // Reach
+            0x00029DB3,  // Eastmarch
+            0x00029DB4,  // Haafingar
+            0x00029DB5,  // Hjaalmarch
+            0x00029DB6,  // Pale
+            0x00029DB7,  // Falkreath
+            0x00029DB8   // Winterhold
+        };
     };
 
 }  // namespace IntelEngine

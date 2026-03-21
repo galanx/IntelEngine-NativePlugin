@@ -390,6 +390,50 @@ namespace IntelEngine {
                 logger::info("  No parent location");
             }
 
+            // Strategy 2c: Scan ALL locations for one whose parent is this BGSLocation
+            // and that HAS a worldLocMarker. Handles cases like Kynesgrove where the
+            // BGSLocation itself has no marker but a child sub-location might.
+            {
+                auto* dataHandler = RE::TESDataHandler::GetSingleton();
+                if (dataHandler) {
+                    RE::TESObjectREFR* childMarkerRef = nullptr;
+                    float bestChildDist = (std::numeric_limits<float>::max)();
+                    auto* player = RE::PlayerCharacter::GetSingleton();
+                    auto playerPos = player ? player->GetPosition() : RE::NiPoint3{0, 0, 0};
+
+                    for (auto* loc : dataHandler->GetFormArray<RE::BGSLocation>()) {
+                        if (!loc || loc == bgsLocation) continue;
+                        // Check if this location is a child of our target
+                        bool isChild = false;
+                        auto* p = loc->parentLoc;
+                        for (int depth = 0; p && depth < 3; ++depth) {
+                            if (p == bgsLocation) { isChild = true; break; }
+                            p = p->parentLoc;
+                        }
+                        if (!isChild) continue;
+
+                        auto markerPtr = loc->worldLocMarker.get();
+                        if (markerPtr) {
+                            auto* ref = markerPtr.get();
+                            if (ref) {
+                                float dist = ref->GetPosition().GetDistance(playerPos);
+                                if (dist < bestChildDist) {
+                                    bestChildDist = dist;
+                                    childMarkerRef = ref;
+                                }
+                            }
+                        }
+                    }
+                    if (childMarkerRef) {
+                        auto pos = childMarkerRef->GetPosition();
+                        logger::info("  Strategy 2c SUCCESS: child location worldLocMarker at ({:.0f}, {:.0f}, {:.0f})",
+                                    pos.x, pos.y, pos.z);
+                        return childMarkerRef;
+                    }
+                    logger::info("  Strategy 2c: no child locations with worldLocMarker");
+                }
+            }
+
             // Strategy 3: Find a loaded actor at the BGSLocation (all 4 process tiers)
             logger::info("  Strategy 3: searching loaded actors at BGSLocation...");
             RE::TESObjectREFR* strategy3Result = nullptr;

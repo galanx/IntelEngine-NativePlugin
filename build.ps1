@@ -186,16 +186,28 @@ if (Test-Path $promptSrc) {
     Write-Host "  $count prompt files synced"
 }
 
-# Sync SkyrimNet config (actions)
+# Sync SkyrimNet config (actions, triggers, factions)
+# settings.yaml is NOT deployed — SkyrimNet creates it from manifest defaults on first run.
+# factions.yaml is excluded from overwrite — users may have customized factions.
+# This prevents overwriting user-configured LLM endpoints, blocklists, hotkeys, and faction configs.
 $configSrc = "$SKSEDir\Plugins\SkyrimNet\config"
 $configDest = "$DataDir\SKSE\Plugins\SkyrimNet\config"
 if (Test-Path $configSrc) {
     if (-not (Test-Path $configDest)) {
         New-Item -ItemType Directory -Path $configDest -Force | Out-Null
     }
-    Copy-Item "$configSrc\*" $configDest -Recurse -Force
-    $count = (Get-ChildItem $configSrc -Recurse -File).Count
-    Write-Host "  $count config files synced"
+    # Copy all config files except user-configurable ones (auto-created by DLL on first run)
+    $configFiles = Get-ChildItem $configSrc -Recurse -File | Where-Object { $_.Name -ne "settings.yaml" -and $_.Name -ne "factions.yaml" }
+    foreach ($cf in $configFiles) {
+        $relativePath = $cf.FullName.Substring($configSrc.Length + 1)
+        $destFile = Join-Path $configDest $relativePath
+        $destDir = Split-Path $destFile -Parent
+        if (-not (Test-Path $destDir)) {
+            New-Item -ItemType Directory -Path $destDir -Force | Out-Null
+        }
+        Copy-Item $cf.FullName $destFile -Force
+    }
+    Write-Host "  $($configFiles.Count) config files synced (settings.yaml excluded)"
 }
 
 # Sync PSC source files to Data
@@ -214,7 +226,8 @@ Write-Host "  Source scripts synced to Data"
 if (-not $SkipDeploy) {
     Write-Host "`n--- Deploying Data to Testing + Vanilla Test + CK ---" -ForegroundColor Cyan
 
-    $robocopyArgs = @("/E", "/IS", "/IT", "/NFL", "/NDL", "/NJH", "/NJS", "/R:1", "/W:1")
+    # /XF: never overwrite user-configured files at deploy targets
+    $robocopyArgs = @("/E", "/IS", "/IT", "/XF", "settings.yaml", "factions.yaml", "/NFL", "/NDL", "/NJH", "/NJS", "/R:1", "/W:1")
 
     Write-Host "  Copying to Testing..."
     & robocopy $DataDir $TestDest @robocopyArgs | Out-Null

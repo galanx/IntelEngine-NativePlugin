@@ -134,10 +134,10 @@ namespace IntelEngine {
         bool m_keywordsCached = false;
         std::vector<RE::BGSKeyword*> m_interiorKeywords;
 
-        // Lazily cache dangerous location keywords
+        // Lazily cache safe location keywords (inverted: non-safe = dangerous)
         void EnsureDangerousKeywordsCached();
         bool m_dangerousKeywordsCached = false;
-        std::vector<RE::BGSKeyword*> m_dangerousKeywords;
+        std::vector<RE::BGSKeyword*> m_safeKeywords;
     };
 
 }  // namespace IntelEngine

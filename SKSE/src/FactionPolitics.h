@@ -99,6 +99,87 @@ namespace IntelEngine {
         /** Get soldier template EditorID for a faction. Empty if not configured. */
         std::string GetSoldierTemplate(const std::string& factionId) const;
 
+        /** Get all known faction IDs. Used for fuzzy matching DM suggestions. */
+        std::vector<std::string> GetAllFactionIds() const;
+
+        /** Get a rival faction ID for the given faction. Returns first rival, or empty if none. */
+        std::string GetFactionRival(const std::string& factionId) const;
+
+        /** Get the faction's current war enemy. If the faction is at war, returns the opponent.
+         *  Falls back to GetFactionRival if no active war. */
+        std::string GetFactionWarEnemy(const std::string& factionId);
+
+        // =================================================================
+        // Convenience wrappers for BattleManager (delegates to PoliticalDB)
+        // =================================================================
+
+        /** Get display name for a faction. Returns faction ID if not found. */
+        std::string GetFactionDisplayName(const std::string& factionId) const;
+
+        /** Get player's standing with a faction. */
+        int GetPlayerStanding(const std::string& factionId) const;
+
+        /** Adjust player's standing with a faction by delta. Returns new standing. */
+        int AdjustPlayerStanding(const std::string& factionId, int delta);
+
+        /** Record a political event. Returns event ID. */
+        int RecordPoliticalEvent(const std::string& factionA, const std::string& factionB,
+                                 const std::string& eventType, const std::string& description,
+                                 int delta, float gameTime);
+
+        // =================================================================
+        // Phase 2 Migration: Politics logic moved from Papyrus to C++
+        // =================================================================
+
+        // =================================================================
+        // Phase 3 Migration: StoryEngine helpers
+        // =================================================================
+
+        // =================================================================
+        // Story Engine helpers (non-faction-specific)
+        // =================================================================
+
+        /** Build exclude list from toggle bitmask + environment flags.
+         *  Bitmask: bit0=seekPlayer, bit1=informant, bit2=roadEncounter, bit3=ambush,
+         *  bit4=stalker, bit5=message, bit6=quest, bit7=factionAmbush,
+         *  bit8=questCombat, bit9=questRescue, bit10=questFindItem,
+         *  bit11=questFactionCombat, bit12=questFactionRescue, bit13=questFactionBattle
+         *  envFlags: bit0=isInterior, bit1=isDangerous */
+        static std::string BuildExcludeList(int toggleBitmask, int envFlags);
+
+        /** Validate a DM story response. Returns JSON with validation result.
+         *  Checks: type validity, MCM toggles, subtype validity, field presence.
+         *  toggleBitmask/envFlags same as BuildExcludeList. */
+        static std::string ValidateStoryResponse(const std::string& responseJson,
+                                                  int toggleBitmask, int envFlags);
+
+        /** Build faction_battle dispatch fact for the quest giver. */
+        std::string BuildFactionBattleDispatchFact(const std::string& alliedFaction,
+                                                    const std::string& questLocation,
+                                                    const std::string& playerName);
+
+        /** Record faction_battle completion: facts for quest giver + leaders + political event.
+         *  Returns JSON with notification text and witnessFact for leaders. */
+        std::string RecordFactionBattleCompletion(const std::string& alliedFaction,
+                                                   const std::string& questLocation,
+                                                   const std::string& playerName,
+                                                   const std::string& enemyFaction = "");
+
+        /** Build expiry fact for when player didn't show up. */
+        std::string BuildBattleExpiryFact(const std::string& alliedFaction,
+                                           const std::string& questLocation,
+                                           const std::string& playerName);
+
+        /** Process the Political DM's response. Handles: parsing, validation,
+         *  event recording, war declaration, surrender, battle result creation,
+         *  standing changes, decay, crime checks. Returns JSON with actions
+         *  for Papyrus to execute (fact injection, battle poll, manifestation). */
+        std::string ProcessPoliticalDMResponse(const std::string& response, int success);
+
+        /** Run periodic standing mechanics: decay + crime gold checks + write state.
+         *  Returns JSON: {decayed, crimeChanges, updated} */
+        std::string RunStandingMechanicsInternal();
+
         // =================================================================
         // Political DM Context Building
         // =================================================================
@@ -269,6 +350,9 @@ namespace IntelEngine {
         void RecalculateRelationScores();
 
         std::string GetConfigPath() const;
+
+        /** Get default factions.yaml content. Written to disk if file doesn't exist. */
+        static std::string GetDefaultFactionConfig();
 
         /** Serialize a FactionConfig to JSON (shared by context/dashboard/state file builders). */
         static nlohmann::json FactionToJson(const FactionConfig& f);

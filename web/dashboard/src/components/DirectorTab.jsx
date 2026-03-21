@@ -200,8 +200,14 @@ function DirectorTab({ loadedNpcs, actions, sendAction }) {
 
   const npcs = loadedNpcs || [];
 
+  // Only show IntelEngine actions in the Director tab
+  const INTEL_ACTIONS = new Set([
+    'GoToLocation', 'FetchPerson', 'DeliverMessage', 'EscortTarget', 'SearchForActor',
+    'ScheduleFetch', 'ScheduleDelivery', 'ScheduleMeeting',
+    'CancelCurrentTask', 'ChangeSpeed', 'ReportPlayerConduct',
+  ]);
   const executableActions = useMemo(
-    () => (actions || []).filter(a => a.params && a.params.length > 0),
+    () => (actions || []).filter(a => a.params && a.params.length > 0 && INTEL_ACTIONS.has(a.name)),
     [actions],
   );
 

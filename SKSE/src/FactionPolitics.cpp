@@ -8,6 +8,9 @@
 
 #include "FactionPolitics.h"
 #include "FactionConfigLoader.h"
+#include <filesystem>
+#include <fstream>
+#include <mutex>
 #include "BattleManager.h"
 #include "DashboardConfig.h"
 #include "NPCIndex.h"
@@ -16,6 +19,7 @@
 #include <fstream>
 #include <filesystem>
 #include <algorithm>
+#include <sstream>
 #include <chrono>
 #include <random>
 
@@ -39,8 +43,165 @@ namespace IntelEngine {
         return "Data/SKSE/Plugins/SkyrimNet/config/plugins/IntelEngine/factions.yaml";
     }
 
+    std::string FactionPolitics::GetDefaultFactionConfig() {
+        return R"YAML(# Faction Politics Configuration — auto-generated defaults
+# Modders can edit this file to add/modify factions. It will NOT be overwritten by updates.
+factions:
+  - id: "ImperialFaction"
+    name: "Imperial Legion"
+    type: "military"
+    hold: "Solitude"
+    skyrim_faction_id: "CWImperialFaction"
+    leader_names: ["General Tullius", "Legate Rikke"]
+    rivals: ["StormcloakFaction"]
+    allies: ["ThalmorFaction"]
+    base_army_strength: 30
+    war_threshold: -50
+    soldier_template: "LCharSoldierImperial"
+    prison_location: "SolitudeCastleDour"
+    prison_marker: [0, 0, 0]
+  - id: "StormcloakFaction"
+    name: "Stormcloaks"
+    type: "military"
+    hold: "Windhelm"
+    skyrim_faction_id: "CWSonsFaction"
+    leader_names: ["Ulfric Stormcloak", "Galmar Stone-Fist"]
+    rivals: ["ImperialFaction", "ThalmorFaction"]
+    allies: []
+    base_army_strength: 25
+    war_threshold: -50
+    soldier_template: "LCharSoldierSons"
+    prison_location: "WindhelmPalaceOfTheKings"
+    prison_marker: [0, 0, 0]
+  - id: "ThalmorFaction"
+    name: "Thalmor"
+    type: "military"
+    hold: "Solitude"
+    skyrim_faction_id: "ThalmorFaction"
+    leader_names: ["Elenwen", "Ondolemar"]
+    rivals: ["StormcloakFaction"]
+    allies: ["ImperialFaction"]
+    base_army_strength: 20
+    war_threshold: -50
+    soldier_template: "LCharThalmorMelee1H"
+    prison_location: "ThalmorEmbassy"
+    prison_marker: [0, 0, 0]
+  - id: "CompanionsFaction"
+    name: "The Companions"
+    type: "guild"
+    hold: "Whiterun"
+    skyrim_faction_id: "CompanionsFaction"
+    leader_names: ["Kodlak Whitemane", "Vilkas"]
+    rivals: []
+    allies: []
+    war_threshold: -60
+    conflict_style: "brawl"
+    soldier_template: "LCharBanditMeleeAny"
+    prison_location: "WhiterunJorrvaskr"
+    prison_marker: [0, 0, 0]
+  - id: "ThievesGuildFaction"
+    name: "Thieves Guild"
+    type: "guild"
+    hold: "Riften"
+    skyrim_faction_id: "ThievesGuildFaction"
+    leader_names: ["Mercer Frey", "Brynjolf"]
+    rivals: []
+    allies: ["BlackBriarFamily"]
+    war_threshold: -55
+    conflict_style: "sabotage"
+    soldier_template: "WEThiefSubChar"
+    prison_location: "RiftenRatway"
+    prison_marker: [0, 0, 0]
+  - id: "CollegeOfWinterholdFaction"
+    name: "College of Winterhold"
+    type: "guild"
+    hold: "Winterhold"
+    skyrim_faction_id: "CollegeofWinterholdFaction"
+    leader_names: ["Savos Aren", "Mirabelle Ervine"]
+    rivals: []
+    allies: []
+    war_threshold: -65
+    conflict_style: "sabotage"
+    soldier_template: "LCharBanditWizard"
+    prison_location: "CollegeOfWinterholdHallOfTheElements"
+    prison_marker: [0, 0, 0]
+  - id: "DarkBrotherhoodFaction"
+    name: "Dark Brotherhood"
+    type: "guild"
+    hold: "Falkreath"
+    skyrim_faction_id: "DarkBrotherhoodFaction"
+    leader_names: ["Astrid", "Nazir"]
+    rivals: []
+    allies: []
+    war_threshold: -50
+    conflict_style: "assassination"
+    soldier_template: "WEAssassinSubChar"
+    prison_location: "DarkBrotherhoodSanctuary"
+    prison_marker: [0, 0, 0]
+  - id: "SilverBloodFamily"
+    name: "Silver-Blood Family"
+    type: "political"
+    hold: "Markarth"
+    skyrim_faction_id: "CrimeFactionReach"
+    leader_names: ["Thongvor Silver-Blood", "Thonar Silver-Blood"]
+    rivals: []
+    allies: []
+    war_threshold: -55
+    conflict_style: "proxy"
+    soldier_template: "LCharForswornMelee1H"
+    prison_location: "MarkarthCidhnaMine"
+    prison_marker: [0, 0, 0]
+  - id: "BlackBriarFamily"
+    name: "Black-Briar Family"
+    type: "political"
+    hold: "Riften"
+    skyrim_faction_id: "CrimeFactionRift"
+    leader_names: ["Maven Black-Briar"]
+    rivals: []
+    allies: ["ThievesGuildFaction"]
+    war_threshold: -55
+    conflict_style: "assassination"
+    soldier_template: "WEThiefSubChar"
+    prison_location: "RiftenJail"
+    prison_marker: [0, 0, 0]
+default_relations:
+  - faction_a: "ImperialFaction"
+    faction_b: "ThalmorFaction"
+    relation: 50
+  - faction_a: "ImperialFaction"
+    faction_b: "StormcloakFaction"
+    relation: -30
+  - faction_a: "StormcloakFaction"
+    faction_b: "ThalmorFaction"
+    relation: -40
+  - faction_a: "BlackBriarFamily"
+    faction_b: "ThievesGuildFaction"
+    relation: 60
+)YAML";
+    }
+
     bool FactionPolitics::LoadConfig() {
-        auto result = LoadFactionConfigFromFile(GetConfigPath());
+        auto configPath = GetConfigPath();
+
+        // Auto-create factions.yaml with defaults if missing.
+        // std::call_once ensures only one thread creates the file even if LoadConfig races.
+        static std::once_flag s_createFlag;
+        std::call_once(s_createFlag, [&]() {
+        if (!std::filesystem::exists(configPath)) {
+            logger::info("FactionPolitics: factions.yaml not found, creating defaults at {}", configPath);
+            std::filesystem::create_directories(std::filesystem::path(configPath).parent_path());
+            std::ofstream out(configPath);
+            if (out.is_open()) {
+                out << GetDefaultFactionConfig();
+                out.close();
+                logger::info("FactionPolitics: Default factions.yaml created");
+            } else {
+                logger::error("FactionPolitics: Failed to create default factions.yaml at {}", configPath);
+            }
+        }
+        });  // end call_once
+
+        auto result = LoadFactionConfigFromFile(configPath);
         if (!result.success) {
             logger::error("FactionPolitics: Failed to load factions.yaml");
             return false;
@@ -98,12 +259,18 @@ namespace IntelEngine {
     }
 
     void FactionPolitics::SeedDefaultRelations() {
+        // Copy under lock, release, then call DB — prevents lock ordering inversion
+        // (configMutex_ -> db mutex_ vs db mutex_ -> configMutex_ in RecordPoliticalEvent)
+        std::vector<DefaultRelation> relsCopy;
+        {
+            std::lock_guard<std::mutex> lock(configMutex_);
+            relsCopy = defaultRelations_;
+        }
         auto* db = PoliticalDB::GetSingleton();
-        std::lock_guard<std::mutex> lock(configMutex_);
-        for (const auto& rel : defaultRelations_) {
+        for (const auto& rel : relsCopy) {
             db->SeedDefaultRelation(rel.factionA, rel.factionB, rel.relation);
         }
-        logger::info("FactionPolitics: Seeded {} default relations", defaultRelations_.size());
+        logger::info("FactionPolitics: Seeded {} default relations", relsCopy.size());
     }
 
     void FactionPolitics::RecalculateRelationScores() {
@@ -192,6 +359,85 @@ namespace IntelEngine {
         auto it = factionIndex_.find(factionId);
         if (it == factionIndex_.end()) return "";
         return factions_[it->second].soldierTemplate;
+    }
+
+    std::vector<std::string> FactionPolitics::GetAllFactionIds() const {
+        std::lock_guard<std::mutex> lock(configMutex_);
+        std::vector<std::string> ids;
+        ids.reserve(factionIndex_.size());
+        for (const auto& [id, _] : factionIndex_) {
+            ids.push_back(id);
+        }
+        return ids;
+    }
+
+    std::string FactionPolitics::GetFactionRival(const std::string& factionId) const {
+        std::lock_guard<std::mutex> lock(configMutex_);
+        auto it = factionIndex_.find(factionId);
+        if (it == factionIndex_.end()) return "";
+        const auto& rivals = factions_[it->second].rivals;
+        if (rivals.empty()) return "";
+        return rivals[0];
+    }
+
+    std::string FactionPolitics::GetFactionWarEnemy(const std::string& factionId) {
+        // Check active wars first — if the faction is at war, that's the enemy
+        auto* db = PoliticalDB::GetSingleton();
+        if (db && db->IsReady()) {
+            auto wars = db->GetActiveWars();
+            for (const auto& war : wars) {
+                if (war.factionA == factionId) return war.factionB;
+                if (war.factionB == factionId) return war.factionA;
+            }
+        }
+        // No active war — fall back to configured rival
+        return GetFactionRival(factionId);
+    }
+
+    // =========================================================================
+    // Convenience wrappers for BattleManager
+    // =========================================================================
+
+    std::string FactionPolitics::GetFactionDisplayName(const std::string& factionId) const {
+        auto faction = GetFaction(factionId);
+        return faction ? faction->name : factionId;
+    }
+
+    int FactionPolitics::GetPlayerStanding(const std::string& factionId) const {
+        auto* db = PoliticalDB::GetSingleton();
+        if (!db || !db->IsReady()) return 0;
+        return db->GetPlayerStanding(factionId);
+    }
+
+    int FactionPolitics::AdjustPlayerStanding(const std::string& factionId, int delta) {
+        auto* db = PoliticalDB::GetSingleton();
+        if (!db || !db->IsReady()) return 0;
+        // MUST use GetCurrentGameTime (days) — same scale as CleanupFutureEvents.
+        // GetHoursPassed() returns hours which is always > GetCurrentGameTime() days,
+        // causing all standing entries to appear "in the future" and get wiped on load.
+        float gameTime = RE::Calendar::GetSingleton() ? RE::Calendar::GetSingleton()->GetCurrentGameTime() : 0.f;
+        return db->AdjustPlayerStanding(factionId, delta, gameTime);
+    }
+
+    int FactionPolitics::RecordPoliticalEvent(const std::string& factionA, const std::string& factionB,
+                                               const std::string& eventType, const std::string& description,
+                                               int delta, float gameTime) {
+        auto* db = PoliticalDB::GetSingleton();
+        if (!db || !db->IsReady()) return -1;
+        if (!ValidateEvent(factionA, factionB, eventType, delta)) return -1;
+
+        int maxDelta = GetMaxRelationChangePerTick();
+        delta = std::clamp(delta, -maxDelta, maxDelta);
+
+        int eventId = db->RecordEvent(factionA, factionB, eventType, description, delta, gameTime);
+
+        if (!factionB.empty() && delta != 0) {
+            db->AdjustRelation(factionA, factionB, delta);
+        }
+        if (eventId >= 0) {
+            WritePoliticalStateFile();
+        }
+        return eventId;
     }
 
     // =========================================================================
@@ -618,31 +864,44 @@ namespace IntelEngine {
             return (it != idToName.end()) ? it->second : id;
         };
 
+        // Get active wars FIRST so we can cross-reference with relations
+        auto activeWars = db->GetActiveWars();
+        // Build a set of active war pairs for quick lookup
+        std::set<std::pair<std::string, std::string>> warPairs;
+        for (const auto& w : activeWars) {
+            warPairs.insert({w.factionA, w.factionB});
+            warPairs.insert({w.factionB, w.factionA});  // both directions
+        }
+
         auto allRelations = db->GetAllRelations();
         for (const auto& r : allRelations) {
-            if (r.relationScore == 0 && !r.tradeActive && !r.warActive) continue;
+            // Use actual war records, not stale warActive flag from relation table
+            bool isAtWar = warPairs.count({r.factionA, r.factionB}) > 0;
+            if (r.relationScore == 0 && !r.tradeActive && !isAtWar) continue;
             md += "- ";
             md += getName(r.factionA);
+            md += " [" + r.factionA + "]";
             md += " / ";
             md += getName(r.factionB);
+            md += " [" + r.factionB + "]";
             md += ": ";
             md += std::to_string(r.relationScore);
             md += " (";
             md += GetRelationStatus(r.relationScore);
             md += ")";
             if (r.tradeActive) md += " [trade]";
-            if (r.warActive) md += " [WAR]";
+            if (isAtWar) md += " [WAR]";
             md += "\n";
         }
-
-        auto activeWars = db->GetActiveWars();
         if (!activeWars.empty()) {
             md += "Active wars:\n";
             for (const auto& w : activeWars) {
                 md += "- ";
                 md += getName(w.factionA);
+                md += " [" + w.factionA + "]";
                 md += " vs ";
                 md += getName(w.factionB);
+                md += " [" + w.factionB + "]";
                 md += " (";
                 md += std::to_string(w.battlesFought);
                 md += " battles, morale ";
@@ -1387,6 +1646,9 @@ namespace IntelEngine {
 
         db->UpdateWarState(war->id, moraleA, moraleB, strengthA, strengthB, war->battlesFought + 1);
 
+        // Worsen inter-faction relations after each battle
+        db->AdjustRelation(factionA, factionB, -10);
+
         WritePoliticalStateFile();
         return battleId;
     }
@@ -1516,6 +1778,457 @@ namespace IntelEngine {
         } catch (const std::exception& e) {
             logger::warn("FactionPolitics: Exception writing political_state.json: {}", e.what());
         }
+    }
+
+    // =========================================================================
+    // Story Engine helpers (non-faction-specific)
+    // =========================================================================
+
+    std::string FactionPolitics::BuildExcludeList(int toggleBitmask, int envFlags) {
+        // Toggle bits: 0=seekPlayer, 1=informant, 2=roadEncounter, 3=ambush,
+        // 4=stalker, 5=message, 6=quest, 7=factionAmbush,
+        // 8=questCombat, 9=questRescue, 10=questFindItem,
+        // 11=questFactionCombat, 12=questFactionRescue, 13=questFactionBattle
+        // Env bits: 0=isInterior, 1=isDangerous
+
+        std::vector<std::string> excludes;
+        auto addIfDisabled = [&](int bit, const char* name) {
+            if (!(toggleBitmask & (1 << bit))) excludes.push_back(name);
+        };
+
+        addIfDisabled(0, "seek_player");
+        addIfDisabled(1, "informant");
+        addIfDisabled(2, "road_encounter");
+        addIfDisabled(3, "ambush");
+        addIfDisabled(4, "stalker");
+        addIfDisabled(5, "message");
+        addIfDisabled(6, "quest");
+        addIfDisabled(7, "faction_ambush");
+
+        // Quest sub-types (only if quest itself is enabled)
+        if (toggleBitmask & (1 << 6)) {
+            addIfDisabled(8, "quest_combat");
+            addIfDisabled(9, "quest_rescue");
+            addIfDisabled(10, "quest_find_item");
+            addIfDisabled(11, "quest_faction_combat");
+            addIfDisabled(12, "quest_faction_rescue");
+            addIfDisabled(13, "quest_faction_battle");
+        }
+
+        // Environment auto-excludes (exact match, no substring issues)
+        bool isInterior = (envFlags & 1) != 0;
+        bool isDangerous = (envFlags & 2) != 0;
+
+        auto addUnique = [&](const char* name) {
+            for (const auto& e : excludes) {
+                if (e == name) return;  // exact match, not substring
+            }
+            excludes.push_back(name);
+        };
+
+        if (isInterior) {
+            addUnique("stalker");
+            addUnique("ambush");
+            addUnique("road_encounter");
+            addUnique("faction_ambush");
+        }
+        if (isDangerous) {
+            addUnique("informant");
+        }
+
+        // Join with ", "
+        std::string result;
+        for (size_t i = 0; i < excludes.size(); ++i) {
+            if (i > 0) result += ", ";
+            result += excludes[i];
+        }
+        return result;
+    }
+
+    std::string FactionPolitics::ValidateStoryResponse(const std::string& responseJson,
+                                                        int toggleBitmask, int envFlags) {
+        nlohmann::json out;
+        out["valid"] = false;
+
+        nlohmann::json resp;
+        try {
+            resp = nlohmann::json::parse(responseJson);
+        } catch (...) {
+            out["reason"] = "JSON parse error";
+            return out.dump();
+        }
+
+        bool shouldAct = resp.value("should_act", false);
+        if (!shouldAct) {
+            out["reason"] = "should_act is false";
+            return out.dump();
+        }
+
+        std::string storyType = resp.value("type", "");
+        if (storyType.empty()) {
+            out["reason"] = "missing type field";
+            return out.dump();
+        }
+
+        // Check if story type is excluded
+        std::string excludeList = BuildExcludeList(toggleBitmask, envFlags);
+        // Exact match check (not substring)
+        std::istringstream stream(excludeList);
+        std::string token;
+        while (std::getline(stream, token, ',')) {
+            // Trim whitespace
+            size_t start = token.find_first_not_of(' ');
+            if (start != std::string::npos) {
+                token = token.substr(start);
+            }
+            if (token == storyType) {
+                out["reason"] = "type '" + storyType + "' is disabled";
+                return out.dump();
+            }
+        }
+
+        // Quest subtype validation
+        if (storyType == "quest") {
+            std::string subType = resp.value("questSubType", "");
+            if (subType.empty()) {
+                out["reason"] = "quest type missing questSubType";
+                return out.dump();
+            }
+
+            // Whitelist of known subtypes
+            static const std::unordered_set<std::string> validSubTypes = {
+                "combat", "rescue", "find_item",
+                "faction_combat", "faction_rescue", "faction_battle"
+            };
+            if (validSubTypes.find(subType) == validSubTypes.end()) {
+                out["reason"] = "unknown questSubType: " + subType;
+                return out.dump();
+            }
+
+            // Check if subtype is excluded
+            std::string questExcludeKey = "quest_" + subType;
+            std::istringstream stream2(excludeList);
+            while (std::getline(stream2, token, ',')) {
+                size_t start = token.find_first_not_of(' ');
+                if (start != std::string::npos) token = token.substr(start);
+                if (token == questExcludeKey) {
+                    out["reason"] = "questSubType '" + subType + "' is disabled";
+                    return out.dump();
+                }
+            }
+
+            // Per-subtype field presence validation
+            std::string questLoc = resp.value("questLocation", "");
+            std::string enemyType = resp.value("enemyType", "");
+            std::string victimName = resp.value("victimName", "");
+            std::string alliedFaction = resp.value("alliedFaction", "");
+
+            if (subType == "faction_rescue") {
+                if (questLoc.empty() || enemyType.empty() || victimName.empty() || alliedFaction.empty()) {
+                    out["reason"] = "faction_rescue missing questLocation, enemyType, victimName, or alliedFaction";
+                    return out.dump();
+                }
+            } else if (subType == "rescue") {
+                if (questLoc.empty() || enemyType.empty() || victimName.empty()) {
+                    out["reason"] = "rescue missing questLocation, enemyType, or victimName";
+                    return out.dump();
+                }
+            } else if (subType == "faction_combat") {
+                if (questLoc.empty() || enemyType.empty() || alliedFaction.empty()) {
+                    out["reason"] = "faction_combat missing questLocation, enemyType, or alliedFaction";
+                    return out.dump();
+                }
+            } else if (subType == "faction_battle") {
+                if (questLoc.empty() || alliedFaction.empty()) {
+                    out["reason"] = "faction_battle missing questLocation or alliedFaction";
+                    return out.dump();
+                }
+            } else {
+                // combat, find_item, etc.
+                if (questLoc.empty() || enemyType.empty()) {
+                    out["reason"] = "quest missing questLocation or enemyType";
+                    return out.dump();
+                }
+            }
+        }
+
+        out["valid"] = true;
+        out["type"] = storyType;
+        return out.dump();
+    }
+
+    // =========================================================================
+    // Phase 3 Migration: StoryEngine helpers
+    // =========================================================================
+
+    std::string FactionPolitics::BuildFactionBattleDispatchFact(const std::string& alliedFaction,
+                                                                 const std::string& questLocation,
+                                                                 const std::string& playerName) {
+        std::string allyName = GetFactionDisplayName(alliedFaction);
+        return "delivered word that the " + allyName + " needed reinforcements near " +
+               questLocation + " and asked " + playerName + " to join the fight";
+    }
+
+    std::string FactionPolitics::RecordFactionBattleCompletion(const std::string& alliedFaction,
+                                                                const std::string& questLocation,
+                                                                const std::string& playerName,
+                                                                const std::string& enemyFaction) {
+        nlohmann::json out;
+        std::string allyName = GetFactionDisplayName(alliedFaction);
+
+        // Notification
+        out["notification"] = "The " + allyName + " will remember your valor at " + questLocation + ".";
+
+        // Quest giver fact
+        out["questGiverFact"] = "learned that " + playerName + " answered the call and fought alongside the " + allyName + " at " + questLocation;
+
+        // Leader fact (different wording — they received word, weren't there)
+        out["leaderFact"] = "received word that " + playerName + " fought alongside the " + allyName + " at " + questLocation;
+
+        // Political event — use actual enemy faction (not re-derived)
+        std::string enemyId = enemyFaction.empty() ? GetFactionWarEnemy(alliedFaction) : enemyFaction;
+        std::string battleDesc = "someone believed to be " + playerName +
+            " fought alongside " + allyName + " forces at " + questLocation;
+        if (!enemyId.empty()) {
+            std::string enemyName = GetFactionDisplayName(enemyId);
+            if (!enemyName.empty()) {
+                battleDesc += ", helping drive back the " + enemyName;
+            }
+        }
+
+        auto* cal = RE::Calendar::GetSingleton();
+        float gameTime = cal ? cal->GetCurrentGameTime() : 0.f;
+        RecordPoliticalEvent(alliedFaction, "", "player_combat", battleDesc, 0, gameTime);
+
+        out["allyName"] = allyName;
+        return out.dump();
+    }
+
+    std::string FactionPolitics::BuildBattleExpiryFact(const std::string& alliedFaction,
+                                                        const std::string& questLocation,
+                                                        const std::string& playerName) {
+        std::string allyName = GetFactionDisplayName(alliedFaction);
+        return "learned that " + playerName + " never arrived to help the " + allyName +
+               " at " + questLocation + " despite promising to join the fight";
+    }
+
+    // =========================================================================
+    // Phase 2 Migration: Politics logic moved from Papyrus to C++
+    // =========================================================================
+
+    std::string FactionPolitics::ProcessPoliticalDMResponse(const std::string& response, int success) {
+        nlohmann::json out;
+        out["acted"] = false;
+
+        logger::info("Politics DM response: success={}, len={}, first100='{}'",
+            success, response.size(), response.substr(0, 100));
+
+        if (success != 1 || response.empty()) {
+            out["error"] = "DM response failed or empty";
+            return out.dump();
+        }
+
+        // Strip non-JSON content (markdown fences, reasoning preamble, trailing text)
+        std::string cleanResponse = response;
+        // Markdown fences
+        auto fenceStart = cleanResponse.find("```");
+        if (fenceStart != std::string::npos) {
+            auto contentStart = cleanResponse.find('\n', fenceStart);
+            if (contentStart != std::string::npos) {
+                contentStart++;
+                auto fenceEnd = cleanResponse.rfind("```");
+                if (fenceEnd != std::string::npos && fenceEnd > fenceStart) {
+                    cleanResponse = cleanResponse.substr(contentStart, fenceEnd - contentStart);
+                }
+            }
+        }
+        // Strip text before first '{' and after last '}'
+        auto jsonStart = cleanResponse.find('{');
+        if (jsonStart != std::string::npos && jsonStart > 0) {
+            cleanResponse = cleanResponse.substr(jsonStart);
+        }
+        auto jsonEnd = cleanResponse.rfind('}');
+        if (jsonEnd != std::string::npos && jsonEnd < cleanResponse.size() - 1) {
+            cleanResponse = cleanResponse.substr(0, jsonEnd + 1);
+        }
+        while (!cleanResponse.empty() && (cleanResponse.back() == '\n' || cleanResponse.back() == '\r' || cleanResponse.back() == ' '))
+            cleanResponse.pop_back();
+        if (cleanResponse.size() != response.size()) {
+            logger::info("Politics DM: stripped non-JSON content, clean len={}", cleanResponse.size());
+        }
+
+        nlohmann::json resp;
+        try {
+            resp = nlohmann::json::parse(cleanResponse);
+        } catch (const std::exception& e) {
+            logger::error("Politics: JSON parse error: {} — first 200 chars: '{}'", e.what(), cleanResponse.substr(0, 200));
+            out["error"] = "JSON parse error";
+            return out.dump();
+        }
+
+        bool shouldAct = resp.value("should_act", false);
+        logger::info("Politics DM: should_act={}", shouldAct);
+        if (!shouldAct) {
+            out["noAction"] = true;
+            return out.dump();
+        }
+
+        std::string factionA = resp.value("faction_a", "");
+        std::string factionB = resp.value("faction_b", "");
+        std::string eventType = resp.value("event_type", "");
+        std::string description = resp.value("description", "");
+        int delta = resp.value("relation_delta", 0);
+
+        logger::info("Politics DM: factionA={}, factionB={}, type={}, delta={}, desc={}",
+            factionA, factionB, eventType, delta, description.substr(0, 80));
+
+        if (factionA.empty() || eventType.empty()) {
+            logger::warn("Politics DM: rejected — missing faction_a or event_type");
+            out["error"] = "missing faction_a or event_type";
+            return out.dump();
+        }
+
+        auto* cal = RE::Calendar::GetSingleton();
+        float gameTime = cal ? cal->GetCurrentGameTime() : 0.f;
+
+        // Record event (handles validation, clamping, relation adjustment, state file)
+        int eventId = RecordPoliticalEvent(factionA, factionB, eventType, description, delta, gameTime);
+        if (eventId < 0) {
+            logger::error("Politics DM: RecordPoliticalEvent FAILED for {} vs {} (type={})",
+                factionA, factionB, eventType);
+            out["error"] = "event recording failed";
+            return out.dump();
+        }
+        logger::info("Politics DM: Event #{} recorded — {} vs {} ({}), delta={}",
+            eventId, factionA, factionB, eventType, delta);
+
+        out["acted"] = true;
+        out["eventId"] = eventId;
+        out["eventType"] = eventType;
+        out["factionA"] = factionA;
+        out["factionB"] = factionB;
+        out["description"] = description;
+
+        // --- Handle war declaration ---
+        if (eventType == "war_declaration") {
+            int warId = DeclareWar(factionA, factionB, gameTime);
+            out["warDeclared"] = (warId >= 0);
+            out["warId"] = warId;
+            logger::info("Politics: WAR #{} DECLARED — {} vs {}", warId, factionA, factionB);
+        }
+
+        // --- Handle surrender ---
+        if (eventType == "surrender") {
+            bool ended = EndWar(factionA, factionB, factionB, gameTime);
+            out["warEnded"] = ended;
+            logger::info("Politics: WAR ENDED — {} surrendered to {}", factionA, factionB);
+        }
+
+        // --- Handle off-screen battle result (ONLY during active war) ---
+        // NOTE: GetActiveWar acquires PoliticalDB::mutex_. Safe here because
+        // ProcessPoliticalDMResponse is called from Papyrus thread, not from a DB write context.
+        if (eventType == "battle_result") {
+            auto war = PoliticalDB::GetSingleton()->GetActiveWar(factionA, factionB);
+            if (!war) {
+                logger::info("Politics: battle_result ignored — no active war between {} and {}", factionA, factionB);
+                out["acted"] = false;
+                return out.dump();
+            }
+
+            std::string battleLoc = resp.value("battle_location", "the field");
+            if (battleLoc.empty()) battleLoc = "the field";
+
+            int pendingId = BattleManager::GetSingleton()->AddPendingBattle(
+                battleLoc, factionA, factionB, response);
+
+            if (pendingId >= 0) {
+                out["pendingBattleId"] = pendingId;
+                out["battleLocation"] = battleLoc;
+                out["startPendingPoll"] = true;
+                // Notification text for Papyrus
+                std::string nameA = GetFactionDisplayName(factionA);
+                std::string nameB = GetFactionDisplayName(factionB);
+                out["notification"] = nameA + " forces engage " + nameB + " at " + battleLoc + "!";
+                logger::info("Politics: Pending battle #{} at {} — {} vs {}",
+                    pendingId, battleLoc, factionA, factionB);
+            } else {
+                // Location unresolvable — fall back to off-screen
+                std::string battleResult = resp.value("battle_result", "draw");
+                std::string victor = resp.value("battle_victor", "");
+                int lossesA = std::clamp(resp.value("attacker_losses", 0), 0, 30);
+                int lossesB = std::clamp(resp.value("defender_losses", 0), 0, 30);
+                RecordOffScreenBattle(factionA, factionB, battleLoc, battleResult,
+                    description, lossesA, lossesB, victor);
+                out["offScreenResolved"] = true;
+                logger::info("Politics: Off-screen battle at {} (location unresolvable)", battleLoc);
+            }
+        }
+
+        // --- Handle scheduled battle ---
+        if (eventType == "battle_scheduled") {
+            std::uniform_real_distribution<float> delayDist(6.f, 12.f);
+            thread_local std::mt19937 rng(std::random_device{}());
+            float delayHours = delayDist(rng);
+            float battleTime = gameTime + delayHours / 24.f;
+            int warId = GetActiveWarId(factionA, factionB);
+
+            out["scheduleBattle"] = true;
+            out["scheduleFactionA"] = factionA;
+            out["scheduleFactionB"] = factionB;
+            out["scheduleWarId"] = warId;
+            out["scheduleBattleTime"] = battleTime;
+            logger::info("Politics: Battle scheduled — {} vs {} in {:.1f}h", factionA, factionB, delayHours);
+        }
+
+        // --- Check manifestation ---
+        if (eventType == "assassination_attempt" || eventType == "brawl" ||
+            eventType == "border_skirmish") {
+            std::string manifestJson = CheckEventManifestation(factionA, factionB, eventType);
+            if (!manifestJson.empty()) {
+                out["manifestJson"] = manifestJson;
+            }
+        }
+
+        // --- Apply player standing changes from DM response ---
+        if (resp.contains("player_standing_changes") && resp["player_standing_changes"].is_array()) {
+            auto* db = PoliticalDB::GetSingleton();
+            int maxDelta = GetMaxRelationChangePerTick();
+            int applied = 0;
+            for (const auto& change : resp["player_standing_changes"]) {
+                std::string faction = change.value("faction", "");
+                int changeDelta = change.value("delta", 0);
+                if (faction.empty() || changeDelta == 0) continue;
+                if (!GetFaction(faction).has_value()) continue;
+                changeDelta = std::clamp(changeDelta, -maxDelta, maxDelta);
+                db->AdjustPlayerStanding(faction, changeDelta, gameTime);
+                ++applied;
+            }
+            out["standingsApplied"] = applied;
+        }
+
+        // --- Run standing mechanics (decay + crime) ---
+        int decayed = DecayPlayerStandings(1);
+        int crimeChanges = CheckCrimeGoldStandings();
+        if (decayed > 0 || crimeChanges > 0) {
+            WritePoliticalStateFile();
+        }
+        out["decayed"] = decayed;
+        out["crimeChanges"] = crimeChanges;
+
+        return out.dump();
+    }
+
+    std::string FactionPolitics::RunStandingMechanicsInternal() {
+        nlohmann::json out;
+        int decayed = DecayPlayerStandings(1);
+        int crimeChanges = CheckCrimeGoldStandings();
+        if (decayed > 0 || crimeChanges > 0) {
+            WritePoliticalStateFile();
+        }
+        out["decayed"] = decayed;
+        out["crimeChanges"] = crimeChanges;
+        out["updated"] = (decayed > 0 || crimeChanges > 0);
+        return out.dump();
     }
 
 }  // namespace IntelEngine

@@ -94,6 +94,14 @@ namespace IntelEngine {
                 total_contributions INTEGER DEFAULT 0
             );
 
+            CREATE TABLE IF NOT EXISTS player_standing_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                faction_id TEXT NOT NULL,
+                delta INTEGER NOT NULL,
+                reason TEXT,
+                game_time REAL NOT NULL
+            );
+
             CREATE TABLE IF NOT EXISTS faction_wars (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 faction_a TEXT NOT NULL,
@@ -439,6 +447,8 @@ namespace IntelEngine {
         }
 
         int newStanding = std::clamp(current + delta, RELATION_MIN, RELATION_MAX);
+        logger::info("PoliticalDB: AdjustPlayerStanding('{}') {} + {} = {} (clamped: {})",
+            factionId, current, delta, current + delta, newStanding);
 
         const char* sql = R"SQL(
             INSERT INTO player_faction_standing (faction_id, standing, last_change_time)
@@ -453,12 +463,26 @@ namespace IntelEngine {
         sqlite3_bind_int(stmt, 2, newStanding);
         sqlite3_bind_double(stmt, 3, gameTime);
 
-        if (sqlite3_step(stmt) == SQLITE_DONE) {
+        if (sqlite3_step(stmt) != SQLITE_DONE) {
             sqlite3_finalize(stmt);
-            return newStanding;
+            return current;
         }
         sqlite3_finalize(stmt);
-        return current;
+
+        // Record the delta in history for save-load recalculation
+        {
+            const char* histSql = "INSERT INTO player_standing_history (faction_id, delta, reason, game_time) VALUES (?, ?, '', ?)";
+            sqlite3_stmt* histStmt = nullptr;
+            if (sqlite3_prepare_v2(db_, histSql, -1, &histStmt, nullptr) == SQLITE_OK) {
+                sqlite3_bind_text(histStmt, 1, factionId.c_str(), -1, SQLITE_TRANSIENT);
+                sqlite3_bind_int(histStmt, 2, delta);
+                sqlite3_bind_double(histStmt, 3, gameTime);
+                sqlite3_step(histStmt);
+                sqlite3_finalize(histStmt);
+            }
+        }
+
+        return newStanding;
     }
 
     std::vector<PlayerStanding> PoliticalDB::GetAllPlayerStandings() {
@@ -480,6 +504,90 @@ namespace IntelEngine {
         }
         sqlite3_finalize(stmt);
         return results;
+    }
+
+    void PoliticalDB::RecalculatePlayerStandings() {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (!db_) return;
+
+        sqlite3_exec(db_, "BEGIN", nullptr, nullptr, nullptr);
+
+        // Migration: if history table is empty but standings exist, seed history from current standings.
+        // This preserves pre-existing standings from saves created before the history system.
+        {
+            int historyCount = 0;
+            sqlite3_stmt* countStmt = nullptr;
+            if (sqlite3_prepare_v2(db_, "SELECT COUNT(*) FROM player_standing_history", -1, &countStmt, nullptr) == SQLITE_OK) {
+                if (sqlite3_step(countStmt) == SQLITE_ROW) historyCount = sqlite3_column_int(countStmt, 0);
+                sqlite3_finalize(countStmt);
+            }
+
+            if (historyCount == 0) {
+                // Seed history from existing standings (one entry per faction with current standing as delta)
+                sqlite3_stmt* readStmt = nullptr;
+                if (sqlite3_prepare_v2(db_, "SELECT faction_id, standing, last_change_time FROM player_faction_standing WHERE standing != 0",
+                        -1, &readStmt, nullptr) == SQLITE_OK) {
+                    int seeded = 0;
+                    while (sqlite3_step(readStmt) == SQLITE_ROW) {
+                        std::string fid = SafeColumnText(readStmt, 0);
+                        int standing = sqlite3_column_int(readStmt, 1);
+                        double changeTime = sqlite3_column_double(readStmt, 2);
+                        if (changeTime <= 0.0) changeTime = 1.0;  // fallback for missing timestamps
+
+                        sqlite3_stmt* insertStmt = nullptr;
+                        if (sqlite3_prepare_v2(db_, "INSERT INTO player_standing_history (faction_id, delta, reason, game_time) VALUES (?, ?, 'migrated', ?)",
+                                -1, &insertStmt, nullptr) == SQLITE_OK) {
+                            sqlite3_bind_text(insertStmt, 1, fid.c_str(), -1, SQLITE_TRANSIENT);
+                            sqlite3_bind_int(insertStmt, 2, standing);
+                            sqlite3_bind_double(insertStmt, 3, changeTime);
+                            sqlite3_step(insertStmt);
+                            sqlite3_finalize(insertStmt);
+                            seeded++;
+                        }
+                    }
+                    sqlite3_finalize(readStmt);
+                    if (seeded > 0) {
+                        logger::info("PoliticalDB: Migrated {} existing standings to history table", seeded);
+                    }
+                }
+            }
+        }
+
+        // Reset all player standings to 0
+        sqlite3_exec(db_, "DELETE FROM player_faction_standing", nullptr, nullptr, nullptr);
+
+        // Replay all standing history events (chronological) to rebuild accurate standings
+        const char* sql = "SELECT faction_id, delta FROM player_standing_history ORDER BY game_time ASC";
+        sqlite3_stmt* stmt = nullptr;
+        if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK) return;
+
+        std::unordered_map<std::string, int> standings;
+        int replayed = 0;
+        while (sqlite3_step(stmt) == SQLITE_ROW) {
+            std::string factionId = SafeColumnText(stmt, 0);
+            int delta = sqlite3_column_int(stmt, 1);
+            standings[factionId] = std::clamp(standings[factionId] + delta, RELATION_MIN, RELATION_MAX);
+            replayed++;
+        }
+        sqlite3_finalize(stmt);
+
+        // Write recalculated standings back
+        for (const auto& [factionId, standing] : standings) {
+            const char* upsert = R"SQL(
+                INSERT INTO player_faction_standing (faction_id, standing) VALUES (?, ?)
+                ON CONFLICT(faction_id) DO UPDATE SET standing = excluded.standing
+            )SQL";
+            sqlite3_stmt* uStmt = nullptr;
+            if (sqlite3_prepare_v2(db_, upsert, -1, &uStmt, nullptr) == SQLITE_OK) {
+                sqlite3_bind_text(uStmt, 1, factionId.c_str(), -1, SQLITE_TRANSIENT);
+                sqlite3_bind_int(uStmt, 2, standing);
+                sqlite3_step(uStmt);
+                sqlite3_finalize(uStmt);
+            }
+        }
+
+        sqlite3_exec(db_, "COMMIT", nullptr, nullptr, nullptr);
+        logger::info("PoliticalDB: Recalculated player standings from {} history events, {} factions", replayed, standings.size());
     }
 
     // =========================================================================
@@ -542,6 +650,8 @@ namespace IntelEngine {
         std::lock_guard<std::mutex> lock(mutex_);
         if (!db_) return 0;
 
+        sqlite3_exec(db_, "BEGIN", nullptr, nullptr, nullptr);
+
         int totalDeleted = 0;
         double gameTime = static_cast<double>(currentGameTime);
 
@@ -584,6 +694,57 @@ namespace IntelEngine {
             }
         }
 
+        // Reopen wars that ended in the future (they were still active at the save point)
+        {
+            const char* sql = "UPDATE faction_wars SET end_time = NULL, victor = NULL WHERE end_time > ? AND start_time <= ?";
+            sqlite3_stmt* stmt = nullptr;
+            if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) == SQLITE_OK) {
+                sqlite3_bind_double(stmt, 1, gameTime);
+                sqlite3_bind_double(stmt, 2, gameTime);
+                if (sqlite3_step(stmt) == SQLITE_DONE) {
+                    int reopened = sqlite3_changes(db_);
+                    if (reopened > 0) {
+                        logger::info("PoliticalDB: Reopened {} wars that ended in the future", reopened);
+                    }
+                }
+                sqlite3_finalize(stmt);
+            }
+        }
+
+        // Delete future battles within surviving wars
+        {
+            const char* sql = "DELETE FROM war_battles WHERE game_time > ?";
+            sqlite3_stmt* stmt = nullptr;
+            if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) == SQLITE_OK) {
+                sqlite3_bind_double(stmt, 1, gameTime);
+                if (sqlite3_step(stmt) == SQLITE_DONE) {
+                    int cleaned = sqlite3_changes(db_);
+                    if (cleaned > 0) {
+                        totalDeleted += cleaned;
+                        logger::info("PoliticalDB: Cleaned {} future battles from surviving wars", cleaned);
+                    }
+                }
+                sqlite3_finalize(stmt);
+            }
+        }
+
+        // Delete future player standing history entries
+        {
+            const char* sql = "DELETE FROM player_standing_history WHERE game_time > ?";
+            sqlite3_stmt* stmt = nullptr;
+            if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) == SQLITE_OK) {
+                sqlite3_bind_double(stmt, 1, gameTime);
+                if (sqlite3_step(stmt) == SQLITE_DONE) {
+                    int cleaned = sqlite3_changes(db_);
+                    if (cleaned > 0) {
+                        totalDeleted += cleaned;
+                        logger::info("PoliticalDB: Cleaned {} future player standing entries", cleaned);
+                    }
+                }
+                sqlite3_finalize(stmt);
+            }
+        }
+
         // Reset last_event_time entries that are in the future
         {
             const char* sql = "UPDATE faction_relations SET last_event_time = NULL WHERE last_event_time > ?";
@@ -609,6 +770,7 @@ namespace IntelEngine {
         if (totalDeleted > 0) {
             logger::info("PoliticalDB: Timeline cleanup deleted {} future rows (game_time > {:.2f})", totalDeleted, currentGameTime);
         }
+        sqlite3_exec(db_, "COMMIT", nullptr, nullptr, nullptr);
         return totalDeleted;
     }
 

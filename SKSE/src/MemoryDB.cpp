@@ -79,38 +79,61 @@ namespace IntelEngine {
             return "";
         }
 
-        // Read the .prompt file from SkyrimNet's character prompts directory.
+        // Read the bio file — prefer dynamic bio (evolved through gameplay), fall back to static.
         const std::string promptFile = bioTemplate + ".prompt";
+        const std::string dynamicBioFile = bioTemplate + ".dynamic.prompt";
         std::string filePath;
         std::error_code ec;
 
-        std::string dynamicPath = "Data/SKSE/Plugins/SkyrimNet/prompts/characters/" + promptFile;
+        // 1. Dynamic bio (LLM-generated evolution of the character)
+        std::string dynamicBioPath = "Data/SKSE/Plugins/SkyrimNet/prompts/characters/dynamic/" + dynamicBioFile;
+        // 2. Static bio (authored character prompt)
+        std::string staticPath = "Data/SKSE/Plugins/SkyrimNet/prompts/characters/" + promptFile;
         std::string originalPath = "Data/SKSE/Plugins/SkyrimNet/original_prompts/characters/" + promptFile;
 
-        if (std::filesystem::exists(dynamicPath, ec)) {
-            filePath = dynamicPath;
-        } else if (std::filesystem::exists(originalPath, ec)) {
-            filePath = originalPath;
-        } else {
-            // Fallback: SkyrimNet stores save-specific bios in _saves/{saveId}/characters/.
-            std::string savesDir = "Data/SKSE/Plugins/SkyrimNet/prompts/_saves";
-            if (std::filesystem::exists(savesDir, ec) && std::filesystem::is_directory(savesDir, ec)) {
-                std::vector<std::filesystem::directory_entry> saveDirs;
-                for (auto& entry : std::filesystem::directory_iterator(savesDir, ec)) {
-                    if (entry.is_directory(ec)) {
-                        saveDirs.push_back(entry);
-                    }
+        // Also check save-specific dynamic bios
+        std::string savesDir = "Data/SKSE/Plugins/SkyrimNet/prompts/_saves";
+        if (std::filesystem::exists(savesDir, ec) && std::filesystem::is_directory(savesDir, ec)) {
+            std::vector<std::filesystem::directory_entry> saveDirs;
+            for (auto& entry : std::filesystem::directory_iterator(savesDir, ec)) {
+                if (entry.is_directory(ec)) saveDirs.push_back(entry);
+            }
+            std::sort(saveDirs.begin(), saveDirs.end(),
+                [](const auto& a, const auto& b) {
+                    return a.path().filename().string() > b.path().filename().string();
+                });
+            for (auto& saveDir : saveDirs) {
+                auto saveDynPath = saveDir.path() / "characters" / "dynamic" / dynamicBioFile;
+                if (std::filesystem::exists(saveDynPath, ec)) {
+                    filePath = saveDynPath.string();
+                    break;
                 }
-                std::sort(saveDirs.begin(), saveDirs.end(),
-                    [](const auto& a, const auto& b) {
-                        return a.path().filename().string() > b.path().filename().string();
-                    });
-                for (auto& saveDir : saveDirs) {
-                    auto saveBioPath = saveDir.path() / "characters" / promptFile;
-                    if (std::filesystem::exists(saveBioPath, ec)) {
-                        filePath = saveBioPath.string();
-                        break;
-                    }
+            }
+        }
+
+        if (filePath.empty() && std::filesystem::exists(dynamicBioPath, ec)) {
+            filePath = dynamicBioPath;
+        } else if (filePath.empty() && std::filesystem::exists(staticPath, ec)) {
+            filePath = staticPath;
+        } else if (filePath.empty() && std::filesystem::exists(originalPath, ec)) {
+            filePath = originalPath;
+        }
+
+        // Last resort: save-specific static bio
+        if (filePath.empty() && std::filesystem::exists(savesDir, ec) && std::filesystem::is_directory(savesDir, ec)) {
+            std::vector<std::filesystem::directory_entry> saveDirs2;
+            for (auto& entry : std::filesystem::directory_iterator(savesDir, ec)) {
+                if (entry.is_directory(ec)) saveDirs2.push_back(entry);
+            }
+            std::sort(saveDirs2.begin(), saveDirs2.end(),
+                [](const auto& a, const auto& b) {
+                    return a.path().filename().string() > b.path().filename().string();
+                });
+            for (auto& saveDir : saveDirs2) {
+                auto saveBioPath = saveDir.path() / "characters" / promptFile;
+                if (std::filesystem::exists(saveBioPath, ec)) {
+                    filePath = saveBioPath.string();
+                    break;
                 }
             }
         }
@@ -164,7 +187,7 @@ namespace IntelEngine {
 
         if (summary.empty()) {
             logger::warn("MemoryDB: No bio summary for FormID 0x{:08X} (template: '{}', tried: '{}', '{}', and _saves/*/characters/)",
-                formId, bioTemplate, dynamicPath, originalPath);
+                formId, bioTemplate, dynamicBioPath, originalPath);
         } else {
             logger::info("MemoryDB: Bio loaded for 0x{:08X} ({}) from {}: {}...",
                 formId, bioTemplate, filePath, summary.substr(0, 60));
