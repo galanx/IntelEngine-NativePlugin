@@ -5,10 +5,12 @@ import PackagesTab from './components/PackagesTab';
 import SettingsTab from './components/SettingsTab';
 import DirectorTab from './components/DirectorTab';
 import ActionsTab from './components/ActionsTab';
+import PoliticsTab from './components/PoliticsTab';
 
 const TABS = [
   { id: 'tasks', label: 'Tasks' },
   { id: 'story', label: 'Story' },
+  { id: 'politics', label: 'Politics' },
   { id: 'director', label: 'Director' },
   { id: 'actions', label: 'Actions' },
   { id: 'packages', label: 'Packages' },
@@ -41,11 +43,36 @@ function App() {
         return next.size !== prev.size ? next : prev;
       });
 
+      // Ensure all known config keys have defaults so they always render in the UI,
+      // even if SkyrimNet's state push doesn't include them from settings.yaml
+      const pluginDefaults = {
+        'story.faction_blocklist': '',
+        'story.location_blocklist': '',
+        'story.npc_blocklist': '',
+        'story.faction_whitelist': '',
+        'story.location_whitelist': '',
+        'story.npc_whitelist': '',
+        'politics.enabled': true,
+        'politics.tick_interval_hours': 6,
+        'politics.max_relation_change_per_tick': 15,
+        'politics.max_active_wars': 2,
+        'ui.scale': 1.3,
+        'llm.endpoint': '',
+        'llm.api_key': '',
+        'llm.model_name': '',
+        'llm.temperature': 0,
+        'llm.max_tokens': 0,
+        'llm.timeout': 0,
+      };
+
       setState(prev => ({
         ...data,
-        // Preserve local pluginConfig after initial load — prevents stale
-        // server pushes from overwriting values the user just edited
-        pluginConfig: prev.pluginConfig || data.pluginConfig,
+        // Merge: defaults → server values → locally edited values
+        pluginConfig: {
+          ...pluginDefaults,
+          ...(data.pluginConfig || {}),
+          ...(prev.pluginConfig || {}),
+        },
       }));
     } catch (e) {
       console.error('[Dashboard] Failed to parse full state:', e);
@@ -156,6 +183,12 @@ function App() {
               quest={state.quest}
               social={state.social}
               npcSocialLog={state.npcSocialLog}
+              sendAction={sendAction}
+            />
+          )}
+          {activeTab === 'politics' && (
+            <PoliticsTab
+              politics={state.politics}
               sendAction={sendAction}
             />
           )}

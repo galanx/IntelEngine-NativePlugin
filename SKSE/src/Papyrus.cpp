@@ -10,6 +10,7 @@
 #include <random>
 #include <algorithm>
 #include <chrono>
+#include <mutex>
 #include "LocationResolver.h"
 #include "StringUtils.h"
 #include "CellAnalyzer.h"
@@ -22,7 +23,12 @@
 #include "Settings.h"
 #include "DashboardConfig.h"
 #include "DashboardUIManager.h"
+#include "FactionPolitics.h"
+#include "PoliticalDB.h"
+#include "BattleManager.h"
+#include "ProcessUtils.h"
 #include <Windows.h>
+#include <nlohmann/json.hpp>
 
 namespace IntelEngine::Papyrus {
 
@@ -33,6 +39,8 @@ namespace IntelEngine::Papyrus {
     bool IsActorOnStoryCooldown(RE::StaticFunctionTag*, RE::Actor*);
     void NotifySocialCooldown(RE::StaticFunctionTag*, RE::Actor*, float, float);
     void NotifyStoryTypePicked(RE::StaticFunctionTag*, RE::BSFixedString);
+    void WarmStoryTypeCountsFromCSV(RE::StaticFunctionTag*, RE::BSFixedString);
+    void SetRecentGossipContext(RE::StaticFunctionTag*, RE::BSFixedString);
     std::vector<int> GetDMCandidatePoolFormIDs(RE::StaticFunctionTag*);
     std::vector<int> GetNPCCandidatePoolFormIDs(RE::StaticFunctionTag*);
     RE::BSFixedString ScanActorsWithPackages(RE::StaticFunctionTag*, std::vector<int>);
@@ -42,8 +50,13 @@ namespace IntelEngine::Papyrus {
     RE::BSFixedString RenderTaskHistorySection(RE::StaticFunctionTag*, std::vector<RE::BSFixedString>, std::vector<float>, float);
     void SetDangerZonePolicy(RE::StaticFunctionTag*, int);
     void SetPlayerHomePolicy(RE::StaticFunctionTag*, int);
+    void SetHoldRestrictionPolicy(RE::StaticFunctionTag*, RE::BSFixedString, int);
+    bool CheckHoldRestriction(RE::StaticFunctionTag*, RE::Actor*, RE::BSFixedString);
+    RE::BSFixedString GetActorHoldName(RE::StaticFunctionTag*, RE::Actor*);
+    bool NPCKnowsPlayer(RE::StaticFunctionTag*, RE::Actor*);
     bool IsPotentialFollower(RE::StaticFunctionTag*, RE::Actor*);
     bool IsPlayerInBlockedLocation(RE::StaticFunctionTag*);
+    bool IsPlayerInWhitelistedLocation(RE::StaticFunctionTag*);
     RE::TESObjectREFR* FindRescueAnchor(RE::StaticFunctionTag*, RE::Actor*);
     RE::TESObjectREFR* FindUsablePrisonerFurniture(RE::StaticFunctionTag*, RE::Actor*);
     RE::TESObjectREFR* ScanAheadForAnchor(RE::StaticFunctionTag*, RE::Actor*);
@@ -57,6 +70,139 @@ namespace IntelEngine::Papyrus {
     bool IsDashboardOpen(RE::StaticFunctionTag*);
     RE::BSFixedString GetPendingDirectorParam(RE::StaticFunctionTag*, RE::BSFixedString);
     void ClearPendingDirectorParams(RE::StaticFunctionTag*);
+    RE::BSFixedString ClaimPendingDirectorParams(RE::StaticFunctionTag*);
+
+    // Political system forward declarations
+    int GetFactionRelation(RE::StaticFunctionTag*, RE::BSFixedString, RE::BSFixedString);
+    int AdjustFactionRelation(RE::StaticFunctionTag*, RE::BSFixedString, RE::BSFixedString, int);
+    int GetPlayerFactionStanding(RE::StaticFunctionTag*, RE::BSFixedString);
+    int AdjustPlayerFactionStanding(RE::StaticFunctionTag*, RE::BSFixedString, int);
+    bool IsFactionAtWar(RE::StaticFunctionTag*, RE::BSFixedString, RE::BSFixedString);
+    int GetWarMorale(RE::StaticFunctionTag*, RE::BSFixedString, RE::BSFixedString, RE::BSFixedString);
+    RE::BSFixedString GetRelationStatus(RE::StaticFunctionTag*, RE::BSFixedString, RE::BSFixedString);
+    RE::BSFixedString BuildPoliticalContext(RE::StaticFunctionTag*, float);
+    RE::BSFixedString BuildPoliticalDashboardJson(RE::StaticFunctionTag*);
+    int RecordPoliticalEvent(RE::StaticFunctionTag*, RE::BSFixedString, RE::BSFixedString,
+                             RE::BSFixedString, RE::BSFixedString, int, float);
+    bool IsPoliticsEnabled(RE::StaticFunctionTag*);
+    int GetPoliticsTickInterval(RE::StaticFunctionTag*);
+    void ReloadFactionConfig(RE::StaticFunctionTag*);
+    std::vector<RE::Actor*> GetFactionLeaderActors(RE::StaticFunctionTag*, RE::BSFixedString);
+    std::vector<int> GetFactionLeaderFormIds(RE::StaticFunctionTag*, RE::BSFixedString);
+    int ApplyPlayerStandingChanges(RE::StaticFunctionTag*, RE::BSFixedString);
+    int ProcessPlayerConduct(RE::StaticFunctionTag*, RE::Actor*, RE::BSFixedString,
+                              RE::BSFixedString, RE::BSFixedString);
+    int CheckCrimeGoldStandings(RE::StaticFunctionTag*);
+    int DecayPlayerStandings(RE::StaticFunctionTag*, int);
+    void WritePoliticalStateFile(RE::StaticFunctionTag*);
+    void SetPoliticsEnabled(RE::StaticFunctionTag*, bool);
+    void SetPoliticsTickInterval(RE::StaticFunctionTag*, int);
+    int DeclareWar(RE::StaticFunctionTag*, RE::BSFixedString, RE::BSFixedString, float);
+    RE::BSFixedString ProcessWarTick(RE::StaticFunctionTag*, float);
+    bool EndFactionWar(RE::StaticFunctionTag*, RE::BSFixedString, RE::BSFixedString, RE::BSFixedString, float);
+    int GetActiveWarCount(RE::StaticFunctionTag*);
+    int GetActiveWarId(RE::StaticFunctionTag*, RE::BSFixedString, RE::BSFixedString);
+    int GetWarStrength(RE::StaticFunctionTag*, RE::BSFixedString, RE::BSFixedString, RE::BSFixedString);
+    int RecordOffScreenBattle(RE::StaticFunctionTag*, RE::BSFixedString, RE::BSFixedString,
+                              RE::BSFixedString, RE::BSFixedString, RE::BSFixedString, int, int, RE::BSFixedString);
+
+    // Event manifestation forward declarations
+    RE::BSFixedString CheckEventManifestation(RE::StaticFunctionTag*, RE::BSFixedString, RE::BSFixedString, RE::BSFixedString);
+    void ConfirmManifestationCooldown(RE::StaticFunctionTag*);
+
+    // Faction query forward declarations
+    bool IsHighStatusNPC(RE::StaticFunctionTag*, RE::Actor*);
+    RE::BSFixedString ExtractFactionId(RE::StaticFunctionTag*, RE::BSFixedString);
+    RE::BSFixedString GetFactionDisplayName(RE::StaticFunctionTag*, RE::BSFixedString);
+    RE::BSFixedString GetFactionRival(RE::StaticFunctionTag*, RE::BSFixedString);
+    RE::BSFixedString GetFactionWarEnemy(RE::StaticFunctionTag*, RE::BSFixedString);
+    RE::BSFixedString GetNPCPoliticalFactionId(RE::StaticFunctionTag*, RE::Actor*);
+    RE::Actor* FindFactionMember(RE::StaticFunctionTag*, RE::BSFixedString);
+
+    // Battle system forward declarations
+    RE::BSFixedString GetFactionSoldierTemplate(RE::StaticFunctionTag*, RE::BSFixedString);
+    std::vector<RE::Actor*> SpawnBattleSoldiers(RE::StaticFunctionTag*, RE::BSFixedString, RE::TESObjectREFR*);
+    RE::BSFixedString ExecuteFullBattleSpawn(RE::StaticFunctionTag*, RE::BSFixedString, RE::Actor*, float, RE::TESObjectREFR*);
+    RE::BSFixedString SpawnReinforcements(RE::StaticFunctionTag*, int, RE::Actor*, RE::TESObjectREFR*);
+    int GetJsonArrayInt(RE::StaticFunctionTag*, RE::BSFixedString, RE::BSFixedString, int);
+    void SetActorProtected(RE::StaticFunctionTag*, RE::Actor*, bool);
+    RE::BSFixedString GetBattleSoldierFormIds(RE::StaticFunctionTag*, RE::BSFixedString);
+    void SetBattleSoldiersAsTeammates(RE::StaticFunctionTag*, RE::BSFixedString);
+    int CountDeadBattleSoldiers(RE::StaticFunctionTag*, RE::BSFixedString);
+    int CleanupBattleSoldiers(RE::StaticFunctionTag*, float, float, float, float, bool);
+    void ForceCleanupAllSoldiers(RE::StaticFunctionTag*);
+    void SnapshotBounties(RE::StaticFunctionTag*);
+    void ClearBattleTeammates(RE::StaticFunctionTag*);
+    void ClearAllHoldBounties(RE::StaticFunctionTag*);
+
+    // Phase 2 Migration: FactionPolitics C++ logic
+    RE::BSFixedString ProcessPoliticalDMResponse(RE::StaticFunctionTag*, RE::BSFixedString, int);
+    RE::BSFixedString RunStandingMechanicsNative(RE::StaticFunctionTag*);
+
+    // Remaining Migration: Text builders, math, display formatters
+    RE::BSFixedString BuildTaskHistoryDesc(RE::StaticFunctionTag*, RE::BSFixedString, RE::BSFixedString, RE::BSFixedString, RE::BSFixedString, RE::BSFixedString);
+    RE::BSFixedString GetSlotStatusNative(RE::StaticFunctionTag*, RE::BSFixedString, int, RE::BSFixedString, RE::BSFixedString);
+    RE::BSFixedString GetPreciseTimeDescriptionNative(RE::StaticFunctionTag*, float, float);
+    RE::BSFixedString GetTimeDescriptionNative(RE::StaticFunctionTag*, float);
+    RE::BSFixedString DetermineLatenessOutcomeNative(RE::StaticFunctionTag*, float, float, float);
+    RE::BSFixedString BuildStuckNarration(RE::StaticFunctionTag*, RE::BSFixedString);
+    bool IsUrgentMessage(RE::StaticFunctionTag*, RE::BSFixedString);
+    RE::BSFixedString GetScheduleDisplayNative(RE::StaticFunctionTag*, RE::BSFixedString, RE::BSFixedString, RE::BSFixedString);
+    RE::BSFixedString GetScheduleStatusNative(RE::StaticFunctionTag*, int, float, float);
+    float CalculateDepartureBuffer(RE::StaticFunctionTag*, float, float);
+
+    // Phase 3 Migration: StoryEngine helpers
+    RE::BSFixedString BuildExcludeListNative(RE::StaticFunctionTag*, int, int);
+    RE::BSFixedString ValidateStoryResponse(RE::StaticFunctionTag*, RE::BSFixedString, int, int);
+    RE::BSFixedString BuildFactionBattleDispatchFact(RE::StaticFunctionTag*, RE::BSFixedString, RE::BSFixedString, RE::BSFixedString);
+    RE::BSFixedString RecordFactionBattleCompletion(RE::StaticFunctionTag*, RE::BSFixedString, RE::BSFixedString, RE::BSFixedString, RE::BSFixedString);
+    RE::BSFixedString BuildBattleExpiryFact(RE::StaticFunctionTag*, RE::BSFixedString, RE::BSFixedString, RE::BSFixedString);
+
+    // Phase 1 Migration: BattleManager C++ logic (replaces Papyrus game logic)
+    RE::BSFixedString FinalizeBattle(RE::StaticFunctionTag*, int, RE::BSFixedString, RE::BSFixedString, int, int, RE::BSFixedString, float);
+    RE::BSFixedString CalculateReinforcementPositions(RE::StaticFunctionTag*, float, float, float, float, float, int);
+    RE::BSFixedString EvaluatePlayerJoinBattle(RE::StaticFunctionTag*, RE::BSFixedString);
+    RE::BSFixedString GetBattleNotification(RE::StaticFunctionTag*, RE::BSFixedString, RE::BSFixedString, RE::BSFixedString, bool);
+    RE::BSFixedString ValidateFactionBattleDispatch(RE::StaticFunctionTag*, RE::BSFixedString, RE::BSFixedString);
+    RE::BSFixedString CalculateMidBattleState(RE::StaticFunctionTag*, float, float);
+    RE::BSFixedString GetPollAction(RE::StaticFunctionTag*, RE::BSFixedString);
+    void ResetBattleState(RE::StaticFunctionTag*);
+    RE::BSFixedString CalculateBattleMarkerPosition(RE::StaticFunctionTag*, float, float, float, float, float, float);
+
+    // BattleManager forward declarations
+    int StartBattle(RE::StaticFunctionTag*, RE::BSFixedString, RE::BSFixedString, RE::BSFixedString, int);
+    void EndBattle(RE::StaticFunctionTag*, int, RE::BSFixedString, RE::BSFixedString);
+    bool RegisterBattleActor(RE::StaticFunctionTag*, RE::Actor*, RE::BSFixedString, int);
+    RE::BSFixedString PollBattleState(RE::StaticFunctionTag*);
+    int GetBattleMorale(RE::StaticFunctionTag*, RE::BSFixedString);
+    void AdjustBattleMorale(RE::StaticFunctionTag*, RE::BSFixedString, int);
+    bool IsBattleActive(RE::StaticFunctionTag*);
+    int GetBattleAliveCount(RE::StaticFunctionTag*, RE::BSFixedString);
+    int GetActiveBattleId(RE::StaticFunctionTag*);
+    int GetBattleCurrentWave(RE::StaticFunctionTag*);
+    void AdvanceBattleWave(RE::StaticFunctionTag*);
+    bool SetPlayerBattleSide(RE::StaticFunctionTag*, RE::BSFixedString);
+    void RemovePlayerCrimeFactions(RE::StaticFunctionTag*);
+    void RestorePlayerCrimeFactions(RE::StaticFunctionTag*);
+    RE::BSFixedString GetPlayerBattleSide(RE::StaticFunctionTag*);
+    bool HasPlayerParticipatedInBattle(RE::StaticFunctionTag*);
+    bool IsBattleFaction(RE::StaticFunctionTag*, RE::BSFixedString);
+
+    // Pending Battle forward declarations
+    int AddPendingBattle(RE::StaticFunctionTag*, RE::BSFixedString, RE::BSFixedString, RE::BSFixedString, RE::BSFixedString);
+    int PollPendingBattles(RE::StaticFunctionTag*);
+    void RemovePendingBattle(RE::StaticFunctionTag*, int);
+    void ClearPendingBattles(RE::StaticFunctionTag*);
+    RE::BSFixedString GetPendingBattleInfo(RE::StaticFunctionTag*, int);
+    int GetPendingBattleCount(RE::StaticFunctionTag*);
+    RE::BSFixedString GetLastExpiredBattleResult(RE::StaticFunctionTag*);
+
+    // Battle witness forward declarations
+    std::vector<RE::Actor*> GetNearbyWitnessNPCs(RE::StaticFunctionTag*, RE::TESObjectREFR*, float);
+
+    // JSON array helper forward declarations
+    int GetJsonArrayLength(RE::StaticFunctionTag*, RE::BSFixedString, RE::BSFixedString);
+    RE::BSFixedString GetJsonArrayItem(RE::StaticFunctionTag*, RE::BSFixedString, RE::BSFixedString, int);
 
     bool Register(RE::BSScript::IVirtualMachine* a_vm) {
         if (!a_vm) {
@@ -177,8 +323,13 @@ namespace IntelEngine::Papyrus {
         a_vm->RegisterFunction("IsJarl", SCRIPT_NAME, IsJarl); ++count;
         a_vm->RegisterFunction("SetDangerZonePolicy", SCRIPT_NAME, SetDangerZonePolicy); ++count;
         a_vm->RegisterFunction("SetPlayerHomePolicy", SCRIPT_NAME, SetPlayerHomePolicy); ++count;
+        a_vm->RegisterFunction("SetHoldRestrictionPolicy", SCRIPT_NAME, SetHoldRestrictionPolicy); ++count;
+        a_vm->RegisterFunction("CheckHoldRestriction", SCRIPT_NAME, CheckHoldRestriction); ++count;
+        a_vm->RegisterFunction("GetActorHoldName", SCRIPT_NAME, GetActorHoldName); ++count;
+        a_vm->RegisterFunction("NPCKnowsPlayer", SCRIPT_NAME, NPCKnowsPlayer); ++count;
         a_vm->RegisterFunction("IsPotentialFollower", SCRIPT_NAME, IsPotentialFollower); ++count;
         a_vm->RegisterFunction("IsPlayerInBlockedLocation", SCRIPT_NAME, IsPlayerInBlockedLocation); ++count;
+        a_vm->RegisterFunction("IsPlayerInWhitelistedLocation", SCRIPT_NAME, IsPlayerInWhitelistedLocation); ++count;
         a_vm->RegisterFunction("StoryResponseShouldAct", SCRIPT_NAME, StoryResponseShouldAct); ++count;
         a_vm->RegisterFunction("StoryResponseGetField", SCRIPT_NAME, StoryResponseGetField); ++count;
         a_vm->RegisterFunction("BuildActorContextJson", SCRIPT_NAME, BuildActorContextJson); ++count;
@@ -189,6 +340,8 @@ namespace IntelEngine::Papyrus {
         a_vm->RegisterFunction("IsActorOnStoryCooldown", SCRIPT_NAME, IsActorOnStoryCooldown); ++count;
         a_vm->RegisterFunction("NotifySocialCooldown", SCRIPT_NAME, NotifySocialCooldown); ++count;
         a_vm->RegisterFunction("NotifyStoryTypePicked", SCRIPT_NAME, NotifyStoryTypePicked); ++count;
+        a_vm->RegisterFunction("WarmStoryTypeCountsFromCSV", SCRIPT_NAME, WarmStoryTypeCountsFromCSV); ++count;
+        a_vm->RegisterFunction("SetRecentGossipContext", SCRIPT_NAME, SetRecentGossipContext); ++count;
         a_vm->RegisterFunction("GetDMCandidatePoolFormIDs", SCRIPT_NAME, GetDMCandidatePoolFormIDs); ++count;
         a_vm->RegisterFunction("GetNPCCandidatePoolFormIDs", SCRIPT_NAME, GetNPCCandidatePoolFormIDs); ++count;
         a_vm->RegisterFunction("ScanActorsWithPackages", SCRIPT_NAME, ScanActorsWithPackages); ++count;
@@ -242,6 +395,132 @@ namespace IntelEngine::Papyrus {
         a_vm->RegisterFunction("IsDashboardOpen", SCRIPT_NAME, IsDashboardOpen); ++count;
         a_vm->RegisterFunction("GetPendingDirectorParam", SCRIPT_NAME, GetPendingDirectorParam); ++count;
         a_vm->RegisterFunction("ClearPendingDirectorParams", SCRIPT_NAME, ClearPendingDirectorParams); ++count;
+        a_vm->RegisterFunction("ClaimPendingDirectorParams", SCRIPT_NAME, ClaimPendingDirectorParams); ++count;
+
+        // Faction Politics Functions
+        a_vm->RegisterFunction("GetFactionRelation", SCRIPT_NAME, GetFactionRelation); ++count;
+        a_vm->RegisterFunction("AdjustFactionRelation", SCRIPT_NAME, AdjustFactionRelation); ++count;
+        a_vm->RegisterFunction("GetPlayerFactionStanding", SCRIPT_NAME, GetPlayerFactionStanding); ++count;
+        a_vm->RegisterFunction("AdjustPlayerFactionStanding", SCRIPT_NAME, AdjustPlayerFactionStanding); ++count;
+        a_vm->RegisterFunction("IsFactionAtWar", SCRIPT_NAME, IsFactionAtWar); ++count;
+        a_vm->RegisterFunction("GetWarMorale", SCRIPT_NAME, GetWarMorale); ++count;
+        a_vm->RegisterFunction("GetRelationStatus", SCRIPT_NAME, GetRelationStatus); ++count;
+        a_vm->RegisterFunction("BuildPoliticalContext", SCRIPT_NAME, BuildPoliticalContext); ++count;
+        a_vm->RegisterFunction("BuildPoliticalDashboardJson", SCRIPT_NAME, BuildPoliticalDashboardJson); ++count;
+        a_vm->RegisterFunction("RecordPoliticalEvent", SCRIPT_NAME, RecordPoliticalEvent); ++count;
+        a_vm->RegisterFunction("IsPoliticsEnabled", SCRIPT_NAME, IsPoliticsEnabled); ++count;
+        a_vm->RegisterFunction("GetPoliticsTickInterval", SCRIPT_NAME, GetPoliticsTickInterval); ++count;
+        a_vm->RegisterFunction("ReloadFactionConfig", SCRIPT_NAME, ReloadFactionConfig); ++count;
+        a_vm->RegisterFunction("GetFactionLeaderActors", SCRIPT_NAME, GetFactionLeaderActors); ++count;
+        a_vm->RegisterFunction("GetFactionLeaderFormIds", SCRIPT_NAME, GetFactionLeaderFormIds); ++count;
+        a_vm->RegisterFunction("ApplyPlayerStandingChanges", SCRIPT_NAME, ApplyPlayerStandingChanges); ++count;
+        a_vm->RegisterFunction("ProcessPlayerConduct", SCRIPT_NAME, ProcessPlayerConduct); ++count;
+        a_vm->RegisterFunction("CheckCrimeGoldStandings", SCRIPT_NAME, CheckCrimeGoldStandings); ++count;
+        a_vm->RegisterFunction("DecayPlayerStandings", SCRIPT_NAME, DecayPlayerStandings); ++count;
+        a_vm->RegisterFunction("WritePoliticalStateFile", SCRIPT_NAME, WritePoliticalStateFile); ++count;
+        a_vm->RegisterFunction("SetPoliticsEnabled", SCRIPT_NAME, SetPoliticsEnabled); ++count;
+
+        // Phase 2 Migration: FactionPolitics C++ logic
+        a_vm->RegisterFunction("ProcessPoliticalDMResponse", SCRIPT_NAME, ProcessPoliticalDMResponse); ++count;
+        a_vm->RegisterFunction("RunStandingMechanics", SCRIPT_NAME, RunStandingMechanicsNative); ++count;
+
+        // Remaining Migration: Text builders, math, display formatters
+        a_vm->RegisterFunction("BuildTaskHistoryDesc", SCRIPT_NAME, BuildTaskHistoryDesc); ++count;
+        a_vm->RegisterFunction("GetSlotStatusNative", SCRIPT_NAME, GetSlotStatusNative); ++count;
+        a_vm->RegisterFunction("GetPreciseTimeDescription", SCRIPT_NAME, GetPreciseTimeDescriptionNative); ++count;
+        a_vm->RegisterFunction("GetTimeDescription", SCRIPT_NAME, GetTimeDescriptionNative); ++count;
+        a_vm->RegisterFunction("DetermineLatenessOutcome", SCRIPT_NAME, DetermineLatenessOutcomeNative); ++count;
+        a_vm->RegisterFunction("IsUrgentMessage", SCRIPT_NAME, IsUrgentMessage); ++count;
+        a_vm->RegisterFunction("BuildStuckNarration", SCRIPT_NAME, BuildStuckNarration); ++count;
+
+        // Phase 3 Migration: StoryEngine helpers
+        a_vm->RegisterFunction("BuildExcludeList", SCRIPT_NAME, BuildExcludeListNative); ++count;
+        a_vm->RegisterFunction("ValidateStoryResponse", SCRIPT_NAME, ValidateStoryResponse); ++count;
+        a_vm->RegisterFunction("BuildFactionBattleDispatchFact", SCRIPT_NAME, BuildFactionBattleDispatchFact); ++count;
+        a_vm->RegisterFunction("RecordFactionBattleCompletion", SCRIPT_NAME, RecordFactionBattleCompletion); ++count;
+        a_vm->RegisterFunction("BuildBattleExpiryFact", SCRIPT_NAME, BuildBattleExpiryFact); ++count;
+        a_vm->RegisterFunction("SetPoliticsTickInterval", SCRIPT_NAME, SetPoliticsTickInterval); ++count;
+        a_vm->RegisterFunction("DeclareWar", SCRIPT_NAME, DeclareWar); ++count;
+        a_vm->RegisterFunction("ProcessWarTick", SCRIPT_NAME, ProcessWarTick); ++count;
+        a_vm->RegisterFunction("EndFactionWar", SCRIPT_NAME, EndFactionWar); ++count;
+        a_vm->RegisterFunction("GetActiveWarCount", SCRIPT_NAME, GetActiveWarCount); ++count;
+        a_vm->RegisterFunction("GetActiveWarId", SCRIPT_NAME, GetActiveWarId); ++count;
+        a_vm->RegisterFunction("GetWarStrength", SCRIPT_NAME, GetWarStrength); ++count;
+        a_vm->RegisterFunction("RecordOffScreenBattle", SCRIPT_NAME, RecordOffScreenBattle); ++count;
+        a_vm->RegisterFunction("CheckEventManifestation", SCRIPT_NAME, CheckEventManifestation); ++count;
+        a_vm->RegisterFunction("ConfirmManifestationCooldown", SCRIPT_NAME, ConfirmManifestationCooldown); ++count;
+
+        // NPC Status Check
+        a_vm->RegisterFunction("IsHighStatusNPC", SCRIPT_NAME, IsHighStatusNPC); ++count;
+
+        // Faction Query Functions
+        a_vm->RegisterFunction("ExtractFactionId", SCRIPT_NAME, ExtractFactionId); ++count;
+        a_vm->RegisterFunction("GetFactionDisplayName", SCRIPT_NAME, GetFactionDisplayName); ++count;
+        a_vm->RegisterFunction("GetFactionRival", SCRIPT_NAME, GetFactionRival); ++count;
+        a_vm->RegisterFunction("GetFactionWarEnemy", SCRIPT_NAME, GetFactionWarEnemy); ++count;
+        a_vm->RegisterFunction("GetNPCPoliticalFactionId", SCRIPT_NAME, GetNPCPoliticalFactionId); ++count;
+        a_vm->RegisterFunction("FindFactionMember", SCRIPT_NAME, FindFactionMember); ++count;
+
+        // Battle System Functions
+        a_vm->RegisterFunction("GetFactionSoldierTemplate", SCRIPT_NAME, GetFactionSoldierTemplate); ++count;
+        a_vm->RegisterFunction("SpawnBattleSoldiers", SCRIPT_NAME, SpawnBattleSoldiers); ++count;
+        a_vm->RegisterFunction("ExecuteFullBattleSpawn", SCRIPT_NAME, ExecuteFullBattleSpawn); ++count;
+        a_vm->RegisterFunction("SpawnReinforcements", SCRIPT_NAME, SpawnReinforcements); ++count;
+        a_vm->RegisterFunction("GetJsonArrayInt", SCRIPT_NAME, GetJsonArrayInt); ++count;
+        a_vm->RegisterFunction("SetActorProtected", SCRIPT_NAME, SetActorProtected); ++count;
+        a_vm->RegisterFunction("GetBattleSoldierFormIds", SCRIPT_NAME, GetBattleSoldierFormIds); ++count;
+        a_vm->RegisterFunction("SetBattleSoldiersAsTeammates", SCRIPT_NAME, SetBattleSoldiersAsTeammates); ++count;
+        a_vm->RegisterFunction("CountDeadBattleSoldiers", SCRIPT_NAME, CountDeadBattleSoldiers); ++count;
+        a_vm->RegisterFunction("CleanupBattleSoldiers", SCRIPT_NAME, CleanupBattleSoldiers); ++count;
+        a_vm->RegisterFunction("ForceCleanupAllSoldiers", SCRIPT_NAME, ForceCleanupAllSoldiers); ++count;
+        a_vm->RegisterFunction("SnapshotBounties", SCRIPT_NAME, SnapshotBounties); ++count;
+        a_vm->RegisterFunction("ClearBattleTeammates", SCRIPT_NAME, ClearBattleTeammates); ++count;
+        a_vm->RegisterFunction("ClearAllHoldBounties", SCRIPT_NAME, ClearAllHoldBounties); ++count;
+        a_vm->RegisterFunction("StartBattle", SCRIPT_NAME, StartBattle); ++count;
+        a_vm->RegisterFunction("EndBattle", SCRIPT_NAME, EndBattle); ++count;
+        a_vm->RegisterFunction("RegisterBattleActor", SCRIPT_NAME, RegisterBattleActor); ++count;
+        a_vm->RegisterFunction("PollBattleState", SCRIPT_NAME, PollBattleState); ++count;
+        a_vm->RegisterFunction("GetBattleMorale", SCRIPT_NAME, GetBattleMorale); ++count;
+        a_vm->RegisterFunction("AdjustBattleMorale", SCRIPT_NAME, AdjustBattleMorale); ++count;
+        a_vm->RegisterFunction("IsBattleActive", SCRIPT_NAME, IsBattleActive); ++count;
+        a_vm->RegisterFunction("GetBattleAliveCount", SCRIPT_NAME, GetBattleAliveCount); ++count;
+        a_vm->RegisterFunction("GetActiveBattleId", SCRIPT_NAME, GetActiveBattleId); ++count;
+        a_vm->RegisterFunction("GetBattleCurrentWave", SCRIPT_NAME, GetBattleCurrentWave); ++count;
+        a_vm->RegisterFunction("AdvanceBattleWave", SCRIPT_NAME, AdvanceBattleWave); ++count;
+        a_vm->RegisterFunction("SetPlayerBattleSide", SCRIPT_NAME, SetPlayerBattleSide); ++count;
+        a_vm->RegisterFunction("RemovePlayerCrimeFactions", SCRIPT_NAME, RemovePlayerCrimeFactions); ++count;
+        a_vm->RegisterFunction("RestorePlayerCrimeFactions", SCRIPT_NAME, RestorePlayerCrimeFactions); ++count;
+        // Phase 4: used by intel_join_battle, intel_accept_recruitment, and intel_broker_peace actions
+        a_vm->RegisterFunction("GetPlayerBattleSide", SCRIPT_NAME, GetPlayerBattleSide); ++count;
+        a_vm->RegisterFunction("HasPlayerParticipatedInBattle", SCRIPT_NAME, HasPlayerParticipatedInBattle); ++count;
+        a_vm->RegisterFunction("IsBattleFaction", SCRIPT_NAME, IsBattleFaction); ++count;
+
+        // Phase 1 Migration: BattleManager C++ logic
+        a_vm->RegisterFunction("FinalizeBattle", SCRIPT_NAME, FinalizeBattle); ++count;
+        a_vm->RegisterFunction("CalculateReinforcementPositions", SCRIPT_NAME, CalculateReinforcementPositions); ++count;
+        a_vm->RegisterFunction("EvaluatePlayerJoinBattle", SCRIPT_NAME, EvaluatePlayerJoinBattle); ++count;
+        a_vm->RegisterFunction("GetBattleNotification", SCRIPT_NAME, GetBattleNotification); ++count;
+        a_vm->RegisterFunction("ValidateFactionBattleDispatch", SCRIPT_NAME, ValidateFactionBattleDispatch); ++count;
+        a_vm->RegisterFunction("CalculateMidBattleState", SCRIPT_NAME, CalculateMidBattleState); ++count;
+        a_vm->RegisterFunction("GetBattlePollAction", SCRIPT_NAME, GetPollAction); ++count;
+        a_vm->RegisterFunction("ResetBattleState", SCRIPT_NAME, ResetBattleState); ++count;
+        a_vm->RegisterFunction("CalculateBattleMarkerPosition", SCRIPT_NAME, CalculateBattleMarkerPosition); ++count;
+
+        // Pending Battle Functions
+        a_vm->RegisterFunction("AddPendingBattle", SCRIPT_NAME, AddPendingBattle); ++count;
+        a_vm->RegisterFunction("PollPendingBattles", SCRIPT_NAME, PollPendingBattles); ++count;
+        a_vm->RegisterFunction("RemovePendingBattle", SCRIPT_NAME, RemovePendingBattle); ++count;
+        a_vm->RegisterFunction("ClearPendingBattles", SCRIPT_NAME, ClearPendingBattles); ++count;
+        a_vm->RegisterFunction("GetPendingBattleInfo", SCRIPT_NAME, GetPendingBattleInfo); ++count;
+        a_vm->RegisterFunction("GetPendingBattleCount", SCRIPT_NAME, GetPendingBattleCount); ++count;
+        a_vm->RegisterFunction("GetLastExpiredBattleResult", SCRIPT_NAME, GetLastExpiredBattleResult); ++count;
+
+        // Battle Witness Functions
+        a_vm->RegisterFunction("GetNearbyWitnessNPCs", SCRIPT_NAME, GetNearbyWitnessNPCs); ++count;
+
+        // JSON Array Helper Functions
+        a_vm->RegisterFunction("GetJsonArrayLength", SCRIPT_NAME, GetJsonArrayLength); ++count;
+        a_vm->RegisterFunction("GetJsonArrayItem", SCRIPT_NAME, GetJsonArrayItem); ++count;
 
         // Debug Functions
         a_vm->RegisterFunction("TestNPCSearch", SCRIPT_NAME, TestNPCSearch); ++count;
@@ -1265,6 +1544,56 @@ namespace IntelEngine::Papyrus {
         NPCIndex::GetSingleton()->SetPlayerHomePolicy(policy);
     }
 
+    void SetHoldRestrictionPolicy(RE::StaticFunctionTag*, RE::BSFixedString storyType, int policy) {
+        NPCIndex::GetSingleton()->SetHoldRestrictionPolicy(storyType.c_str(), policy);
+    }
+
+    bool CheckHoldRestriction(RE::StaticFunctionTag*, RE::Actor* actor, RE::BSFixedString storyType) {
+        if (!actor) return true;
+        int policy = NPCIndex::GetSingleton()->GetHoldRestrictionPolicy(storyType.c_str());
+        if (policy == 0) return true;
+
+        auto* player = RE::PlayerCharacter::GetSingleton();
+        if (!player) return true;
+        std::string playerHold = NPCIndex::GetNPCHoldName(player);
+        return NPCIndex::PassesHoldRestriction(actor, playerHold, policy);
+    }
+
+    RE::BSFixedString GetActorHoldName(RE::StaticFunctionTag*, RE::Actor* actor) {
+        if (!actor) return "";
+        return RE::BSFixedString(NPCIndex::GetNPCHoldName(actor).c_str());
+    }
+
+    bool NPCKnowsPlayer(RE::StaticFunctionTag*, RE::Actor* actor) {
+        if (!actor) return false;
+        auto* memDB = MemoryDB::GetSingleton();
+        if (!memDB) return false;
+        RE::FormID formId = actor->GetFormID();
+
+        // Check dialogue history (most reliable — they've spoken to the player directly)
+        auto dialogue = memDB->GetRecentDialogueForActor(formId, 1);
+        if (!dialogue.empty()) return true;
+
+        // Check memories — but only if they mention the player by name.
+        // GetFormattedMemories returns ALL NPC memories (not just player-related),
+        // so an NPC who only has memories about third parties would false-positive without this filter.
+        auto* player = RE::PlayerCharacter::GetSingleton();
+        if (player) {
+            std::string playerName = player->GetDisplayFullName();
+            if (!playerName.empty()) {
+                auto memories = memDB->GetFormattedMemories(formId, 5);
+                if (!memories.empty()) {
+                    // Case-insensitive search for player name in memory text
+                    std::string memLower = StringUtils::ToLowerStd(memories);
+                    std::string nameLower = StringUtils::ToLowerStd(playerName);
+                    if (memLower.find(nameLower) != std::string::npos) return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
     bool IsPotentialFollower(RE::StaticFunctionTag*, RE::Actor* actor) {
         return NPCIndex::IsPotentialFollower(actor);
     }
@@ -1273,56 +1602,172 @@ namespace IntelEngine::Papyrus {
         return NPCIndex::IsPlayerInBlockedLocation();
     }
 
+    bool IsPlayerInWhitelistedLocation(RE::StaticFunctionTag*) {
+        return NPCIndex::IsPlayerInWhitelistedLocation();
+    }
+
+    // Strip non-JSON content from LLM responses.
+    // Handles: markdown code fences (```json...```), reasoning text before/after JSON.
+    // Modifies the string in-place. Returns true if stripping occurred.
+    static bool StripToJson(std::string& s) {
+        bool stripped = false;
+
+        // Try markdown code fences first
+        auto fenceStart = s.find("```");
+        if (fenceStart != std::string::npos) {
+            auto contentStart = s.find('\n', fenceStart);
+            if (contentStart != std::string::npos) {
+                contentStart++;
+                auto fenceEnd = s.rfind("```");
+                if (fenceEnd != std::string::npos && fenceEnd > fenceStart) {
+                    s = s.substr(contentStart, fenceEnd - contentStart);
+                    stripped = true;
+                }
+            }
+        }
+
+        // Strip any text before the first '{' (LLM reasoning preamble)
+        auto jsonStart = s.find('{');
+        if (jsonStart != std::string::npos && jsonStart > 0) {
+            s = s.substr(jsonStart);
+            stripped = true;
+        }
+
+        // Strip any text after the last '}' (trailing commentary)
+        auto jsonEnd = s.rfind('}');
+        if (jsonEnd != std::string::npos && jsonEnd < s.size() - 1) {
+            s = s.substr(0, jsonEnd + 1);
+            stripped = true;
+        }
+
+        // Trim whitespace
+        while (!s.empty() && (s.back() == '\n' || s.back() == '\r' || s.back() == ' '))
+            s.pop_back();
+
+        return stripped;
+    }
+
     bool StoryResponseShouldAct(RE::StaticFunctionTag*, RE::BSFixedString response) {
-        std::string_view sv(response.c_str());
-        bool result = sv.find("\"should_act\":true") != std::string_view::npos ||
-                      sv.find("\"should_act\": true") != std::string_view::npos;
-        logger::info("[StoryDM] ShouldAct={} — input len={}", result, sv.size());
+        std::string jsonStr(response.c_str());
+        StripToJson(jsonStr);
+        bool result = jsonStr.find("\"should_act\":true") != std::string::npos ||
+                      jsonStr.find("\"should_act\": true") != std::string::npos;
+        if (!result) {
+            // Log rejection reason if present
+            auto reasonPos = jsonStr.find("\"reason\"");
+            if (reasonPos != std::string::npos) {
+                auto valStart = jsonStr.find(':', reasonPos);
+                if (valStart != std::string::npos) {
+                    auto qStart = jsonStr.find('"', valStart + 1);
+                    auto qEnd = (qStart != std::string::npos) ? jsonStr.find('"', qStart + 1) : std::string::npos;
+                    if (qStart != std::string::npos && qEnd != std::string::npos) {
+                        logger::info("[StoryDM] Rejected: {}", jsonStr.substr(qStart + 1, qEnd - qStart - 1));
+                    }
+                }
+            } else {
+                logger::info("[StoryDM] Rejected (no reason given)");
+            }
+        }
+        logger::info("[StoryDM] ShouldAct={} — input len={}", result, jsonStr.size());
         return result;
     }
 
+    // Parse-once cache for StoryResponseGetField. Keyed by JSON string hash +
+    // equality check to avoid collisions. Thread-safe via mutex.
+    constexpr std::size_t kLogTruncLen = 80;
+    static std::mutex s_jsonCacheMutex;
+    static std::size_t s_cachedJsonHash = 0;
+    static std::string s_cachedJsonStr;
+    static std::unordered_map<std::string, std::string> s_cachedFields;  // lowercased key -> value
+
     RE::BSFixedString StoryResponseGetField(RE::StaticFunctionTag*, RE::BSFixedString json,
                                             RE::BSFixedString fieldName) {
-        std::string_view sv(json.c_str());
-        // BSFixedString is case-insensitive: "npc" may become "NPC" if the engine
-        // already stored that casing.  We must also handle camelCase keys like
-        // "msgContent" that get lowercased.  Solution: lowercase BOTH the JSON
-        // (for searching) and the field name, but extract values from the original.
-        std::string jsonLower(sv);
-        std::transform(jsonLower.begin(), jsonLower.end(), jsonLower.begin(),
-                       [](unsigned char c) { return std::tolower(c); });
-
+        std::string jsonStr(json.c_str());
         std::string field(fieldName.c_str());
-        std::transform(field.begin(), field.end(), field.begin(),
+
+        if (jsonStr.empty() || field.empty()) return "";
+
+        // Strip markdown code fences if LLM wrapped the response
+        if (StripToJson(jsonStr)) {
+            logger::info("[StoryDM] Stripped markdown code fence from response");
+        }
+
+        std::string fieldLower = field;
+        std::transform(fieldLower.begin(), fieldLower.end(), fieldLower.begin(),
                        [](unsigned char c) { return std::tolower(c); });
-        std::string needle = "\"" + field + "\":";
-        auto pos = jsonLower.find(needle);
-        if (pos == std::string::npos) {
-            // Try with space after colon
-            needle = "\"" + field + "\": ";
-            pos = jsonLower.find(needle);
+
+        // Result copied out of cache under lock; BSFixedString constructed outside
+        // to avoid lock-ordering with BSStringPool's internal lock.
+        std::string result;
+        bool found = false;
+        std::string warnKeys;
+
+        {
+            std::lock_guard<std::mutex> lock(s_jsonCacheMutex);
+
+            auto hash = std::hash<std::string>{}(jsonStr);
+            if (hash != s_cachedJsonHash || jsonStr != s_cachedJsonStr) {
+                // Cache miss — parse and populate
+                s_cachedFields.clear();
+                s_cachedJsonHash = 0;
+                s_cachedJsonStr.clear();
+
+                try {
+                    auto j = nlohmann::json::parse(jsonStr);
+                    if (!j.is_object()) {
+                        // Cache the miss so we don't re-parse non-objects
+                        s_cachedJsonHash = hash;
+                        s_cachedJsonStr = jsonStr;
+                        logger::warn("[StoryDM] GetField('{}') — response is not a JSON object, len={}",
+                                     field, jsonStr.size());
+                        return "";
+                    }
+
+                    for (auto& [key, value] : j.items()) {
+                        std::string keyLower = key;
+                        std::transform(keyLower.begin(), keyLower.end(), keyLower.begin(),
+                                       [](unsigned char c) { return std::tolower(c); });
+
+                        if (value.is_string()) {
+                            s_cachedFields[keyLower] = value.get<std::string>();
+                        } else if (value.is_null()) {
+                            s_cachedFields[keyLower] = "";
+                        } else {
+                            s_cachedFields[keyLower] = value.dump();
+                        }
+                    }
+
+                    s_cachedJsonHash = hash;
+                    s_cachedJsonStr = jsonStr;
+                } catch (const std::exception& e) {
+                    logger::warn("[StoryDM] GetField('{}') — JSON error: {} — input len={}, first80='{}'",
+                                 field, e.what(), jsonStr.size(),
+                                 jsonStr.size() > kLogTruncLen ? jsonStr.substr(0, kLogTruncLen) : jsonStr);
+                    return "";
+                }
+            }
+
+            // Lookup field from cache
+            auto it = s_cachedFields.find(fieldLower);
+            if (it != s_cachedFields.end()) {
+                result = it->second;
+                found = true;
+            } else {
+                for (auto& [k, _] : s_cachedFields) {
+                    if (!warnKeys.empty()) warnKeys += ", ";
+                    warnKeys += k;
+                }
+            }
         }
-        if (pos == std::string::npos) {
-            logger::warn("[StoryDM] GetField('{}') NOT FOUND — input len={}, first80='{}'",
-                         fieldName.c_str(), sv.size(),
-                         sv.size() > 80 ? sv.substr(0, 80) : sv);
-            return "";
+        // Lock released — safe to construct BSFixedString and log
+
+        if (found) {
+            return RE::BSFixedString(result.c_str());
         }
 
-        // Find opening quote of value (use original sv for value extraction)
-        auto quoteStart = sv.find('"', pos + needle.size());
-        if (quoteStart == std::string_view::npos) return "";
-
-        // Find closing quote (handle escaped quotes)
-        auto i = quoteStart + 1;
-        while (i < sv.size()) {
-            if (sv[i] == '"' && (i == 0 || sv[i - 1] != '\\')) break;
-            ++i;
-        }
-        if (i >= sv.size()) return "";
-
-        auto value = sv.substr(quoteStart + 1, i - quoteStart - 1);
-        return RE::BSFixedString(std::string(value).c_str());
+        logger::warn("[StoryDM] GetField('{}') NOT FOUND in parsed JSON — keys: {}",
+                     field, warnKeys);
+        return "";
     }
 
     RE::BSFixedString BuildActorContextJson(RE::StaticFunctionTag*, RE::Actor* actor,
@@ -1409,6 +1854,17 @@ namespace IntelEngine::Papyrus {
         std::string json = "{";
         json += "\"npcPairPool\":\"" + std::string(npcContext.c_str()) + "\"";
         json += ",\"preferredType\":\"" + preferred + "\"";
+
+        json += ",\"player_at_inn\":\"" + std::string(FactionPolitics::IsPlayerAtInn() ? "1" : "0") + "\"";
+
+        // Latest witnessable event — anchors political gossip to a specific event
+        std::string witnessEvent = FactionPolitics::GetSingleton()->GetLatestWitnessableEvent();
+        if (!witnessEvent.empty()) {
+            json += ",\"latest_witness_event\":\"" + MemoryDB::EscapeJsonString(witnessEvent) + "\"";
+        } else {
+            json += ",\"latest_witness_event\":\"\"";
+        }
+
         json += "}";
         return RE::BSFixedString(json);
     }
@@ -1431,9 +1887,47 @@ namespace IntelEngine::Papyrus {
 
     void NotifyStoryTypePicked(RE::StaticFunctionTag*, RE::BSFixedString storyType) {
         std::string type(storyType.c_str());
-        if (!type.empty()) {
-            NPCIndex::GetSingleton()->NotifyStoryTypePicked(type);
+        if (type.empty()) return;
+
+        // If Papyrus sends just "quest" (stale bytecode), enhance with cached subtype from DM response.
+        // C++ caches the subtype when StoryResponseShouldAct parses the response.
+        if (type == "quest") {
+            std::lock_guard<std::mutex> lock(s_jsonCacheMutex);
+            if (!s_cachedFields.empty()) {
+                auto it = s_cachedFields.find("questsubtype");
+                if (it != s_cachedFields.end() && !it->second.empty()) {
+                    type = "quest/" + it->second;
+                    logger::info("[StoryDM] Enhanced type tracking: quest -> {}", type);
+                }
+            }
         }
+        NPCIndex::GetSingleton()->NotifyStoryTypePicked(type);
+    }
+
+    void WarmStoryTypeCountsFromCSV(RE::StaticFunctionTag*, RE::BSFixedString csv) {
+        // Parse pipe-separated entries, extract type prefix before ':'
+        std::string input(csv.c_str());
+        auto* npcIdx = NPCIndex::GetSingleton();
+        int count = 0;
+        size_t pos = 0;
+        while (pos < input.size()) {
+            size_t pipePos = input.find('|', pos);
+            if (pipePos == std::string::npos) pipePos = input.size();
+            std::string entry = input.substr(pos, pipePos - pos);
+            auto colonPos = entry.find(':');
+            if (colonPos != std::string::npos && colonPos > 0) {
+                npcIdx->NotifyStoryTypePicked(entry.substr(0, colonPos));
+                count++;
+            }
+            pos = pipePos + 1;
+        }
+        if (count > 0) {
+            logger::info("[StoryDM] Warmed {} type counts from CSV", count);
+        }
+    }
+
+    void SetRecentGossipContext(RE::StaticFunctionTag*, RE::BSFixedString gossipLines) {
+        NPCIndex::GetSingleton()->SetRecentGossipContext(gossipLines.c_str());
     }
 
     std::vector<int> GetDMCandidatePoolFormIDs(RE::StaticFunctionTag*) {
@@ -1723,7 +2217,9 @@ namespace IntelEngine::Papyrus {
         static const char* allTypes[] = {
             "seek_player", "informant", "road_encounter",
             "ambush", "stalker", "message", "quest",
-            "quest_combat", "quest_rescue", "quest_find_item"
+            "quest_combat", "quest_rescue", "quest_find_item",
+            "faction_ambush",
+            "quest_faction_combat", "quest_faction_rescue", "quest_faction_battle"
         };
 
         // Log exclude set for diagnostics
@@ -1750,6 +2246,88 @@ namespace IntelEngine::Papyrus {
         for (const auto* t : allTypes) {
             json += "\"show_" + std::string(t) + "\":\"" +
                     (excludedSet.count(t) ? "0" : "1") + "\",";
+        }
+
+        json += "\"player_at_inn\":\"" + std::string(FactionPolitics::IsPlayerAtInn() ? "1" : "0") + "\",";
+
+        // Latest witnessable political event (assassination, brawl, sabotage, etc.)
+        std::string witnessEvent = FactionPolitics::GetSingleton()->GetLatestWitnessableEvent();
+        if (!witnessEvent.empty()) {
+            std::string escaped = MemoryDB::EscapeJsonString(witnessEvent);
+            json += "\"latest_witness_event\":\"" + escaped + "\",";
+        } else {
+            json += "\"latest_witness_event\":\"\",";
+        }
+
+        // Hostile factions — factions hostile to the player OR enemies of the player's friendly factions.
+        // Used by faction_ambush (player-hostile only) and faction_combat/rescue (ally's enemies too).
+        {
+            auto* db = PoliticalDB::GetSingleton();
+            auto* fp = FactionPolitics::GetSingleton();
+            if (db && db->IsReady() && fp) {
+                auto standings = db->GetAllPlayerStandings();
+
+                // Build friendly faction list first (needed for hostile derivation)
+                std::vector<std::string> friendlyIds;
+                std::string friendlyList;
+                for (const auto& ps : standings) {
+                    if (ps.standing >= 40) {
+                        friendlyIds.push_back(ps.factionId);
+                        auto factionOpt = fp->GetFaction(ps.factionId);
+                        std::string displayName = factionOpt ? factionOpt->name : ps.factionId;
+                        if (!friendlyList.empty()) friendlyList += ", ";
+                        friendlyList += displayName + " [" + ps.factionId + "] (" + std::to_string(ps.standing) + ")";
+                    }
+                }
+
+                // Hostile = player standing <= -40 OR enemy of any friendly faction (Tense or worse relation)
+                std::set<std::string> hostileSet;
+                for (const auto& ps : standings) {
+                    if (ps.standing <= -40) {
+                        hostileSet.insert(ps.factionId);
+                    }
+                }
+                // Also include rivals/enemies of friendly factions
+                auto allRelations = db->GetAllRelations();
+                for (const auto& fid : friendlyIds) {
+                    for (const auto& r : allRelations) {
+                        if (r.relationScore >= 0) continue;  // only hostile relations
+                        if (r.factionA == fid && hostileSet.find(r.factionB) == hostileSet.end()) {
+                            hostileSet.insert(r.factionB);
+                        } else if (r.factionB == fid && hostileSet.find(r.factionA) == hostileSet.end()) {
+                            hostileSet.insert(r.factionA);
+                        }
+                    }
+                }
+
+                std::string hostileList;
+                for (const auto& hid : hostileSet) {
+                    auto factionOpt = fp->GetFaction(hid);
+                    std::string displayName = factionOpt ? factionOpt->name : hid;
+                    int playerStanding = 0;
+                    for (const auto& ps : standings) {
+                        if (ps.factionId == hid) { playerStanding = ps.standing; break; }
+                    }
+                    if (!hostileList.empty()) hostileList += ", ";
+                    hostileList += displayName + " [" + hid + "] (" + std::to_string(playerStanding) + ")";
+                }
+
+                json += "\"hostile_factions\":\"" + MemoryDB::EscapeJsonString(hostileList) + "\",";
+                json += "\"friendly_factions\":\"" + MemoryDB::EscapeJsonString(friendlyList) + "\",";
+            } else {
+                json += "\"hostile_factions\":\"\",";
+                json += "\"friendly_factions\":\"\",";
+            }
+        }
+
+        // World quiet flag — true if last dispatch was > 3 game days ago (or never)
+        {
+            auto* npcIdx = NPCIndex::GetSingleton();
+            float lastDispatch = npcIdx->GetLastDispatchGameTime();
+            auto* cal = RE::Calendar::GetSingleton();
+            float now = cal ? cal->GetCurrentGameTime() : 0.f;
+            bool worldQuiet = (lastDispatch <= 0.f) || ((now - lastDispatch) > 3.f);
+            json += "\"world_quiet\":\"" + std::string(worldQuiet ? "1" : "0") + "\",";
         }
 
         // Remove trailing comma, close
@@ -1798,7 +2376,7 @@ namespace IntelEngine::Papyrus {
             if (idx < factTimes.size()) {
                 timeLabel = FormatRelativeTimeFromDays(currentGameDays, factTimes[idx]);
             }
-            result += "- I ";
+            result += "- ";
             result += facts[idx].c_str();
             result += " (";
             result += timeLabel;
@@ -1943,6 +2521,10 @@ namespace IntelEngine::Papyrus {
         DashboardUIManager::ClearPendingParams();
     }
 
+    RE::BSFixedString ClaimPendingDirectorParams(RE::StaticFunctionTag*) {
+        return DashboardUIManager::ClaimPendingParams();
+    }
+
     // ==========================================================================
     // Debug Functions
     // ==========================================================================
@@ -2014,12 +2596,14 @@ namespace IntelEngine::Papyrus {
     // Returns formID array so Papyrus can persist via StorageUtil (save-safe).
     // ==========================================================================
 
-    static std::mt19937 s_rng{std::random_device{}()};
+    static thread_local std::mt19937 s_rng{std::random_device{}()};
 
     // Exact-match cache (EditorID → single form)
     static std::unordered_map<std::string, RE::TESBoundObject*> s_leveledActorCache;
     // Prefix-match cache (EditorID → list of matching forms for random selection)
     static std::unordered_map<std::string, std::vector<RE::TESBoundObject*>> s_prefixMatchCache;
+    // Guards both caches — lookups can occur from multiple threads
+    static std::mutex s_lookupCacheMutex;
 
     static bool IsPrefixSkippable(const char* eid) {
         // Skip Requiem-nullified forms (REQ_NULL_) and ERDP mod-specific variants
@@ -2045,9 +2629,22 @@ namespace IntelEngine::Papyrus {
         {"LvlDraugrWarlockMale",   0x01E7AC},
         {"EncDragon01Fire",        0x01CA03},
         {"EncDragon01Frost",       0x0F80FA},
+        // Civil War / faction soldiers (for battle system)
+        {"LCharSoldierImperial",   0x01FC5B},
+        {"LCharSoldierSons",       0x01FC5C},
+        {"LCharThalmorMelee1H",    0x02B129},
+        {"LCharThalmorMagic",      0x02B128},
+        {"LCharThalmorMissile",    0x02B12A},
+        // Guild / political faction members
+        {"LCharBanditMeleeAny",    0x03DECD},
+        {"WEThiefSubChar",         0x104DC9},
+        {"LCharBanditWizard",      0x01E771},
+        {"WEAssassinSubChar",      0x1051F4},
+        {"LCharForswornMelee1H",   0x01E792},
     };
 
     static RE::TESBoundObject* LookupLeveledActor(const char* editorID) {
+        std::lock_guard<std::mutex> lock(s_lookupCacheMutex);
         std::string key(editorID);
 
         // Check exact cache first (includes negative results)
@@ -2107,8 +2704,19 @@ namespace IntelEngine::Papyrus {
             // Prefix fallback: Lorerim/Requiem replaces leveled characters with individual
             // NPC variants (e.g., "LvlBanditMelee" → "LvlBanditMelee1HCold", "LvlBanditMelee2HCold").
             // Collect all prefix matches, skip mod-specific/nullified forms, pick randomly for variety.
+            // Scans both LeveledNpc and NPC form arrays for maximum compatibility across modlists.
             size_t prefixLen = strlen(editorID);
             std::vector<RE::TESBoundObject*> matches;
+            for (auto* f : dh->GetFormArray<RE::TESLevCharacter>()) {
+                if (f) {
+                    auto eid = f->GetFormEditorID();
+                    if (eid && eid[0] != '\0' && _strnicmp(eid, editorID, prefixLen) == 0) {
+                        if (!IsPrefixSkippable(eid)) {
+                            matches.push_back(static_cast<RE::TESBoundObject*>(f));
+                        }
+                    }
+                }
+            }
             for (auto* f : dh->GetFormArray<RE::TESNPC>()) {
                 if (f) {
                     auto eid = f->GetFormEditorID();
@@ -2167,6 +2775,59 @@ namespace IntelEngine::Papyrus {
         const char* secondaryID = nullptr;
         int minCount = 1;
         int maxCount = 1;
+
+        // Faction soldier spawning: enemyType format "faction:FactionId" (e.g., "faction:ThalmorFaction")
+        bool isFactionSpawn = (type.substr(0, 8) == "faction:");
+        if (isFactionSpawn) {
+            std::string factionId = std::string(enemyType.c_str()).substr(8);  // Use original casing
+            auto templateId = FactionPolitics::GetSingleton()->GetSoldierTemplate(factionId);
+            RE::TESBoundObject* base = nullptr;
+            if (!templateId.empty()) {
+                base = LookupLeveledActor(templateId.c_str());
+            }
+            if (!base) {
+                logger::error("[IntelEngine] SpawnQuestEnemies: faction template not found for '{}'", factionId);
+                base = LookupLeveledActor("LvlBanditMeleeAny");
+            }
+            if (!base) return result;
+
+            // Resolve leveled list to concrete NPCs (same as SpawnBattleSoldiers)
+            std::vector<RE::TESBoundObject*> resolvedBases;
+            std::uniform_int_distribution<int> countDist(4, 6);
+            int count = countDist(s_rng);
+
+            if (base->GetFormType() == RE::FormType::LeveledNPC) {
+                auto* player = RE::PlayerCharacter::GetSingleton();
+                auto playerLevel = player ? player->GetLevel() : static_cast<std::uint16_t>(25);
+                RE::BSScrapArray<RE::CALCED_OBJECT> calced;
+                static_cast<RE::TESLevCharacter*>(base)->CalculateCurrentFormList(playerLevel, count, calced, 0, false);
+                for (auto& c : calced) {
+                    auto* form = c.form;
+                    for (int depth = 0; depth < 10 && form && form->GetFormType() == RE::FormType::LeveledNPC; ++depth) {
+                        RE::BSScrapArray<RE::CALCED_OBJECT> sub;
+                        static_cast<RE::TESLevCharacter*>(form)->CalculateCurrentFormList(playerLevel, 1, sub, 0, false);
+                        if (!sub.empty() && sub[0].form) form = sub[0].form;
+                        else break;
+                    }
+                    if (form && form->GetFormType() != RE::FormType::LeveledNPC) {
+                        resolvedBases.push_back(static_cast<RE::TESBoundObject*>(form));
+                    }
+                }
+            } else {
+                for (int i = 0; i < count; ++i) resolvedBases.push_back(base);
+            }
+
+            for (auto* resolvedBase : resolvedBases) {
+                auto spawned = location->PlaceObjectAtMe(resolvedBase, true);
+                if (spawned) {
+                    auto* actor = spawned->As<RE::Actor>();
+                    if (actor) result.push_back(actor);
+                }
+            }
+            logger::info("[IntelEngine] SpawnQuestEnemies: {} faction '{}' soldiers spawned at {}",
+                        result.size(), factionId, location->GetName());
+            return result;
+        }
 
         if (type == "bandit") {
             primaryID = "LvlBanditMeleeAny";
@@ -2352,21 +3013,38 @@ namespace IntelEngine::Papyrus {
 
         std::string type = StringUtils::ToLowerStd(enemyType.c_str());
 
-        const char* bossID = nullptr;
-        if (type == "bandit") {
-            bossID = "LvlBanditBoss";           // 0x03DF17
-        } else if (type == "draugr") {
-            bossID = "LvlDraugrWarlockMale";    // 0x01E7AC
-        } else if (type == "dragon") {
-            bossID = "EncDragon01Fire";          // 0x01CA03
+        RE::TESBoundObject* bossBase = nullptr;
+
+        // Faction boss: use the faction's soldier template (same soldiers, just one extra tough one)
+        if (type.substr(0, 8) == "faction:") {
+            std::string factionId = std::string(enemyType.c_str()).substr(8);  // original casing
+            auto templateId = FactionPolitics::GetSingleton()->GetSoldierTemplate(factionId);
+            if (!templateId.empty()) {
+                bossBase = LookupLeveledActor(templateId.c_str());
+            }
+            if (!bossBase) {
+                // Fallback: generic bandit boss for faction quests
+                bossBase = LookupLeveledActor("LvlBanditBoss");
+            }
+            logger::info("[IntelEngine] SpawnQuestBoss: faction boss for '{}' (template='{}')",
+                factionId, templateId.empty() ? "fallback" : templateId);
         } else {
-            logger::error("[IntelEngine] SpawnQuestBoss: unknown enemy type '{}'", type);
-            return nullptr;
+            const char* bossID = nullptr;
+            if (type == "bandit") {
+                bossID = "LvlBanditBoss";           // 0x03DF17
+            } else if (type == "draugr") {
+                bossID = "LvlDraugrWarlockMale";    // 0x01E7AC
+            } else if (type == "dragon") {
+                bossID = "EncDragon01Fire";          // 0x01CA03
+            } else {
+                logger::error("[IntelEngine] SpawnQuestBoss: unknown enemy type '{}'", type);
+                return nullptr;
+            }
+            bossBase = LookupLeveledActor(bossID);
         }
 
-        auto* bossBase = LookupLeveledActor(bossID);
         if (!bossBase) {
-            logger::error("[IntelEngine] SpawnQuestBoss: boss '{}' not found", bossID);
+            logger::error("[IntelEngine] SpawnQuestBoss: boss template not found for '{}'", type);
             return nullptr;
         }
 
@@ -2831,6 +3509,1109 @@ namespace IntelEngine::Papyrus {
         }
 
         return false;  // Item not found — player took it
+    }
+
+    // ==========================================================================
+    // Faction Politics Functions
+    // ==========================================================================
+
+    int GetFactionRelation(RE::StaticFunctionTag*, RE::BSFixedString factionA, RE::BSFixedString factionB) {
+        auto* db = PoliticalDB::GetSingleton();
+        if (!db->IsReady()) return 0;
+        return db->GetRelation(factionA.c_str(), factionB.c_str());
+    }
+
+    int AdjustFactionRelation(RE::StaticFunctionTag*, RE::BSFixedString factionA,
+                               RE::BSFixedString factionB, int delta) {
+        auto* db = PoliticalDB::GetSingleton();
+        if (!db->IsReady()) return 0;
+        return db->AdjustRelation(factionA.c_str(), factionB.c_str(), delta);
+    }
+
+    int GetPlayerFactionStanding(RE::StaticFunctionTag*, RE::BSFixedString factionId) {
+        auto* db = PoliticalDB::GetSingleton();
+        if (!db->IsReady()) return 0;
+        return db->GetPlayerStanding(factionId.c_str());
+    }
+
+    int AdjustPlayerFactionStanding(RE::StaticFunctionTag*, RE::BSFixedString factionId, int delta) {
+        auto* db = PoliticalDB::GetSingleton();
+        if (!db->IsReady()) return 0;
+        float gameTime = RE::Calendar::GetSingleton() ? RE::Calendar::GetSingleton()->GetHoursPassed() : 0.0f;
+        return db->AdjustPlayerStanding(factionId.c_str(), delta, gameTime);
+    }
+
+    bool IsFactionAtWar(RE::StaticFunctionTag*, RE::BSFixedString factionA, RE::BSFixedString factionB) {
+        auto* politics = FactionPolitics::GetSingleton();
+        if (!politics->IsReady()) return false;
+        return politics->IsAtWar(factionA.c_str(), factionB.c_str());
+    }
+
+    int GetWarMorale(RE::StaticFunctionTag*, RE::BSFixedString factionA, RE::BSFixedString factionB,
+                     RE::BSFixedString queryFaction) {
+        return FactionPolitics::GetSingleton()->GetWarMorale(factionA.c_str(), factionB.c_str(), queryFaction.c_str());
+    }
+
+    RE::BSFixedString GetRelationStatus(RE::StaticFunctionTag*, RE::BSFixedString factionA, RE::BSFixedString factionB) {
+        auto* db = PoliticalDB::GetSingleton();
+        if (!db->IsReady()) return RE::BSFixedString("Neutral");
+        int score = db->GetRelation(factionA.c_str(), factionB.c_str());
+        return RE::BSFixedString(FactionPolitics::GetRelationStatus(score).c_str());
+    }
+
+    RE::BSFixedString BuildPoliticalContext(RE::StaticFunctionTag*, float currentGameTime) {
+        auto* politics = FactionPolitics::GetSingleton();
+        if (!politics->IsReady()) return RE::BSFixedString("{}");
+        return RE::BSFixedString(politics->BuildPoliticalContext(currentGameTime).c_str());
+    }
+
+    RE::BSFixedString BuildPoliticalDashboardJson(RE::StaticFunctionTag*) {
+        auto* politics = FactionPolitics::GetSingleton();
+        if (!politics->IsReady()) return RE::BSFixedString("{}");
+        return RE::BSFixedString(politics->BuildDashboardJson().c_str());
+    }
+
+    int RecordPoliticalEvent(RE::StaticFunctionTag*, RE::BSFixedString factionA,
+                              RE::BSFixedString factionB, RE::BSFixedString eventType,
+                              RE::BSFixedString description, int relationDelta, float gameTime) {
+        auto* politics = FactionPolitics::GetSingleton();
+        if (!politics->IsReady()) return -1;
+        // Single source of truth — FactionPolitics::RecordPoliticalEvent handles
+        // validation, clamping, recording, relation adjustment, and state file write.
+        return politics->RecordPoliticalEvent(
+            factionA.c_str(), factionB.c_str(), eventType.c_str(),
+            description.c_str(), relationDelta, gameTime);
+    }
+
+    bool IsPoliticsEnabled(RE::StaticFunctionTag*) {
+        return FactionPolitics::GetSingleton()->IsEnabled();
+    }
+
+    int GetPoliticsTickInterval(RE::StaticFunctionTag*) {
+        return FactionPolitics::GetSingleton()->GetTickIntervalHours();
+    }
+
+    void ReloadFactionConfig(RE::StaticFunctionTag*) {
+        FactionPolitics::GetSingleton()->Reload();
+        logger::info("FactionPolitics: Config reloaded via Papyrus");
+    }
+
+    std::vector<RE::Actor*> GetFactionLeaderActors(RE::StaticFunctionTag*, RE::BSFixedString factionId) {
+        std::vector<RE::Actor*> result;
+        auto cfg = FactionPolitics::GetSingleton()->GetFaction(factionId.c_str());
+        if (!cfg) return result;
+
+        auto* npcIndex = NPCIndex::GetSingleton();
+        for (const auto& leaderName : cfg->leaderNames) {
+            auto* actor = npcIndex->FindByName(leaderName);
+            if (actor) {
+                result.push_back(actor);
+            }
+        }
+        return result;
+    }
+
+    std::vector<int> GetFactionLeaderFormIds(RE::StaticFunctionTag*, RE::BSFixedString factionId) {
+        std::vector<int> result;
+        auto cfg = FactionPolitics::GetSingleton()->GetFaction(factionId.c_str());
+        if (!cfg) return result;
+
+        auto* npcIndex = NPCIndex::GetSingleton();
+        for (const auto& leaderName : cfg->leaderNames) {
+            RE::FormID formId = npcIndex->FindFormIdByName(leaderName);
+            if (formId != 0) {
+                result.push_back(static_cast<int>(formId));
+            } else {
+                logger::debug("GetFactionLeaderFormIds: '{}' not found in NPC index", leaderName);
+            }
+        }
+        return result;
+    }
+
+    RE::BSFixedString CheckEventManifestation(RE::StaticFunctionTag*,
+        RE::BSFixedString factionA, RE::BSFixedString factionB, RE::BSFixedString eventType)
+    {
+        std::string result = FactionPolitics::GetSingleton()->CheckEventManifestation(
+            factionA.c_str(), factionB.c_str(), eventType.c_str());
+        return result.c_str();
+    }
+
+    void ConfirmManifestationCooldown(RE::StaticFunctionTag*) {
+        FactionPolitics::GetSingleton()->ConfirmManifestationCooldown();
+    }
+
+    int ApplyPlayerStandingChanges(RE::StaticFunctionTag*, RE::BSFixedString responseJson) {
+        // Parse player_standing_changes array from Political DM response.
+        // Format: [{"faction":"ImperialFaction","delta":5,"reason":"spoke favorably"}]
+        auto* db = PoliticalDB::GetSingleton();
+        if (!db->IsReady()) return 0;
+
+        std::string json = responseJson.c_str();
+        if (json.empty()) return 0;
+
+        // Find the player_standing_changes array in the response
+        auto pos = json.find("\"player_standing_changes\"");
+        if (pos == std::string::npos) return 0;
+
+        // Find the opening bracket
+        auto bracketStart = json.find('[', pos);
+        if (bracketStart == std::string::npos) return 0;
+
+        // Find matching closing bracket
+        int depth = 0;
+        size_t bracketEnd = bracketStart;
+        for (size_t i = bracketStart; i < json.size(); ++i) {
+            if (json[i] == '[') depth++;
+            else if (json[i] == ']') { depth--; if (depth == 0) { bracketEnd = i; break; } }
+        }
+        if (bracketEnd == bracketStart) return 0;
+
+        std::string arrayStr = json.substr(bracketStart, bracketEnd - bracketStart + 1);
+
+        int applied = 0;
+        try {
+            auto changes = nlohmann::json::parse(arrayStr);
+            if (!changes.is_array()) return 0;
+
+            auto* cal = RE::Calendar::GetSingleton();
+            float gameTime = cal ? cal->GetCurrentGameTime() : 0.0f;
+            auto* politics = FactionPolitics::GetSingleton();
+            int maxDelta = politics->GetMaxRelationChangePerTick();
+
+            for (const auto& change : changes) {
+                if (!change.contains("faction") || !change.contains("delta")) continue;
+                std::string faction = change.value("faction", "");
+                int delta = change.value("delta", 0);
+                std::string reason = change.value("reason", "");
+
+                // Validate faction ID exists
+                if (!politics->GetFaction(faction).has_value()) {
+                    logger::warn("Politics: Unknown faction '{}' in player standing change", faction);
+                    continue;
+                }
+
+                delta = std::clamp(delta, -maxDelta, maxDelta);
+                if (delta == 0) continue;
+
+                int newStanding = db->AdjustPlayerStanding(faction, delta, gameTime);
+                logger::info("Politics: Player standing with {} changed by {} -> {} ({})",
+                             faction, delta, newStanding, reason);
+                ++applied;
+            }
+        } catch (const std::exception& e) {
+            logger::warn("Politics: Failed to parse player_standing_changes: {}", e.what());
+        }
+
+        return applied;
+    }
+
+    int ProcessPlayerConduct(RE::StaticFunctionTag*, RE::Actor* reporter,
+                              RE::BSFixedString factionId, RE::BSFixedString sentiment,
+                              RE::BSFixedString reason) {
+        if (!reporter) return 0;
+        return FactionPolitics::GetSingleton()->ProcessPlayerConduct(
+            reporter, factionId.c_str(), sentiment.c_str(), reason.c_str());
+    }
+
+    int CheckCrimeGoldStandings(RE::StaticFunctionTag*) {
+        return FactionPolitics::GetSingleton()->CheckCrimeGoldStandings();
+    }
+
+    int DecayPlayerStandings(RE::StaticFunctionTag*, int decayRate) {
+        return FactionPolitics::GetSingleton()->DecayPlayerStandings(decayRate);
+    }
+
+    void WritePoliticalStateFile(RE::StaticFunctionTag*) {
+        FactionPolitics::GetSingleton()->WritePoliticalStateFile();
+    }
+
+    void SetPoliticsEnabled(RE::StaticFunctionTag*, bool enabled) {
+        FactionPolitics::GetSingleton()->SetEnabled(enabled);
+    }
+
+    void SetPoliticsTickInterval(RE::StaticFunctionTag*, int hours) {
+        FactionPolitics::GetSingleton()->SetTickIntervalHours(hours);
+    }
+
+    // =========================================================================
+    // War Lifecycle Natives
+    // =========================================================================
+
+    int DeclareWar(RE::StaticFunctionTag*, RE::BSFixedString factionA, RE::BSFixedString factionB, float gameTime) {
+        return FactionPolitics::GetSingleton()->DeclareWar(factionA.c_str(), factionB.c_str(), gameTime);
+    }
+
+    RE::BSFixedString ProcessWarTick(RE::StaticFunctionTag*, float gameTime) {
+        std::string result = FactionPolitics::GetSingleton()->ProcessWarTick(gameTime);
+        return RE::BSFixedString(result);
+    }
+
+    bool EndFactionWar(RE::StaticFunctionTag*, RE::BSFixedString factionA, RE::BSFixedString factionB,
+                       RE::BSFixedString victor, float gameTime) {
+        return FactionPolitics::GetSingleton()->EndWar(factionA.c_str(), factionB.c_str(), victor.c_str(), gameTime);
+    }
+
+    int GetActiveWarCount(RE::StaticFunctionTag*) {
+        return FactionPolitics::GetSingleton()->GetActiveWarCount();
+    }
+
+    int GetActiveWarId(RE::StaticFunctionTag*, RE::BSFixedString factionA, RE::BSFixedString factionB) {
+        return FactionPolitics::GetSingleton()->GetActiveWarId(factionA.c_str(), factionB.c_str());
+    }
+
+    int GetWarStrength(RE::StaticFunctionTag*, RE::BSFixedString factionA, RE::BSFixedString factionB,
+                       RE::BSFixedString queryFaction) {
+        return FactionPolitics::GetSingleton()->GetWarStrength(factionA.c_str(), factionB.c_str(), queryFaction.c_str());
+    }
+
+    int RecordOffScreenBattle(RE::StaticFunctionTag*, RE::BSFixedString factionA, RE::BSFixedString factionB,
+                              RE::BSFixedString location, RE::BSFixedString result, RE::BSFixedString narrative,
+                              int attackerLosses, int defenderLosses, RE::BSFixedString victor) {
+        return FactionPolitics::GetSingleton()->RecordOffScreenBattle(
+            factionA.c_str(), factionB.c_str(), location.c_str(), result.c_str(),
+            narrative.c_str(), attackerLosses, defenderLosses, victor.c_str());
+    }
+
+    // ==========================================================================
+    // Faction Query Functions
+    // ==========================================================================
+
+    bool IsHighStatusNPC(RE::StaticFunctionTag*, RE::Actor* actor) {
+        // Delegates to NPCIndex::IsHighStatus which checks:
+        //   - JobJarlFaction (via editor ID lookup, load-order safe)
+        //   - JobCourtWizardFaction, JobStewardFaction, JobHousecarlFaction
+        if (!actor) return false;
+
+        if (NPCIndex::IsHighStatus(actor)) return true;
+
+        // NOTE: We do NOT use Unique+Essential as a catch-all here.
+        // While it catches generals/faction heads, it also false-positives on
+        // followers (Lydia, Serana), quest NPCs (Delphine, Brynjolf), and other
+        // essential unique characters who are valid dispatch candidates.
+        // The faction-based checks above are sufficient and precise.
+
+        return false;
+    }
+
+    RE::BSFixedString ExtractFactionId(RE::StaticFunctionTag*, RE::BSFixedString enemyType) {
+        // Extracts faction ID from "faction:FactionId" format. Returns "" if no prefix.
+        std::string_view sv = enemyType.c_str();
+        constexpr std::string_view prefix = "faction:";
+        if (sv.starts_with(prefix)) {
+            return RE::BSFixedString(std::string(sv.substr(prefix.size())));
+        }
+        return RE::BSFixedString("");
+    }
+
+    RE::BSFixedString GetFactionDisplayName(RE::StaticFunctionTag*, RE::BSFixedString factionId) {
+        auto faction = FactionPolitics::GetSingleton()->GetFaction(factionId.c_str());
+        return faction ? RE::BSFixedString(faction->name) : RE::BSFixedString(factionId.c_str());
+    }
+
+    RE::BSFixedString GetFactionRival(RE::StaticFunctionTag*, RE::BSFixedString factionId) {
+        auto rival = FactionPolitics::GetSingleton()->GetFactionRival(factionId.c_str());
+        return RE::BSFixedString(rival);
+    }
+
+    RE::BSFixedString GetFactionWarEnemy(RE::StaticFunctionTag*, RE::BSFixedString factionId) {
+        return RE::BSFixedString(FactionPolitics::GetSingleton()->GetFactionWarEnemy(factionId.c_str()));
+    }
+
+    RE::BSFixedString GetNPCPoliticalFactionId(RE::StaticFunctionTag*, RE::Actor* actor) {
+        if (!actor) return RE::BSFixedString("");
+        auto factionId = FactionPolitics::GetSingleton()->GetNPCFactionId(actor);
+        return RE::BSFixedString(factionId);
+    }
+
+    RE::Actor* FindFactionMember(RE::StaticFunctionTag*, RE::BSFixedString factionId) {
+        auto* fp = FactionPolitics::GetSingleton();
+        auto cfg = fp->GetFaction(factionId.c_str());
+        if (!cfg) return nullptr;
+
+        auto* player = RE::PlayerCharacter::GetSingleton();
+        if (!player) return nullptr;
+
+        auto playerPos = player->GetPosition();
+        RE::Actor* best = nullptr;
+        float bestDist = (std::numeric_limits<float>::max)();
+        std::string bestName;
+
+        // Prefer generic (non-unique) faction members over named leaders.
+        // Uses NPCIndex::IsHighStatus to skip Jarls, court wizards, stewards, housecarls.
+        // Generic guards/soldiers (non-unique) are the natural choice for delivering faction messages.
+        RE::Actor* bestGeneric = nullptr;
+        float bestGenericDist = (std::numeric_limits<float>::max)();
+        RE::Actor* bestUnique = nullptr;
+        float bestUniqueDist = (std::numeric_limits<float>::max)();
+
+        ProcessUtils::ForEachLoadedActor([&](RE::Actor* actor) -> bool {
+            if (!actor || actor == player) return false;
+            if (actor->IsDead() || actor->IsDisabled()) return false;
+            if (actor->IsInCombat()) return false;
+
+            // Skip high-status NPCs (Jarls, court wizards, stewards, housecarls)
+            if (NPCIndex::IsHighStatus(actor)) return false;
+
+            auto actorFaction = fp->GetNPCFactionId(actor);
+            if (actorFaction != cfg->id) return false;
+
+            float dist = actor->GetPosition().GetDistance(playerPos);
+            auto* base = actor->GetActorBase();
+            bool isUnique = base && base->IsUnique();
+
+            if (!isUnique) {
+                if (dist < bestGenericDist) {
+                    bestGeneric = actor;
+                    bestGenericDist = dist;
+                }
+            } else {
+                if (dist < bestUniqueDist) {
+                    bestUnique = actor;
+                    bestUniqueDist = dist;
+                }
+            }
+            return false;
+        });
+
+        // Prefer generic soldiers/guards, fall back to non-essential unique NPCs
+        best = bestGeneric ? bestGeneric : bestUnique;
+        bestDist = bestGeneric ? bestGenericDist : bestUniqueDist;
+        if (best) {
+            bestName = best->GetDisplayFullName();
+        }
+
+        if (best) {
+            logger::info("[StoryDM] FindFactionMember('{}') -> '{}' (dist={:.0f})",
+                         factionId.c_str(), bestName, bestDist);
+        } else {
+            logger::info("[StoryDM] FindFactionMember('{}') -> no loaded member found",
+                         factionId.c_str());
+        }
+        return best;
+    }
+
+    // ==========================================================================
+    // Battle System Helper Functions
+    // ==========================================================================
+
+    RE::BSFixedString GetFactionSoldierTemplate(RE::StaticFunctionTag*, RE::BSFixedString factionId) {
+        return RE::BSFixedString(FactionPolitics::GetSingleton()->GetSoldierTemplate(factionId.c_str()));
+    }
+
+    // factionIdWithCount format: "FactionId:Count" (e.g., "StormcloakFaction:7")
+    std::vector<RE::Actor*> SpawnBattleSoldiers(RE::StaticFunctionTag*, RE::BSFixedString factionIdWithCount,
+                                                RE::TESObjectREFR* spawnAt) {
+        std::vector<RE::Actor*> result;
+        if (!spawnAt) {
+            logger::error("[IntelEngine] SpawnBattleSoldiers: spawnAt is null");
+            return result;
+        }
+
+        // Parse "FactionId:Count"
+        std::string input(factionIdWithCount.c_str());
+        std::string factionId;
+        int count = 0;
+        auto colonPos = input.rfind(':');
+        if (colonPos != std::string::npos) {
+            factionId = input.substr(0, colonPos);
+            try { count = std::stoi(input.substr(colonPos + 1)); } catch (...) { count = 0; }
+        } else {
+            factionId = input;
+        }
+
+        constexpr int MAX_SOLDIERS_PER_SPAWN = 20;
+        if (count <= 0 || count > MAX_SOLDIERS_PER_SPAWN) {
+            logger::error("[IntelEngine] SpawnBattleSoldiers: invalid count {} from '{}'", count, input);
+            return result;
+        }
+
+        auto templateId = FactionPolitics::GetSingleton()->GetSoldierTemplate(factionId);
+
+        // Resolve template EditorID to a spawnable base form
+        RE::TESBoundObject* base = nullptr;
+        if (!templateId.empty()) {
+            base = LookupLeveledActor(templateId.c_str());
+        }
+
+        // Fallback to generic bandit if faction template not found
+        if (!base) {
+            logger::warn("[IntelEngine] SpawnBattleSoldiers: template '{}' not found for faction '{}', using bandit fallback",
+                        templateId, factionId);
+            base = LookupLeveledActor("LvlBanditMeleeAny");
+        }
+
+        if (!base) {
+            logger::error("[IntelEngine] SpawnBattleSoldiers: no spawnable base found (even fallback failed)");
+            return result;
+        }
+
+        logger::info("[IntelEngine] SpawnBattleSoldiers: base FormID={:08X} type={} name='{}', template='{}', spawnAt='{}'",
+                    base->GetFormID(), static_cast<int>(base->GetFormType()),
+                    base->GetName(), templateId, spawnAt->GetName());
+
+        // PlaceObjectAtMe with a LeveledNPC base returns type 61 (REFR) instead of
+        // type 62 (Actor), making the refs unusable in Papyrus. Resolve the leveled
+        // list to concrete TESNPC forms first so PlaceObjectAtMe gets a real NPC.
+        // Nested leveled lists are resolved recursively (max 10 depth).
+        std::vector<RE::TESBoundObject*> resolvedBases;
+        if (base->GetFormType() == RE::FormType::LeveledNPC) {
+            auto* player = RE::PlayerCharacter::GetSingleton();
+            auto playerLevel = player ? player->GetLevel() : static_cast<std::uint16_t>(25);
+
+            RE::BSScrapArray<RE::CALCED_OBJECT> calced;
+            static_cast<RE::TESLevCharacter*>(base)->CalculateCurrentFormList(playerLevel, static_cast<std::int16_t>(count), calced, 0, false);
+
+            for (std::uint32_t ci = 0; ci < calced.size(); ++ci) {
+                auto* form = calced[ci].form;
+                if (!form) continue;
+
+                // Resolve nested leveled lists (e.g., LCharSoldierSons -> LCharSoldierSonsOutfit -> TESNPC)
+                constexpr int MAX_DEPTH = 10;
+                for (int depth = 0; depth < MAX_DEPTH && form->GetFormType() == RE::FormType::LeveledNPC; ++depth) {
+                    RE::BSScrapArray<RE::CALCED_OBJECT> sub;
+                    static_cast<RE::TESLevCharacter*>(form)->CalculateCurrentFormList(playerLevel, 1, sub, 0, false);
+                    if (!sub.empty() && sub[0].form) {
+                        form = sub[0].form;
+                    } else {
+                        break;
+                    }
+                }
+
+                if (form->GetFormType() != RE::FormType::LeveledNPC) {
+                    resolvedBases.push_back(static_cast<RE::TESBoundObject*>(form));
+                } else {
+                    logger::warn("[IntelEngine] SpawnBattleSoldiers: [{}] could not resolve nested leveled list, skipping", ci);
+                }
+            }
+        } else {
+            for (int i = 0; i < count; ++i) {
+                resolvedBases.push_back(base);
+            }
+        }
+
+        if (resolvedBases.empty()) {
+            logger::error("[IntelEngine] SpawnBattleSoldiers: all leveled list resolutions failed for '{}'", templateId);
+            return result;
+        }
+
+        logger::info("[IntelEngine] SpawnBattleSoldiers: resolved {} bases from leveled list", resolvedBases.size());
+
+        for (size_t i = 0; i < resolvedBases.size(); ++i) {
+            auto spawned = spawnAt->PlaceObjectAtMe(resolvedBases[i], true);
+            if (spawned) {
+                auto* actor = spawned->As<RE::Actor>();
+                if (actor) {
+                    result.push_back(actor);
+                } else {
+                    logger::error("[IntelEngine] SpawnBattleSoldiers: [{}] spawned FormID={:08X} but type={} (not Actor!)",
+                                i, spawned->GetFormID(), static_cast<int>(spawned->GetFormType()));
+                }
+            } else {
+                logger::error("[IntelEngine] SpawnBattleSoldiers: [{}] PlaceObjectAtMe returned null", i);
+            }
+        }
+
+        // Remove hold crime factions from ALL spawned soldiers — killing them generates no bounty.
+        // This applies to battle soldiers, ambush soldiers, and manifestation soldiers.
+        static constexpr RE::FormID crimeFactionIds[] = {
+            0x00029DB0, 0x00029DB1, 0x00029DB2, 0x00029DB3,
+            0x00029DB4, 0x00029DB5, 0x00029DB6, 0x00029DB7, 0x00029DB8
+        };
+        for (auto* actor : result) {
+            if (!actor) continue;
+            for (auto fid : crimeFactionIds) {
+                auto* crimeFaction = RE::TESForm::LookupByID<RE::TESFaction>(fid);
+                if (crimeFaction) actor->AddToFaction(crimeFaction, -1);
+            }
+        }
+
+        logger::info("[IntelEngine] SpawnBattleSoldiers: spawned {}/{} for faction '{}' (crime factions removed)",
+                    result.size(), count, factionId);
+        return result;
+    }
+
+    int GetJsonArrayInt(RE::StaticFunctionTag*, RE::BSFixedString jsonStr,
+                        RE::BSFixedString arrayKey, int index) {
+        try {
+            auto j = nlohmann::json::parse(jsonStr.c_str());
+            auto key = std::string(arrayKey.c_str());
+            if (j.contains(key) && j[key].is_array()) {
+                auto& arr = j[key];
+                if (index >= 0 && static_cast<size_t>(index) < arr.size()) {
+                    // FormIDs can exceed INT_MAX (0xFF prefix = 4278190080+).
+                    // Use uint32 to avoid overflow, then reinterpret as signed for Papyrus.
+                    auto val = arr[index].get<uint32_t>();
+                    return static_cast<int>(val);
+                }
+            }
+        } catch (...) {}
+        return 0;
+    }
+
+    void SetActorProtected(RE::StaticFunctionTag*, RE::Actor* actor, bool protect) {
+        if (!actor) return;
+        // Set per-actor Protected flag — does NOT affect other actors sharing the same ActorBase.
+        // Protected actors enter bleedout but can only be killed by the player.
+        if (protect) {
+            actor->GetActorRuntimeData().boolFlags.set(RE::Actor::BOOL_FLAGS::kProtected);
+        } else {
+            actor->GetActorRuntimeData().boolFlags.reset(RE::Actor::BOOL_FLAGS::kProtected);
+        }
+    }
+
+    RE::BSFixedString ExecuteFullBattleSpawn(RE::StaticFunctionTag*,
+                                              RE::BSFixedString questAutoJoinFaction,
+                                              RE::Actor* player, float playerAngleZ,
+                                              RE::TESObjectREFR* spawnAnchor) {
+        auto* bm = BattleManager::GetSingleton();
+        if (!bm) return RE::BSFixedString("{}");
+        return RE::BSFixedString(bm->ExecuteFullBattleSpawn(
+            questAutoJoinFaction.c_str(), player, playerAngleZ, spawnAnchor).c_str());
+    }
+
+    RE::BSFixedString SpawnReinforcements(RE::StaticFunctionTag*, int count, RE::Actor* player,
+                                          RE::TESObjectREFR* spawnAnchor) {
+        auto* bm = BattleManager::GetSingleton();
+        if (!bm) return RE::BSFixedString("{}");
+        return RE::BSFixedString(bm->SpawnReinforcements(count, player, spawnAnchor).c_str());
+    }
+
+    RE::BSFixedString GetBattleSoldierFormIds(RE::StaticFunctionTag*, RE::BSFixedString side) {
+        auto* bm = BattleManager::GetSingleton();
+        if (!bm) return RE::BSFixedString("{}");
+        return RE::BSFixedString(bm->GetBattleSoldierFormIds(side.c_str()).c_str());
+    }
+
+    void SetBattleSoldiersAsTeammates(RE::StaticFunctionTag*, RE::BSFixedString side) {
+        auto* bm = BattleManager::GetSingleton();
+        if (bm) bm->SetBattleSoldiersAsTeammates(side.c_str(), true);
+    }
+
+    int CountDeadBattleSoldiers(RE::StaticFunctionTag*, RE::BSFixedString side) {
+        auto* bm = BattleManager::GetSingleton();
+        if (!bm) return 0;
+        return bm->CountDeadSoldiers(side.c_str());
+    }
+
+    int CleanupBattleSoldiers(RE::StaticFunctionTag*, float playerX, float playerY,
+                               float playerZ, float playerAngleZ, bool forceAll) {
+        auto* bm = BattleManager::GetSingleton();
+        if (!bm) return 0;
+        return bm->CleanupBattleSoldiers(playerX, playerY, playerZ, playerAngleZ, forceAll);
+    }
+
+    void ForceCleanupAllSoldiers(RE::StaticFunctionTag*) {
+        auto* bm = BattleManager::GetSingleton();
+        if (bm) bm->ForceCleanupAllSoldiers();
+    }
+
+    void SnapshotBounties(RE::StaticFunctionTag*) {
+        auto* bm = BattleManager::GetSingleton();
+        if (bm) bm->SnapshotBounties();
+    }
+
+    // Snapshot of bounty at battle start — only clear what was added DURING the battle
+    static std::unordered_map<RE::FormID, std::int32_t> s_preBattleBounty;
+    static constexpr RE::FormID kHoldCrimeFactions[] = {
+        0x00029DB0, 0x00029DB1, 0x00029DB2, 0x00029DB3, 0x00029DB4,
+        0x00029DB5, 0x00029DB6, 0x00029DB7, 0x00029DB8
+    };
+
+    void ClearBattleTeammates(RE::StaticFunctionTag*) {
+        // Centralized: delegates to BattleManager::RestoreEnlistedGuards which uses
+        // tracked FormIDs (works even if guards unloaded). No more ForEachLoadedActor guesswork.
+        BattleManager::GetSingleton()->RestoreEnlistedGuards();
+    }
+
+    void ClearAllHoldBounties(RE::StaticFunctionTag*) {
+        // Revert bounty to pre-battle snapshot — only clears what accumulated DURING the battle.
+        // First call snapshots current bounty; subsequent calls revert to snapshot.
+        if (s_preBattleBounty.empty()) {
+            // First call — take snapshot
+            for (auto fid : kHoldCrimeFactions) {
+                auto* faction = RE::TESForm::LookupByID<RE::TESFaction>(fid);
+                if (faction) {
+                    s_preBattleBounty[fid] = faction->GetCrimeGold();
+                }
+            }
+            return;
+        }
+        // Subsequent calls — revert to snapshot
+        for (auto fid : kHoldCrimeFactions) {
+            auto* faction = RE::TESForm::LookupByID<RE::TESFaction>(fid);
+            if (!faction) continue;
+            auto it = s_preBattleBounty.find(fid);
+            std::int32_t preBattle = (it != s_preBattleBounty.end()) ? it->second : 0;
+            if (faction->GetCrimeGold() > preBattle) {
+                faction->SetCrimeGold(preBattle);
+                faction->SetCrimeGoldViolent(0);
+            }
+        }
+    }
+
+    // ClearBattleBounties and RestoreBounties implementations removed.
+
+    // ==========================================================================
+    // Phase 2 Migration: FactionPolitics C++ Logic (Papyrus native wrappers)
+    // ==========================================================================
+
+    RE::BSFixedString ProcessPoliticalDMResponse(RE::StaticFunctionTag*, RE::BSFixedString response, int success) {
+        return RE::BSFixedString(FactionPolitics::GetSingleton()->ProcessPoliticalDMResponse(
+            response.c_str(), success));
+    }
+
+    RE::BSFixedString RunStandingMechanicsNative(RE::StaticFunctionTag*) {
+        return RE::BSFixedString(FactionPolitics::GetSingleton()->RunStandingMechanicsInternal());
+    }
+
+    // ==========================================================================
+    // Remaining Migration: Text builders, math helpers, display formatters
+    // ==========================================================================
+
+    RE::BSFixedString BuildTaskHistoryDesc(RE::StaticFunctionTag*,
+                                            RE::BSFixedString taskType, RE::BSFixedString target,
+                                            RE::BSFixedString result, RE::BSFixedString msgContent,
+                                            RE::BSFixedString meetLocation) {
+        std::string type = taskType.c_str();
+        std::string tgt = target.c_str();
+        std::string res = result.c_str();
+        std::string msg = msgContent.c_str();
+        std::string loc = meetLocation.c_str();
+        std::string desc;
+
+        if (type == "travel") {
+            desc = (res == "timeout") ? "Went to " + tgt + " but gave up waiting" : "Traveled to " + tgt;
+        } else if (type == "fetch_npc") {
+            desc = (res == "success") ? "Found " + tgt + " and brought them back"
+                                      : "Looked for " + tgt + " but couldn't bring them";
+        } else if (type == "deliver_message") {
+            if (res == "delivered") {
+                desc = "Delivered a message to " + tgt;
+                if (!msg.empty()) {
+                    if (msg.size() > 80) msg = msg.substr(0, 80) + "...";
+                    desc += ": '" + msg + "'";
+                }
+                if (!loc.empty()) desc += " (meeting at " + loc + ")";
+            } else {
+                desc = "Tried to deliver a message to " + tgt;
+            }
+        } else if (type == "search_for_actor") {
+            desc = "Searched for " + tgt;
+        } else if (type == "story") {
+            desc = "Sought out " + tgt;
+        } else if (type == "story_npc") {
+            desc = "Went to talk with " + tgt;
+        } else {
+            desc = "Completed a task involving " + tgt;
+        }
+        return RE::BSFixedString(desc);
+    }
+
+    RE::BSFixedString GetSlotStatusNative(RE::StaticFunctionTag*,
+                                           RE::BSFixedString taskType, int taskState,
+                                           RE::BSFixedString targetName, RE::BSFixedString cellName) {
+        std::string type = taskType.c_str();
+        std::string target = targetName.c_str();
+        std::string cell = cellName.c_str();
+        std::string status;
+
+        if (type == "fetch_npc") {
+            if (taskState == 1) status = "Going to fetch " + target;
+            else if (taskState == 2) status = "Fetching " + target;
+            else if (taskState == 3) status = "Returning with " + target;
+            else status = "Fetching " + target;
+        } else if (type == "deliver_message") {
+            if (taskState == 1) status = "Going to deliver a message to " + target;
+            else if (taskState == 2) status = "Delivering message to " + target;
+            else if (taskState == 3) status = "Returning after delivering message";
+            else status = "Delivering message to " + target;
+        } else if (type == "search_for_actor") {
+            status = "Searching for " + target;
+        } else if (type == "escort_target") {
+            if (taskState == 1) status = "Going to escort " + target;
+            else if (taskState == 2) status = "Escorting " + target;
+            else status = "Escorting " + target;
+        } else if (type == "travel") {
+            status = "Traveling to " + target;
+        } else if (type == "story") {
+            status = "Seeking out the player";
+        } else if (type == "story_npc") {
+            status = "Going to visit " + target;
+        } else {
+            status = "On a task";
+        }
+
+        if (!cell.empty()) status += " (near " + cell + ")";
+        return RE::BSFixedString(status);
+    }
+
+    RE::BSFixedString GetPreciseTimeDescriptionNative(RE::StaticFunctionTag*, float meetTimeHours, float currentGameTime) {
+        float currentHours = std::fmod(currentGameTime * 24.f, 24.f);
+        float hoursUntil = meetTimeHours - currentHours;
+        if (hoursUntil < 0) hoursUntil += 24.f;
+
+        bool tomorrow = (meetTimeHours < currentHours && hoursUntil > 1.f);
+        std::string prefix = tomorrow ? "tomorrow " : "";
+
+        int hour = static_cast<int>(meetTimeHours);
+        int minute = static_cast<int>((meetTimeHours - hour) * 60.f);
+        std::string ampm = (hour >= 12) ? "PM" : "AM";
+        int displayHour = hour % 12;
+        if (displayHour == 0) displayHour = 12;
+
+        char buf[64];
+        if (minute > 0) {
+            snprintf(buf, sizeof(buf), "%s%d:%02d %s", prefix.c_str(), displayHour, minute, ampm.c_str());
+        } else {
+            snprintf(buf, sizeof(buf), "%s%d %s", prefix.c_str(), displayHour, ampm.c_str());
+        }
+        return RE::BSFixedString(buf);
+    }
+
+    RE::BSFixedString GetTimeDescriptionNative(RE::StaticFunctionTag*, float hours) {
+        int h = static_cast<int>(hours);
+        if (h < 4) return RE::BSFixedString("late night");
+        if (h < 6) return RE::BSFixedString("early morning");
+        if (h < 8) return RE::BSFixedString("dawn");
+        if (h < 10) return RE::BSFixedString("morning");
+        if (h < 12) return RE::BSFixedString("late morning");
+        if (h < 14) return RE::BSFixedString("midday");
+        if (h < 16) return RE::BSFixedString("afternoon");
+        if (h < 18) return RE::BSFixedString("late afternoon");
+        if (h < 20) return RE::BSFixedString("evening");
+        if (h < 22) return RE::BSFixedString("night");
+        return RE::BSFixedString("late night");
+    }
+
+    RE::BSFixedString DetermineLatenessOutcomeNative(RE::StaticFunctionTag*, float scheduledTime,
+                                                      float arrivalTime, float gracePeriod) {
+        float hoursLate = (arrivalTime - scheduledTime) * 24.f;
+        if (hoursLate > gracePeriod) return RE::BSFixedString("late");
+        if (hoursLate < -gracePeriod) return RE::BSFixedString("early");
+        return RE::BSFixedString("on_time");
+    }
+
+    RE::BSFixedString BuildStuckNarration(RE::StaticFunctionTag*, RE::BSFixedString taskType) {
+        std::string type = taskType.c_str();
+        if (type == "fetch_npc") return RE::BSFixedString("tried to carry out the task but couldn't get going and gave up.");
+        if (type == "deliver_message") return RE::BSFixedString("tried to deliver the message but was unable to reach the destination and gave up.");
+        if (type == "search_for_actor") return RE::BSFixedString("searched but couldn't find who they were looking for and gave up.");
+        if (type == "escort_target") return RE::BSFixedString("tried to escort their charge but couldn't make progress and gave up.");
+        return RE::BSFixedString("tried to leave but was unable to and gave up on the task.");
+    }
+
+    bool IsUrgentMessage(RE::StaticFunctionTag*, RE::BSFixedString msgContent) {
+        std::string msg = msgContent.c_str();
+        // Lowercase for comparison
+        std::transform(msg.begin(), msg.end(), msg.begin(), ::tolower);
+        static const std::vector<std::string> urgencyWords = {
+            "immediate", "right now", "at once", "right away", "urgently",
+            "without delay", "this instant", "as soon as possible"
+        };
+        for (const auto& word : urgencyWords) {
+            if (msg.find(word) != std::string::npos) return true;
+        }
+        return false;
+    }
+
+    // ==========================================================================
+    // Phase 3 Migration: StoryEngine helpers (Papyrus native wrappers)
+    // ==========================================================================
+
+    RE::BSFixedString BuildExcludeListNative(RE::StaticFunctionTag*, int toggleBitmask, int envFlags) {
+        return RE::BSFixedString(FactionPolitics::BuildExcludeList(toggleBitmask, envFlags));
+    }
+
+    RE::BSFixedString ValidateStoryResponse(RE::StaticFunctionTag*, RE::BSFixedString responseJson,
+                                             int toggleBitmask, int envFlags) {
+        return RE::BSFixedString(FactionPolitics::ValidateStoryResponse(
+            responseJson.c_str(), toggleBitmask, envFlags));
+    }
+
+    RE::BSFixedString BuildFactionBattleDispatchFact(RE::StaticFunctionTag*,
+                                                      RE::BSFixedString alliedFaction,
+                                                      RE::BSFixedString questLocation,
+                                                      RE::BSFixedString playerName) {
+        return RE::BSFixedString(FactionPolitics::GetSingleton()->BuildFactionBattleDispatchFact(
+            alliedFaction.c_str(), questLocation.c_str(), playerName.c_str()));
+    }
+
+    RE::BSFixedString RecordFactionBattleCompletion(RE::StaticFunctionTag*,
+                                                     RE::BSFixedString alliedFaction,
+                                                     RE::BSFixedString questLocation,
+                                                     RE::BSFixedString playerName,
+                                                     RE::BSFixedString enemyFaction) {
+        std::string enemy = enemyFaction.c_str() ? enemyFaction.c_str() : "";
+        return RE::BSFixedString(FactionPolitics::GetSingleton()->RecordFactionBattleCompletion(
+            alliedFaction.c_str(), questLocation.c_str(), playerName.c_str(), enemy));
+    }
+
+    RE::BSFixedString BuildBattleExpiryFact(RE::StaticFunctionTag*,
+                                             RE::BSFixedString alliedFaction,
+                                             RE::BSFixedString questLocation,
+                                             RE::BSFixedString playerName) {
+        return RE::BSFixedString(FactionPolitics::GetSingleton()->BuildBattleExpiryFact(
+            alliedFaction.c_str(), questLocation.c_str(), playerName.c_str()));
+    }
+
+    // ==========================================================================
+    // Phase 1 Migration: BattleManager C++ Logic (Papyrus native wrappers)
+    // ==========================================================================
+
+    RE::BSFixedString FinalizeBattle(RE::StaticFunctionTag*, int battleId,
+                                     RE::BSFixedString result, RE::BSFixedString victor,
+                                     int deadA, int deadB, RE::BSFixedString locationName,
+                                     float gameTime) {
+        return RE::BSFixedString(BattleManager::GetSingleton()->FinalizeBattle(
+            battleId, result.c_str(), victor.c_str(), deadA, deadB,
+            locationName.c_str(), gameTime));
+    }
+
+    RE::BSFixedString CalculateReinforcementPositions(RE::StaticFunctionTag*,
+                                                       float playerX, float playerY, float playerZ,
+                                                       float centerX, float centerY, int waveNum) {
+        return RE::BSFixedString(BattleManager::GetSingleton()->CalculateReinforcementPositions(
+            playerX, playerY, playerZ, centerX, centerY, waveNum));
+    }
+
+    RE::BSFixedString EvaluatePlayerJoinBattle(RE::StaticFunctionTag*, RE::BSFixedString questAutoJoin) {
+        return RE::BSFixedString(BattleManager::GetSingleton()->EvaluatePlayerJoin(questAutoJoin.c_str()));
+    }
+
+    RE::BSFixedString GetBattleNotification(RE::StaticFunctionTag*, RE::BSFixedString type,
+                                             RE::BSFixedString locationName, RE::BSFixedString victorName,
+                                             bool playerWon) {
+        return RE::BSFixedString(BattleManager::GetSingleton()->GetBattleNotification(
+            type.c_str(), locationName.c_str(), victorName.c_str(), playerWon));
+    }
+
+    RE::BSFixedString ValidateFactionBattleDispatch(RE::StaticFunctionTag*, RE::BSFixedString alliedFaction,
+                                                     RE::BSFixedString suggestedEnemy) {
+        std::string enemy = suggestedEnemy.c_str() ? suggestedEnemy.c_str() : "";
+        return RE::BSFixedString(BattleManager::GetSingleton()->ValidateFactionBattleDispatch(
+            alliedFaction.c_str(), enemy));
+    }
+
+    RE::BSFixedString CalculateMidBattleState(RE::StaticFunctionTag*, float scheduledTime, float currentTime) {
+        return RE::BSFixedString(BattleManager::GetSingleton()->CalculateMidBattleState(scheduledTime, currentTime));
+    }
+
+    RE::BSFixedString GetPollAction(RE::StaticFunctionTag*, RE::BSFixedString stateJson) {
+        return RE::BSFixedString(BattleManager::GetSingleton()->GetPollAction(stateJson.c_str()));
+    }
+
+    void ResetBattleState(RE::StaticFunctionTag*) {
+        BattleManager::GetSingleton()->ResetBattleState();
+        s_preBattleBounty.clear();  // Reset bounty snapshot for next battle
+    }
+
+    RE::BSFixedString CalculateBattleMarkerPosition(RE::StaticFunctionTag*,
+                                                     float playerX, float playerY,
+                                                     float locX, float locY, float locZ,
+                                                     float offsetUnits) {
+        return RE::BSFixedString(BattleManager::GetSingleton()->CalculateBattleMarkerPosition(
+            playerX, playerY, locX, locY, locZ, offsetUnits));
+    }
+
+    // ==========================================================================
+    // Battle Witness Functions
+    // ==========================================================================
+
+    std::vector<RE::Actor*> GetNearbyWitnessNPCs(RE::StaticFunctionTag*,
+                                                  RE::TESObjectREFR* center, float radius) {
+        std::vector<RE::Actor*> result;
+        if (!center) return result;
+
+        auto pos = center->GetPosition();
+
+        // Get all battle actor FormIDs to exclude them
+        std::unordered_set<RE::FormID> battleActors;
+        auto* bm = BattleManager::GetSingleton();
+        // BattleSnapshot doesn't include actors, so we check via IsBattleActive
+        // and skip actors that are in battle factions
+
+        auto* processLists = RE::ProcessLists::GetSingleton();
+        if (!processLists) return result;
+
+        for (auto& handle : processLists->highActorHandles) {
+            auto actor = handle.get();
+            if (!actor || !actor.get()) continue;
+            auto* a = actor.get();
+
+            // Skip dead, player, deleted
+            if (a->IsDead() || a->IsPlayerRef() || a->IsDeleted()) continue;
+
+            // Skip unnamed (generic spawns)
+            auto name = a->GetName();
+            if (!name || name[0] == '\0') continue;
+
+            // Skip if too far
+            auto aPos = a->GetPosition();
+            float dx = pos.x - aPos.x;
+            float dy = pos.y - aPos.y;
+            float dist = std::sqrt(dx * dx + dy * dy);
+            if (dist > radius) continue;
+
+            // Skip battle-spawned soldiers (they have temp FormIDs in FF range)
+            if ((a->GetFormID() >> 24) == 0xFF) continue;
+
+            result.push_back(a);
+        }
+
+        logger::info("[IntelEngine] GetNearbyWitnessNPCs: found {} witnesses within {:.0f} units",
+                    result.size(), radius);
+        return result;
+    }
+
+    // ==========================================================================
+    // BattleManager Functions
+    // ==========================================================================
+
+    int StartBattle(RE::StaticFunctionTag*, RE::BSFixedString factionA, RE::BSFixedString factionB,
+                    RE::BSFixedString locationName, int warId) {
+        return BattleManager::GetSingleton()->StartBattle(
+            factionA.c_str(), factionB.c_str(), locationName.c_str(), warId);
+    }
+
+    void EndBattle(RE::StaticFunctionTag*, int battleId, RE::BSFixedString result, RE::BSFixedString victor) {
+        BattleManager::GetSingleton()->EndBattle(battleId, result.c_str(), victor.c_str());
+    }
+
+    bool RegisterBattleActor(RE::StaticFunctionTag*, RE::Actor* actor, RE::BSFixedString factionId, int tier) {
+        if (!actor) return false;
+        return BattleManager::GetSingleton()->RegisterActor(actor, factionId.c_str(), tier);
+    }
+
+    RE::BSFixedString PollBattleState(RE::StaticFunctionTag*) {
+        auto* bm = BattleManager::GetSingleton();
+        auto result = bm->PollBattleState();
+        // Suppress bounty + stop hostile friendly guards every poll cycle (C++ — stale-bytecode-safe)
+        bm->SuppressBountyTick();
+        return RE::BSFixedString(result);
+    }
+
+    int GetBattleMorale(RE::StaticFunctionTag*, RE::BSFixedString factionId) {
+        return BattleManager::GetSingleton()->GetMorale(factionId.c_str());
+    }
+
+    void AdjustBattleMorale(RE::StaticFunctionTag*, RE::BSFixedString factionId, int delta) {
+        BattleManager::GetSingleton()->AdjustMorale(factionId.c_str(), delta);
+    }
+
+    bool IsBattleActive(RE::StaticFunctionTag*) {
+        return BattleManager::GetSingleton()->IsBattleActive();
+    }
+
+    int GetBattleAliveCount(RE::StaticFunctionTag*, RE::BSFixedString factionId) {
+        return BattleManager::GetSingleton()->GetAliveCount(factionId.c_str());
+    }
+
+    int GetActiveBattleId(RE::StaticFunctionTag*) {
+        return BattleManager::GetSingleton()->GetActiveBattleId();
+    }
+
+    int GetBattleCurrentWave(RE::StaticFunctionTag*) {
+        return BattleManager::GetSingleton()->GetCurrentWave();
+    }
+
+    void AdvanceBattleWave(RE::StaticFunctionTag*) {
+        BattleManager::GetSingleton()->AdvanceWave();
+    }
+
+    bool SetPlayerBattleSide(RE::StaticFunctionTag*, RE::BSFixedString factionId) {
+        return BattleManager::GetSingleton()->SetPlayerSide(factionId.c_str());
+    }
+
+    void RemovePlayerCrimeFactions(RE::StaticFunctionTag*) {
+        BattleManager::GetSingleton()->RemovePlayerCrimeFactions();
+    }
+
+    void RestorePlayerCrimeFactions(RE::StaticFunctionTag*) {
+        BattleManager::GetSingleton()->RestorePlayerCrimeFactions();
+    }
+
+    RE::BSFixedString GetPlayerBattleSide(RE::StaticFunctionTag*) {
+        return BattleManager::GetSingleton()->GetPlayerSide();
+    }
+
+    bool HasPlayerParticipatedInBattle(RE::StaticFunctionTag*) {
+        return BattleManager::GetSingleton()->HasPlayerParticipated();
+    }
+
+    bool IsBattleFaction(RE::StaticFunctionTag*, RE::BSFixedString factionId) {
+        return BattleManager::GetSingleton()->IsBattleFaction(factionId.c_str());
+    }
+
+    // ==========================================================================
+    // Pending Battle Functions
+    // ==========================================================================
+
+    int AddPendingBattle(RE::StaticFunctionTag*, RE::BSFixedString locationName,
+                          RE::BSFixedString factionA, RE::BSFixedString factionB,
+                          RE::BSFixedString resultJson) {
+        return BattleManager::GetSingleton()->AddPendingBattle(
+            locationName.c_str(), factionA.c_str(), factionB.c_str(), resultJson.c_str());
+    }
+
+    int PollPendingBattles(RE::StaticFunctionTag*) {
+        auto* player = RE::PlayerCharacter::GetSingleton();
+        if (!player) return -1;
+        auto pos = player->GetPosition();
+        return BattleManager::GetSingleton()->PollPendingBattles(pos.x, pos.y, pos.z);
+    }
+
+    void RemovePendingBattle(RE::StaticFunctionTag*, int id) {
+        BattleManager::GetSingleton()->RemovePendingBattle(id);
+    }
+
+    void ClearPendingBattles(RE::StaticFunctionTag*) {
+        BattleManager::GetSingleton()->ClearPendingBattles();
+    }
+
+    RE::BSFixedString GetPendingBattleInfo(RE::StaticFunctionTag*, int id) {
+        return RE::BSFixedString(BattleManager::GetSingleton()->GetPendingBattleInfo(id));
+    }
+
+    int GetPendingBattleCount(RE::StaticFunctionTag*) {
+        return BattleManager::GetSingleton()->GetPendingBattleCount();
+    }
+
+    RE::BSFixedString GetLastExpiredBattleResult(RE::StaticFunctionTag*) {
+        return RE::BSFixedString(BattleManager::GetSingleton()->GetLastExpiredBattleResult());
+    }
+
+    // ==========================================================================
+    // JSON Array Helper Functions
+    // ==========================================================================
+
+    int GetJsonArrayLength(RE::StaticFunctionTag*, RE::BSFixedString jsonStr, RE::BSFixedString key) {
+        try {
+            auto j = nlohmann::json::parse(jsonStr.c_str());
+            std::string k = key.c_str();
+            if (k.empty()) {
+                return j.is_array() ? static_cast<int>(j.size()) : 0;
+            }
+            if (j.contains(k) && j[k].is_array()) {
+                return static_cast<int>(j[k].size());
+            }
+        } catch (...) {}
+        return 0;
+    }
+
+    RE::BSFixedString GetJsonArrayItem(RE::StaticFunctionTag*, RE::BSFixedString jsonStr,
+                                        RE::BSFixedString key, int index) {
+        try {
+            auto j = nlohmann::json::parse(jsonStr.c_str());
+            std::string k = key.c_str();
+            const auto& arr = k.empty() ? j : j[k];
+            if (arr.is_array() && index >= 0 && index < static_cast<int>(arr.size())) {
+                if (arr[index].is_string()) {
+                    return RE::BSFixedString(arr[index].get<std::string>());
+                }
+                return RE::BSFixedString(arr[index].dump());
+            }
+        } catch (...) {}
+        return RE::BSFixedString("");
     }
 
 }  // namespace IntelEngine::Papyrus

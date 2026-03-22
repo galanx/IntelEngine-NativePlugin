@@ -82,6 +82,7 @@ namespace IntelEngine {
         static void OnRemovePackagesStatic(const char* jsonArg);
         static void OnChangePluginConfigStatic(const char* jsonArg);
         static void OnDispatchStoryStatic(const char* jsonArg);
+        static void OnDispatchNpcSocialStatic(const char* jsonArg);
         static void OnExecuteActionStatic(const char* jsonArg);
         static void OnToggleActionStatic(const char* jsonArg);
 
@@ -118,6 +119,9 @@ namespace IntelEngine {
         // Called from Papyrus native functions
         static std::string GetPendingParam(const std::string& key);
         static void ClearPendingParams();
+        // Atomic claim: reads all params as JSON and clears in one lock.
+        // Returns "" if already claimed (prevents double-handler race).
+        static std::string ClaimPendingParams();
     };
 
 }  // namespace IntelEngine

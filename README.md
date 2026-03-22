@@ -1,5 +1,5 @@
-# IntelEngine v2.6.0
-### NPC Autonomy & Player-Driven Task Framework for SkyrimNet
+# IntelEngine v3.0.0
+### NPC Autonomy, Faction Politics & Player-Driven Task Framework for SkyrimNet
 
 *"Meet me at the Western Watchtower at sunset."*
 *She agrees. Hours pass. The sun dips. You arrive — and she's already there.*
@@ -65,8 +65,19 @@ Without any player input, NPCs autonomously:
 - **Ambush you** for real grudges — with stealth approach, combat, and a yield system
 - **Secretly follow you** out of obsession until caught
 - **Deliver messages** from NPCs who can't come themselves
-- **Offer quests** to clear enemy camps, with a guide option and map marker
+- **Offer quests** — bounty hunts, rescue missions, item retrieval, and **faction war battles**
 - **Interact with each other** independently — arguments, deals, whispered conspiracies
+
+### Part 3 — Faction Politics (NEW in v3.0)
+
+A living political system where 9 factions (configurable) scheme, trade, and wage war:
+
+- **Political DM** generates events every 6 game hours — trade deals, espionage, border skirmishes, assassinations, war declarations, and surrenders
+- **Player standing** with each faction rises and falls based on your actions — fight for a faction, betray them, commit crimes in their territory
+- **Faction wars** with morale, army strength, off-screen battles, and **player-present battles** with 5 waves of spawned soldiers (22 per side)
+- **Faction quests** — when your standing is 20+ with a faction, they call on you for combat missions, rescue operations, and full-scale battles that affect war outcomes
+- **Political awareness** — NPCs know about recent political events and react to them in conversation
+- **Prisma UI dashboard** with a Politics tab showing all faction relations, active wars, and player standings
 
 No teleportation. No console commands. No hardcoded location lists. IntelEngine dynamically indexes every actor and location across every cell in the game — every inn, every home, every NPC is discoverable because the index is built from your actual load order.
 

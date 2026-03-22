@@ -22,6 +22,7 @@ find_package(CommonLibSSE CONFIG REQUIRED)
 find_package(fmt CONFIG REQUIRED)
 find_package(rapidfuzz CONFIG REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
+find_package(unofficial-sqlite3 CONFIG REQUIRED)
 
 
 # =============================================================================
@@ -44,6 +45,10 @@ set(SOURCES
     src/MemoryDB.cpp
     src/DashboardConfig.cpp
     src/DashboardUIManager.cpp
+    src/PoliticalDB.cpp
+    src/FactionPolitics.cpp
+    src/FactionConfigLoader.cpp
+    src/BattleManager.cpp
 )
 
 # =============================================================================
@@ -67,6 +72,7 @@ target_link_libraries(
         fmt::fmt
         rapidfuzz::rapidfuzz
         nlohmann_json::nlohmann_json
+        unofficial::sqlite3::sqlite3
 )
 
 target_precompile_headers(

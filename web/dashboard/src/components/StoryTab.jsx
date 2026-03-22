@@ -5,6 +5,7 @@ const STORY_TYPES = [
   { key: 'informant', label: 'Informant', icon: '\u{1F4E2}' },
   { key: 'road_encounter', label: 'Road Encounter', icon: '\u{1F6E4}' },
   { key: 'ambush', label: 'Ambush', icon: '\u{2694}' },
+  { key: 'faction_ambush', label: 'Faction Ambush', icon: '\u{1F6E1}' },
   { key: 'stalker', label: 'Stalker', icon: '\u{1F441}' },
   { key: 'message', label: 'Message', icon: '\u{1F4E8}' },
   { key: 'quest', label: 'Quest', icon: '\u{2728}' },

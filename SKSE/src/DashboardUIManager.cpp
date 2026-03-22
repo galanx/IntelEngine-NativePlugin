@@ -37,6 +37,17 @@ namespace IntelEngine {
         pendingParams_.clear();
     }
 
+    std::string DashboardUIManager::ClaimPendingParams() {
+        std::lock_guard<std::mutex> lock(pendingParamsMutex_);
+        if (pendingParams_.empty()) return "";
+        nlohmann::json j;
+        for (auto& [key, val] : pendingParams_) {
+            j[key] = val;
+        }
+        pendingParams_.clear();
+        return j.dump();
+    }
+
     static constexpr int kViewRenderOrder = 90;
     static constexpr auto kPollIntervalMs = std::chrono::milliseconds(50);
     static constexpr auto kKeyPressCooldownMs = std::chrono::milliseconds(300);
@@ -189,12 +200,17 @@ namespace IntelEngine {
                 };
                 nlohmann::json pc;
                 try {
-                    pc["ui.dashboard_hotkey"] = std::stoi(rv("ui.dashboard_hotkey", "118"));
-                    pc["ui.dashboard_modifiers"] = std::stoi(rv("ui.dashboard_modifiers", "2"));
+                    // Read hotkey/modifiers from DashboardConfig atomics (source of
+                    // truth), NOT from SkyrimNet API which may have stale cache.
+                    pc["ui.dashboard_hotkey"] = DashboardConfig::GetSingleton()->GetHotkey();
+                    pc["ui.dashboard_modifiers"] = DashboardConfig::GetSingleton()->GetModifiers();
                     pc["ui.scale"] = std::stof(rv("ui.scale", "1.3"));
                     pc["story.faction_blocklist"] = rv("story.faction_blocklist", "");
                     pc["story.location_blocklist"] = rv("story.location_blocklist", "");
                     pc["story.npc_blocklist"] = rv("story.npc_blocklist", "");
+                    pc["story.faction_whitelist"] = rv("story.faction_whitelist", "");
+                    pc["story.location_whitelist"] = rv("story.location_whitelist", "");
+                    pc["story.npc_whitelist"] = rv("story.npc_whitelist", "");
                     pc["llm.endpoint"] = rv("llm.endpoint", "");
                     pc["llm.api_key"] = rv("llm.api_key", "");
                     pc["llm.model_name"] = rv("llm.model_name", "");
@@ -460,10 +476,34 @@ namespace IntelEngine {
                 }
 
                 auto* config = DashboardConfig::GetSingleton();
+
+                // Hotkey/modifier: use dedicated setters that write YAML + update
+                // atomics directly.  Do NOT call Reload() — the SkyrimNet API
+                // cache is stale after a direct file write and would revert the
+                // change to the old value.
+                if (key == "dashboard_hotkey" && val.is_number_integer()) {
+                    int vk = val.get<int>();
+                    if (config->SetHotkey(vk)) {
+                        logger::info("[Dashboard] Hotkey updated: VK {}", vk);
+                    } else {
+                        logger::warn("[Dashboard] Failed to save hotkey VK {}", vk);
+                    }
+                    DashboardUIManager::GetSingleton()->SendModEvent("IntelEngine_DashboardRefresh");
+                    return;
+                }
+                if (key == "dashboard_modifiers" && val.is_number_integer()) {
+                    int mods = val.get<int>();
+                    if (config->SetModifiers(mods)) {
+                        logger::info("[Dashboard] Modifiers updated: {}", mods);
+                    } else {
+                        logger::warn("[Dashboard] Failed to save modifiers {}", mods);
+                    }
+                    DashboardUIManager::GetSingleton()->SendModEvent("IntelEngine_DashboardRefresh");
+                    return;
+                }
+
                 if (config->WriteYamlValue(section, key, yamlValue)) {
                     logger::info("[Dashboard] Plugin config updated: {}.{} = {}", section, key, yamlValue);
-                    // Reload hotkey config if UI section changed
-                    if (section == "ui") config->Reload();
                     // Refresh dashboard to show updated values
                     DashboardUIManager::GetSingleton()->SendModEvent("IntelEngine_DashboardRefresh");
                 } else {
@@ -493,6 +533,7 @@ namespace IntelEngine {
         prismaUI_->RegisterJSListener(dashboardView_, "onDashboard_removePackages", OnRemovePackagesStatic);
         prismaUI_->RegisterJSListener(dashboardView_, "onDashboard_changePluginConfig", OnChangePluginConfigStatic);
         prismaUI_->RegisterJSListener(dashboardView_, "onDashboard_dispatchStory", OnDispatchStoryStatic);
+        prismaUI_->RegisterJSListener(dashboardView_, "onDashboard_dispatchNpcSocial", OnDispatchNpcSocialStatic);
         prismaUI_->RegisterJSListener(dashboardView_, "onDashboard_executeAction", OnExecuteActionStatic);
         prismaUI_->RegisterJSListener(dashboardView_, "onDashboard_toggleAction", OnToggleActionStatic);
 
@@ -596,6 +637,56 @@ namespace IntelEngine {
                 DashboardUIManager::GetSingleton()->SendModEvent(
                     "IntelEngine_DashboardDispatchStory", type, 0.0f);
                 logger::info("[Dashboard] Director: dispatch story type={} npc={}", type, npcName);
+            } catch (...) {}
+        });
+    }
+
+    // =========================================================================
+    // Director: NPC Social Dispatch (JS -> C++ -> pending params -> ModEvent -> Papyrus)
+    // =========================================================================
+
+    void DashboardUIManager::OnDispatchNpcSocialStatic(const char* jsonArg) {
+        auto* task = SKSE::GetTaskInterface();
+        if (!task) return;
+        std::string arg(jsonArg ? jsonArg : "{}");
+        task->AddTask([arg]() {
+            try {
+                auto j = nlohmann::json::parse(arg);
+                std::string npc1 = j.value("npc1Name", "");
+                std::string npc2 = j.value("npc2Name", "");
+                std::string type = j.value("socialType", "");
+                std::string narration = j.value("narration", "");
+                if (npc1.empty() || npc2.empty() || type.empty() || narration.empty()) return;
+
+                {
+                    std::lock_guard<std::mutex> lock(pendingParamsMutex_);
+                    pendingParams_.clear();
+                    pendingParams_["socialType"] = type;
+                    pendingParams_["narration"] = narration;
+                    pendingParams_["npc1Name"] = npc1;
+                    pendingParams_["npc2Name"] = npc2;
+
+                    // Build response JSON matching what the NPC DM would return
+                    nlohmann::json response;
+                    response["should_act"] = true;
+                    response["type"] = type;
+                    response["npc"] = npc1;
+                    response["npc2"] = npc2;
+                    response["narration"] = narration;
+                    // Type-specific fields
+                    for (const char* f : {"fact1", "fact2", "gossip"}) {
+                        response[f] = "";
+                    }
+                    for (auto& [key, val] : j.items()) {
+                        if (key == "npc1Name" || key == "npc2Name" || key == "socialType" || key == "narration") continue;
+                        if (val.is_string()) response[key] = val.get<std::string>();
+                    }
+                    pendingParams_["response"] = response.dump();
+                }
+
+                DashboardUIManager::GetSingleton()->SendModEvent(
+                    "IntelEngine_DashboardDispatchNpcSocial", type, 0.0f);
+                logger::info("[Dashboard] Director: NPC social type={} npc1={} npc2={}", type, npc1, npc2);
             } catch (...) {}
         });
     }

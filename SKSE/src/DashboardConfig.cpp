@@ -185,11 +185,24 @@ namespace IntelEngine {
     }
 
     void DashboardConfig::Load() {
-        // Try SkyrimNet API first
         // Defaults: Shift+7 (VK_7=0x37=55, kModShift=2)
         constexpr int kDefaultHotkey = 55;     // VK_7
         constexpr int kDefaultModifiers = kModShift;
 
+        // Read settings.yaml directly — it is the single source of truth.
+        // The SkyrimNet API caches values in memory and can return stale data
+        // after direct file writes (e.g., user changes hotkey in dashboard UI).
+        std::string path = GetSettingsPath();
+        if (std::filesystem::exists(path)) {
+            dashboardHotkey_.store(ReadYamlInt(path, "ui", "dashboard_hotkey", kDefaultHotkey));
+            dashboardModifiers_.store(ReadYamlInt(path, "ui", "dashboard_modifiers", kDefaultModifiers));
+            logger::info("DashboardConfig: Loaded from file - key={}, modifiers={}",
+                         dashboardHotkey_.load(), dashboardModifiers_.load());
+            return;
+        }
+
+        // Fallback: try SkyrimNet API (handles MO2 VFS edge cases where
+        // std::filesystem may not resolve the virtual path)
         if (SkyrimNetAPI::GetPluginConfigValue) {
             try {
                 std::string hkVal = SkyrimNetAPI::GetPluginConfigValue(
@@ -200,7 +213,7 @@ namespace IntelEngine {
                     std::to_string(kDefaultModifiers).c_str());
                 dashboardHotkey_.store(std::stoi(hkVal));
                 dashboardModifiers_.store(std::stoi(modVal));
-                logger::info("DashboardConfig: Loaded via API - key={}, modifiers={}",
+                logger::info("DashboardConfig: Loaded via API fallback - key={}, modifiers={}",
                              dashboardHotkey_.load(), dashboardModifiers_.load());
                 return;
             } catch (const std::exception& e) {
@@ -208,17 +221,7 @@ namespace IntelEngine {
             }
         }
 
-        // Fallback: read settings.yaml directly
-        std::string path = GetSettingsPath();
-        if (!std::filesystem::exists(path)) {
-            logger::info("DashboardConfig: settings.yaml not found, using defaults (Shift+7)");
-            return;
-        }
-
-        dashboardHotkey_.store(ReadYamlInt(path, "ui", "dashboard_hotkey", kDefaultHotkey));
-        dashboardModifiers_.store(ReadYamlInt(path, "ui", "dashboard_modifiers", kDefaultModifiers));
-        logger::info("DashboardConfig: Loaded from file - key={}, modifiers={}",
-                     dashboardHotkey_.load(), dashboardModifiers_.load());
+        logger::info("DashboardConfig: settings.yaml not found, using defaults (Shift+7)");
     }
 
     bool DashboardConfig::SetHotkey(int vkCode) {

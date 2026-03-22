@@ -7,6 +7,8 @@
 #include "NPCIndex.h"
 #include <algorithm>
 #include "CellAnalyzer.h"
+#include "FactionPolitics.h"
+#include "PoliticalDB.h"
 #include "LocationResolver.h"
 #include "MemoryDB.h"
 #include "SlotTracker.h"
@@ -123,6 +125,19 @@ namespace IntelEngine {
         m_playerHomePolicy.store(std::clamp(policy, 0, 3), std::memory_order_relaxed);
     }
 
+    void NPCIndex::SetHoldRestrictionPolicy(const std::string& storyType, int policy) {
+        std::lock_guard<std::mutex> lock(m_holdRestrictionMutex);
+        m_holdRestrictionPolicies[storyType] = std::clamp(policy, 0, 6);
+        logger::info("Hold restriction policy: {} = {}", storyType, policy);
+    }
+
+    int NPCIndex::GetHoldRestrictionPolicy(const std::string& storyType) const {
+        std::lock_guard<std::mutex> lock(m_holdRestrictionMutex);
+        auto it = m_holdRestrictionPolicies.find(storyType);
+        if (it != m_holdRestrictionPolicies.end()) return it->second;
+        return 1;  // default: same hold for civilians
+    }
+
     bool NPCIndex::IsPotentialFollower(RE::Actor* actor) {
         if (!actor) return false;
         static RE::TESFaction* s_potentialFollowerFaction = nullptr;
@@ -132,37 +147,52 @@ namespace IntelEngine {
         return s_potentialFollowerFaction && actor->IsInFaction(s_potentialFollowerFaction);
     }
 
-    // ── Location Blocklist (populated from plugin config) ──
-    static std::vector<std::string> s_blockedLocations;  // lowercase
-    static std::mutex s_locationMutex;
-    static std::chrono::steady_clock::time_point s_locationBlocklistLastRefresh;
-
-    static void RefreshLocationBlocklist() {
+    // ── Shared CSV Blocklist Refresh ──
+    // Handles throttle (30s), config read, CSV parse, trim, lowercase, swap under lock.
+    static void RefreshStringBlocklist(std::mutex& mtx, std::chrono::steady_clock::time_point& lastRefresh,
+                                       const char* configKey, std::vector<std::string>& output, const char* label) {
         auto now = std::chrono::steady_clock::now();
         {
-            std::lock_guard<std::mutex> lock(s_locationMutex);
-            if (now - s_locationBlocklistLastRefresh < std::chrono::seconds(30)) return;
-            s_locationBlocklistLastRefresh = now;
+            std::lock_guard<std::mutex> lock(mtx);
+            if (now - lastRefresh < std::chrono::seconds(30)) return;
+            lastRefresh = now;
         }
-
         if (!SkyrimNetAPI::GetPluginConfigValue) return;
-        std::string csv = SkyrimNetAPI::GetPluginConfigValue(
-            "IntelEngine", "story.location_blocklist", "");
+        std::string csv = SkyrimNetAPI::GetPluginConfigValue("IntelEngine", configKey, "");
+
+        // Strip surrounding quotes if YAML parser preserved them (e.g., '""' → '')
+        if (csv.size() >= 2 && csv.front() == '"' && csv.back() == '"') {
+            csv = csv.substr(1, csv.size() - 2);
+        }
 
         std::vector<std::string> newList;
         if (!csv.empty()) {
             std::stringstream ss(csv);
             std::string token;
             while (std::getline(ss, token, ',')) {
-                auto start = token.find_first_not_of(" \t");
-                auto end = token.find_last_not_of(" \t");
-                if (start != std::string::npos) {
-                    newList.push_back(StringUtils::ToLowerStd(token.substr(start, end - start + 1)));
+                auto start = token.find_first_not_of(" \t\"");
+                auto end = token.find_last_not_of(" \t\"");
+                if (start != std::string::npos && start <= end) {
+                    std::string cleaned = StringUtils::ToLowerStd(token.substr(start, end - start + 1));
+                    if (!cleaned.empty()) {
+                        newList.push_back(cleaned);
+                    }
                 }
             }
         }
-        std::lock_guard<std::mutex> lock(s_locationMutex);
-        s_blockedLocations = std::move(newList);
+        std::lock_guard<std::mutex> lock(mtx);
+        output = std::move(newList);
+        logger::info("{} refreshed: {} entries (raw config: '{}')", label, output.size(), csv);
+    }
+
+    // ── Location Blocklist ──
+    static std::vector<std::string> s_blockedLocations;
+    static std::mutex s_locationMutex;
+    static std::chrono::steady_clock::time_point s_locationBlocklistLastRefresh;
+
+    static void RefreshLocationBlocklist() {
+        RefreshStringBlocklist(s_locationMutex, s_locationBlocklistLastRefresh,
+            "story.location_blocklist", s_blockedLocations, "Location blocklist");
     }
 
     bool NPCIndex::IsPlayerInBlockedLocation() {
@@ -180,40 +210,16 @@ namespace IntelEngine {
         return false;
     }
 
+    // IsPlayerInWhitelistedLocation is defined after whitelist declarations below.
+
     // ── NPC Name Blocklist (populated from plugin config) ──
     static std::vector<std::string> s_blockedNPCNames;  // lowercase
     static std::mutex s_npcNameMutex;
     static std::chrono::steady_clock::time_point s_npcNameBlocklistLastRefresh;
 
     static void RefreshNPCNameBlocklist() {
-        auto now = std::chrono::steady_clock::now();
-        {
-            std::lock_guard<std::mutex> lock(s_npcNameMutex);
-            if (now - s_npcNameBlocklistLastRefresh < std::chrono::seconds(30)) return;
-            s_npcNameBlocklistLastRefresh = now;
-        }
-
-        if (!SkyrimNetAPI::GetPluginConfigValue) return;
-        std::string csv = SkyrimNetAPI::GetPluginConfigValue(
-            "IntelEngine", "story.npc_blocklist", "");
-
-        std::vector<std::string> newList;
-        if (!csv.empty()) {
-            std::stringstream ss(csv);
-            std::string token;
-            while (std::getline(ss, token, ',')) {
-                auto start = token.find_first_not_of(" \t");
-                auto end = token.find_last_not_of(" \t");
-                if (start != std::string::npos) {
-                    newList.push_back(StringUtils::ToLowerStd(token.substr(start, end - start + 1)));
-                }
-            }
-        }
-        std::lock_guard<std::mutex> lock(s_npcNameMutex);
-        s_blockedNPCNames = std::move(newList);
-        if (!s_blockedNPCNames.empty()) {
-            logger::info("NPC name blocklist refreshed: {} entries", s_blockedNPCNames.size());
-        }
+        RefreshStringBlocklist(s_npcNameMutex, s_npcNameBlocklistLastRefresh,
+            "story.npc_blocklist", s_blockedNPCNames, "NPC name blocklist");
     }
 
     static bool IsBlockedByName(RE::Actor* actor) {
@@ -224,6 +230,100 @@ namespace IntelEngine {
         std::string nameLower = StringUtils::ToLowerStd(displayName);
         for (const auto& blocked : s_blockedNPCNames) {
             if (nameLower == blocked) return true;
+        }
+        return false;
+    }
+
+    // ── Whitelists (empty = disabled, non-empty = only listed entries pass) ──
+    static std::vector<std::string> s_whitelistedNPCNames;  // lowercase
+    static std::mutex s_npcWhitelistMutex;
+    static std::chrono::steady_clock::time_point s_npcWhitelistLastRefresh;
+
+    static void RefreshNPCWhitelist() {
+        RefreshStringBlocklist(s_npcWhitelistMutex, s_npcWhitelistLastRefresh,
+            "story.npc_whitelist", s_whitelistedNPCNames, "NPC whitelist");
+    }
+
+    static bool PassesNPCWhitelist(RE::Actor* actor) {
+        RefreshNPCWhitelist();
+        std::lock_guard<std::mutex> lock(s_npcWhitelistMutex);
+        if (s_whitelistedNPCNames.empty()) return true;  // empty = everything allowed
+        auto displayName = actor->GetDisplayFullName();
+        if (!displayName || !displayName[0]) return false;
+        std::string nameLower = StringUtils::ToLowerStd(displayName);
+        for (const auto& allowed : s_whitelistedNPCNames) {
+            if (nameLower == allowed) return true;
+        }
+        return false;
+    }
+
+    static std::vector<std::string> s_whitelistedLocations;  // lowercase
+    static std::mutex s_locationWhitelistMutex;
+    static std::chrono::steady_clock::time_point s_locationWhitelistLastRefresh;
+
+    static void RefreshLocationWhitelist() {
+        RefreshStringBlocklist(s_locationWhitelistMutex, s_locationWhitelistLastRefresh,
+            "story.location_whitelist", s_whitelistedLocations, "Location whitelist");
+    }
+
+    bool NPCIndex::IsPlayerInWhitelistedLocation() {
+        RefreshLocationWhitelist();
+        std::lock_guard<std::mutex> lock(s_locationWhitelistMutex);
+        if (s_whitelistedLocations.empty()) return true;  // empty = everything allowed
+
+        auto* player = RE::PlayerCharacter::GetSingleton();
+        if (!player) return true;
+        RE::BSFixedString locName = LocationResolver::GetSingleton()->GetActorLocationName(player);
+        std::string playerLoc = StringUtils::ToLowerStd(locName.c_str() ? locName.c_str() : "");
+        for (const auto& allowed : s_whitelistedLocations) {
+            if (playerLoc == allowed) return true;
+        }
+        return false;
+    }
+
+    // Faction whitelist — uses EditorID lookup (same as blocklist but with whitelist logic)
+    static std::vector<RE::TESFaction*> s_whitelistedFactions;
+    static std::mutex s_factionWhitelistMutex;
+    static std::chrono::steady_clock::time_point s_factionWhitelistLastRefresh;
+
+    static void RefreshFactionWhitelist() {
+        auto now = std::chrono::steady_clock::now();
+        {
+            std::lock_guard<std::mutex> lock(s_factionWhitelistMutex);
+            if (now - s_factionWhitelistLastRefresh < std::chrono::seconds(30)) return;
+            s_factionWhitelistLastRefresh = now;
+        }
+        if (!SkyrimNetAPI::GetPluginConfigValue) return;
+        std::string csv = SkyrimNetAPI::GetPluginConfigValue("IntelEngine", "story.faction_whitelist", "");
+
+        std::vector<RE::TESFaction*> newList;
+        if (!csv.empty()) {
+            std::stringstream ss(csv);
+            std::string token;
+            while (std::getline(ss, token, ',')) {
+                auto start = token.find_first_not_of(" \t");
+                auto end = token.find_last_not_of(" \t");
+                if (start == std::string::npos) continue;
+                std::string factionId = token.substr(start, end - start + 1);
+                auto* form = RE::TESForm::LookupByEditorID(factionId);
+                if (auto* faction = form ? form->As<RE::TESFaction>() : nullptr) {
+                    newList.push_back(faction);
+                }
+            }
+        }
+        std::lock_guard<std::mutex> lock(s_factionWhitelistMutex);
+        s_whitelistedFactions = std::move(newList);
+        if (!s_whitelistedFactions.empty()) {
+            logger::info("Faction whitelist refreshed: {} entries", s_whitelistedFactions.size());
+        }
+    }
+
+    static bool PassesFactionWhitelist(RE::Actor* actor) {
+        RefreshFactionWhitelist();
+        std::lock_guard<std::mutex> lock(s_factionWhitelistMutex);
+        if (s_whitelistedFactions.empty()) return true;  // empty = everything allowed
+        for (auto* faction : s_whitelistedFactions) {
+            if (actor->IsInFaction(faction)) return true;
         }
         return false;
     }
@@ -293,6 +393,56 @@ namespace IntelEngine {
 
         logger::info("Phase 1 complete: {} unique NPCs indexed from base forms", m_allNames.size());
 
+        // Shared resolver: upgrades base FormIDs to Actor reference FormIDs for unique NPCs
+        auto resolveBaseFormIDs = [this](RE::TESObjectCELL* cell, int& count) {
+            cell->ForEachReference([&](RE::TESObjectREFR& ref) {
+                auto* actor = ref.As<RE::Actor>();
+                if (!actor || actor->IsDeleted()) return RE::BSContainer::ForEachResult::kContinue;
+
+                auto* base = actor->GetActorBase();
+                if (!base || !base->IsUnique()) return RE::BSContainer::ForEachResult::kContinue;
+
+                auto baseName = base->GetFullName();
+                if (!baseName || strlen(baseName) == 0) return RE::BSContainer::ForEachResult::kContinue;
+
+                std::string lowerName = StringUtils::ToLowerStd(baseName);
+                auto it = m_npcFormIds.find(lowerName);
+                if (it != m_npcFormIds.end() && it->second == base->GetFormID()) {
+                    it->second = actor->GetFormID();
+                    count++;
+                }
+                return RE::BSContainer::ForEachResult::kContinue;
+            });
+        };
+
+        // PHASE 1.5: Resolve base FormIDs → Actor reference FormIDs via persistent cells
+        // Unique NPCs have persistent references stored in worldspace persistent cells even when
+        // unloaded. Scan ALL worldspaces (Tamriel, Solstheim, DLC, etc.) so NPCs in any worldspace
+        // get resolved — not just NPCs in the player's current worldspace.
+        int resolvedCount = 0;
+        auto* dataHandler = RE::TESDataHandler::GetSingleton();
+        if (dataHandler) {
+            const auto& worldspaces = dataHandler->GetFormArray<RE::TESWorldSpace>();
+            for (auto* worldspace : worldspaces) {
+                if (!worldspace || !worldspace->persistentCell) continue;
+                resolveBaseFormIDs(worldspace->persistentCell, resolvedCount);
+            }
+        }
+        logger::info("Phase 1.5 complete: {} base FormIDs resolved to Actor reference FormIDs across all worldspaces", resolvedCount);
+
+        // PHASE 1.6: Resolve remaining base FormIDs via interior cells
+        // Some unique NPCs (especially mod-added) may have persistent references in standalone
+        // interior cells that aren't part of any worldspace. Scan dataHandler->interiorCells
+        // to catch these. Only resolves NPCs still at base FormID (not already resolved by 1.5).
+        int interiorResolved = 0;
+        if (dataHandler) {
+            for (auto* cell : dataHandler->interiorCells) {
+                if (!cell) continue;
+                resolveBaseFormIDs(cell, interiorResolved);
+            }
+        }
+        logger::info("Phase 1.6 complete: {} additional base FormIDs resolved via interior cells", interiorResolved);
+
         // PHASE 2: Update index with loaded actor references (higher priority)
         // Search ALL four process list tiers to cover every actor the engine tracks
         ProcessUtils::ForEachLoadedActor([this](RE::Actor* actor) {
@@ -315,6 +465,9 @@ namespace IntelEngine {
 
         // Update with actual Actor reference
         m_npcIndex[lowerName] = actor;
+
+        // Update FormID to Actor reference ID (base form ID won't cast to Actor in Papyrus)
+        m_npcFormIds[lowerName] = actor->GetFormID();
 
         // Update current location
         if (auto* cell = actor->GetParentCell()) {
@@ -762,167 +915,111 @@ namespace IntelEngine {
         return kExcluded.count(name) > 0;
     }
 
+    // Shared eligibility checks — used by both strict and relaxed candidate filtering.
+    // Returns false (with optional debug log) if the actor fails any common check.
+    static bool PassesCommonEligibility(RE::Actor* actor, RE::Actor* player, SlotTracker* tracker, bool verbose) {
+        if (!actor || actor == player) return false;
+
+        auto displayName = actor->GetDisplayFullName();
+        if (!displayName || !displayName[0] || std::string_view(displayName) == "Unknown") {
+            if (verbose) logger::debug("[StoryDM] Rejected 0x{:08X}: no display name", actor->GetFormID());
+            return false;
+        }
+        if (actor->IsDead()) {
+            if (verbose) logger::debug("[StoryDM] Rejected '{}': dead", displayName);
+            return false;
+        }
+        if (actor->IsDisabled()) {
+            if (verbose) logger::debug("[StoryDM] Rejected '{}': disabled", displayName);
+            return false;
+        }
+        if (tracker && (tracker->HasActiveTask(actor) || tracker->IsOnCooldown(actor))) {
+            if (verbose) logger::debug("[StoryDM] Rejected '{}': active task or cooldown", displayName);
+            return false;
+        }
+
+        static auto* kwActorTypeNPC = RE::TESForm::LookupByID<RE::BGSKeyword>(0x00013794);
+        if (kwActorTypeNPC && !actor->HasKeyword(kwActorTypeNPC)) {
+            if (verbose) logger::debug("[StoryDM] Rejected '{}': not ActorTypeNPC", displayName);
+            return false;
+        }
+        if (auto* race = actor->GetRace()) {
+            if (race->IsChildRace()) {
+                if (verbose) logger::debug("[StoryDM] Rejected '{}': child race", displayName);
+                return false;
+            }
+        }
+        if (NPCIndex::GetSingleton()->IsOnStoryCooldown(actor->GetFormID(), NPCIndex::GetStoryCooldownHours())) {
+            if (verbose) logger::debug("[StoryDM] Rejected '{}': story cooldown", displayName);
+            return false;
+        }
+
+        RefreshFactionBlocklist();
+        if (IsInBlockedFaction(actor)) {
+            if (verbose) logger::debug("[StoryDM] Rejected '{}': blocked faction", displayName);
+            return false;
+        }
+        RefreshNPCNameBlocklist();
+        if (IsBlockedByName(actor)) {
+            if (verbose) logger::debug("[StoryDM] Rejected '{}': blocked by name", displayName);
+            return false;
+        }
+
+        // Whitelist checks (empty = disabled, non-empty = only listed entries pass)
+        if (!PassesFactionWhitelist(actor)) {
+            if (verbose) logger::debug("[StoryDM] Rejected '{}': not in faction whitelist", displayName);
+            return false;
+        }
+        if (!PassesNPCWhitelist(actor)) {
+            if (verbose) logger::debug("[StoryDM] Rejected '{}': not in NPC whitelist", displayName);
+            return false;
+        }
+
+        // Policy-based filtering (danger zone + player home)
+        auto checkPolicy = [&](int policy, bool condition, const char* label) -> bool {
+            if (policy > 0 && condition) {
+                if (policy == 3) {
+                    if (verbose) logger::debug("[StoryDM] Rejected '{}': {} (block all)", displayName, label);
+                    return false;
+                }
+                if (policy == 2 && !NPCIndex::IsPotentialFollower(actor)) {
+                    if (verbose) logger::debug("[StoryDM] Rejected '{}': {} (followers only)", displayName, label);
+                    return false;
+                }
+                if (policy == 1 && NPCIndex::ClassifyNPCArchetype(actor) == "CIVILIAN") {
+                    if (verbose) logger::debug("[StoryDM] Rejected '{}': {} (civilian)", displayName, label);
+                    return false;
+                }
+            }
+            return true;
+        };
+
+        auto* cellAnalyzer = CellAnalyzer::GetSingleton();
+        auto* npcIdx = NPCIndex::GetSingleton();
+        if (!checkPolicy(npcIdx->GetDangerZonePolicy(), cellAnalyzer->IsPlayerInDangerousLocation(), "danger zone")) return false;
+        if (!checkPolicy(npcIdx->GetPlayerHomePolicy(), cellAnalyzer->IsPlayerInOwnHome(), "player home")) return false;
+
+        return true;
+    }
+
     bool NPCIndex::IsEligibleStoryCandidate(RE::Actor* actor, RE::Actor* player,
         RE::TESObjectCELL* playerCell, SlotTracker* tracker) {
-        if (!actor || actor == player) return false;
+        if (!PassesCommonEligibility(actor, player, tracker, false)) return false;
+
+        // Strict-only checks: deleted, no parent cell, in combat, teammate, hostile, same cell
         if (actor->IsDeleted()) return false;
         if (!actor->GetParentCell()) return false;
-        // Filter out nameless/unknown actors
-        auto displayName = actor->GetDisplayFullName();
-        if (!displayName || !displayName[0] || std::string_view(displayName) == "Unknown") return false;
-        if (actor->IsDead() || actor->IsDisabled()) return false;
         if (actor->IsInCombat()) return false;
         if (actor->IsPlayerTeammate()) return false;
         if (actor->IsHostileToActor(player)) return false;
         if (actor->GetParentCell() == playerCell) return false;
-        if (tracker && (tracker->HasActiveTask(actor) || tracker->IsOnCooldown(actor))) return false;
-
-        // Filter out animals/creatures — only humanoid NPCs with ActorTypeNPC keyword (0x13794)
-        static auto* kwActorTypeNPC = RE::TESForm::LookupByID<RE::BGSKeyword>(0x00013794);
-        if (kwActorTypeNPC && !actor->HasKeyword(kwActorTypeNPC)) return false;
-
-        // Filter out child NPCs — children can't be story candidates
-        if (auto* race = actor->GetRace()) {
-            if (race->IsChildRace()) return false;
-        }
-
-        // Full MCM cooldown — prevents wasted LLM turns picking NPCs Papyrus would reject
-        if (NPCIndex::GetSingleton()->IsOnStoryCooldown(actor->GetFormID(), GetStoryCooldownHours())) return false;
-
-        // Plugin-configured faction blocklist (refreshes every 30s)
-        RefreshFactionBlocklist();
-        if (IsInBlockedFaction(actor)) return false;
-
-        // Plugin-configured NPC name blocklist (refreshes every 30s)
-        RefreshNPCNameBlocklist();
-        if (IsBlockedByName(actor)) return false;
-
-        // Danger zone candidate filtering (MCM-controlled)
-        {
-            int policy = NPCIndex::GetSingleton()->m_dangerZonePolicy.load(std::memory_order_relaxed);
-            if (policy > 0 && CellAnalyzer::GetSingleton()->IsPlayerInDangerousLocation()) {
-                if (policy == 3) return false;
-                if (policy == 2 && !IsPotentialFollower(actor)) return false;
-                if (policy == 1 && ClassifyNPCArchetype(actor) == "CIVILIAN") return false;
-            }
-        }
-
-        // Player home candidate filtering (MCM-controlled)
-        {
-            int policy = NPCIndex::GetSingleton()->m_playerHomePolicy.load(std::memory_order_relaxed);
-            if (policy > 0 && CellAnalyzer::GetSingleton()->IsPlayerInOwnHome()) {
-                if (policy == 3) return false;
-                if (policy == 2 && !IsPotentialFollower(actor)) return false;
-                if (policy == 1 && ClassifyNPCArchetype(actor) == "CIVILIAN") return false;
-            }
-        }
 
         return true;
     }
 
     bool NPCIndex::IsEligibleStoryCandidateRelaxed(RE::Actor* actor, RE::Actor* player,
         SlotTracker* tracker) {
-        if (!actor || actor == player) return false;
-
-        // Filter out nameless/unknown actors (dynamically created NPCs with no display name)
-        auto displayName = actor->GetDisplayFullName();
-        if (!displayName || !displayName[0] || std::string_view(displayName) == "Unknown") {
-            logger::debug("[StoryDM] Rejected 0x{:08X}: no display name", actor->GetFormID());
-            return false;
-        }
-
-        if (actor->IsDead()) {
-            logger::debug("[StoryDM] Rejected '{}': dead", displayName);
-            return false;
-        }
-        if (actor->IsDisabled()) {
-            logger::debug("[StoryDM] Rejected '{}': disabled", displayName);
-            return false;
-        }
-        if (tracker && tracker->HasActiveTask(actor)) {
-            logger::debug("[StoryDM] Rejected '{}': active task", displayName);
-            return false;
-        }
-        if (tracker && tracker->IsOnCooldown(actor)) {
-            logger::debug("[StoryDM] Rejected '{}': task cooldown", displayName);
-            return false;
-        }
-
-        // Filter out animals/creatures — only humanoid NPCs with ActorTypeNPC keyword (0x13794)
-        static auto* kwActorTypeNPC = RE::TESForm::LookupByID<RE::BGSKeyword>(0x00013794);
-        if (kwActorTypeNPC && !actor->HasKeyword(kwActorTypeNPC)) {
-            logger::debug("[StoryDM] Rejected '{}': not ActorTypeNPC", displayName);
-            return false;
-        }
-
-        // Filter out child NPCs
-        if (auto* race = actor->GetRace()) {
-            if (race->IsChildRace()) {
-                logger::debug("[StoryDM] Rejected '{}': child race", displayName);
-                return false;
-            }
-        }
-
-        // Hard cooldown block — prevents recently-dispatched NPCs from appearing in
-        // the pool entirely, forcing variety. Matches IsEligibleStoryCandidate behavior.
-        if (GetSingleton()->IsOnStoryCooldown(actor->GetFormID(), GetStoryCooldownHours())) {
-            logger::debug("[StoryDM] Rejected '{}': story cooldown", displayName);
-            return false;
-        }
-
-        // Plugin-configured faction blocklist (shared with IsEligibleStoryCandidate)
-        RefreshFactionBlocklist();
-        if (IsInBlockedFaction(actor)) {
-            logger::debug("[StoryDM] Rejected '{}': blocked faction", displayName);
-            return false;
-        }
-
-        // Plugin-configured NPC name blocklist (shared with IsEligibleStoryCandidate)
-        RefreshNPCNameBlocklist();
-        if (IsBlockedByName(actor)) {
-            logger::debug("[StoryDM] Rejected '{}': blocked by name", displayName);
-            return false;
-        }
-
-        // Danger zone candidate filtering (MCM-controlled)
-        {
-            int policy = NPCIndex::GetSingleton()->m_dangerZonePolicy.load(std::memory_order_relaxed);
-            if (policy > 0 && CellAnalyzer::GetSingleton()->IsPlayerInDangerousLocation()) {
-                if (policy == 3) {
-                    logger::debug("[StoryDM] Rejected '{}': danger zone (block all)", displayName);
-                    return false;
-                }
-                if (policy == 2 && !IsPotentialFollower(actor)) {
-                    logger::debug("[StoryDM] Rejected '{}': danger zone (followers only)", displayName);
-                    return false;
-                }
-                if (policy == 1 && ClassifyNPCArchetype(actor) == "CIVILIAN") {
-                    logger::debug("[StoryDM] Rejected '{}': danger zone (civilian)", displayName);
-                    return false;
-                }
-            }
-        }
-
-        // Player home candidate filtering (MCM-controlled)
-        {
-            int policy = NPCIndex::GetSingleton()->m_playerHomePolicy.load(std::memory_order_relaxed);
-            if (policy > 0 && CellAnalyzer::GetSingleton()->IsPlayerInOwnHome()) {
-                if (policy == 3) {
-                    logger::debug("[StoryDM] Rejected '{}': player home (block all)", displayName);
-                    return false;
-                }
-                if (policy == 2 && !IsPotentialFollower(actor)) {
-                    logger::debug("[StoryDM] Rejected '{}': player home (followers only)", displayName);
-                    return false;
-                }
-                if (policy == 1 && ClassifyNPCArchetype(actor) == "CIVILIAN") {
-                    logger::debug("[StoryDM] Rejected '{}': player home (civilian)", displayName);
-                    return false;
-                }
-            }
-        }
-
-        return true;
+        return PassesCommonEligibility(actor, player, tracker, true);
     }
 
     std::string NPCIndex::GetNPCLocationName(RE::Actor* actor) {
@@ -948,27 +1045,57 @@ namespace IntelEngine {
         return "";
     }
 
-    std::string NPCIndex::GetNPCHoldName(RE::Actor* actor) {
-        if (!actor) return "";
-
+    // Shared 3-step location resolution: parentCell → saveParentCell → editorLocation
+    static RE::BGSLocation* ResolveActorLocation(RE::Actor* actor) {
+        if (!actor) return nullptr;
         RE::BGSLocation* loc = nullptr;
-
-        // Loaded: get location from parent cell
         if (auto* cell = actor->GetParentCell()) {
             loc = cell->GetLocation();
         }
-
-        // Unloaded: fall back to editor location
+        if (!loc) {
+            if (auto* saveCell = actor->GetSaveParentCell()) {
+                loc = saveCell->GetLocation();
+            }
+        }
         if (!loc) {
             loc = actor->GetEditorLocation();
         }
+        return loc;
+    }
 
+    std::string NPCIndex::GetNPCHoldName(RE::Actor* actor) {
+        auto* loc = ResolveActorLocation(actor);
         if (!loc) return "";
 
         // Walk to topmost named parent (the hold)
         while (loc->parentLoc) {
             loc = loc->parentLoc;
         }
+        auto name = loc->GetFullName();
+        return (name && name[0]) ? name : "";
+    }
+
+    std::string NPCIndex::GetActorSettlementName(RE::Actor* actor) {
+        auto* loc = ResolveActorLocation(actor);
+        if (!loc) return "";
+
+        // Walk UP the hierarchy looking for LocTypeCity or LocTypeTown keyword.
+        // C++11 guarantees thread-safe initialization of function-local statics (magic statics).
+        static auto* s_cityKW = RE::TESForm::LookupByEditorID<RE::BGSKeyword>("LocTypeCity");
+        static auto* s_townKW = RE::TESForm::LookupByEditorID<RE::BGSKeyword>("LocTypeTown");
+
+        RE::BGSLocation* current = loc;
+        while (current) {
+            if ((s_cityKW && current->HasKeyword(s_cityKW)) ||
+                (s_townKW && current->HasKeyword(s_townKW))) {
+                auto name = current->GetFullName();
+                return (name && name[0]) ? name : "";
+            }
+            current = current->parentLoc;
+        }
+
+        // No city/town keyword found — NPC is in wilderness/unnamed area.
+        // Return the immediate location name as fallback.
         auto name = loc->GetFullName();
         return (name && name[0]) ? name : "";
     }
@@ -1288,6 +1415,47 @@ namespace IntelEngine {
         return false;
     }
 
+    // Check if an NPC passes the hold restriction policy for a given story type.
+    // Returns true if the NPC is allowed to be dispatched for this type.
+    bool NPCIndex::PassesHoldRestriction(RE::Actor* actor, const std::string& playerHold, int policy) {
+        if (policy == 0) return true;  // no restriction
+        if (playerHold.empty()) return true;  // can't determine player hold, allow
+
+        // Policies 4-5: settlement-level restriction (city/town granularity)
+        if (policy >= 4) {
+            auto* player = RE::PlayerCharacter::GetSingleton();
+            std::string playerSettlement = player ? GetActorSettlementName(player) : "";
+            std::string npcSettlement = GetActorSettlementName(actor);
+
+            // Can't determine either → allow (graceful degradation)
+            if (playerSettlement.empty() || npcSettlement.empty()) return true;
+            if (playerSettlement == npcSettlement) return true;  // same settlement → always passes
+
+            // Different settlement
+            if (policy == 6) return false;  // nobody crosses settlements
+            if (policy == 5) return NPCIndex::IsPotentialFollower(actor);  // only followers cross settlements
+            // policy == 4: civilians blocked, warriors can cross within same hold
+            if (NPCIndex::ClassifyNPCArchetype(actor) == "CIVILIAN") return false;
+            // Warriors: allow if same hold, block if different hold
+            std::string npcHold = GetNPCHoldName(actor);
+            if (npcHold.empty()) return true;
+            return npcHold == playerHold;
+        }
+
+        std::string npcHold = NPCIndex::GetNPCHoldName(actor);
+        if (npcHold.empty()) return true;  // can't determine NPC hold, allow
+
+        // Same hold — always passes (policies 1-3)
+        if (npcHold == playerHold) return true;
+
+        // Different hold — check policy
+        // 1 = block civilians only, 2 = block everyone except followers, 3 = block everyone
+        if (policy == 3) return false;
+        if (policy == 2) return NPCIndex::IsPotentialFollower(actor);
+        if (policy == 1) return NPCIndex::ClassifyNPCArchetype(actor) != "CIVILIAN";
+        return true;
+    }
+
     std::string NPCIndex::GetEligibleStoryTypes(RE::Actor* actor,
         const std::string& archetype, bool dangerous, bool interior) {
 
@@ -1307,33 +1475,47 @@ namespace IntelEngine {
             return "message, quest";
         }
 
+        // Get player hold for hold restriction checks
+        std::string playerHold;
+        auto* player = RE::PlayerCharacter::GetSingleton();
+        if (player) playerHold = GetNPCHoldName(player);
+
+        auto* npcIndex = GetSingleton();
+
         std::vector<const char*> types;
 
-        // seek_player: civilians can't enter danger zones
-        if (!(isCivilian && dangerous))
+        // seek_player: civilians can't enter danger zones + hold restriction
+        if (!(isCivilian && dangerous) &&
+            PassesHoldRestriction(actor, playerHold, npcIndex->GetHoldRestrictionPolicy("seek_player")))
             types.push_back("seek_player");
 
-        // informant: never in danger zones (gossip isn't worth risking your life)
-        if (!dangerous)
+        // informant: never in danger zones + hold restriction
+        if (!dangerous &&
+            PassesHoldRestriction(actor, playerHold, npcIndex->GetHoldRestrictionPolicy("informant")))
             types.push_back("informant");
 
-        // road_encounter: exterior only
-        if (!interior)
+        // road_encounter: exterior only + hold restriction
+        if (!interior &&
+            PassesHoldRestriction(actor, playerHold, npcIndex->GetHoldRestrictionPolicy("road_encounter")))
             types.push_back("road_encounter");
 
-        // ambush: combat-capable only
-        if (!isCivilian)
+        // ambush: combat-capable only + hold restriction
+        if (!isCivilian &&
+            PassesHoldRestriction(actor, playerHold, npcIndex->GetHoldRestrictionPolicy("ambush")))
             types.push_back("ambush");
 
-        // stalker: exterior only, not civilian (needs stealth capability)
-        if (!interior && !isCivilian)
+        // stalker: exterior only, not civilian + hold restriction
+        if (!interior && !isCivilian &&
+            PassesHoldRestriction(actor, playerHold, npcIndex->GetHoldRestrictionPolicy("stalker")))
             types.push_back("stalker");
 
-        // message: anyone can send a message (messenger selection is automatic)
-        types.push_back("message");
+        // message: anyone can send a message + hold restriction
+        if (PassesHoldRestriction(actor, playerHold, npcIndex->GetHoldRestrictionPolicy("message")))
+            types.push_back("message");
 
-        // quest: anyone can give a quest (civilians ask for help, warriors offer jobs)
-        types.push_back("quest");
+        // quest: anyone can give a quest + hold restriction
+        if (PassesHoldRestriction(actor, playerHold, npcIndex->GetHoldRestrictionPolicy("quest")))
+            types.push_back("quest");
 
         std::string result;
         for (size_t i = 0; i < types.size(); ++i) {
@@ -1413,6 +1595,17 @@ namespace IntelEngine {
         }
 
         return result;
+    }
+
+    // Helper: convert elapsed days to human-readable time string
+    static std::string FormatElapsedDays(float daysSince) {
+        if (daysSince < 0.042f) return "just now";
+        if (daysSince < 0.5f) return "earlier today";
+        if (daysSince < 1.f) return "yesterday";
+        if (daysSince < 3.f) return std::to_string(static_cast<int>(daysSince)) + " days ago";
+        if (daysSince < 7.f) return "several days ago";
+        if (daysSince < 30.f) return "weeks ago";
+        return "a long time ago";
     }
 
     std::string NPCIndex::BuildDungeonMasterContext(int maxCandidates, float absenceDays) {
@@ -1576,18 +1769,22 @@ namespace IntelEngine {
             return "";
         }
 
+        // Player relationship data — used by both scoring and markdown building
+        auto relationships = memDB->GetPlayerRelationshipData();
+        std::unordered_map<std::string, PlayerRelationship> relMap;       // by name (for scoring)
+        std::unordered_map<RE::FormID, PlayerRelationship> relMapById;    // by formId (for markdown)
+        for (const auto& rel : relationships) {
+            relMap[StringUtils::ToLowerStd(rel.name)] = rel;
+            if (rel.formId > 0) relMapById[rel.formId] = rel;
+        }
+        float currentDBHours = memDB->GetCurrentDBHours();
+        auto* calendar = RE::Calendar::GetSingleton();
+        float currentGameTime = calendar ? calendar->GetCurrentGameTime() : 0.f;
+
         // --- Multi-factor scoring ---
         {
-            // Factor 2: Absence bonus (old friends who haven't been seen in a long time)
-            // relMap keyed by lowercase name — handles stale FormIDs in relationship data
-            auto relationships = memDB->GetPlayerRelationshipData();
-            std::unordered_map<std::string, PlayerRelationship> relMap;
-            for (const auto& rel : relationships) {
-                relMap[StringUtils::ToLowerStd(rel.name)] = rel;
-            }
-
-            // Live game time in seconds (same scale as DB game_time: days * 86400)
-            float currentHours = memDB->GetCurrentDBHours();
+            // relMap, currentDBHours already built above (shared with markdown section)
+            float currentHours = currentDBHours;
             constexpr float ABSENCE_BONUS_WEIGHT = 1.5f;
             constexpr float GEOGRAPHIC_BONUS = 3.0f;
             constexpr float FRIEND_OF_FRIEND_BONUS = 2.0f;
@@ -1760,7 +1957,50 @@ namespace IntelEngine {
         md += "- Danger: ";  md += dangerous ? "DANGEROUS" : "SAFE";  md += "\n";
         md += "- Environment: ";  md += interior ? "Interior" : "Exterior";  md += "\n";
         md += "- Hold: ";    md += holdName;   md += "\n";
-        md += "- Time: ";    md += timeStr;    md += "\n\n";
+        md += "- Time: ";    md += timeStr;    md += "\n";
+
+        bool playerAtInn = FactionPolitics::IsPlayerAtInn();
+        md += "- At Inn: ";  md += playerAtInn ? "yes" : "no";  md += "\n";
+
+        // How long since the last successful STORY dispatch (NPC DM gossip/interaction is separate)
+        if (m_lastStoryDispatchGameTime > 0.f) {
+            float hoursSinceDispatch = (currentGameTime - m_lastStoryDispatchGameTime) * 24.f;
+            std::string typeHint = m_lastStoryDispatchType.empty() ? "" : " (type: " + m_lastStoryDispatchType + ")";
+            if (hoursSinceDispatch < 5.f) {
+                md += "- Last story dispatched: ";
+                md += std::to_string(static_cast<int>(hoursSinceDispatch));
+                md += " game hours ago" + typeHint + " — recent, avoid dispatching the EXACT same type/subtype. Different subtypes (e.g., quest/rescue vs quest/faction_battle) are fine.\n";
+            } else if (hoursSinceDispatch < 24.f) {
+                md += "- Last story dispatched: ";
+                md += std::to_string(static_cast<int>(hoursSinceDispatch));
+                md += " game hours ago" + typeHint + "\n";
+            } else {
+                float daysSince = hoursSinceDispatch / 24.f;
+                md += "- Last story dispatched: ";
+                md += std::to_string(static_cast<int>(daysSince));
+                md += " game days ago — the world has been quiet, consider dispatching\n";
+            }
+        } else {
+            md += "- Last story dispatched: never this session — the world is silent, consider dispatching\n";
+        }
+        md += "\n";
+
+        // Recent gossip — populated by Papyrus before each DM tick via SetRecentGossipContext
+        {
+            std::unique_lock lock(m_mutex);
+            if (!m_recentGossipContext.empty()) {
+                md += "## Recent Gossip\n";
+                md += m_recentGossipContext;
+                md += "\n\n";
+            }
+        }
+
+        // Political climate (so Story DM can dispatch politically-motivated stories)
+        auto politicalSummary = FactionPolitics::GetSingleton()->BuildPoliticalSummary();
+        if (!politicalSummary.empty()) {
+            md += politicalSummary;
+            md += "\n";
+        }
 
         // --- Candidate pool (ascending score: most important candidates last for LLM attention) ---
         std::reverse(pool.begin(), pool.end());
@@ -1785,14 +2025,106 @@ namespace IntelEngine {
             snprintf(uuid, sizeof(uuid), "0x%08X", actor->GetFormID());
 
             std::string bio = GetNPCBioLine(actor);
-            std::string eligibleTypes = GetEligibleStoryTypes(actor, archetype, dangerous, interior);
+            std::string npcHold = GetNPCHoldName(actor);
+            if (npcHold.empty()) npcHold = "Unknown";
+
+            // Distance from player (approximate — loaded actors only)
+            float distFromPlayer = 0.f;
+            std::string distStr;
+            if (actor->Is3DLoaded()) {
+                float dx = actor->GetPositionX() - player->GetPositionX();
+                float dy = actor->GetPositionY() - player->GetPositionY();
+                distFromPlayer = std::sqrt(dx * dx + dy * dy);
+                if (distFromPlayer < 500.f) distStr = "very close (same area)";
+                else if (distFromPlayer < 2000.f) distStr = "nearby";
+                else if (distFromPlayer < 5000.f) distStr = "moderate distance";
+                else distStr = "far away";
+            } else {
+                distStr = (npcHold == holdName) ? "same hold (not loaded)" : "different hold (far)";
+            }
+
+            // FormID for MemoryDB queries (used by both "last met" and familiarity checks)
+            RE::FormID queryFormId = pool[i].dbFormId;
+
+            // Last interaction with player — try every data source until one works.
+            // 1. relMap by FormID  2. relMap by name  3. MemoryDB events  4. familiarity fallback
+            std::string lastInteractionStr = "never met";
+            bool foundInteractionTime = false;
+
+            // Try relationship data (has exact timestamps)
+            for (int attempt = 0; attempt < 2 && !foundInteractionTime; attempt++) {
+                const PlayerRelationship* relData = nullptr;
+                if (attempt == 0) {
+                    auto it = relMapById.find(queryFormId);
+                    if (it != relMapById.end() && it->second.interactionCount > 0) relData = &it->second;
+                } else {
+                    auto it = relMap.find(StringUtils::ToLowerStd(name));
+                    if (it != relMap.end() && it->second.interactionCount > 0) relData = &it->second;
+                }
+                if (relData) {
+                    float dbTimeSince = currentDBHours - relData->lastInteractionHours;
+                    float daysSince = dbTimeSince / 86400.0f;
+                    lastInteractionStr = FormatElapsedDays(daysSince);
+                    lastInteractionStr += " (" + std::to_string(relData->interactionCount) + " interactions)";
+                    foundInteractionTime = true;
+                }
+            }
+
+            // Fallback: query MemoryDB for the most recent event timestamp directly.
+            if (!foundInteractionTime && SkyrimNetAPI::GetRecentEvents) {
+                try {
+                    auto evtJson = SkyrimNetAPI::GetRecentEvents(
+                        queryFormId, 1, "direct_narration,custom_action,dialogue,dialogue_background,persistent_generic");
+                    auto arr = nlohmann::json::parse(evtJson);
+                    if (arr.is_array() && !arr.empty()) {
+                        double evtTime = arr[0].value("gameTime", 0.0);
+                        if (evtTime > 0.0) {
+                            float dbTimeSince = currentDBHours - static_cast<float>(evtTime);
+                            float daysSince = dbTimeSince / 86400.0f;
+                            lastInteractionStr = FormatElapsedDays(daysSince);
+                            foundInteractionTime = true;
+                        }
+                    }
+                } catch (...) {}
+            }
+
+            // Player familiarity — 3 tiers from MemoryDB (queryFormId already set above)
+            std::string familiarityStr = "stranger (never interacted)";
+            {
+                auto dialogue = memDB->GetRecentDialogueForActor(queryFormId, 1);
+                if (!dialogue.empty()) {
+                    familiarityStr = "acquainted (has spoken directly)";
+                } else {
+                    auto memories = memDB->GetFormattedMemories(queryFormId, 1);
+                    if (!memories.empty()) {
+                        familiarityStr = "acquainted (shared history)";
+                    } else {
+                        auto related = memDB->GetRelatedCandidateFormIDs(queryFormId, 15);
+                        for (const auto& rel : related) {
+                            if (rel.formId == 0x14) {
+                                familiarityStr = "aware (seen nearby, never spoken)";
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
 
             md += "### ";  md += std::to_string(i + 1);  md += ". ";  md += name;
             md += " [";    md += archetype;  md += ", ";  md += gender;  md += "] - ";  md += loc;
             md += " (";    md += uuid;       md += ")\n";
-            md += "Eligible: ";  md += eligibleTypes;  md += "\n";
+            md += "Hold: ";  md += npcHold;  md += "\n";
+            md += "Distance: ";  md += distStr;  md += "\n";
+            md += "Knows player: ";  md += familiarityStr;  md += "\n";
+            md += "Last met player: ";  md += lastInteractionStr;  md += "\n";
             if (!bio.empty()) {
                 md += "Bio: ";  md += bio;  md += "\n";
+            }
+
+            // Political faction affiliation (single lock scope — avoids TOCTOU)
+            auto npcFaction = FactionPolitics::GetSingleton()->GetNPCFaction(actor);
+            if (npcFaction) {
+                md += "Faction: ";  md += npcFaction->name;  md += "\n";
             }
 
             // Bio relationships — canonical connections from character prompt file
@@ -1802,9 +2134,7 @@ namespace IntelEngine {
                 md += "Relationships:\n";  md += bioRels;  md += "\n";
             }
 
-            // Use dbFormId for MemoryDB queries — the DB's FormID is in the UUID cache.
-            // actor->GetFormID() may differ if resolved via name (stale FormID workaround).
-            RE::FormID queryFormId = pool[i].dbFormId;
+            // queryFormId already set above (dbFormId for MemoryDB queries)
             auto memories = memDB->GetFormattedMemories(queryFormId, memPerCandidate);
             if (!memories.empty()) {
                 md += "Memories:\n";  md += memories;  md += "\n";
@@ -2014,6 +2344,13 @@ namespace IntelEngine {
         md += " at ";        md += playerLoc;  md += "\n";
         md += "- Time: ";    md += timeStr;    md += "\n\n";
 
+        // Political climate (so NPC DM can reference faction events in gossip)
+        auto politicalSummary = FactionPolitics::GetSingleton()->BuildPoliticalSummary();
+        if (!politicalSummary.empty()) {
+            md += politicalSummary;
+            md += "\n";
+        }
+
         md += "## NPC Groups by Location\n";
 
         for (const auto& group : groups) {
@@ -2068,6 +2405,93 @@ namespace IntelEngine {
     void NPCIndex::NotifyStoryTypePicked(const std::string& storyType) {
         std::unique_lock lock(m_mutex);
         m_storyTypeCounts[storyType]++;
+        auto* cal = RE::Calendar::GetSingleton();
+        float now = cal ? cal->GetCurrentGameTime() : 0.f;
+        // NPC DM types tracked separately so Story DM doesn't see them as "last dispatch"
+        if (storyType == "npc_interaction" || storyType == "npc_gossip") {
+            m_lastNPCDispatchGameTime = now;
+        } else {
+            m_lastStoryDispatchType = storyType;
+            m_lastStoryDispatchGameTime = now;
+        }
+    }
+
+    void NPCIndex::SetRecentGossipContext(const std::string& gossipLines) {
+        // Inject hold names into gossip lines by resolving NPC names to holds.
+        // Single actor scan builds name→hold map, then applies to all lines.
+        if (gossipLines.empty()) {
+            std::unique_lock lock(m_mutex);
+            m_recentGossipContext = "";
+            return;
+        }
+
+        // Collect all NPC names from gossip lines first
+        std::set<std::string> npcNamesLower;
+        {
+            std::istringstream scan(gossipLines);
+            std::string line;
+            while (std::getline(scan, line)) {
+                if (line.find("[") != std::string::npos) continue;  // already tagged
+                auto dashPos = line.find("- ");
+                if (dashPos == std::string::npos) continue;
+                auto toldPos = line.find(" told ", dashPos + 2);
+                if (toldPos != std::string::npos) {
+                    npcNamesLower.insert(StringUtils::ToLowerStd(
+                        line.substr(dashPos + 2, toldPos - dashPos - 2)));
+                }
+            }
+        }
+
+        // Single actor scan: build name→hold map
+        std::unordered_map<std::string, std::string> nameToHold;
+        if (!npcNamesLower.empty()) {
+            ProcessUtils::ForEachLoadedActor([&](RE::Actor* actor) -> bool {
+                if (!actor) return false;
+                auto* dispName = actor->GetDisplayFullName();
+                if (!dispName) return false;
+                std::string nameLower = StringUtils::ToLowerStd(dispName);
+                if (npcNamesLower.count(nameLower)) {
+                    nameToHold[nameLower] = GetNPCHoldName(actor);
+                    // Stop early if all names resolved
+                    if (nameToHold.size() == npcNamesLower.size()) return true;
+                }
+                return false;
+            });
+        }
+
+        // Apply hold names to gossip lines
+        std::string result;
+        result.reserve(gossipLines.size() + 200);
+        std::istringstream stream(gossipLines);
+        std::string line;
+        while (std::getline(stream, line)) {
+            if (line.empty()) continue;
+            if (line.find("[") != std::string::npos && line.find("]") != std::string::npos) {
+                result += line + "\n";
+                continue;
+            }
+            std::string holdName;
+            auto dashPos = line.find("- ");
+            if (dashPos != std::string::npos) {
+                auto toldPos = line.find(" told ", dashPos + 2);
+                if (toldPos != std::string::npos) {
+                    std::string nameLower = StringUtils::ToLowerStd(
+                        line.substr(dashPos + 2, toldPos - dashPos - 2));
+                    auto it = nameToHold.find(nameLower);
+                    if (it != nameToHold.end() && !it->second.empty()) {
+                        holdName = it->second;
+                    }
+                }
+            }
+            if (!holdName.empty()) {
+                result += "- [" + holdName + "] " + line.substr(2) + "\n";
+            } else {
+                result += line + "\n";
+            }
+        }
+
+        std::unique_lock lock(m_mutex);
+        m_recentGossipContext = result;
     }
 
     std::string NPCIndex::GetStoryTypeCountsMarkdown(const std::unordered_set<std::string>& relevantTypes) const {

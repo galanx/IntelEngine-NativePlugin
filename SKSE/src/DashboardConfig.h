@@ -7,7 +7,7 @@
  * Single source of truth: config/plugins/IntelEngine/settings.yaml
  *
  * Supports modifier keys via bitmask: 1=Ctrl, 2=Shift, 4=Alt.
- * Default: Ctrl+Shift+I (key=73, modifiers=3)
+ * Default: Shift+7 (key=55, modifiers=2)
  */
 
 #include "Plugin.h"
@@ -56,8 +56,8 @@ namespace IntelEngine {
                         const std::string& key, int defaultVal);
         bool WriteYamlInt(const std::string& section, const std::string& key, int value);
 
-        std::atomic<int> dashboardHotkey_{118};    // VK_F7 default
-        std::atomic<int> dashboardModifiers_{kModShift};  // Shift+F7 default
+        std::atomic<int> dashboardHotkey_{55};     // VK_7 default (Shift+7)
+        std::atomic<int> dashboardModifiers_{kModShift};  // Shift modifier
         std::mutex writeMutex_;
     };
 
