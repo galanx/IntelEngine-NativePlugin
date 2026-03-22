@@ -634,8 +634,17 @@ namespace IntelEngine {
                     pendingParams_["response"] = response.dump();
                 }
 
+                // Pass ALL params as JSON in strArg — pendingParams_ is racy
+                // (Papyrus processes ModEvent async, another JS callback could clear params first)
+                nlohmann::json eventPayload;
+                {
+                    std::lock_guard<std::mutex> lock(pendingParamsMutex_);
+                    for (auto& [k, v] : pendingParams_) {
+                        eventPayload[k] = v;
+                    }
+                }
                 DashboardUIManager::GetSingleton()->SendModEvent(
-                    "IntelEngine_DashboardDispatchStory", type, 0.0f);
+                    "IntelEngine_DashboardDispatchStory", eventPayload.dump(), 0.0f);
                 logger::info("[Dashboard] Director: dispatch story type={} npc={}", type, npcName);
             } catch (...) {}
         });
@@ -684,8 +693,16 @@ namespace IntelEngine {
                     pendingParams_["response"] = response.dump();
                 }
 
+                // Pass ALL params as JSON in strArg (same race fix as story dispatch)
+                nlohmann::json eventPayload;
+                {
+                    std::lock_guard<std::mutex> lock(pendingParamsMutex_);
+                    for (auto& [k, v] : pendingParams_) {
+                        eventPayload[k] = v;
+                    }
+                }
                 DashboardUIManager::GetSingleton()->SendModEvent(
-                    "IntelEngine_DashboardDispatchNpcSocial", type, 0.0f);
+                    "IntelEngine_DashboardDispatchNpcSocial", eventPayload.dump(), 0.0f);
                 logger::info("[Dashboard] Director: NPC social type={} npc1={} npc2={}", type, npc1, npc2);
             } catch (...) {}
         });
@@ -718,8 +735,16 @@ namespace IntelEngine {
                     }
                 }
 
+                // Pass ALL params as JSON in strArg (same race fix)
+                nlohmann::json eventPayload;
+                {
+                    std::lock_guard<std::mutex> lock(pendingParamsMutex_);
+                    for (auto& [k, v] : pendingParams_) {
+                        eventPayload[k] = v;
+                    }
+                }
                 DashboardUIManager::GetSingleton()->SendModEvent(
-                    "IntelEngine_DashboardExecuteAction", actionName, static_cast<float>(formId));
+                    "IntelEngine_DashboardExecuteAction", eventPayload.dump(), static_cast<float>(formId));
                 logger::info("[Dashboard] Director: execute action={} npc=0x{:X}", actionName, formId);
             } catch (...) {}
         });
