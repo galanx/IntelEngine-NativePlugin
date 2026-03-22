@@ -25,6 +25,7 @@ namespace IntelEngine {
 
         std::unique_lock lock(m_mutex);
         auto& s = m_slots[slot];
+
         s.agent = agent;
         s.state = state;
         s.taskType = taskType;
@@ -39,6 +40,7 @@ namespace IntelEngine {
 
         std::unique_lock lock(m_mutex);
         auto& s = m_slots[slot];
+
         s.agent = nullptr;
         s.state = 0;
         s.taskType.clear();
