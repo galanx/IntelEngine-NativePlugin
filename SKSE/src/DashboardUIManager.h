@@ -82,6 +82,7 @@ namespace IntelEngine {
         static void OnRemovePackagesStatic(const char* jsonArg);
         static void OnChangePluginConfigStatic(const char* jsonArg);
         static void OnDispatchStoryStatic(const char* jsonArg);
+        static void OnDispatchNpcSocialStatic(const char* jsonArg);
         static void OnExecuteActionStatic(const char* jsonArg);
         static void OnToggleActionStatic(const char* jsonArg);
 

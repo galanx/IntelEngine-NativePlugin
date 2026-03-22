@@ -533,6 +533,7 @@ namespace IntelEngine {
         prismaUI_->RegisterJSListener(dashboardView_, "onDashboard_removePackages", OnRemovePackagesStatic);
         prismaUI_->RegisterJSListener(dashboardView_, "onDashboard_changePluginConfig", OnChangePluginConfigStatic);
         prismaUI_->RegisterJSListener(dashboardView_, "onDashboard_dispatchStory", OnDispatchStoryStatic);
+        prismaUI_->RegisterJSListener(dashboardView_, "onDashboard_dispatchNpcSocial", OnDispatchNpcSocialStatic);
         prismaUI_->RegisterJSListener(dashboardView_, "onDashboard_executeAction", OnExecuteActionStatic);
         prismaUI_->RegisterJSListener(dashboardView_, "onDashboard_toggleAction", OnToggleActionStatic);
 
@@ -636,6 +637,56 @@ namespace IntelEngine {
                 DashboardUIManager::GetSingleton()->SendModEvent(
                     "IntelEngine_DashboardDispatchStory", type, 0.0f);
                 logger::info("[Dashboard] Director: dispatch story type={} npc={}", type, npcName);
+            } catch (...) {}
+        });
+    }
+
+    // =========================================================================
+    // Director: NPC Social Dispatch (JS -> C++ -> pending params -> ModEvent -> Papyrus)
+    // =========================================================================
+
+    void DashboardUIManager::OnDispatchNpcSocialStatic(const char* jsonArg) {
+        auto* task = SKSE::GetTaskInterface();
+        if (!task) return;
+        std::string arg(jsonArg ? jsonArg : "{}");
+        task->AddTask([arg]() {
+            try {
+                auto j = nlohmann::json::parse(arg);
+                std::string npc1 = j.value("npc1Name", "");
+                std::string npc2 = j.value("npc2Name", "");
+                std::string type = j.value("socialType", "");
+                std::string narration = j.value("narration", "");
+                if (npc1.empty() || npc2.empty() || type.empty() || narration.empty()) return;
+
+                {
+                    std::lock_guard<std::mutex> lock(pendingParamsMutex_);
+                    pendingParams_.clear();
+                    pendingParams_["socialType"] = type;
+                    pendingParams_["narration"] = narration;
+                    pendingParams_["npc1Name"] = npc1;
+                    pendingParams_["npc2Name"] = npc2;
+
+                    // Build response JSON matching what the NPC DM would return
+                    nlohmann::json response;
+                    response["should_act"] = true;
+                    response["type"] = type;
+                    response["npc"] = npc1;
+                    response["npc2"] = npc2;
+                    response["narration"] = narration;
+                    // Type-specific fields
+                    for (const char* f : {"fact1", "fact2", "gossip"}) {
+                        response[f] = "";
+                    }
+                    for (auto& [key, val] : j.items()) {
+                        if (key == "npc1Name" || key == "npc2Name" || key == "socialType" || key == "narration") continue;
+                        if (val.is_string()) response[key] = val.get<std::string>();
+                    }
+                    pendingParams_["response"] = response.dump();
+                }
+
+                DashboardUIManager::GetSingleton()->SendModEvent(
+                    "IntelEngine_DashboardDispatchNpcSocial", type, 0.0f);
+                logger::info("[Dashboard] Director: NPC social type={} npc1={} npc2={}", type, npc1, npc2);
             } catch (...) {}
         });
     }

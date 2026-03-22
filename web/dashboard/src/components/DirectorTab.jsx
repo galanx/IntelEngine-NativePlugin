@@ -10,6 +10,11 @@ const DIRECTOR_STORY_TYPES = [
   { key: 'quest', label: 'Quest' },
 ];
 
+const SOCIAL_TYPES = [
+  { key: 'npc_interaction', label: 'Interaction' },
+  { key: 'npc_gossip', label: 'Gossip' },
+];
+
 const MEET_TIMES = ['dawn', 'morning', 'afternoon', 'evening', 'sunset', 'night', 'midnight'];
 const ENEMY_TYPES = ['bandit', 'draugr', 'dragon'];
 const QUEST_SUB_TYPES = ['combat', 'rescue', 'find_item'];
@@ -186,12 +191,35 @@ const ACTION_FIELDS = {
   ],
 };
 
+const SOCIAL_TYPE_FIELDS = {
+  npc_interaction: [
+    { key: 'fact1', label: 'NPC 1 memory', type: 'text', required: true,
+      placeholder: 'e.g. confronted Sven about stolen goods',
+      hint: 'Required. What NPC 1 remembers. Past-tense verb phrase, no subject prefix.' },
+    { key: 'fact2', label: 'NPC 2 memory', type: 'text', required: true,
+      placeholder: 'e.g. was accused by Mikael of stealing goods',
+      hint: 'Required. What NPC 2 remembers. Past-tense verb phrase, no subject prefix.' },
+  ],
+  npc_gossip: [
+    { key: 'gossip', label: 'Gossip', type: 'text', required: true,
+      placeholder: 'e.g. was overheard arguing with the steward about missing tribute',
+      hint: 'Required. What was said. Past-tense verb phrase, no subject prefix.' },
+  ],
+};
+
 function DirectorTab({ loadedNpcs, actions, sendAction }) {
   // Story dispatch state
   const [storyNpc, setStoryNpc] = useState('');
   const [storyType, setStoryType] = useState('seek_player');
   const [storyNarration, setStoryNarration] = useState('');
   const [storyFields, setStoryFields] = useState({});
+
+  // NPC Social dispatch state
+  const [socialNpc1, setSocialNpc1] = useState('');
+  const [socialNpc2, setSocialNpc2] = useState('');
+  const [socialType, setSocialType] = useState('npc_interaction');
+  const [socialNarration, setSocialNarration] = useState('');
+  const [socialFields, setSocialFields] = useState({});
 
   // Action execution state
   const [actionNpc, setActionNpc] = useState('');
@@ -246,6 +274,26 @@ function DirectorTab({ loadedNpcs, actions, sendAction }) {
     setStoryNarration('');
     setStoryFields({});
   }, [storyNpc, storyType, storyNarration, storyFields, sendAction]);
+
+  const currentSocialFields = SOCIAL_TYPE_FIELDS[socialType] || [];
+
+  const handleSocialTypeChange = useCallback((type) => {
+    setSocialType(type);
+    setSocialFields({});
+  }, []);
+
+  const handleDispatchSocial = useCallback(() => {
+    if (!socialNpc1.trim() || !socialNpc2.trim() || !socialNarration.trim()) return;
+    sendAction('dispatchNpcSocial', {
+      npc1Name: socialNpc1.trim(),
+      npc2Name: socialNpc2.trim(),
+      socialType,
+      narration: socialNarration.trim(),
+      ...socialFields,
+    });
+    setSocialNarration('');
+    setSocialFields({});
+  }, [socialNpc1, socialNpc2, socialType, socialNarration, socialFields, sendAction]);
 
   const handleExecuteAction = useCallback(() => {
     if (!actionNpc || !selectedAction) return;
@@ -337,6 +385,74 @@ function DirectorTab({ loadedNpcs, actions, sendAction }) {
             className="w-full px-3 py-1.5 text-xs font-medium rounded transition-colors bg-blue-500/20 text-blue-400 hover:bg-blue-500/30 disabled:opacity-30 disabled:cursor-not-allowed"
           >
             Dispatch Story
+          </button>
+        </div>
+      </section>
+
+      {/* NPC Social Dispatch */}
+      <section>
+        <h2 className="section-header mb-2">NPC Social</h2>
+        <div className="space-y-2">
+          <div className="flex gap-2">
+            <input
+              type="text"
+              value={socialNpc1}
+              onChange={e => setSocialNpc1(e.target.value)}
+              placeholder="NPC 1 (e.g. Mikael)"
+              className="flex-1 bg-white/5 border border-white/10 rounded px-2 py-1.5 text-xs text-gray-200 outline-none placeholder:text-gray-600"
+            />
+            <input
+              type="text"
+              value={socialNpc2}
+              onChange={e => setSocialNpc2(e.target.value)}
+              placeholder="NPC 2 (e.g. Sven)"
+              className="flex-1 bg-white/5 border border-white/10 rounded px-2 py-1.5 text-xs text-gray-200 outline-none placeholder:text-gray-600"
+            />
+          </div>
+          <div className="flex gap-2">
+            <select
+              value={socialType}
+              onChange={e => handleSocialTypeChange(e.target.value)}
+              className="w-[130px] bg-white/5 border border-white/10 rounded px-2 py-1.5 text-xs text-gray-200 outline-none"
+            >
+              {SOCIAL_TYPES.map(t => (
+                <option key={t.key} value={t.key}>{t.label}</option>
+              ))}
+            </select>
+            <textarea
+              value={socialNarration}
+              onChange={e => setSocialNarration(e.target.value)}
+              placeholder="Narration (e.g. confronted him about the stolen shipment)"
+              rows={1}
+              className="flex-1 bg-white/5 border border-white/10 rounded px-2 py-1.5 text-xs text-gray-200 outline-none resize-none placeholder:text-gray-600"
+            />
+          </div>
+
+          {currentSocialFields.map(f => (
+            <div key={f.key} className="flex flex-col gap-0.5">
+              <label className="text-[10px] text-gray-500">
+                {f.label}
+                {f.required && <span className="text-red-400 ml-0.5">*</span>}
+              </label>
+              <input
+                type="text"
+                value={socialFields[f.key] || ''}
+                onChange={e => setSocialFields(prev => ({ ...prev, [f.key]: e.target.value }))}
+                placeholder={f.placeholder}
+                className="bg-white/5 border border-white/10 rounded px-2 py-1.5 text-xs text-gray-200 outline-none placeholder:text-gray-600"
+              />
+              {f.hint && (
+                <span className="text-[9px] text-gray-600 leading-tight">{f.hint}</span>
+              )}
+            </div>
+          ))}
+
+          <button
+            onClick={handleDispatchSocial}
+            disabled={!socialNpc1.trim() || !socialNpc2.trim() || !socialNarration.trim()}
+            className="w-full px-3 py-1.5 text-xs font-medium rounded transition-colors bg-purple-500/20 text-purple-400 hover:bg-purple-500/30 disabled:opacity-30 disabled:cursor-not-allowed"
+          >
+            Dispatch Social
           </button>
         </div>
       </section>
