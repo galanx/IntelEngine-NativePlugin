@@ -13,6 +13,7 @@
 #include <mutex>
 #include "BattleManager.h"
 #include "DashboardConfig.h"
+#include "MemoryDB.h"
 #include "NPCIndex.h"
 #include "SkyrimNetAPI.h"
 
@@ -22,6 +23,7 @@
 #include <sstream>
 #include <chrono>
 #include <random>
+#include <unordered_set>
 
 namespace IntelEngine {
 
@@ -663,7 +665,8 @@ default_relations:
 
         state["current_game_time"] = currentGameTime;
 
-        // Nearby faction leaders — tells the DM which leaders the player can see
+        // Faction leaders — all leaders get bio/relationships, those the player
+        // interacted with also get memories/dialogue/events
         {
             auto* player = RE::PlayerCharacter::GetSingleton();
             auto* npcIndex = NPCIndex::GetSingleton();
@@ -680,17 +683,16 @@ default_relations:
                     }
                 }
 
-                // Resolve actors and check proximity outside the lock
-                // Only scan when player is in an exterior worldspace — GetWorldspace() returns
-                // nullptr for interiors, causing false matches between different interior cells
-                nlohmann::json nearbyJson = nlohmann::json::array();
-                auto* playerWorld = player->GetWorldspace();
+                auto* memDB = MemoryDB::GetSingleton();
+                nlohmann::json leadersJson = nlohmann::json::array();
 
+                // Check which leaders are physically nearby (exterior, within range)
+                std::unordered_set<std::string> nearbyLeaders;
+                auto* playerWorld = player->GetWorldspace();
                 if (playerWorld) {
                     for (const auto& info : leaderSnapshot) {
                         auto* leader = npcIndex->FindByName(info.name);
                         if (!leader || !leader->Is3DLoaded()) continue;
-
                         if (leader->GetWorldspace() != playerWorld) continue;
 
                         float dx = leader->GetPositionX() - player->GetPositionX();
@@ -698,17 +700,47 @@ default_relations:
                         float dz = leader->GetPositionZ() - player->GetPositionZ();
                         float dist = std::sqrt(dx * dx + dy * dy + dz * dz);
                         if (dist < NEARBY_LEADER_DISTANCE) {
-                            nlohmann::json leaderEntry;
-                            leaderEntry["name"] = info.name;
-                            leaderEntry["faction"] = info.factionId;
-                            leaderEntry["hold"] = info.hold;
-                            nearbyJson.push_back(leaderEntry);
+                            nearbyLeaders.insert(info.name);
                         }
                     }
                 }
 
-                if (!nearbyJson.empty()) {
-                    state["player_nearby_leaders"] = nearbyJson;
+                // Build context for ALL leaders
+                for (const auto& info : leaderSnapshot) {
+                    nlohmann::json leaderEntry;
+                    leaderEntry["name"] = info.name;
+                    leaderEntry["faction"] = info.factionId;
+                    leaderEntry["hold"] = info.hold;
+                    leaderEntry["nearby"] = nearbyLeaders.count(info.name) > 0;
+
+                    // Try to resolve actor for MemoryDB enrichment
+                    auto* leader = npcIndex->FindByName(info.name);
+                    if (leader && memDB) {
+                        RE::FormID leaderId = leader->GetFormID();
+
+                        // Bio + relationships always included (cached, cheap)
+                        auto bio = memDB->GetNPCBioSummary(leaderId);
+                        if (!bio.empty()) leaderEntry["bio"] = bio;
+
+                        auto relationships = memDB->GetNPCBioRelationships(leaderId);
+                        if (!relationships.empty()) leaderEntry["relationships"] = relationships;
+
+                        // Memories, dialogue, events — included when available
+                        auto memories = memDB->GetFormattedMemories(leaderId, 3);
+                        if (!memories.empty()) leaderEntry["memories"] = memories;
+
+                        auto dialogue = memDB->GetRecentDialogueForActor(leaderId, 3);
+                        if (!dialogue.empty()) leaderEntry["recent_dialogue"] = dialogue;
+
+                        auto events = memDB->GetRecentEventsForActor(leaderId, 3);
+                        if (!events.empty()) leaderEntry["recent_events"] = events;
+                    }
+
+                    leadersJson.push_back(leaderEntry);
+                }
+
+                if (!leadersJson.empty()) {
+                    state["faction_leaders"] = leadersJson;
                     std::string playerHold = NPCIndex::GetNPCHoldName(player);
                     if (!playerHold.empty()) {
                         state["player_hold"] = playerHold;
