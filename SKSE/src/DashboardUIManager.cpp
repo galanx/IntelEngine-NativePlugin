@@ -534,6 +534,7 @@ namespace IntelEngine {
         prismaUI_->RegisterJSListener(dashboardView_, "onDashboard_changePluginConfig", OnChangePluginConfigStatic);
         prismaUI_->RegisterJSListener(dashboardView_, "onDashboard_dispatchStory", OnDispatchStoryStatic);
         prismaUI_->RegisterJSListener(dashboardView_, "onDashboard_dispatchNpcSocial", OnDispatchNpcSocialStatic);
+        prismaUI_->RegisterJSListener(dashboardView_, "onDashboard_dispatchPolitics", OnDispatchPoliticsStatic);
         prismaUI_->RegisterJSListener(dashboardView_, "onDashboard_executeAction", OnExecuteActionStatic);
         prismaUI_->RegisterJSListener(dashboardView_, "onDashboard_toggleAction", OnToggleActionStatic);
 
@@ -607,46 +608,36 @@ namespace IntelEngine {
                 std::string narration = j.value("narration", "");
                 if (npcName.empty() || type.empty() || narration.empty()) return;
 
-                // Store core fields + build response JSON for StoryEngine handlers
-                {
-                    std::lock_guard<std::mutex> lock(pendingParamsMutex_);
-                    pendingParams_.clear();
-                    pendingParams_["storyType"] = type;
-                    pendingParams_["narration"] = narration;
-                    pendingParams_["npcName"] = npcName;
-
-                    // Build response JSON with nlohmann::json (proper escaping)
-                    // Single source of truth — Papyrus extracts fields via ExtractJsonField()
-                    // All fields default to "" so ExtractJsonField never hits the warn path
-                    nlohmann::json response;
-                    for (const char* f : {"sender","subject","gossip","destination",
-                                          "msgContent","meetTime","questLocation",
-                                          "enemyType","questSubType","victimName",
-                                          "itemName","itemDesc"}) {
-                        response[f] = "";
+                // Build response JSON with proper escaping (all optional fields default to "")
+                nlohmann::json response;
+                for (const char* f : {"sender","subject","gossip","destination",
+                                      "msgContent","meetTime","questLocation",
+                                      "enemyType","questSubType","victimName",
+                                      "itemName","itemDesc"}) {
+                    response[f] = "";
+                }
+                for (auto& [key, val] : j.items()) {
+                    if (key == "npcName" || key == "storyType" || key == "narration") continue;
+                    if (val.is_string()) {
+                        response[key] = val.get<std::string>();
                     }
-                    for (auto& [key, val] : j.items()) {
-                        if (key == "npcName" || key == "storyType" || key == "narration") continue;
-                        if (val.is_string()) {
-                            response[key] = val.get<std::string>();
-                        }
-                    }
-                    pendingParams_["response"] = response.dump();
                 }
 
-                // Pass ALL params as JSON in strArg — pendingParams_ is racy
-                // (Papyrus processes ModEvent async, another JS callback could clear params first)
+                // Build event payload directly from locals — no shared state needed
                 nlohmann::json eventPayload;
-                {
-                    std::lock_guard<std::mutex> lock(pendingParamsMutex_);
-                    for (auto& [k, v] : pendingParams_) {
-                        eventPayload[k] = v;
-                    }
-                }
+                eventPayload["storyType"] = type;
+                eventPayload["narration"] = narration;
+                eventPayload["npcName"] = npcName;
+                eventPayload["response"] = response.dump();
+
                 DashboardUIManager::GetSingleton()->SendModEvent(
                     "IntelEngine_DashboardDispatchStory", eventPayload.dump(), 0.0f);
                 logger::info("[Dashboard] Director: dispatch story type={} npc={}", type, npcName);
-            } catch (...) {}
+            } catch (const std::exception& e) {
+                logger::error("[Dashboard] Director story dispatch failed: {}", e.what());
+            } catch (...) {
+                logger::error("[Dashboard] Director story dispatch failed: unknown error");
+            }
         });
     }
 
@@ -667,44 +658,77 @@ namespace IntelEngine {
                 std::string narration = j.value("narration", "");
                 if (npc1.empty() || npc2.empty() || type.empty() || narration.empty()) return;
 
-                {
-                    std::lock_guard<std::mutex> lock(pendingParamsMutex_);
-                    pendingParams_.clear();
-                    pendingParams_["socialType"] = type;
-                    pendingParams_["narration"] = narration;
-                    pendingParams_["npc1Name"] = npc1;
-                    pendingParams_["npc2Name"] = npc2;
-
-                    // Build response JSON matching what the NPC DM would return
-                    nlohmann::json response;
-                    response["should_act"] = true;
-                    response["type"] = type;
-                    response["npc"] = npc1;
-                    response["npc2"] = npc2;
-                    response["narration"] = narration;
-                    // Type-specific fields
-                    for (const char* f : {"fact1", "fact2", "gossip"}) {
-                        response[f] = "";
-                    }
-                    for (auto& [key, val] : j.items()) {
-                        if (key == "npc1Name" || key == "npc2Name" || key == "socialType" || key == "narration") continue;
-                        if (val.is_string()) response[key] = val.get<std::string>();
-                    }
-                    pendingParams_["response"] = response.dump();
+                // Build response JSON matching what the NPC DM would return
+                nlohmann::json response;
+                response["should_act"] = true;
+                response["type"] = type;
+                response["npc"] = npc1;
+                response["npc2"] = npc2;
+                response["narration"] = narration;
+                for (const char* f : {"fact1", "fact2", "gossip"}) {
+                    response[f] = "";
+                }
+                for (auto& [key, val] : j.items()) {
+                    if (key == "npc1Name" || key == "npc2Name" || key == "socialType" || key == "narration") continue;
+                    if (val.is_string()) response[key] = val.get<std::string>();
                 }
 
-                // Pass ALL params as JSON in strArg (same race fix as story dispatch)
+                // Build event payload directly from locals — no shared state needed
                 nlohmann::json eventPayload;
-                {
-                    std::lock_guard<std::mutex> lock(pendingParamsMutex_);
-                    for (auto& [k, v] : pendingParams_) {
-                        eventPayload[k] = v;
-                    }
-                }
+                eventPayload["socialType"] = type;
+                eventPayload["narration"] = narration;
+                eventPayload["npc1Name"] = npc1;
+                eventPayload["npc2Name"] = npc2;
+                eventPayload["response"] = response.dump();
+
                 DashboardUIManager::GetSingleton()->SendModEvent(
                     "IntelEngine_DashboardDispatchNpcSocial", eventPayload.dump(), 0.0f);
                 logger::info("[Dashboard] Director: NPC social type={} npc1={} npc2={}", type, npc1, npc2);
-            } catch (...) {}
+            } catch (const std::exception& e) {
+                logger::error("[Dashboard] Director NPC social dispatch failed: {}", e.what());
+            } catch (...) {
+                logger::error("[Dashboard] Director NPC social dispatch failed: unknown error");
+            }
+        });
+    }
+
+    // =========================================================================
+    // Director: Political Event Dispatch (JS -> C++ -> ModEvent -> Papyrus)
+    // =========================================================================
+
+    void DashboardUIManager::OnDispatchPoliticsStatic(const char* jsonArg) {
+        auto* task = SKSE::GetTaskInterface();
+        if (!task) return;
+        std::string arg(jsonArg ? jsonArg : "{}");
+        task->AddTask([arg]() {
+            try {
+                auto j = nlohmann::json::parse(arg);
+                std::string factionA = j.value("factionA", "");
+                std::string factionB = j.value("factionB", "");
+                std::string eventType = j.value("eventType", "");
+                std::string description = j.value("description", "");
+                int delta = j.value("relationDelta", 0);
+                if (factionA.empty() || factionB.empty() || eventType.empty() || description.empty() || delta == 0) return;
+
+                // Build a fake Political DM response matching the expected JSON format
+                nlohmann::json response;
+                response["should_act"] = true;
+                response["faction_a"] = factionA;
+                response["faction_b"] = factionB;
+                response["event_type"] = eventType;
+                response["description"] = description;
+                response["relation_delta"] = delta;
+
+                // Pass the full response JSON as strArg — Papyrus feeds it to ProcessPoliticalDMResponse
+                DashboardUIManager::GetSingleton()->SendModEvent(
+                    "IntelEngine_DashboardDispatchPolitics", response.dump(), 0.0f);
+                logger::info("[Dashboard] Director: politics event={} factionA={} factionB={} delta={}",
+                    eventType, factionA, factionB, delta);
+            } catch (const std::exception& e) {
+                logger::error("[Dashboard] Director politics dispatch failed: {}", e.what());
+            } catch (...) {
+                logger::error("[Dashboard] Director politics dispatch failed: unknown error");
+            }
         });
     }
 
