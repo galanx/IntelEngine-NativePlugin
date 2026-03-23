@@ -185,6 +185,7 @@ namespace IntelEngine::Papyrus {
     void RemovePlayerCrimeFactions(RE::StaticFunctionTag*);
     void RestorePlayerCrimeFactions(RE::StaticFunctionTag*);
     RE::BSFixedString GetPlayerBattleSide(RE::StaticFunctionTag*);
+    RE::BSFixedString GetFactionBattleSide(RE::StaticFunctionTag*, RE::BSFixedString);
     bool HasPlayerParticipatedInBattle(RE::StaticFunctionTag*);
     bool IsBattleFaction(RE::StaticFunctionTag*, RE::BSFixedString);
 
@@ -492,6 +493,7 @@ namespace IntelEngine::Papyrus {
         a_vm->RegisterFunction("RestorePlayerCrimeFactions", SCRIPT_NAME, RestorePlayerCrimeFactions); ++count;
         // Phase 4: used by intel_join_battle, intel_accept_recruitment, and intel_broker_peace actions
         a_vm->RegisterFunction("GetPlayerBattleSide", SCRIPT_NAME, GetPlayerBattleSide); ++count;
+        a_vm->RegisterFunction("GetFactionBattleSide", SCRIPT_NAME, GetFactionBattleSide); ++count;
         a_vm->RegisterFunction("HasPlayerParticipatedInBattle", SCRIPT_NAME, HasPlayerParticipatedInBattle); ++count;
         a_vm->RegisterFunction("IsBattleFaction", SCRIPT_NAME, IsBattleFaction); ++count;
 
@@ -4532,6 +4534,10 @@ namespace IntelEngine::Papyrus {
 
     RE::BSFixedString GetPlayerBattleSide(RE::StaticFunctionTag*) {
         return BattleManager::GetSingleton()->GetPlayerSide();
+    }
+
+    RE::BSFixedString GetFactionBattleSide(RE::StaticFunctionTag*, RE::BSFixedString factionId) {
+        return BattleManager::GetSingleton()->GetFactionSide(factionId.c_str());
     }
 
     bool HasPlayerParticipatedInBattle(RE::StaticFunctionTag*) {
