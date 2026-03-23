@@ -15,6 +15,25 @@ const SOCIAL_TYPES = [
   { key: 'npc_gossip', label: 'Gossip' },
 ];
 
+const POLITICAL_EVENT_TYPES = [
+  { key: 'trade_deal', label: 'Trade Deal', delta: 8 },
+  { key: 'diplomatic_gift', label: 'Diplomatic Gift', delta: 10 },
+  { key: 'alliance_proposal', label: 'Alliance Proposal', delta: 12 },
+  { key: 'peace_offer', label: 'Peace Offer', delta: 8 },
+  { key: 'insult', label: 'Insult', delta: -5 },
+  { key: 'trade_dispute', label: 'Trade Dispute', delta: -4 },
+  { key: 'embargo', label: 'Embargo', delta: -10 },
+  { key: 'espionage', label: 'Espionage', delta: -8 },
+  { key: 'territory_dispute', label: 'Territory Dispute', delta: -8 },
+  { key: 'betrayal', label: 'Betrayal', delta: -12 },
+  { key: 'border_skirmish', label: 'Border Skirmish', delta: -10 },
+  { key: 'assassination_attempt', label: 'Assassination', delta: -12 },
+  { key: 'sabotage', label: 'Sabotage', delta: -10 },
+  { key: 'brawl', label: 'Brawl', delta: -6 },
+  { key: 'war_declaration', label: 'War Declaration', delta: -15 },
+  { key: 'surrender', label: 'Surrender', delta: 8 },
+];
+
 const MEET_TIMES = ['dawn', 'morning', 'afternoon', 'evening', 'sunset', 'night', 'midnight'];
 const ENEMY_TYPES = ['bandit', 'draugr', 'dragon'];
 const QUEST_SUB_TYPES = ['combat', 'rescue', 'find_item'];
@@ -221,6 +240,13 @@ function DirectorTab({ loadedNpcs, actions, sendAction }) {
   const [socialNarration, setSocialNarration] = useState('');
   const [socialFields, setSocialFields] = useState({});
 
+  // Political dispatch state
+  const [polFactionA, setPolFactionA] = useState('');
+  const [polFactionB, setPolFactionB] = useState('');
+  const [polEventType, setPolEventType] = useState('trade_deal');
+  const [polDescription, setPolDescription] = useState('');
+  const [polDelta, setPolDelta] = useState(8);
+
   // Action execution state
   const [actionNpc, setActionNpc] = useState('');
   const [selectedAction, setSelectedAction] = useState('');
@@ -294,6 +320,24 @@ function DirectorTab({ loadedNpcs, actions, sendAction }) {
     setSocialNarration('');
     setSocialFields({});
   }, [socialNpc1, socialNpc2, socialType, socialNarration, socialFields, sendAction]);
+
+  const handlePolEventTypeChange = useCallback((type) => {
+    setPolEventType(type);
+    const evt = POLITICAL_EVENT_TYPES.find(e => e.key === type);
+    if (evt) setPolDelta(evt.delta);
+  }, []);
+
+  const handleDispatchPolitics = useCallback(() => {
+    if (!polFactionA.trim() || !polFactionB.trim() || !polDescription.trim()) return;
+    sendAction('dispatchPolitics', {
+      factionA: polFactionA.trim(),
+      factionB: polFactionB.trim(),
+      eventType: polEventType,
+      description: polDescription.trim(),
+      relationDelta: polDelta,
+    });
+    setPolDescription('');
+  }, [polFactionA, polFactionB, polEventType, polDescription, polDelta, sendAction]);
 
   const handleExecuteAction = useCallback(() => {
     if (!actionNpc || !selectedAction) return;
@@ -453,6 +497,65 @@ function DirectorTab({ loadedNpcs, actions, sendAction }) {
             className="w-full px-3 py-1.5 text-xs font-medium rounded transition-colors bg-purple-500/20 text-purple-400 hover:bg-purple-500/30 disabled:opacity-30 disabled:cursor-not-allowed"
           >
             Dispatch Social
+          </button>
+        </div>
+      </section>
+
+      {/* Political Dispatch */}
+      <section>
+        <h2 className="section-header mb-2">Political Event</h2>
+        <div className="space-y-2">
+          <div className="flex gap-2">
+            <input
+              type="text"
+              value={polFactionA}
+              onChange={e => setPolFactionA(e.target.value)}
+              placeholder="Faction A (e.g. StormcloakFaction)"
+              className="flex-1 bg-white/5 border border-white/10 rounded px-2 py-1.5 text-xs text-gray-200 outline-none placeholder:text-gray-600"
+            />
+            <input
+              type="text"
+              value={polFactionB}
+              onChange={e => setPolFactionB(e.target.value)}
+              placeholder="Faction B (e.g. ThalmorFaction)"
+              className="flex-1 bg-white/5 border border-white/10 rounded px-2 py-1.5 text-xs text-gray-200 outline-none placeholder:text-gray-600"
+            />
+          </div>
+          <div className="flex gap-2">
+            <select
+              value={polEventType}
+              onChange={e => handlePolEventTypeChange(e.target.value)}
+              className="flex-1 bg-white/5 border border-white/10 rounded px-2 py-1.5 text-xs text-gray-200 outline-none"
+            >
+              {POLITICAL_EVENT_TYPES.map(t => (
+                <option key={t.key} value={t.key}>{t.label}</option>
+              ))}
+            </select>
+            <div className="flex items-center gap-1">
+              <label className="text-[10px] text-gray-500">Δ</label>
+              <input
+                type="number"
+                value={polDelta}
+                onChange={e => setPolDelta(Number(e.target.value))}
+                className="w-14 bg-white/5 border border-white/10 rounded px-2 py-1.5 text-xs text-gray-200 outline-none text-center"
+                min={-15}
+                max={15}
+              />
+            </div>
+          </div>
+          <textarea
+            value={polDescription}
+            onChange={e => setPolDescription(e.target.value)}
+            placeholder="Event description (e.g. Imperial spies intercepted Stormcloak dispatches near Windhelm)"
+            rows={2}
+            className="w-full bg-white/5 border border-white/10 rounded px-2 py-1.5 text-xs text-gray-200 outline-none resize-none placeholder:text-gray-600"
+          />
+          <button
+            onClick={handleDispatchPolitics}
+            disabled={!polFactionA.trim() || !polFactionB.trim() || !polDescription.trim()}
+            className="w-full px-3 py-1.5 text-xs font-medium rounded transition-colors bg-amber-500/20 text-amber-400 hover:bg-amber-500/30 disabled:opacity-30 disabled:cursor-not-allowed"
+          >
+            Dispatch Political Event
           </button>
         </div>
       </section>

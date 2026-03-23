@@ -17,23 +17,27 @@
 
 #include <string>
 #include <functional>
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include <windows.h>
+// windows.h defines macros that conflict with CommonLibSSE
+#ifdef GetObject
+#undef GetObject
+#endif
+#ifdef SendMessage
+#undef SendMessage
+#endif
 
 namespace RE { class Actor; }
 
 namespace IntelEngine::SkyrimNetAPI {
 
-    // Callback types
-    using DecoratorCallback = std::function<std::string(RE::Actor*)>;
-    using EligibilityCallback = std::function<bool(RE::Actor*)>;
-
     // ---- Core ----
     inline int (*GetVersion)() = nullptr;
-
-    // ---- Decorator/Tag Registration (v3+) ----
-    inline int (*DecoratorRegister)(const std::string& id, DecoratorCallback callback) = nullptr;
-    inline int (*TagRegister)(const std::string& name, EligibilityCallback callback) = nullptr;
-    inline bool (*DecoratorExists)(const std::string& id) = nullptr;
 
     // ---- Bio Template (v3+) ----
 
@@ -107,15 +111,7 @@ namespace IntelEngine::SkyrimNetAPI {
             return false;
         }
 
-        // v3+ function pointers — Decorator/Tag registration
-        DecoratorRegister = reinterpret_cast<int(*)(const std::string&, DecoratorCallback)>(
-            GetProcAddress(hDLL, "PublicDecoratorRegister"));
-
-        TagRegister = reinterpret_cast<int(*)(const std::string&, EligibilityCallback)>(
-            GetProcAddress(hDLL, "PublicTagRegister"));
-
-        DecoratorExists = reinterpret_cast<bool(*)(const std::string&)>(
-            GetProcAddress(hDLL, "PublicDecoratorExists"));
+        // v4+ function pointers — Decorator registration
 
         // v3+ function pointers — Bio Template
         GetBioTemplateName = reinterpret_cast<std::string(*)(uint32_t)>(
@@ -156,8 +152,6 @@ namespace IntelEngine::SkyrimNetAPI {
         GetPluginConfigValue = reinterpret_cast<std::string(*)(const char*, const char*, const char*)>(
             GetProcAddress(hDLL, "PublicGetPluginConfigValue"));
 
-        logger::info("SkyrimNet API initialized: DecoratorRegister={}, TagRegister={}, DecoratorExists={}",
-                     DecoratorRegister != nullptr, TagRegister != nullptr, DecoratorExists != nullptr);
         logger::info("SkyrimNet Data API: Memories={}, Events={}, Dialogue={}, LatestDialogue={}, Ready={}, "
                      "ActorEngagement={}, RelatedActors={}, PlayerContext={}, EventPairs={}",
                      GetMemoriesForActor != nullptr, GetRecentEvents != nullptr,
