@@ -141,6 +141,7 @@ namespace IntelEngine {
 
         std::string summary;
         std::string relationships;
+        std::string fullContext;
         if (!filePath.empty()) {
             std::ifstream file(filePath);
             if (file.is_open()) {
@@ -150,39 +151,46 @@ namespace IntelEngine {
 
                 const std::string endTag = "{% endblock %}";
 
-                // Extract {% block summary %}...{% endblock %}
-                {
-                    const std::string startTag = "{% block summary %}";
+                // Helper: extract a named block's content, trimmed
+                auto extractBlock = [&](const std::string& blockName) -> std::string {
+                    std::string startTag = "{% block " + blockName + " %}";
                     auto startPos = content.find(startTag);
-                    if (startPos != std::string::npos) {
-                        startPos += startTag.size();
-                        auto endPos = content.find(endTag, startPos);
-                        if (endPos != std::string::npos) {
-                            summary = content.substr(startPos, endPos - startPos);
-                            while (!summary.empty() && (summary.front() == ' ' || summary.front() == '\n' || summary.front() == '\r'))
-                                summary.erase(summary.begin());
-                            while (!summary.empty() && (summary.back() == ' ' || summary.back() == '\n' || summary.back() == '\r'))
-                                summary.pop_back();
-                        }
-                    }
-                }
+                    if (startPos == std::string::npos) return "";
+                    startPos += startTag.size();
+                    auto endPos = content.find(endTag, startPos);
+                    if (endPos == std::string::npos) return "";
+                    std::string text = content.substr(startPos, endPos - startPos);
+                    while (!text.empty() && (text.front() == ' ' || text.front() == '\n' || text.front() == '\r'))
+                        text.erase(text.begin());
+                    while (!text.empty() && (text.back() == ' ' || text.back() == '\n' || text.back() == '\r'))
+                        text.pop_back();
+                    return text;
+                };
 
-                // Extract {% block relationships %}...{% endblock %}
-                {
-                    const std::string startTag = "{% block relationships %}";
-                    auto startPos = content.find(startTag);
-                    if (startPos != std::string::npos) {
-                        startPos += startTag.size();
-                        auto endPos = content.find(endTag, startPos);
-                        if (endPos != std::string::npos) {
-                            relationships = content.substr(startPos, endPos - startPos);
-                            while (!relationships.empty() && (relationships.front() == ' ' || relationships.front() == '\n' || relationships.front() == '\r'))
-                                relationships.erase(relationships.begin());
-                            while (!relationships.empty() && (relationships.back() == ' ' || relationships.back() == '\n' || relationships.back() == '\r'))
-                                relationships.pop_back();
-                        }
+                summary = extractBlock("summary");
+                relationships = extractBlock("relationships");
+
+                // Build full context: summary + personality + relationships only.
+                // Keeps token cost manageable for the NPC DM picker prompt.
+                struct BlockDef { const char* name; const char* label; };
+                static constexpr BlockDef blocks[] = {
+                    {"personality",   "Personality"},
+                    {"occupation",    "Occupation"},
+                    {"relationships", "Relationships"},
+                };
+
+                for (const auto& [bname, blabel] : blocks) {
+                    std::string blockText = extractBlock(bname);
+                    if (!blockText.empty()) {
+                        fullContext += blabel;
+                        fullContext += ": ";
+                        fullContext += blockText;
+                        fullContext += "\n";
                     }
                 }
+                // Trim trailing newline
+                while (!fullContext.empty() && (fullContext.back() == '\n' || fullContext.back() == '\r'))
+                    fullContext.pop_back();
             }
         }
 
@@ -198,6 +206,7 @@ namespace IntelEngine {
             std::lock_guard lock(m_mutex);
             m_bioSummaryCache[formId] = summary;
             m_bioRelationshipsCache[formId] = relationships;
+            m_bioFullContextCache[formId] = fullContext;
         }
 
         return summary;
@@ -218,6 +227,27 @@ namespace IntelEngine {
             std::lock_guard lock(m_mutex);
             auto cacheIt = m_bioRelationshipsCache.find(formId);
             if (cacheIt != m_bioRelationshipsCache.end()) {
+                return cacheIt->second;
+            }
+        }
+        return "";
+    }
+
+    std::string MemoryDB::GetNPCFullContext(RE::FormID formId) {
+        // Check cache first — populated as side effect of GetNPCBioSummary
+        {
+            std::lock_guard lock(m_mutex);
+            auto cacheIt = m_bioFullContextCache.find(formId);
+            if (cacheIt != m_bioFullContextCache.end()) {
+                return cacheIt->second;
+            }
+        }
+        // Cache miss — trigger bio file load (populates all caches)
+        GetNPCBioSummary(formId);
+        {
+            std::lock_guard lock(m_mutex);
+            auto cacheIt = m_bioFullContextCache.find(formId);
+            if (cacheIt != m_bioFullContextCache.end()) {
                 return cacheIt->second;
             }
         }

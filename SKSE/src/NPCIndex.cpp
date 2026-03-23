@@ -2378,9 +2378,20 @@ namespace IntelEngine {
                     md += " {";  md += bio;  md += "}";
                 }
 
+                // Full character context (all blocks except appearance)
+                auto fullCtx = memDB->GetNPCFullContext(actor->GetFormID());
+                if (!fullCtx.empty()) {
+                    md += "\n  ";
+                    // Indent each line for readability under the NPC bullet
+                    for (char c : fullCtx) {
+                        md += c;
+                        if (c == '\n') md += "  ";
+                    }
+                }
+
                 auto memories = memDB->GetFormattedMemories(actor->GetFormID(), 2);
                 if (!memories.empty()) {
-                    md += ": ";  md += memories;
+                    md += "\n  Memories: ";  md += memories;
                 }
                 md += "\n";
             }

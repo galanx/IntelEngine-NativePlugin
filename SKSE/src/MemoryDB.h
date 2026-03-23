@@ -208,6 +208,11 @@ namespace IntelEngine {
         // Populated as a side effect of GetNPCBioSummary (same file read).
         std::string GetNPCBioRelationships(RE::FormID formId);
 
+        // Get the full character context (all blocks except appearance) for an NPC.
+        // Populated as a side effect of GetNPCBioSummary (same file read).
+        // Returns labeled sections: Personality, Background, Relationships, etc.
+        std::string GetNPCFullContext(RE::FormID formId);
+
     private:
         MemoryDB() = default;
         ~MemoryDB() = default;
@@ -243,6 +248,9 @@ namespace IntelEngine {
 
         // Bio relationships cache: FormID -> extracted {% block relationships %} content
         std::unordered_map<RE::FormID, std::string> m_bioRelationshipsCache;
+
+        // Full context cache: FormID -> all blocks except appearance, labeled
+        std::unordered_map<RE::FormID, std::string> m_bioFullContextCache;
 
         // Cached current DB time (refreshed on GetCurrentDBHours)
         float m_cachedCurrentTime = 0.0f;
