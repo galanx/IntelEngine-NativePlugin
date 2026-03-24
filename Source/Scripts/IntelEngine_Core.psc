@@ -189,6 +189,10 @@ Function Maintenance(Bool isFirstLoad = false)
         isFirstLoad = true when mod is first installed (OnInit on alias)
         isFirstLoad = false on subsequent loads (OnPlayerLoadGame on alias)
     }
+    ; ModEvent registrations must run EVERY load — never guarded by duplicate check.
+    ; Papyrus ModEvent listeners don't persist across save/load.
+    RegisterDashboardEvents()
+
     Float now = Utility.GetCurrentRealTime()
     If !isFirstLoad && (now - LastMaintenanceRealTime) < 2.0 && LastMaintenanceRealTime > 0.0
         DebugMsg("IntelEngine Maintenance skipped (duplicate call within 2s)")
@@ -1860,6 +1864,7 @@ Function RegisterDashboardEvents()
     RegisterForModEvent("IntelEngine_DashboardRemovePackages", "OnDashboardRemovePackages")
     RegisterForModEvent("IntelEngine_DashboardDispatchStory", "OnDashboardDispatchStory")
     RegisterForModEvent("IntelEngine_DashboardDispatchNpcSocial", "OnDashboardDispatchNpcSocial")
+    RegisterForModEvent("IntelEngine_DashboardDispatchPolitics", "OnDashboardDispatchPolitics")
     RegisterForModEvent("IntelEngine_DashboardExecuteAction", "OnDashboardExecuteAction")
     DebugMsg("Dashboard ModEvent listeners registered")
 EndFunction
@@ -2099,16 +2104,11 @@ EndEvent
 ; DIRECTOR MODE: Story Dispatch
 ; =============================================================================
 Event OnDashboardDispatchStory(String eventName, String strArg, Float numArg, Form sender)
-    ; strArg = storyType
-    ; All fields stored in C++ pending params (type-specific fields included)
-    String storyType = strArg
-    String npcName = IntelEngine.GetPendingDirectorParam("npcName")
-    String narration = IntelEngine.GetPendingDirectorParam("narration")
-
-    ; Response JSON built in C++ with proper escaping (nlohmann::json)
-    ; All type-specific fields extracted from response via ExtractJsonField (single source of truth)
-    String response = IntelEngine.GetPendingDirectorParam("response")
-    IntelEngine.ClearPendingDirectorParams()
+    ; strArg = full JSON payload (race-safe: no shared state between C++ and Papyrus)
+    String storyType = IntelEngine.StoryResponseGetField(strArg, "storyType")
+    String npcName = IntelEngine.StoryResponseGetField(strArg, "npcName")
+    String narration = IntelEngine.StoryResponseGetField(strArg, "narration")
+    String response = IntelEngine.StoryResponseGetField(strArg, "response")
 
     Actor npc = IntelEngine.ResolveStoryCandidate(npcName)
     If !npc || npc.IsDead()
@@ -2182,12 +2182,12 @@ EndEvent
 ; =============================================================================
 Event OnDashboardDispatchNpcSocial(String eventName, String strArg, Float numArg, Form sender)
     ; strArg = socialType (npc_interaction or npc_gossip)
-    String socialType = strArg
-    String npc1Name = IntelEngine.GetPendingDirectorParam("npc1Name")
-    String npc2Name = IntelEngine.GetPendingDirectorParam("npc2Name")
-    String narration = IntelEngine.GetPendingDirectorParam("narration")
-    String response = IntelEngine.GetPendingDirectorParam("response")
-    IntelEngine.ClearPendingDirectorParams()
+    ; strArg = full JSON payload (race-safe: no shared state between C++ and Papyrus)
+    String socialType = IntelEngine.StoryResponseGetField(strArg, "socialType")
+    String npc1Name = IntelEngine.StoryResponseGetField(strArg, "npc1Name")
+    String npc2Name = IntelEngine.StoryResponseGetField(strArg, "npc2Name")
+    String narration = IntelEngine.StoryResponseGetField(strArg, "narration")
+    String response = IntelEngine.StoryResponseGetField(strArg, "response")
 
     Actor npc1 = IntelEngine.FindNPCByName(npc1Name)
     Actor npc2 = IntelEngine.FindNPCByName(npc2Name)
@@ -2236,16 +2236,33 @@ Event OnDashboardDispatchNpcSocial(String eventName, String strArg, Float numArg
 EndEvent
 
 ; =============================================================================
+; DIRECTOR MODE: Political Event Dispatch
+; =============================================================================
+Event OnDashboardDispatchPolitics(String eventName, String strArg, Float numArg, Form sender)
+    ; strArg = fake Political DM response JSON (built by C++ from UI fields)
+    ; Feed it directly to ProcessPoliticalDMResponse — same path as a real DM response
+    DebugMsg("Director: Political event received — eventName=" + eventName + " strArg length=" + StringUtil.GetLength(strArg))
+    If Politics
+        DebugMsg("Director: Forwarding to Politics.OnPoliticalDMResponse")
+        ; Director bypasses manifestation cooldown — player is manually triggering events
+        IntelEngine.ResetManifestationCooldown()
+        Politics.OnPoliticalDMResponse(strArg, 1)
+        DebugMsg("Director: Politics.OnPoliticalDMResponse returned")
+    Else
+        DebugMsg("Director: Politics script not available (property is None)")
+    EndIf
+    PushDashboardState()
+EndEvent
+
+; =============================================================================
 ; DIRECTOR MODE: Action Execution
 ; =============================================================================
 Event OnDashboardExecuteAction(String eventName, String strArg, Float numArg, Form sender)
-    ; strArg = actionName, numArg = npcFormId
-    ; Action params stored in C++ pending params
-    String actionName = strArg
+    ; strArg = full JSON payload (race-safe), numArg = npcFormId
+    String actionName = IntelEngine.StoryResponseGetField(strArg, "actionName")
     Actor npc = Game.GetForm(numArg as Int) as Actor
 
     If !npc || npc.IsDead()
-        IntelEngine.ClearPendingDirectorParams()
         DebugMsg("Director: Invalid or dead NPC for action execution")
         Return
     EndIf
@@ -2253,33 +2270,29 @@ Event OnDashboardExecuteAction(String eventName, String strArg, Float numArg, Fo
     DebugMsg("Director: Executing " + actionName + " on " + npc.GetDisplayName())
 
     If actionName == "GoToLocation"
-        String destination = IntelEngine.GetPendingDirectorParam("destination")
-        Int speed = IntelEngine.GetPendingDirectorParam("speed") as Int
-        Int waitFP = IntelEngine.GetPendingDirectorParam("waitForPlayer") as Int
-        IntelEngine.ClearPendingDirectorParams()
+        String destination = IntelEngine.StoryResponseGetField(strArg, "destination")
+        Int speed = IntelEngine.StoryResponseGetField(strArg, "speed") as Int
+        Int waitFP = IntelEngine.StoryResponseGetField(strArg, "waitForPlayer") as Int
         Travel.GoToLocation(npc, destination, speed, waitFP, false)
 
     ElseIf actionName == "FetchPerson"
-        String targetName = IntelEngine.GetPendingDirectorParam("targetName")
-        String failReason = IntelEngine.GetPendingDirectorParam("failReason")
-        IntelEngine.ClearPendingDirectorParams()
+        String targetName = IntelEngine.StoryResponseGetField(strArg, "targetName")
+        String failReason = IntelEngine.StoryResponseGetField(strArg, "failReason")
         If failReason == ""
             failReason = "none"
         EndIf
         NPCTasks.FetchNPC(npc, targetName, failReason)
 
     ElseIf actionName == "SearchForActor"
-        String targetName = IntelEngine.GetPendingDirectorParam("targetName")
-        Int speed = IntelEngine.GetPendingDirectorParam("speed") as Int
-        IntelEngine.ClearPendingDirectorParams()
+        String targetName = IntelEngine.StoryResponseGetField(strArg, "targetName")
+        Int speed = IntelEngine.StoryResponseGetField(strArg, "speed") as Int
         NPCTasks.SearchForActor(npc, targetName, speed)
 
     ElseIf actionName == "DeliverMessage"
-        String targetName = IntelEngine.GetPendingDirectorParam("targetName")
-        String msgContent = IntelEngine.GetPendingDirectorParam("msgContent")
-        String meetLoc = IntelEngine.GetPendingDirectorParam("meetLocation")
-        String meetTime = IntelEngine.GetPendingDirectorParam("meetTime")
-        IntelEngine.ClearPendingDirectorParams()
+        String targetName = IntelEngine.StoryResponseGetField(strArg, "targetName")
+        String msgContent = IntelEngine.StoryResponseGetField(strArg, "msgContent")
+        String meetLoc = IntelEngine.StoryResponseGetField(strArg, "meetLocation")
+        String meetTime = IntelEngine.StoryResponseGetField(strArg, "meetTime")
         If meetLoc == ""
             meetLoc = "none"
         EndIf
@@ -2289,43 +2302,37 @@ Event OnDashboardExecuteAction(String eventName, String strArg, Float numArg, Fo
         NPCTasks.DeliverMessage(npc, targetName, msgContent, meetLoc, meetTime)
 
     ElseIf actionName == "EscortTarget"
-        String targetName = IntelEngine.GetPendingDirectorParam("targetName")
-        String destination = IntelEngine.GetPendingDirectorParam("destination")
-        Int shouldWait = IntelEngine.GetPendingDirectorParam("shouldWait") as Int
-        IntelEngine.ClearPendingDirectorParams()
+        String targetName = IntelEngine.StoryResponseGetField(strArg, "targetName")
+        String destination = IntelEngine.StoryResponseGetField(strArg, "destination")
+        Int shouldWait = IntelEngine.StoryResponseGetField(strArg, "shouldWait") as Int
         If destination == ""
             destination = "home"
         EndIf
         NPCTasks.EscortTarget(npc, targetName, destination, shouldWait)
 
     ElseIf actionName == "CancelCurrentTask"
-        IntelEngine.ClearPendingDirectorParams()
         CancelCurrentTask(npc)
 
     ElseIf actionName == "ChangeSpeed"
-        Int newSpeed = IntelEngine.GetPendingDirectorParam("newSpeed") as Int
-        IntelEngine.ClearPendingDirectorParams()
+        Int newSpeed = IntelEngine.StoryResponseGetField(strArg, "newSpeed") as Int
         ChangeTaskSpeed(npc, newSpeed)
 
     ElseIf actionName == "ScheduleMeeting"
-        String destination = IntelEngine.GetPendingDirectorParam("destination")
-        String timeCond = IntelEngine.GetPendingDirectorParam("timeCondition")
-        IntelEngine.ClearPendingDirectorParams()
+        String destination = IntelEngine.StoryResponseGetField(strArg, "destination")
+        String timeCond = IntelEngine.StoryResponseGetField(strArg, "timeCondition")
         Schedule.ScheduleMeeting(npc, destination, timeCond)
 
     ElseIf actionName == "ScheduleFetch"
-        String targetName = IntelEngine.GetPendingDirectorParam("targetName")
-        String timeCond = IntelEngine.GetPendingDirectorParam("timeCondition")
-        IntelEngine.ClearPendingDirectorParams()
+        String targetName = IntelEngine.StoryResponseGetField(strArg, "targetName")
+        String timeCond = IntelEngine.StoryResponseGetField(strArg, "timeCondition")
         Schedule.ScheduleFetch(npc, targetName, timeCond)
 
     ElseIf actionName == "ScheduleDelivery"
-        String targetName = IntelEngine.GetPendingDirectorParam("targetName")
-        String msgContent = IntelEngine.GetPendingDirectorParam("msgContent")
-        String timeCond = IntelEngine.GetPendingDirectorParam("timeCondition")
-        String meetLoc = IntelEngine.GetPendingDirectorParam("meetLocation")
-        String meetTime = IntelEngine.GetPendingDirectorParam("meetTime")
-        IntelEngine.ClearPendingDirectorParams()
+        String targetName = IntelEngine.StoryResponseGetField(strArg, "targetName")
+        String msgContent = IntelEngine.StoryResponseGetField(strArg, "msgContent")
+        String timeCond = IntelEngine.StoryResponseGetField(strArg, "timeCondition")
+        String meetLoc = IntelEngine.StoryResponseGetField(strArg, "meetLocation")
+        String meetTime = IntelEngine.StoryResponseGetField(strArg, "meetTime")
         If meetLoc == ""
             meetLoc = "none"
         EndIf
@@ -2335,7 +2342,6 @@ Event OnDashboardExecuteAction(String eventName, String strArg, Float numArg, Fo
         Schedule.ScheduleDelivery(npc, targetName, msgContent, timeCond, meetLoc, meetTime)
 
     Else
-        IntelEngine.ClearPendingDirectorParams()
         DebugMsg("Director: Unknown action " + actionName)
     EndIf
 

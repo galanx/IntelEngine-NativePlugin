@@ -231,6 +231,11 @@ namespace IntelEngine {
                                            RE::Actor* player, float playerAngleZ,
                                            RE::TESObjectREFR* spawnAnchor);
 
+        /** Get the ESP side ("A" or "B") assigned to a political faction ID.
+         *  Uses the sideAFaction normalization: sideAFaction → "A", everything else → "B".
+         *  Returns "A" if no battle is active or sideAFaction is unset (safe default). */
+        std::string GetFactionSide(const std::string& factionId) const;
+
         /** Get FormIDs of soldiers on a given side ("A" or "B").
          *  Returns JSON: {"formIds": [...], "count": N, "alive": M} */
         std::string GetBattleSoldierFormIds(const std::string& side) const;
@@ -301,6 +306,11 @@ namespace IntelEngine {
             std::unordered_set<std::string> moraleThresholdsNarrated; // "factionId_threshold" keys
 
             std::vector<BattleActor> actors;
+
+            // ESP faction mapping — which faction got Intel_BattleSideA.
+            // Normalized so player's allied faction is always SideA when player joins.
+            // Reinforcements and wave spawns must use this mapping, not factionA/B directly.
+            std::string sideAFaction;  // faction ID assigned to Intel_BattleSideA
 
             // Player participation
             std::string playerSide;          // empty = spectator, factionId = participating

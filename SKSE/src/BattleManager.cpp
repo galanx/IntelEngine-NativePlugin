@@ -457,6 +457,12 @@ namespace IntelEngine {
         return activeBattle_->playerSide;
     }
 
+    std::string BattleManager::GetFactionSide(const std::string& factionId) const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (!activeBattle_ || activeBattle_->sideAFaction.empty()) return "A";
+        return (factionId == activeBattle_->sideAFaction) ? "A" : "B";
+    }
+
     bool BattleManager::HasPlayerParticipated() const {
         std::lock_guard<std::mutex> lock(mutex_);
         if (!activeBattle_) return false;
@@ -1401,42 +1407,69 @@ namespace IntelEngine {
         }
 
         // --- Step 5: Add soldiers to ESP battle factions ---
+        // Normalize: player's allied faction ALWAYS gets Intel_BattleSideA, enemy gets SideB.
+        // This prevents the side-swap bug where the DM lists factions in arbitrary order
+        // (e.g., "Thalmor vs Stormcloaks" one tick, "Stormcloaks vs Thalmor" the next),
+        // causing the player to end up on different ESP factions between consecutive battles.
         auto [battleFactionA, battleFactionB] = ResolveBattleFactions();
 
         if (battleFactionA && battleFactionB) {
-            for (auto* a : soldiersA) {
+            // Determine which soldiers are allies vs enemies (for faction assignment)
+            bool allyIsA = !playerJoined || (joinFaction == factionA);
+            auto& allySoldiers = allyIsA ? soldiersA : soldiersB;
+            auto& enemySoldiers = allyIsA ? soldiersB : soldiersA;
+            const auto& allyFactionId = allyIsA ? factionA : factionB;
+            const auto& enemyFactionId = allyIsA ? factionB : factionA;
+
+            // Defensive: clear player from BOTH battle factions before adding to new side.
+            // Papyrus RemoveFromFaction may not have propagated if the player was teleported
+            // between battles (e.g., arrest → jail → new cell). Without this, the player
+            // can end up in both SideA and SideB simultaneously — these factions are enemies,
+            // so every NPC attacks the player.
+            if (player) {
+                player->AddToFaction(battleFactionA, -1);
+                player->AddToFaction(battleFactionB, -1);
+            }
+
+            // Allies always SideA, enemies always SideB
+            for (auto* a : allySoldiers) {
                 if (a) a->AddToFaction(battleFactionA, 0);
             }
-            for (auto* b : soldiersB) {
+            for (auto* b : enemySoldiers) {
                 if (b) b->AddToFaction(battleFactionB, 0);
             }
 
             if (playerJoined && player) {
-                RE::TESFaction* playerFaction = (joinFaction == factionA) ? battleFactionA : battleFactionB;
-                player->AddToFaction(playerFaction, 0);
+                // Player always on SideA (allied side)
+                player->AddToFaction(battleFactionA, 0);
 
                 // Do NOT set kPlayerTeammate — causes cascade (allies defend player
                 // against retaliating ally → infighting → guards join → chaos).
 
-                // Enlist nearby guards into battle faction
-                EnlistFriendlyGuards(joinFaction, playerFaction, player);
+                // Enlist nearby guards into battle faction (SideA = ally)
+                EnlistFriendlyGuards(joinFaction, battleFactionA, player);
 
                 // Remove player from crime factions (C++ guarantee — runs regardless
                 // of Papyrus bytecode state on existing saves)
                 RemovePlayerCrimeFactions();
             }
 
-            logger::info("ExecuteFullBattleSpawn: factions assigned — A={:08X}, B={:08X}",
-                battleFactionA->GetFormID(), battleFactionB->GetFormID());
+            // Store the normalization so reinforcements use the same side mapping
+            {
+                std::lock_guard<std::mutex> lock(mutex_);
+                if (activeBattle_) {
+                    activeBattle_->sideAFaction = allyFactionId;
+                }
+            }
+
+            logger::info("ExecuteFullBattleSpawn: factions assigned — allies({})=SideA, enemies({})=SideB",
+                allyFactionId, enemyFactionId);
         } else {
             logger::error("ExecuteFullBattleSpawn: FAILED to resolve battle factions from IntelEngine.esp!");
             out["success"] = false;
             out["error"] = "battle factions not found in IntelEngine.esp";
             return out.dump();
         }
-
-        // Crime faction removal is now handled at QUEST level (RemovePlayerCrimeFactions
-        // called from Papyrus when faction quest starts). Not tied to battle spawn timing.
 
         // --- Step 5b: Hostile standing check ---
         // If player has very negative standing (<= -40) with a faction,
@@ -1448,6 +1481,8 @@ namespace IntelEngine {
 
             // Only add player to ONE opposing faction (pick the worse standing).
             // Adding to both would put the player in two mutually hostile factions.
+            // Note: after normalization, SideA=allyish SideB=enemyish, but without
+            // playerJoin neither side is truly "allied" — use standing to decide.
             if (standingA <= HOSTILE_STANDING_THRESHOLD || standingB <= HOSTILE_STANDING_THRESHOLD) {
                 if (standingA <= standingB && standingA <= HOSTILE_STANDING_THRESHOLD && battleFactionB) {
                     player->AddToFaction(battleFactionB, 0);
@@ -1462,6 +1497,7 @@ namespace IntelEngine {
         }
 
         // --- Step 6: Select leader (first allied soldier) ---
+        // Use the same ally determination as the normalization block above
         RE::FormID leaderFormId = 0;
         if (playerJoined) {
             auto& alliedSoldiers = (joinFaction == factionA) ? soldiersA : soldiersB;
@@ -1619,7 +1655,7 @@ namespace IntelEngine {
             return out.dump();
         }
 
-        std::string factionA, factionB, playerSide;
+        std::string factionA, factionB, playerSide, sideAFaction;
         {
             std::lock_guard<std::mutex> lock(mutex_);
             if (!activeBattle_) {
@@ -1629,6 +1665,7 @@ namespace IntelEngine {
             factionA = activeBattle_->factionA;
             factionB = activeBattle_->factionB;
             playerSide = activeBattle_->playerSide;
+            sideAFaction = activeBattle_->sideAFaction;
         }
 
         auto* fp = FactionPolitics::GetSingleton();
@@ -1640,13 +1677,20 @@ namespace IntelEngine {
             return out.dump();
         }
 
+        // Use the same side normalization as the initial spawn:
+        // sideAFaction was assigned to Intel_BattleSideA, the other to SideB.
+        // Default to factionA=SideA if sideAFaction wasn't set (pre-existing battle).
+        bool aIsSideA = sideAFaction.empty() || (sideAFaction == factionA);
+        const auto& sideAId = aIsSideA ? factionA : factionB;
+        const auto& sideBId = aIsSideA ? factionB : factionA;
+
         // Spawn at anchor (battle location) if available, otherwise at player
         RE::TESObjectREFR* spawnRef = (spawnAnchor && spawnAnchor->Is3DLoaded()) ? spawnAnchor : player;
         if (spawnRef != player) {
             logger::info("SpawnReinforcements: spawning at anchor {:08X}", spawnRef->GetFormID());
         }
-        auto soldiersA = SpawnSoldiersForFaction(factionA, battleFactionA, count, spawnRef, player);
-        auto soldiersB = SpawnSoldiersForFaction(factionB, battleFactionB, count, spawnRef, player);
+        auto soldiersA = SpawnSoldiersForFaction(sideAId, battleFactionA, count, spawnRef, player);
+        auto soldiersB = SpawnSoldiersForFaction(sideBId, battleFactionB, count, spawnRef, player);
 
         // Post-spawn validation: confirm battle wasn't ended during spawn
         {

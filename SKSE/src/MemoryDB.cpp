@@ -139,6 +139,60 @@ namespace IntelEngine {
             }
         }
 
+        // Priority 5: Fuzzy file fallback — template name includes a FormID suffix
+        // (e.g., "ulfric_stormcloak_584") that changes with load order. Bio files may
+        // also have title prefixes (e.g., "jarl_ulfric_stormcloak_131").
+        // Strip the FormID suffix to get the base name, then scan for any match.
+        if (filePath.empty() && !bioTemplate.empty()) {
+            std::string baseName = bioTemplate;
+            auto lastUnderscore = baseName.rfind('_');
+            if (lastUnderscore != std::string::npos && lastUnderscore > 0) {
+                bool isHexSuffix = true;
+                for (size_t i = lastUnderscore + 1; i < baseName.size(); i++) {
+                    char c = baseName[i];
+                    if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F'))) {
+                        isHexSuffix = false;
+                        break;
+                    }
+                }
+                if (isHexSuffix) {
+                    baseName = baseName.substr(0, lastUnderscore);
+                }
+            }
+
+            auto scanDir = [&](const std::string& dir) -> std::string {
+                if (!std::filesystem::exists(dir, ec) || !std::filesystem::is_directory(dir, ec)) return "";
+                for (auto& entry : std::filesystem::directory_iterator(dir, ec)) {
+                    if (!entry.is_regular_file(ec)) continue;
+                    auto fname = entry.path().filename().string();
+                    if (fname.find(baseName) != std::string::npos &&
+                        (fname.ends_with(".prompt") || fname.ends_with(".dynamic.prompt"))) {
+                        return entry.path().string();
+                    }
+                }
+                return "";
+            };
+
+            std::string match = scanDir("Data/SKSE/Plugins/SkyrimNet/prompts/characters/dynamic");
+            if (match.empty()) match = scanDir("Data/SKSE/Plugins/SkyrimNet/prompts/characters");
+            if (match.empty()) match = scanDir("Data/SKSE/Plugins/SkyrimNet/original_prompts/characters");
+
+            // Reuse already-collected saveDirs (no need to re-iterate)
+            if (match.empty()) {
+                for (auto& saveDir : saveDirs) {
+                    match = scanDir((saveDir.path() / "characters" / "dynamic").string());
+                    if (match.empty()) match = scanDir((saveDir.path() / "characters").string());
+                    if (!match.empty()) break;
+                }
+            }
+
+            if (!match.empty()) {
+                filePath = match;
+                logger::info("MemoryDB: Fuzzy file fallback matched '{}' -> '{}' for FormID 0x{:08X}",
+                    bioTemplate, std::filesystem::path(match).filename().string(), formId);
+            }
+        }
+
         std::string summary;
         std::string relationships;
         std::string fullContext;

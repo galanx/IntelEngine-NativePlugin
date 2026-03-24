@@ -81,6 +81,12 @@ target_precompile_headers(
         src/Plugin.h
 )
 
+# Workaround for MSVC Internal Compiler Error (C1001) in heavy template code
+# (CommonLibSSE Relocation.h / xstring). Safe to remove if MSVC is updated.
+if(MSVC)
+    target_compile_options(${PROJECT_NAME} PRIVATE /d2ReducedOptimizeHugeFunctions)
+endif()
+
 # =============================================================================
 # Output Configuration
 # =============================================================================
