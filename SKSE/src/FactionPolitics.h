@@ -244,6 +244,10 @@ namespace IntelEngine {
          *  Called by Papyrus only when at least one actor was successfully created. */
         void ConfirmManifestationCooldown();
 
+        /** Reset manifestation cooldown. Called by director dispatch to allow
+         *  repeated testing without waiting 4 game hours. */
+        void ResetManifestationCooldown();
+
         /** Write political_state.json for pull-based NPC awareness.
          *  Called after each political event. The file is read by the prompt template
          *  via read_json() at conversation time — no UUID issues, works for all NPCs. */

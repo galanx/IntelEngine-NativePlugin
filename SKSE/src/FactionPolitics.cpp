@@ -16,6 +16,7 @@
 #include "MemoryDB.h"
 #include "NPCIndex.h"
 #include "SkyrimNetAPI.h"
+#include "ProcessUtils.h"
 
 #include <fstream>
 #include <filesystem>
@@ -1099,12 +1100,15 @@ default_relations:
             return "";
         }
 
-        // Guard: player must be in exterior
         auto* player = RE::PlayerCharacter::GetSingleton();
         if (!player) return "";
         auto* playerCell = player->GetParentCell();
-        if (!playerCell || playerCell->IsInteriorCell()) {
-            logger::info("FactionPolitics: Skipping manifestation — player is indoors");
+        if (!playerCell) return "";
+        bool isInterior = playerCell->IsInteriorCell();
+
+        // Interior: only assassination_attempt manifests (spawn attacker near target leader)
+        if (isInterior && eventType != "assassination_attempt") {
+            logger::info("FactionPolitics: Skipping manifestation — player is indoors ({})", eventType);
             return "";
         }
 
@@ -1222,6 +1226,11 @@ default_relations:
             lastManifestationTime_.store(cal->GetCurrentGameTime());
             logger::info("FactionPolitics: Manifestation cooldown confirmed by Papyrus");
         }
+    }
+
+    void FactionPolitics::ResetManifestationCooldown() {
+        lastManifestationTime_.store(0.0f);
+        logger::info("FactionPolitics: Manifestation cooldown reset (director override)");
     }
 
     // =========================================================================

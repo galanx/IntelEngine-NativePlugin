@@ -109,11 +109,17 @@ namespace IntelEngine::Papyrus {
     // Event manifestation forward declarations
     RE::BSFixedString CheckEventManifestation(RE::StaticFunctionTag*, RE::BSFixedString, RE::BSFixedString, RE::BSFixedString);
     void ConfirmManifestationCooldown(RE::StaticFunctionTag*);
+    void ResetManifestationCooldown(RE::StaticFunctionTag*);
+    RE::Actor* ExecuteAssassination(RE::StaticFunctionTag*, RE::BSFixedString targetFaction, RE::BSFixedString attackerFaction);
+    RE::Actor* GetAssassinationTarget(RE::StaticFunctionTag*);
+    RE::BSFixedString GetAssassinationLeaderName(RE::StaticFunctionTag*);
+    void TriggerAssassinationAttack(RE::StaticFunctionTag*);
 
     // Faction query forward declarations
     bool IsHighStatusNPC(RE::StaticFunctionTag*, RE::Actor*);
     RE::BSFixedString ExtractFactionId(RE::StaticFunctionTag*, RE::BSFixedString);
     RE::BSFixedString GetFactionDisplayName(RE::StaticFunctionTag*, RE::BSFixedString);
+    RE::TESFaction* GetSkyrimFaction(RE::StaticFunctionTag*, RE::BSFixedString);
     RE::BSFixedString GetFactionRival(RE::StaticFunctionTag*, RE::BSFixedString);
     RE::BSFixedString GetFactionWarEnemy(RE::StaticFunctionTag*, RE::BSFixedString);
     RE::BSFixedString GetNPCPoliticalFactionId(RE::StaticFunctionTag*, RE::Actor*);
@@ -450,6 +456,11 @@ namespace IntelEngine::Papyrus {
         a_vm->RegisterFunction("RecordOffScreenBattle", SCRIPT_NAME, RecordOffScreenBattle); ++count;
         a_vm->RegisterFunction("CheckEventManifestation", SCRIPT_NAME, CheckEventManifestation); ++count;
         a_vm->RegisterFunction("ConfirmManifestationCooldown", SCRIPT_NAME, ConfirmManifestationCooldown); ++count;
+        a_vm->RegisterFunction("ResetManifestationCooldown", SCRIPT_NAME, ResetManifestationCooldown); ++count;
+        a_vm->RegisterFunction("ExecuteAssassination", SCRIPT_NAME, ExecuteAssassination); ++count;
+        a_vm->RegisterFunction("GetAssassinationTarget", SCRIPT_NAME, GetAssassinationTarget); ++count;
+        a_vm->RegisterFunction("GetAssassinationLeaderName", SCRIPT_NAME, GetAssassinationLeaderName); ++count;
+        a_vm->RegisterFunction("TriggerAssassinationAttack", SCRIPT_NAME, TriggerAssassinationAttack); ++count;
 
         // NPC Status Check
         a_vm->RegisterFunction("IsHighStatusNPC", SCRIPT_NAME, IsHighStatusNPC); ++count;
@@ -457,6 +468,7 @@ namespace IntelEngine::Papyrus {
         // Faction Query Functions
         a_vm->RegisterFunction("ExtractFactionId", SCRIPT_NAME, ExtractFactionId); ++count;
         a_vm->RegisterFunction("GetFactionDisplayName", SCRIPT_NAME, GetFactionDisplayName); ++count;
+        a_vm->RegisterFunction("GetSkyrimFaction", SCRIPT_NAME, GetSkyrimFaction); ++count;
         a_vm->RegisterFunction("GetFactionRival", SCRIPT_NAME, GetFactionRival); ++count;
         a_vm->RegisterFunction("GetFactionWarEnemy", SCRIPT_NAME, GetFactionWarEnemy); ++count;
         a_vm->RegisterFunction("GetNPCPoliticalFactionId", SCRIPT_NAME, GetNPCPoliticalFactionId); ++count;
@@ -3603,11 +3615,46 @@ namespace IntelEngine::Papyrus {
         auto cfg = FactionPolitics::GetSingleton()->GetFaction(factionId.c_str());
         if (!cfg) return result;
 
-        auto* npcIndex = NPCIndex::GetSingleton();
+        // Always use substring match with player cell priority.
+        // "Ulfric Stormcloak" must match "Jarl Ulfric Stormcloak" in the player's cell,
+        // not a different reference named "Ulfric Stormcloak" in an unloaded cell.
+        auto* player = RE::PlayerCharacter::GetSingleton();
+        auto* playerCell = player ? player->GetParentCell() : nullptr;
+
         for (const auto& leaderName : cfg->leaderNames) {
-            auto* actor = npcIndex->FindByName(leaderName);
-            if (actor) {
-                result.push_back(actor);
+            std::string lowerName = leaderName;
+            std::transform(lowerName.begin(), lowerName.end(), lowerName.begin(), ::tolower);
+
+            RE::Actor* bestMatch = nullptr;
+            bool bestInPlayerCell = false;
+
+            ProcessUtils::ForEachLoadedActor([&](RE::Actor* a) -> bool {
+                if (!a || a->IsDead()) return false;
+                std::string displayName = a->GetDisplayFullName();
+                std::string lowerDisplay = displayName;
+                std::transform(lowerDisplay.begin(), lowerDisplay.end(), lowerDisplay.begin(), ::tolower);
+
+                // Match: display name contains leader name OR leader name contains display name
+                if (lowerDisplay.find(lowerName) == std::string::npos &&
+                    lowerName.find(lowerDisplay) == std::string::npos) {
+                    return false;
+                }
+
+                bool inPlayerCell = playerCell && a->GetParentCell() == playerCell;
+
+                // Prefer actor in player's cell over one in a different cell
+                if (!bestMatch || (inPlayerCell && !bestInPlayerCell)) {
+                    bestMatch = a;
+                    bestInPlayerCell = inPlayerCell;
+                    if (inPlayerCell) return true;  // can't do better
+                }
+                return false;
+            });
+
+            if (bestMatch) {
+                result.push_back(bestMatch);
+                logger::debug("GetFactionLeaderActors: '{}' -> '{}' (sameCell={})",
+                    leaderName, bestMatch->GetDisplayFullName(), bestInPlayerCell);
             }
         }
         return result;
@@ -3640,6 +3687,170 @@ namespace IntelEngine::Papyrus {
 
     void ConfirmManifestationCooldown(RE::StaticFunctionTag*) {
         FactionPolitics::GetSingleton()->ConfirmManifestationCooldown();
+    }
+
+    void ResetManifestationCooldown(RE::StaticFunctionTag*) {
+        FactionPolitics::GetSingleton()->ResetManifestationCooldown();
+    }
+
+    // =========================================================================
+    // Assassination Manifestation (all logic in C++)
+    // =========================================================================
+
+    // Tracked state for active assassination (between Execute and Trigger)
+    static std::vector<RE::FormID> s_assassinFormIds;
+    static RE::FormID s_assassinTargetFormId = 0;
+    static std::string s_assassinLeaderName;
+
+    RE::Actor* ExecuteAssassination(RE::StaticFunctionTag*,
+                                     RE::BSFixedString targetFaction,
+                                     RE::BSFixedString attackerFaction) {
+        auto* fp = FactionPolitics::GetSingleton();
+        auto* player = RE::PlayerCharacter::GetSingleton();
+        if (!player || !fp) {
+            logger::error("ExecuteAssassination: no player or politics");
+            return nullptr;
+        }
+
+        std::string targetFacId(targetFaction.c_str());
+        std::string attackerFacId(attackerFaction.c_str());
+
+        // 1. Find leader in player's cell/proximity
+        auto leaders = GetFactionLeaderActors(nullptr, targetFaction);
+        RE::Actor* target = nullptr;
+        auto* playerCell = player->GetSaveParentCell();
+        if (!playerCell) playerCell = player->GetParentCell();
+        bool isInterior = playerCell && playerCell->IsInteriorCell();
+
+        for (auto* leader : leaders) {
+            if (!leader || leader->IsDead()) continue;
+            if (isInterior) {
+                auto* leaderCell = leader->GetSaveParentCell();
+                if (!leaderCell) leaderCell = leader->GetParentCell();
+                if (leaderCell == playerCell) { target = leader; break; }
+            } else {
+                auto ppos = player->GetPosition();
+                auto lpos = leader->GetPosition();
+                float dx = ppos.x - lpos.x, dy = ppos.y - lpos.y, dz = ppos.z - lpos.z;
+                if (std::sqrt(dx*dx + dy*dy + dz*dz) < 3000.0f) { target = leader; break; }
+            }
+        }
+
+        if (!target) {
+            logger::info("ExecuteAssassination: no {} leader in player's cell/proximity", targetFacId);
+            return nullptr;
+        }
+
+        logger::info("ExecuteAssassination: target={} ({}), attacker={}",
+            target->GetDisplayFullName(), targetFacId, attackerFacId);
+
+        // 2. Find spawn point: nearest door to leader, or behind leader if no door
+        RE::TESObjectREFR* spawnAnchor = target->As<RE::TESObjectREFR>();
+        std::vector<RE::TESObjectREFR*> doors = CellAnalyzer::GetSingleton()->GetDoors(player);
+        float bestDist = 999999.f;
+        RE::NiPoint3 tgtPos = target->GetPosition();
+        for (auto* door : doors) {
+            if (!door) continue;
+            RE::NiPoint3 dpos = door->GetPosition();
+            float dx = dpos.x - tgtPos.x, dy = dpos.y - tgtPos.y, dz = dpos.z - tgtPos.z;
+            float dist = std::sqrt(dx*dx + dy*dy + dz*dz);
+            if (dist < bestDist) {
+                bestDist = dist;
+                spawnAnchor = door;
+            }
+        }
+        if (spawnAnchor != target->As<RE::TESObjectREFR>()) {
+            logger::info("ExecuteAssassination: spawning at door nearest to leader (dist={:.0f})", bestDist);
+        } else {
+            // No doors found — spawn at leader position (Papyrus will offset 500 units behind)
+            logger::info("ExecuteAssassination: no doors — spawning near leader");
+        }
+
+        // Single assassin
+        // Infiltrators — spawn using TARGET faction template so they blend in
+        std::string spawnArg = targetFacId + ":1";
+        auto soldiers = SpawnBattleSoldiers(nullptr,
+            RE::BSFixedString(spawnArg), spawnAnchor);
+
+        if (soldiers.empty()) {
+            logger::error("ExecuteAssassination: SpawnBattleSoldiers returned empty");
+            return nullptr;
+        }
+
+        // 3. Setup: strip factions, set kIgnoreFriendlyHits, passive aggression
+        s_assassinFormIds.clear();
+        s_assassinTargetFormId = target->GetFormID();
+        s_assassinLeaderName = target->GetDisplayFullName();
+
+        RE::Actor* assassin = nullptr;
+        for (auto* soldier : soldiers) {
+            if (!soldier) continue;
+
+            // Strip ALL factions — factionless means no crime consequences
+            std::vector<RE::TESFaction*> toRemove;
+            soldier->VisitFactions([&](RE::TESFaction* fac, std::int8_t) -> bool {
+                if (fac) toRemove.push_back(fac);
+                return false;
+            });
+            for (auto* fac : toRemove) {
+                soldier->AddToFaction(fac, -1);
+            }
+            soldier->formFlags |= RE::TESForm::RecordFlags::kIgnoreFriendlyHits;
+            soldier->AsActorValueOwner()->SetActorValue(RE::ActorValue::kAggression, 0.f);
+            soldier->AsActorValueOwner()->SetActorValue(RE::ActorValue::kConfidence, 4.f);
+
+            s_assassinFormIds.push_back(soldier->GetFormID());
+            assassin = soldier;
+
+            logger::info("ExecuteAssassination: soldier {:08X} ready (factionless, aggression 0)",
+                soldier->GetFormID());
+        }
+
+        logger::info("ExecuteAssassination: assassin={:08X}, target={}",
+            assassin ? assassin->GetFormID() : 0, target->GetDisplayFullName());
+        return assassin;
+    }
+
+    RE::Actor* GetAssassinationTarget(RE::StaticFunctionTag*) {
+        if (s_assassinTargetFormId == 0) return nullptr;
+        return RE::TESForm::LookupByID<RE::Actor>(s_assassinTargetFormId);
+    }
+
+    RE::BSFixedString GetAssassinationLeaderName(RE::StaticFunctionTag*) {
+        return RE::BSFixedString(s_assassinLeaderName);
+    }
+
+    void TriggerAssassinationAttack(RE::StaticFunctionTag*) {
+        auto* target = RE::TESForm::LookupByID<RE::Actor>(s_assassinTargetFormId);
+        if (!target) {
+            logger::error("TriggerAssassinationAttack: target {:08X} not found", s_assassinTargetFormId);
+            s_assassinFormIds.clear();
+            s_assassinTargetFormId = 0;
+            return;
+        }
+
+        int attackCount = 0;
+        for (auto fid : s_assassinFormIds) {
+            auto* soldier = RE::TESForm::LookupByID<RE::Actor>(fid);
+            if (!soldier || soldier->IsDead()) continue;
+
+            // Aggression 2 = attack everyone. Factionless — nobody defends them.
+            // currentCombatTarget = leader, so they prioritize the leader.
+            soldier->AsActorValueOwner()->SetActorValue(RE::ActorValue::kAggression, 2.f);
+            soldier->GetActorRuntimeData().currentCombatTarget = target->GetHandle();
+            attackCount++;
+
+            logger::info("TriggerAssassinationAttack: soldier {:08X} attacking {}", fid,
+                target->GetDisplayFullName());
+        }
+
+        logger::info("TriggerAssassinationAttack: {} soldiers attacking {}", attackCount,
+            target->GetDisplayFullName());
+
+        // Cleanup tracking
+        s_assassinFormIds.clear();
+        s_assassinTargetFormId = 0;
+        s_assassinLeaderName.clear();
     }
 
     int ApplyPlayerStandingChanges(RE::StaticFunctionTag*, RE::BSFixedString responseJson) {
@@ -3808,6 +4019,12 @@ namespace IntelEngine::Papyrus {
     RE::BSFixedString GetFactionDisplayName(RE::StaticFunctionTag*, RE::BSFixedString factionId) {
         auto faction = FactionPolitics::GetSingleton()->GetFaction(factionId.c_str());
         return faction ? RE::BSFixedString(faction->name) : RE::BSFixedString(factionId.c_str());
+    }
+
+    RE::TESFaction* GetSkyrimFaction(RE::StaticFunctionTag*, RE::BSFixedString factionId) {
+        auto config = FactionPolitics::GetSingleton()->GetFaction(factionId.c_str());
+        if (!config || config->skyrimFactionId.empty()) return nullptr;
+        return RE::TESForm::LookupByEditorID<RE::TESFaction>(config->skyrimFactionId);
     }
 
     RE::BSFixedString GetFactionRival(RE::StaticFunctionTag*, RE::BSFixedString factionId) {
@@ -4013,22 +4230,42 @@ namespace IntelEngine::Papyrus {
             }
         }
 
-        // Remove hold crime factions from ALL spawned soldiers — killing them generates no bounty.
-        // This applies to battle soldiers, ambush soldiers, and manifestation soldiers.
-        static constexpr RE::FormID crimeFactionIds[] = {
-            0x00029DB0, 0x00029DB1, 0x00029DB2, 0x00029DB3,
-            0x00029DB4, 0x00029DB5, 0x00029DB6, 0x00029DB7, 0x00029DB8
-        };
-        for (auto* actor : result) {
-            if (!actor) continue;
-            for (auto fid : crimeFactionIds) {
-                auto* crimeFaction = RE::TESForm::LookupByID<RE::TESFaction>(fid);
-                if (crimeFaction) actor->AddToFaction(crimeFaction, -1);
+        // For bandit fallback: strip hostile factions (BanditFaction etc.) so they don't
+        // attack everyone on sight, then add them to the political faction they fight for.
+        // For faction templates: soldiers already belong to the right faction.
+        // Battle factions (Intel_BattleSideA/B) are assigned later by Papyrus.
+        bool isFallbackTemplate = templateId.empty() || !LookupLeveledActor(templateId.c_str());
+        if (isFallbackTemplate) {
+            // Look up the political faction's Skyrim engine faction (e.g., CWSonsFaction)
+            RE::TESFaction* politicalFaction = nullptr;
+            auto factionConfig = FactionPolitics::GetSingleton()->GetFaction(factionId);
+            if (factionConfig && !factionConfig->skyrimFactionId.empty()) {
+                auto* dataHandler = RE::TESDataHandler::GetSingleton();
+                if (dataHandler) {
+                    politicalFaction = RE::TESForm::LookupByEditorID<RE::TESFaction>(factionConfig->skyrimFactionId);
+                }
+            }
+
+            for (auto* actor : result) {
+                if (!actor) continue;
+                // Strip ALL base factions (bandit, bandit friend, etc.)
+                std::vector<RE::TESFaction*> toRemove;
+                actor->VisitFactions([&](RE::TESFaction* faction, std::int8_t) -> bool {
+                    if (faction) toRemove.push_back(faction);
+                    return false;
+                });
+                for (auto* fac : toRemove) {
+                    actor->AddToFaction(fac, -1);
+                }
+                // Add to the political faction they fight for
+                if (politicalFaction) {
+                    actor->AddToFaction(politicalFaction, 0);
+                }
             }
         }
 
-        logger::info("[IntelEngine] SpawnBattleSoldiers: spawned {}/{} for faction '{}' (crime factions removed)",
-                    result.size(), count, factionId);
+        logger::info("[IntelEngine] SpawnBattleSoldiers: spawned {}/{} for faction '{}' (fallback={})",
+                    result.size(), count, factionId, isFallbackTemplate);
         return result;
     }
 
