@@ -170,7 +170,7 @@ namespace IntelEngine {
                 summary = extractBlock("summary");
                 relationships = extractBlock("relationships");
 
-                // Build full context: summary + personality + relationships only.
+                // Build full context: personality + occupation + relationships.
                 // Keeps token cost manageable for the NPC DM picker prompt.
                 struct BlockDef { const char* name; const char* label; };
                 static constexpr BlockDef blocks[] = {

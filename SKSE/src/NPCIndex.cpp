@@ -2378,7 +2378,7 @@ namespace IntelEngine {
                     md += " {";  md += bio;  md += "}";
                 }
 
-                // Full character context (all blocks except appearance)
+                // Personality, occupation & relationships from character prompt
                 auto fullCtx = memDB->GetNPCFullContext(actor->GetFormID());
                 if (!fullCtx.empty()) {
                     md += "\n  ";
