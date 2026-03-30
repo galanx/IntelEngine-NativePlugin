@@ -59,26 +59,17 @@ namespace IntelEngine {
     void DashboardUIManager::Initialize() {
         std::lock_guard<std::mutex> lock(mutex_);
 
-        if (initialized_) {
-            logger::info("[Dashboard] Initialize: already initialized, skipping");
-            return;
-        }
+        if (initialized_) return;
         initialized_ = true;
-        logger::info("[Dashboard] Initialize: starting (thread={})", GetCurrentThreadId());
 
         try {
             auto* api = static_cast<PRISMA_UI_API::IVPrismaUI1*>(
                 PRISMA_UI_API::RequestPluginAPI(PRISMA_UI_API::InterfaceVersion::V1));
             if (api) {
                 prismaUI_ = api;
-                logger::info("[Dashboard] PrismaUI API acquired, calling CreateViewIfNeeded");
-                bool viewOk = CreateViewIfNeeded();
-                logger::info("[Dashboard] CreateViewIfNeeded returned {}", viewOk);
-            } else {
-                logger::warn("[Dashboard] RequestPluginAPI returned nullptr");
+                logger::info("[Dashboard] PrismaUI API acquired");
+                CreateViewIfNeeded();
             }
-        } catch (const std::exception& e) {
-            logger::error("[Dashboard] Initialize exception: {}", e.what());
         } catch (...) {
             logger::warn("[Dashboard] Failed to acquire PrismaUI API");
         }
@@ -152,21 +143,12 @@ namespace IntelEngine {
         try {
             const char* viewPath = "IntelEngine/dashboard/index.html";
             dashboardView_ = prismaUI_->CreateView(viewPath, OnDomReadyStatic);
-            if (dashboardView_ == 0) {
-                logger::error("[Dashboard] CreateView returned 0 for path: {}", viewPath);
-                return false;
-            }
+            if (dashboardView_ == 0) return false;
 
-            logger::info("[Dashboard] CreateView succeeded, view={}", dashboardView_);
             prismaUI_->SetOrder(dashboardView_, kViewRenderOrder);
             prismaUI_->Hide(dashboardView_);
             return true;
-        } catch (const std::exception& e) {
-            logger::error("[Dashboard] CreateView threw exception: {}", e.what());
-            dashboardView_ = 0;
-            return false;
         } catch (...) {
-            logger::error("[Dashboard] CreateView threw unknown exception");
             dashboardView_ = 0;
             return false;
         }
