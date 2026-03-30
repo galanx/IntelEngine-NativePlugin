@@ -173,18 +173,21 @@ namespace IntelEngine {
                 return "";
             };
 
-            std::string match = scanDir("Data/SKSE/Plugins/SkyrimNet/prompts/characters/dynamic");
-            if (match.empty()) match = scanDir("Data/SKSE/Plugins/SkyrimNet/prompts/characters");
-            if (match.empty()) match = scanDir("Data/SKSE/Plugins/SkyrimNet/original_prompts/characters");
-
-            // Reuse already-collected saveDirs (no need to re-iterate)
+            // Fuzzy fallback follows the same priority as exact match:
+            // 1. save-specific dynamic, 2. save-specific, 3. edited, 4. original
+            std::string match;
+            for (auto& saveDir : saveDirs) {
+                match = scanDir((saveDir.path() / "characters" / "dynamic").string());
+                if (!match.empty()) break;
+            }
             if (match.empty()) {
                 for (auto& saveDir : saveDirs) {
-                    match = scanDir((saveDir.path() / "characters" / "dynamic").string());
-                    if (match.empty()) match = scanDir((saveDir.path() / "characters").string());
+                    match = scanDir((saveDir.path() / "characters").string());
                     if (!match.empty()) break;
                 }
             }
+            if (match.empty()) match = scanDir("Data/SKSE/Plugins/SkyrimNet/prompts/characters");
+            if (match.empty()) match = scanDir("Data/SKSE/Plugins/SkyrimNet/original_prompts/characters");
 
             if (!match.empty()) {
                 filePath = match;
@@ -214,31 +217,31 @@ namespace IntelEngine {
                     auto endPos = content.find(endTag, startPos);
                     if (endPos == std::string::npos) return "";
                     std::string text = content.substr(startPos, endPos - startPos);
-                    while (!text.empty() && (text.front() == ' ' || text.front() == '\n' || text.front() == '\r'))
-                        text.erase(text.begin());
-                    while (!text.empty() && (text.back() == ' ' || text.back() == '\n' || text.back() == '\r'))
-                        text.pop_back();
-                    return text;
+                    auto start = text.find_first_not_of(" \n\r");
+                    if (start == std::string::npos) return "";
+                    auto end = text.find_last_not_of(" \n\r");
+                    return text.substr(start, end - start + 1);
                 };
 
                 summary = extractBlock("summary");
                 relationships = extractBlock("relationships");
+                std::string personality = extractBlock("personality");
+                std::string occupation = extractBlock("occupation");
 
                 // Build full context: personality + occupation + relationships.
                 // Keeps token cost manageable for the NPC DM picker prompt.
-                struct BlockDef { const char* name; const char* label; };
-                static constexpr BlockDef blocks[] = {
-                    {"personality",   "Personality"},
-                    {"occupation",    "Occupation"},
-                    {"relationships", "Relationships"},
+                struct BlockDef { const char* label; const std::string* text; };
+                BlockDef blocks[] = {
+                    {"Personality",   &personality},
+                    {"Occupation",    &occupation},
+                    {"Relationships", &relationships},
                 };
 
-                for (const auto& [bname, blabel] : blocks) {
-                    std::string blockText = extractBlock(bname);
-                    if (!blockText.empty()) {
+                for (const auto& [blabel, btext] : blocks) {
+                    if (!btext->empty()) {
                         fullContext += blabel;
                         fullContext += ": ";
-                        fullContext += blockText;
+                        fullContext += *btext;
                         fullContext += "\n";
                     }
                 }

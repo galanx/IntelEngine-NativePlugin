@@ -2369,29 +2369,24 @@ namespace IntelEngine {
 
                 std::string bio = GetNPCBioLine(actor);
 
-                md += "- ";   md += name;
+                md += "#### ";  md += name;
                 md += " [";   md += archetype;  md += ", ";  md += gender;  md += "]";
                 if (actor->IsPlayerTeammate()) {
                     md += " (follower)";
                 }
                 if (!bio.empty()) {
-                    md += " {";  md += bio;  md += "}";
+                    md += "\n";  md += bio;
                 }
 
                 // Personality, occupation & relationships from character prompt
                 auto fullCtx = memDB->GetNPCFullContext(actor->GetFormID());
                 if (!fullCtx.empty()) {
-                    md += "\n  ";
-                    // Indent each line for readability under the NPC bullet
-                    for (char c : fullCtx) {
-                        md += c;
-                        if (c == '\n') md += "  ";
-                    }
+                    md += "\n";  md += fullCtx;
                 }
 
                 auto memories = memDB->GetFormattedMemories(actor->GetFormID(), 2);
                 if (!memories.empty()) {
-                    md += "\n  Memories: ";  md += memories;
+                    md += "\nMemories: ";  md += memories;
                 }
                 md += "\n";
             }
