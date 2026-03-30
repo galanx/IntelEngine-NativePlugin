@@ -6,7 +6,7 @@ cmake_minimum_required(VERSION 3.21)
 
 project(
     IntelEngine
-    VERSION 1.0.0
+    VERSION 3.1.0
     DESCRIPTION "Intelligent NPC Task Execution for SkyrimNet"
     LANGUAGES CXX
 )
