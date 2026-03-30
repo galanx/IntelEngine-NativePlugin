@@ -114,6 +114,12 @@ namespace IntelEngine {
          */
         bool IsPlayerInOwnHome();
 
+        /**
+         * Check if a location is inappropriate for combat quests.
+         * Returns true for temples, castles, guild halls, and named sacred locations.
+         */
+        bool IsLocationNonCombative(RE::BGSLocation* location);
+
     private:
         CellAnalyzer() = default;
         ~CellAnalyzer() = default;

@@ -27,6 +27,7 @@
 #include "PoliticalDB.h"
 #include "BattleManager.h"
 #include "ProcessUtils.h"
+#include "DialogueTracker.h"
 #include <Windows.h>
 #include <nlohmann/json.hpp>
 
@@ -236,6 +237,7 @@ namespace IntelEngine::Papyrus {
         a_vm->RegisterFunction("FindDoorToLocation", SCRIPT_NAME, FindDoorToLocation); ++count;
         a_vm->RegisterFunction("ResolveSemanticLocation", SCRIPT_NAME, ResolveSemanticLocation); ++count;
         a_vm->RegisterFunction("ResolveAnyDestination", SCRIPT_NAME, ResolveAnyDestination); ++count;
+        a_vm->RegisterFunction("IsLocationNonCombative", SCRIPT_NAME, IsLocationNonCombative); ++count;
         a_vm->RegisterFunction("GetCellSpatialInfo", SCRIPT_NAME, GetCellSpatialInfo); ++count;
         a_vm->RegisterFunction("IsSemanticTerm", SCRIPT_NAME, IsSemanticTerm); ++count;
         a_vm->RegisterFunction("GetAvailableSemanticDirections", SCRIPT_NAME, GetAvailableSemanticDirections); ++count;
@@ -544,6 +546,16 @@ namespace IntelEngine::Papyrus {
         a_vm->RegisterFunction("SetDebugLevel", SCRIPT_NAME, SetDebugLevel); ++count;
         a_vm->RegisterFunction("GetVersion", SCRIPT_NAME, GetVersion); ++count;
 
+        // Utility
+        a_vm->RegisterFunction("HexToInt", SCRIPT_NAME, HexToInt); ++count;
+
+        // Dialogue Tracker
+        a_vm->RegisterFunction("SetAutoBioEnabled", SCRIPT_NAME, SetAutoBioEnabled); ++count;
+        a_vm->RegisterFunction("SetAutoBioThreshold", SCRIPT_NAME, SetAutoBioThreshold); ++count;
+        a_vm->RegisterFunction("SetAutoBioCount", SCRIPT_NAME, SetAutoBioCount); ++count;
+        a_vm->RegisterFunction("GetAutoBioCount", SCRIPT_NAME, GetAutoBioCount); ++count;
+        a_vm->RegisterFunction("GetAutoBioCountsJson", SCRIPT_NAME, GetAutoBioCountsJson); ++count;
+
         logger::info("Registered {} Papyrus functions", count);
         return true;
     }
@@ -650,6 +662,17 @@ namespace IntelEngine::Papyrus {
             return nullptr;
         }
         return LocationResolver::GetSingleton()->ResolveAnyDestination(akNPC, destination.c_str());
+    }
+
+    bool IsLocationNonCombative(RE::StaticFunctionTag*, RE::TESObjectREFR* ref) {
+        if (!ref) return false;
+        RE::BGSLocation* loc = nullptr;
+        auto* cell = ref->GetSaveParentCell();
+        if (!cell) cell = ref->GetParentCell();
+        if (cell) loc = cell->GetLocation();
+        if (!loc) loc = ref->GetCurrentLocation();
+        if (!loc) return false;
+        return CellAnalyzer::GetSingleton()->IsLocationNonCombative(loc);
     }
 
     RE::BSFixedString GetCellSpatialInfo(RE::StaticFunctionTag*, RE::Actor* akNPC) {
@@ -2603,6 +2626,48 @@ namespace IntelEngine::Papyrus {
 
     RE::BSFixedString GetVersion(RE::StaticFunctionTag*) {
         return INTELENGINE_VERSION;
+    }
+
+    // ==========================================================================
+    // Dialogue Tracker — Auto Bio Update
+    // ==========================================================================
+
+    int HexToInt(RE::StaticFunctionTag*, RE::BSFixedString hexStr) {
+        try {
+            return static_cast<int>(std::stoul(hexStr.c_str(), nullptr, 16));
+        } catch (...) {
+            return 0;
+        }
+    }
+
+    void SetAutoBioEnabled(RE::StaticFunctionTag*, bool enabled) {
+        DialogueTracker::GetSingleton()->SetEnabled(enabled);
+        logger::info("DialogueTracker: enabled={}", enabled);
+    }
+
+    void SetAutoBioThreshold(RE::StaticFunctionTag*, int threshold) {
+        DialogueTracker::GetSingleton()->SetThreshold(threshold);
+        logger::info("DialogueTracker: threshold={}", threshold);
+    }
+
+    void SetAutoBioCount(RE::StaticFunctionTag*, RE::Actor* actor, int count) {
+        if (!actor) return;
+        DialogueTracker::GetSingleton()->SetCount(actor->GetFormID(), count);
+    }
+
+    int GetAutoBioCount(RE::StaticFunctionTag*, RE::Actor* actor) {
+        if (!actor) return 0;
+        return DialogueTracker::GetSingleton()->GetCount(actor->GetFormID());
+    }
+
+    RE::BSFixedString GetAutoBioCountsJson(RE::StaticFunctionTag*) {
+        auto counts = DialogueTracker::GetSingleton()->GetAllCounts();
+        if (counts.empty()) return "{}";
+        nlohmann::json j;
+        for (const auto& [formId, count] : counts) {
+            j[std::to_string(formId)] = count;
+        }
+        return j.dump();
     }
 
     // ==========================================================================

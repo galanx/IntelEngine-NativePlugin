@@ -504,7 +504,6 @@ namespace IntelEngine {
 
                 if (config->WriteYamlValue(section, key, yamlValue)) {
                     logger::info("[Dashboard] Plugin config updated: {}.{} = {}", section, key, yamlValue);
-                    // Refresh dashboard to show updated values
                     DashboardUIManager::GetSingleton()->SendModEvent("IntelEngine_DashboardRefresh");
                 } else {
                     logger::warn("[Dashboard] Failed to write plugin config: {}.{}", section, key);

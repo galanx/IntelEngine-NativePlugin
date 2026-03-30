@@ -505,7 +505,20 @@ default_relations:
         fj["type"] = f.type;
         fj["hold"] = f.hold;
         if (!f.skyrimFactionId.empty()) fj["skyrim_faction_id"] = f.skyrimFactionId;
-        fj["leaders"] = f.leaderNames;
+
+        // Filter out dead leaders — prevents LLM from generating events involving dead NPCs
+        nlohmann::json aliveLeaders = nlohmann::json::array();
+        auto* npcIndex = NPCIndex::GetSingleton();
+        for (const auto& leaderName : f.leaderNames) {
+            auto* actor = npcIndex ? npcIndex->FindByName(leaderName) : nullptr;
+            if (actor && actor->IsDead()) {
+                logger::debug("FactionToJson: leader '{}' is dead — excluding from context", leaderName);
+                continue;
+            }
+            // Include if alive OR if we can't resolve (unloaded — assume alive)
+            aliveLeaders.push_back(leaderName);
+        }
+        fj["leaders"] = aliveLeaders;
         return fj;
     }
 

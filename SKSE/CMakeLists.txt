@@ -49,6 +49,7 @@ set(SOURCES
     src/FactionPolitics.cpp
     src/FactionConfigLoader.cpp
     src/BattleManager.cpp
+    src/DialogueTracker.cpp
 )
 
 # =============================================================================

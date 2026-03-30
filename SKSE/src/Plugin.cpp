@@ -19,6 +19,7 @@
 #include "PoliticalDB.h"
 #include "FactionPolitics.h"
 #include "SkyrimNetAPI.h"
+#include "DialogueTracker.h"
 
 #include <fstream>
 #include <chrono>
@@ -326,6 +327,7 @@ namespace IntelEngine {
                 // (requires save ID for per-save database path)
                 logger::info("Data loaded - initializing SkyrimNet API and NPC index");
                 MemoryDB::GetSingleton()->InitializeAPI();
+                DialogueTracker::GetSingleton()->Initialize();
 
                 DashboardConfig::GetSingleton()->Load();
                 DashboardUIManager::GetSingleton()->Initialize();
