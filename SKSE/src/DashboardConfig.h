@@ -45,13 +45,13 @@ namespace IntelEngine {
         std::string ReadYamlString(const std::string& path, const std::string& section,
                                     const std::string& key, const std::string& defaultVal);
 
-        std::string GetSettingsPath();
-
     private:
         DashboardConfig() = default;
         ~DashboardConfig() = default;
         DashboardConfig(const DashboardConfig&) = delete;
         DashboardConfig& operator=(const DashboardConfig&) = delete;
+
+        std::string GetSettingsPath();
         int ReadYamlInt(const std::string& path, const std::string& section,
                         const std::string& key, int defaultVal);
         bool WriteYamlInt(const std::string& section, const std::string& key, int value);

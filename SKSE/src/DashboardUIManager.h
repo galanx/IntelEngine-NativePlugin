@@ -43,13 +43,6 @@ namespace IntelEngine {
         // Push comprehensive dashboard state JSON from Papyrus
         void PushFullState(const std::string& json);
 
-        // Route a named action to the corresponding static callback.
-        // Used by WebDashboardServer to dispatch browser WS messages.
-        static void DispatchAction(const std::string& action, const std::string& jsonArg);
-
-        // Request Papyrus to push a full state update (fires ModEvent on game thread)
-        void RequestFullState();
-
         // Hot-reload UI from disk + re-read config
         void ReloadView();
 

@@ -14,11 +14,6 @@ body {
   background: transparent !important;
 }
 
-body.browser-mode {
-  background: #0f0f14 !important;
-  overflow: auto !important;
-}
-
 .dashboard-panel {
   background: var(--bg-panel);
   border: 1px solid var(--border-color);

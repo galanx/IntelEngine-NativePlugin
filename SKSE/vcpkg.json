@@ -9,8 +9,6 @@
     "fmt",
     "rapidfuzz",
     "nlohmann-json",
-    "sqlite3",
-    "cpp-httplib",
-    "ixwebsocket"
+    "sqlite3"
   ]
 }

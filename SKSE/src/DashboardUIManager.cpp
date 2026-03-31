@@ -14,7 +14,6 @@
 #include "SkyrimNetAPI.h"
 #include "SlotTracker.h"
 #include "ProcessUtils.h"
-#include "WebDashboardServer.h"
 #include <windows.h>
 #include <filesystem>
 #include <fstream>
@@ -47,47 +46,6 @@ namespace IntelEngine {
         }
         pendingParams_.clear();
         return j.dump();
-    }
-
-    // =========================================================================
-    // Action Dispatch (shared by PrismaUI listeners and WebSocket server)
-    // =========================================================================
-
-    void DashboardUIManager::DispatchAction(const std::string& action, const std::string& jsonArg) {
-        static const std::unordered_map<std::string, void(*)(const char*)> actionMap = {
-            {"cancelTask",        OnCancelTaskStatic},
-            {"cancelSchedule",    OnCancelScheduleStatic},
-            {"toggleStoryType",   OnToggleStoryTypeStatic},
-            {"changeSetting",     OnChangeSettingStatic},
-            {"removePackages",    OnRemovePackagesStatic},
-            {"changePluginConfig",OnChangePluginConfigStatic},
-            {"dispatchStory",     OnDispatchStoryStatic},
-            {"dispatchNpcSocial", OnDispatchNpcSocialStatic},
-            {"dispatchPolitics",  OnDispatchPoliticsStatic},
-            {"executeAction",     OnExecuteActionStatic},
-            {"toggleAction",      OnToggleActionStatic},
-        };
-
-        auto it = actionMap.find(action);
-        if (it != actionMap.end()) {
-            it->second(jsonArg.c_str());
-        } else if (action == "requestRefresh") {
-            OnRequestRefreshStatic(jsonArg.c_str());
-        } else {
-            logger::warn("[Dashboard] DispatchAction: unknown action '{}'", action);
-        }
-    }
-
-    void DashboardUIManager::RequestFullState() {
-        logger::info("[Dashboard] RequestFullState called");
-        auto* task = SKSE::GetTaskInterface();
-        if (task) {
-            task->AddTask([]() {
-                auto* mgr = DashboardUIManager::GetSingleton();
-                mgr->SendModEvent("IntelEngine_DashboardOpened");
-                mgr->PushSlotData();
-            });
-        }
     }
 
     static constexpr int kViewRenderOrder = 90;
@@ -129,9 +87,6 @@ namespace IntelEngine {
     void DashboardUIManager::Shutdown() {
         stopPolling_.store(true);
         if (hotkeyThread_.joinable()) hotkeyThread_.join();
-
-        // Shut down WebSocket/HTTP server
-        WebDashboardServer::GetSingleton()->Shutdown();
 
         std::lock_guard<std::mutex> lock(mutex_);
         if (prismaUI_ && dashboardView_ != 0) {
@@ -204,33 +159,21 @@ namespace IntelEngine {
     // =========================================================================
 
     void DashboardUIManager::PushSlotData() {
+        if (!prismaUI_ || dashboardView_ == 0 || !domReady_.load()) return;
         try {
             std::string json = SlotTracker::GetSingleton()->SerializeToJson();
-
-            // Push to PrismaUI if available
-            if (prismaUI_ && dashboardView_ != 0 && domReady_.load()) {
-                prismaUI_->InteropCall(dashboardView_, "updateSlots", json.c_str());
-            }
-
-            // Broadcast to WebSocket clients
-            auto* ws = WebDashboardServer::GetSingleton();
-            if (ws->IsRunning()) {
-                ws->BroadcastSlotData(json);
-            }
+            prismaUI_->InteropCall(dashboardView_, "updateSlots", json.c_str());
         } catch (const std::exception& e) {
             logger::error("[Dashboard] Failed to push slot data: {}", e.what());
         }
     }
 
     void DashboardUIManager::PushFullState(const std::string& json) {
-        bool prismaReady = prismaUI_ && dashboardView_ != 0 && domReady_.load();
-        bool wsReady = WebDashboardServer::GetSingleton()->IsRunning();
-
-        if (!prismaReady && !wsReady) {
-            logger::warn("[Dashboard] PushFullState: no transports available");
+        if (!prismaUI_ || dashboardView_ == 0 || !domReady_.load()) {
+            logger::warn("[Dashboard] PushFullState: skipped (prisma={}, view={}, domReady={})",
+                        prismaUI_ != nullptr, dashboardView_, domReady_.load());
             return;
         }
-
         try {
             // Fix Papyrus Bool-to-String before parsing — Papyrus produces
             // mixed-case TRUE/True/False/FALSE which is invalid JSON.
@@ -322,17 +265,8 @@ namespace IntelEngine {
             }
 
             std::string clean = parsed.dump();
-            logger::info("[Dashboard] PushFullState: sending {} bytes", clean.size());
-
-            // Push to PrismaUI if available
-            if (prismaReady) {
-                prismaUI_->InteropCall(dashboardView_, "updateFullState", clean.c_str());
-            }
-
-            // Broadcast to WebSocket clients
-            if (wsReady) {
-                WebDashboardServer::GetSingleton()->BroadcastFullState(clean);
-            }
+            logger::debug("[Dashboard] PushFullState: sending {} bytes", clean.size());
+            prismaUI_->InteropCall(dashboardView_, "updateFullState", clean.c_str());
         } catch (const std::exception& e) {
             logger::error("[Dashboard] Failed to push full state: {}", e.what());
         }
@@ -653,7 +587,7 @@ namespace IntelEngine {
         modEvent.sender = nullptr;
         eventSource->SendEvent(&modEvent);
 
-        logger::info("[Dashboard] Sent ModEvent: {} str={} num={}",
+        logger::debug("[Dashboard] Sent ModEvent: {} str={} num={}",
                     eventName, strArg, numArg);
     }
 

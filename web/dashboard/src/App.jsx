@@ -6,7 +6,6 @@ import SettingsTab from './components/SettingsTab';
 import DirectorTab from './components/DirectorTab';
 import ActionsTab from './components/ActionsTab';
 import PoliticsTab from './components/PoliticsTab';
-import { initTransport, sendAction as transportSend, destroyTransport, isPrismaUI } from './transport';
 
 const TABS = [
   { id: 'tasks', label: 'Tasks' },
@@ -20,7 +19,6 @@ const TABS = [
 
 function App() {
   const [activeTab, setActiveTab] = useState('tasks');
-  const [browserMode, setBrowserMode] = useState(false);
   const [state, setState] = useState({
     tasks: [],
     scheduled: [],
@@ -92,24 +90,25 @@ function App() {
   }, []);
 
   useEffect(() => {
-    const result = initTransport({
-      onFullState: handleFullState,
-      onSlots: handleUpdateSlots,
-    });
+    window.updateFullState = (json) => handleFullState(json);
+    window.updateSlots = (json) => handleUpdateSlots(json);
 
-    if (result.mode === 'browser') {
-      setBrowserMode(true);
-      document.body.classList.add('browser-mode');
+    const pending = window.__pendingInteropCalls || [];
+    for (const call of pending) {
+      if (call.name === 'updateFullState') handleFullState(call.json);
+      else if (call.name === 'updateSlots') handleUpdateSlots(call.json);
     }
+    window.__pendingInteropCalls = [];
 
     return () => {
-      destroyTransport();
-      document.body.classList.remove('browser-mode');
+      window.updateFullState = () => {};
+      window.updateSlots = () => {};
     };
   }, [handleFullState, handleUpdateSlots]);
 
   const sendAction = useCallback((action, payload = {}) => {
-    transportSend(action, payload);
+    const fn = window[`onDashboard_${action}`];
+    if (fn) fn(JSON.stringify(payload));
   }, []);
 
   const handleSettingChange = useCallback((key, value) => {
@@ -127,11 +126,7 @@ function App() {
   }, []);
 
   const handleRefresh = useCallback(() => {
-    if (isPrismaUI()) {
-      if (window.onRequestRefresh) window.onRequestRefresh('{}');
-    } else {
-      transportSend('requestRefresh', {});
-    }
+    if (window.onRequestRefresh) window.onRequestRefresh('{}');
   }, []);
 
   const activeCount = (state.tasks || []).filter(s => s.state !== 0).length;
@@ -139,15 +134,8 @@ function App() {
   const uiScale = state.pluginConfig?.['ui.scale'] || 1.3;
 
   return (
-    <div className={browserMode
-      ? "min-h-screen w-full flex justify-center p-8"
-      : "fixed top-4 right-4 w-[540px] max-h-[calc(100vh-2rem)] flex flex-col origin-top-right"
-    } style={browserMode ? {} : { zoom: uiScale }}>
-      <div className={`dashboard-panel rounded-lg flex flex-col ${
-        browserMode
-          ? 'max-w-[960px] w-full min-h-[calc(100vh-4rem)]'
-          : 'max-h-[calc(100vh-2rem)] overflow-hidden'
-      }`}>
+    <div className="fixed top-4 right-4 w-[540px] max-h-[calc(100vh-2rem)] flex flex-col origin-top-right" style={{ zoom: uiScale }}>
+      <div className="dashboard-panel rounded-lg overflow-hidden flex flex-col max-h-[calc(100vh-2rem)]">
         {/* Header */}
         <div className="flex items-center justify-between px-4 py-2.5 border-b border-white/10">
           <div className="flex items-center gap-3">
@@ -160,9 +148,7 @@ function App() {
           </div>
           <div className="flex items-center gap-1">
             <button onClick={handleRefresh} className="btn-icon" title="Refresh">&#x21BB;</button>
-            {!browserMode && (
-              <button onClick={handleClose} className="btn-icon" title="Close (Shift+7)">&#x2715;</button>
-            )}
+            <button onClick={handleClose} className="btn-icon" title="Close (Shift+7)">&#x2715;</button>
           </div>
         </div>
         {/* Tabs */}
