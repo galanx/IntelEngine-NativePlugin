@@ -79,57 +79,50 @@ namespace IntelEngine {
             return "";
         }
 
-        // Read the bio file — prefer dynamic bio (evolved through gameplay), fall back to static.
+        // Read the .prompt file from SkyrimNet's character prompts directory.
+        // Priority (highest first):
+        //   1. Dynamic bio:    _saves/{saveId}/characters/dynamic/{template}.dynamic.prompt
+        //   2. Save-specific:  _saves/{saveId}/characters/{template}.prompt
+        //   3. Dynamic bio:    prompts/characters/dynamic/{template}.dynamic.prompt
+        //   4. Edited bio:     prompts/characters/{template}.prompt
+        //   5. Original:       original_prompts/characters/{template}.prompt
         const std::string promptFile = bioTemplate + ".prompt";
-        const std::string dynamicBioFile = bioTemplate + ".dynamic.prompt";
+        const std::string dynamicPromptFile = bioTemplate + ".dynamic.prompt";
         std::string filePath;
         std::error_code ec;
 
-        // 1. Dynamic bio (LLM-generated evolution of the character)
-        std::string dynamicBioPath = "Data/SKSE/Plugins/SkyrimNet/prompts/characters/dynamic/" + dynamicBioFile;
-        // 2. Static bio (authored character prompt)
-        std::string staticPath = "Data/SKSE/Plugins/SkyrimNet/prompts/characters/" + promptFile;
+        std::string editedPath = "Data/SKSE/Plugins/SkyrimNet/prompts/characters/" + promptFile;
         std::string originalPath = "Data/SKSE/Plugins/SkyrimNet/original_prompts/characters/" + promptFile;
 
-        // Also check save-specific dynamic bios
+        // Collect and sort save dirs once (shared by dynamic and save-specific lookups)
         std::string savesDir = "Data/SKSE/Plugins/SkyrimNet/prompts/_saves";
+        std::vector<std::filesystem::directory_entry> saveDirs;
         if (std::filesystem::exists(savesDir, ec) && std::filesystem::is_directory(savesDir, ec)) {
-            std::vector<std::filesystem::directory_entry> saveDirs;
             for (auto& entry : std::filesystem::directory_iterator(savesDir, ec)) {
-                if (entry.is_directory(ec)) saveDirs.push_back(entry);
+                if (entry.is_directory(ec)) {
+                    saveDirs.push_back(entry);
+                }
             }
+            // Sort descending by directory name (newest save first)
             std::sort(saveDirs.begin(), saveDirs.end(),
                 [](const auto& a, const auto& b) {
                     return a.path().filename().string() > b.path().filename().string();
                 });
+        }
+
+        // Priority 1: Dynamic bios in _saves/{saveId}/characters/dynamic/
+        // SkyrimNet returns the full template name (including any suffix), so exact match.
+        for (auto& saveDir : saveDirs) {
+            auto dynamicBioPath = saveDir.path() / "characters" / "dynamic" / dynamicPromptFile;
+            if (std::filesystem::exists(dynamicBioPath, ec)) {
+                filePath = dynamicBioPath.string();
+                break;
+            }
+        }
+
+        // Priority 2: save-specific (non-dynamic) in _saves/{saveId}/characters/
+        if (filePath.empty()) {
             for (auto& saveDir : saveDirs) {
-                auto saveDynPath = saveDir.path() / "characters" / "dynamic" / dynamicBioFile;
-                if (std::filesystem::exists(saveDynPath, ec)) {
-                    filePath = saveDynPath.string();
-                    break;
-                }
-            }
-        }
-
-        if (filePath.empty() && std::filesystem::exists(dynamicBioPath, ec)) {
-            filePath = dynamicBioPath;
-        } else if (filePath.empty() && std::filesystem::exists(staticPath, ec)) {
-            filePath = staticPath;
-        } else if (filePath.empty() && std::filesystem::exists(originalPath, ec)) {
-            filePath = originalPath;
-        }
-
-        // Last resort: save-specific static bio
-        if (filePath.empty() && std::filesystem::exists(savesDir, ec) && std::filesystem::is_directory(savesDir, ec)) {
-            std::vector<std::filesystem::directory_entry> saveDirs2;
-            for (auto& entry : std::filesystem::directory_iterator(savesDir, ec)) {
-                if (entry.is_directory(ec)) saveDirs2.push_back(entry);
-            }
-            std::sort(saveDirs2.begin(), saveDirs2.end(),
-                [](const auto& a, const auto& b) {
-                    return a.path().filename().string() > b.path().filename().string();
-                });
-            for (auto& saveDir : saveDirs2) {
                 auto saveBioPath = saveDir.path() / "characters" / promptFile;
                 if (std::filesystem::exists(saveBioPath, ec)) {
                     filePath = saveBioPath.string();
@@ -138,15 +131,31 @@ namespace IntelEngine {
             }
         }
 
-        // Fuzzy file fallback: template name includes a FormID suffix (e.g., "ulfric_stormcloak_584")
-        // that changes with load order. Bio files may also have title prefixes (e.g., "jarl_ulfric_stormcloak_131").
-        // Strip the FormID suffix to get the base name, then scan existing files for any match.
+        // Priority 3: non-save-specific dynamic bio
+        if (filePath.empty()) {
+            std::string dynamicBioPath = "Data/SKSE/Plugins/SkyrimNet/prompts/characters/dynamic/" + dynamicPromptFile;
+            if (std::filesystem::exists(dynamicBioPath, ec)) {
+                filePath = dynamicBioPath;
+            }
+        }
+
+        // Priority 4-5: edited, then original
+        if (filePath.empty()) {
+            if (std::filesystem::exists(editedPath, ec)) {
+                filePath = editedPath;
+            } else if (std::filesystem::exists(originalPath, ec)) {
+                filePath = originalPath;
+            }
+        }
+
+        // Priority 5: Fuzzy file fallback — template name includes a FormID suffix
+        // (e.g., "ulfric_stormcloak_584") that changes with load order. Bio files may
+        // also have title prefixes (e.g., "jarl_ulfric_stormcloak_131").
+        // Strip the FormID suffix to get the base name, then scan for any match.
         if (filePath.empty() && !bioTemplate.empty()) {
-            // Extract base name by removing the trailing _XXX FormID suffix
             std::string baseName = bioTemplate;
             auto lastUnderscore = baseName.rfind('_');
             if (lastUnderscore != std::string::npos && lastUnderscore > 0) {
-                // Verify the suffix is hex digits (FormID)
                 bool isHexSuffix = true;
                 for (size_t i = lastUnderscore + 1; i < baseName.size(); i++) {
                     char c = baseName[i];
@@ -160,13 +169,11 @@ namespace IntelEngine {
                 }
             }
 
-            // Scan character directories for files containing the base name
             auto scanDir = [&](const std::string& dir) -> std::string {
                 if (!std::filesystem::exists(dir, ec) || !std::filesystem::is_directory(dir, ec)) return "";
                 for (auto& entry : std::filesystem::directory_iterator(dir, ec)) {
                     if (!entry.is_regular_file(ec)) continue;
                     auto fname = entry.path().filename().string();
-                    // Match: filename contains the base name (handles title prefixes + different FormID suffixes)
                     if (fname.find(baseName) != std::string::npos &&
                         (fname.ends_with(".prompt") || fname.ends_with(".dynamic.prompt"))) {
                         return entry.path().string();
@@ -175,27 +182,22 @@ namespace IntelEngine {
                 return "";
             };
 
-            // Priority: dynamic → static → original (same as primary lookup)
-            std::string match = scanDir("Data/SKSE/Plugins/SkyrimNet/prompts/characters/dynamic");
-            if (match.empty()) match = scanDir("Data/SKSE/Plugins/SkyrimNet/prompts/characters");
-            if (match.empty()) match = scanDir("Data/SKSE/Plugins/SkyrimNet/original_prompts/characters");
-
-            // Also check save-specific directories
-            if (match.empty() && std::filesystem::exists(savesDir, ec)) {
-                std::vector<std::filesystem::directory_entry> saveDirs3;
-                for (auto& entry : std::filesystem::directory_iterator(savesDir, ec)) {
-                    if (entry.is_directory(ec)) saveDirs3.push_back(entry);
-                }
-                std::sort(saveDirs3.begin(), saveDirs3.end(),
-                    [](const auto& a, const auto& b) {
-                        return a.path().filename().string() > b.path().filename().string();
-                    });
-                for (auto& saveDir : saveDirs3) {
-                    match = scanDir((saveDir.path() / "characters" / "dynamic").string());
-                    if (match.empty()) match = scanDir((saveDir.path() / "characters").string());
+            // Fuzzy fallback follows the same priority as exact match:
+            // 1. save-specific dynamic, 2. save-specific, 3. dynamic, 4. edited, 5. original
+            std::string match;
+            for (auto& saveDir : saveDirs) {
+                match = scanDir((saveDir.path() / "characters" / "dynamic").string());
+                if (!match.empty()) break;
+            }
+            if (match.empty()) {
+                for (auto& saveDir : saveDirs) {
+                    match = scanDir((saveDir.path() / "characters").string());
                     if (!match.empty()) break;
                 }
             }
+            if (match.empty()) match = scanDir("Data/SKSE/Plugins/SkyrimNet/prompts/characters/dynamic");
+            if (match.empty()) match = scanDir("Data/SKSE/Plugins/SkyrimNet/prompts/characters");
+            if (match.empty()) match = scanDir("Data/SKSE/Plugins/SkyrimNet/original_prompts/characters");
 
             if (!match.empty()) {
                 filePath = match;
@@ -206,6 +208,7 @@ namespace IntelEngine {
 
         std::string summary;
         std::string relationships;
+        std::string fullContext;
         if (!filePath.empty()) {
             std::ifstream file(filePath);
             if (file.is_open()) {
@@ -215,45 +218,52 @@ namespace IntelEngine {
 
                 const std::string endTag = "{% endblock %}";
 
-                // Extract {% block summary %}...{% endblock %}
-                {
-                    const std::string startTag = "{% block summary %}";
+                // Helper: extract a named block's content, trimmed
+                auto extractBlock = [&](const std::string& blockName) -> std::string {
+                    std::string startTag = "{% block " + blockName + " %}";
                     auto startPos = content.find(startTag);
-                    if (startPos != std::string::npos) {
-                        startPos += startTag.size();
-                        auto endPos = content.find(endTag, startPos);
-                        if (endPos != std::string::npos) {
-                            summary = content.substr(startPos, endPos - startPos);
-                            while (!summary.empty() && (summary.front() == ' ' || summary.front() == '\n' || summary.front() == '\r'))
-                                summary.erase(summary.begin());
-                            while (!summary.empty() && (summary.back() == ' ' || summary.back() == '\n' || summary.back() == '\r'))
-                                summary.pop_back();
-                        }
-                    }
-                }
+                    if (startPos == std::string::npos) return "";
+                    startPos += startTag.size();
+                    auto endPos = content.find(endTag, startPos);
+                    if (endPos == std::string::npos) return "";
+                    std::string text = content.substr(startPos, endPos - startPos);
+                    auto start = text.find_first_not_of(" \n\r");
+                    if (start == std::string::npos) return "";
+                    auto end = text.find_last_not_of(" \n\r");
+                    return text.substr(start, end - start + 1);
+                };
 
-                // Extract {% block relationships %}...{% endblock %}
-                {
-                    const std::string startTag = "{% block relationships %}";
-                    auto startPos = content.find(startTag);
-                    if (startPos != std::string::npos) {
-                        startPos += startTag.size();
-                        auto endPos = content.find(endTag, startPos);
-                        if (endPos != std::string::npos) {
-                            relationships = content.substr(startPos, endPos - startPos);
-                            while (!relationships.empty() && (relationships.front() == ' ' || relationships.front() == '\n' || relationships.front() == '\r'))
-                                relationships.erase(relationships.begin());
-                            while (!relationships.empty() && (relationships.back() == ' ' || relationships.back() == '\n' || relationships.back() == '\r'))
-                                relationships.pop_back();
-                        }
+                summary = extractBlock("summary");
+                relationships = extractBlock("relationships");
+                std::string personality = extractBlock("personality");
+                std::string occupation = extractBlock("occupation");
+
+                // Build full context: personality + occupation + relationships.
+                // Keeps token cost manageable for the NPC DM picker prompt.
+                struct BlockDef { const char* label; const std::string* text; };
+                BlockDef blocks[] = {
+                    {"Personality",   &personality},
+                    {"Occupation",    &occupation},
+                    {"Relationships", &relationships},
+                };
+
+                for (const auto& [blabel, btext] : blocks) {
+                    if (!btext->empty()) {
+                        fullContext += blabel;
+                        fullContext += ": ";
+                        fullContext += *btext;
+                        fullContext += "\n";
                     }
                 }
+                // Trim trailing newline
+                while (!fullContext.empty() && (fullContext.back() == '\n' || fullContext.back() == '\r'))
+                    fullContext.pop_back();
             }
         }
 
         if (summary.empty()) {
-            logger::warn("MemoryDB: No bio summary for FormID 0x{:08X} (template: '{}', tried: '{}', '{}', and _saves/*/characters/)",
-                formId, bioTemplate, dynamicBioPath, originalPath);
+            logger::warn("MemoryDB: No bio summary for FormID 0x{:08X} (template: '{}', tried: _saves/*/characters/dynamic/, _saves/*/characters/, prompts/characters/dynamic/, '{}', '{}')",
+                formId, bioTemplate, editedPath, originalPath);
         } else {
             logger::info("MemoryDB: Bio loaded for 0x{:08X} ({}) from {}: {}...",
                 formId, bioTemplate, filePath, summary.substr(0, 60));
@@ -263,6 +273,7 @@ namespace IntelEngine {
             std::lock_guard lock(m_mutex);
             m_bioSummaryCache[formId] = summary;
             m_bioRelationshipsCache[formId] = relationships;
+            m_bioFullContextCache[formId] = fullContext;
         }
 
         return summary;
@@ -283,6 +294,27 @@ namespace IntelEngine {
             std::lock_guard lock(m_mutex);
             auto cacheIt = m_bioRelationshipsCache.find(formId);
             if (cacheIt != m_bioRelationshipsCache.end()) {
+                return cacheIt->second;
+            }
+        }
+        return "";
+    }
+
+    std::string MemoryDB::GetNPCFullContext(RE::FormID formId) {
+        // Check cache first — populated as side effect of GetNPCBioSummary
+        {
+            std::lock_guard lock(m_mutex);
+            auto cacheIt = m_bioFullContextCache.find(formId);
+            if (cacheIt != m_bioFullContextCache.end()) {
+                return cacheIt->second;
+            }
+        }
+        // Cache miss — trigger bio file load (populates all caches)
+        GetNPCBioSummary(formId);
+        {
+            std::lock_guard lock(m_mutex);
+            auto cacheIt = m_bioFullContextCache.find(formId);
+            if (cacheIt != m_bioFullContextCache.end()) {
                 return cacheIt->second;
             }
         }

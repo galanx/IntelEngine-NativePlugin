@@ -45,3 +45,5 @@ check_header.ps1
 check_backslash.ps1
 SkyrimNet_API_Issues.log
 CHANGELOG.md
+
+SKSE/cmake/x64-windows-skse.cmake
