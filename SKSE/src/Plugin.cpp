@@ -16,6 +16,7 @@
 #include "Settings.h"
 #include "DashboardConfig.h"
 #include "DashboardUIManager.h"
+#include "WebDashboardServer.h"
 #include "PoliticalDB.h"
 #include "FactionPolitics.h"
 #include "SkyrimNetAPI.h"
@@ -329,6 +330,7 @@ namespace IntelEngine {
 
                 DashboardConfig::GetSingleton()->Load();
                 DashboardUIManager::GetSingleton()->Initialize();
+                WebDashboardServer::GetSingleton()->Initialize();
                 NPCIndex::GetSingleton()->BuildIndex();
                 LocationResolver::GetSingleton()->BuildLocationIndex();
                 ItemIndex::GetSingleton()->BuildIndex();
@@ -414,8 +416,8 @@ SKSEPluginLoad(const SKSE::LoadInterface* skse) {
 
         auto sink = std::make_shared<spdlog::sinks::basic_file_sink_mt>(path->string(), true);
         auto log = std::make_shared<spdlog::logger>("global log", std::move(sink));
-        log->set_level(spdlog::level::info);
-        log->flush_on(spdlog::level::info);
+        log->set_level(spdlog::level::trace);
+        log->flush_on(spdlog::level::trace);
         spdlog::set_default_logger(std::move(log));
         spdlog::set_pattern("[%Y-%m-%d %H:%M:%S.%e] [%l] %v");
     } catch (const std::exception& e) {

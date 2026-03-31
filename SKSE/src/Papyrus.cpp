@@ -6,6 +6,7 @@
 
 #include "Papyrus.h"
 #include "NPCIndex.h"
+#include "WebDashboardServer.h"
 #include "ItemIndex.h"
 #include <random>
 #include <algorithm>
@@ -2524,7 +2525,8 @@ namespace IntelEngine::Papyrus {
     }
 
     bool IsDashboardOpen(RE::StaticFunctionTag*) {
-        return DashboardUIManager::GetSingleton()->IsOpen();
+        return DashboardUIManager::GetSingleton()->IsOpen()
+            || WebDashboardServer::GetSingleton()->HasConnectedClients();
     }
 
     RE::BSFixedString GetPendingDirectorParam(RE::StaticFunctionTag*, RE::BSFixedString key) {

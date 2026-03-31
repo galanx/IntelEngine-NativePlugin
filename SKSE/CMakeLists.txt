@@ -23,6 +23,8 @@ find_package(fmt CONFIG REQUIRED)
 find_package(rapidfuzz CONFIG REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
 find_package(unofficial-sqlite3 CONFIG REQUIRED)
+find_package(httplib CONFIG REQUIRED)
+find_package(ixwebsocket CONFIG REQUIRED)
 
 
 # =============================================================================
@@ -49,6 +51,7 @@ set(SOURCES
     src/FactionPolitics.cpp
     src/FactionConfigLoader.cpp
     src/BattleManager.cpp
+    src/WebDashboardServer.cpp
 )
 
 # =============================================================================
@@ -58,6 +61,7 @@ set(SOURCES
 add_commonlibsse_plugin(
     ${PROJECT_NAME}
     SOURCES ${SOURCES}
+    MINIMUM_SKSE_VERSION 0.0.0.0
 )
 
 target_include_directories(
@@ -73,6 +77,9 @@ target_link_libraries(
         rapidfuzz::rapidfuzz
         nlohmann_json::nlohmann_json
         unofficial::sqlite3::sqlite3
+        httplib::httplib
+        ixwebsocket::ixwebsocket
+        bcrypt
 )
 
 target_precompile_headers(
