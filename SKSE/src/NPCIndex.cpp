@@ -910,7 +910,9 @@ namespace IntelEngine {
             "Sabre Cat", "Skeever", "Slaughterfish", "Snowy Sabre Cat",
             "Spriggan", "Thrall Wolf", "Troll", "Unknown", "Wisp",
             "Wolf", "Flame Atronach", "Frost Atronach", "Storm Atronach",
-            "Hagraven", "Chaurus", "Horker", "Fox"
+            "Hagraven", "Chaurus", "Horker", "Fox",
+            // Test cell actors — should never appear in story dispatch
+            "TestTony", "Marker Storage Unit"
         };
         return kExcluded.count(name) > 0;
     }
@@ -1019,7 +1021,10 @@ namespace IntelEngine {
 
     bool NPCIndex::IsEligibleStoryCandidateRelaxed(RE::Actor* actor, RE::Actor* player,
         SlotTracker* tracker) {
-        return PassesCommonEligibility(actor, player, tracker, true);
+        if (!PassesCommonEligibility(actor, player, tracker, true)) return false;
+        // Followers should never be story candidates — they're already with the player
+        if (actor->IsPlayerTeammate()) return false;
+        return true;
     }
 
     std::string NPCIndex::GetNPCLocationName(RE::Actor* actor) {
@@ -1067,8 +1072,9 @@ namespace IntelEngine {
         auto* loc = ResolveActorLocation(actor);
         if (!loc) return "";
 
-        // Walk to topmost named parent (the hold)
-        while (loc->parentLoc) {
+        // Walk up but stop at the hold level — the topmost is "Tamriel" (worldspace), one too far.
+        // Stop when the parent's parent is null (parent = worldspace = top).
+        while (loc->parentLoc && loc->parentLoc->parentLoc) {
             loc = loc->parentLoc;
         }
         auto name = loc->GetFullName();
@@ -1656,6 +1662,8 @@ namespace IntelEngine {
                 dbCreature++;
                 continue;
             }
+            // Absence filter — skip NPCs who recently interacted with the player
+            if (recentPlayerNPCs.count(StringUtils::ToLowerStd(name))) continue;
             // Resolve via FormID first, fall back to name if FormID is stale
             auto* actor = ResolveFromMemoryDB(formId, name);
             if (!actor) {
@@ -1935,18 +1943,8 @@ namespace IntelEngine {
         bool dangerous = cellAnalyzer->IsPlayerInDangerousLocation();
         bool interior = playerCell->IsInteriorCell();
 
-        // Hold name (parent location)
-        std::string holdName;
-        if (auto* loc = player->GetCurrentLocation()) {
-            if (auto* parent = loc->parentLoc) {
-                auto n = parent->GetFullName();
-                if (n && n[0]) holdName = n;
-            }
-            if (holdName.empty()) {
-                auto n = loc->GetFullName();
-                if (n && n[0]) holdName = n;
-            }
-        }
+        // Hold name — use the same resolution as per-NPC candidates
+        std::string holdName = GetNPCHoldName(player);
         if (holdName.empty()) holdName = "Unknown";
 
         const char* timeStr = GetTimeOfDayString();
@@ -2025,7 +2023,8 @@ namespace IntelEngine {
             snprintf(uuid, sizeof(uuid), "0x%08X", actor->GetFormID());
 
             std::string bio = GetNPCBioLine(actor);
-            std::string npcHold = GetNPCHoldName(actor);
+            std::string npcHold = GetActorSettlementName(actor);
+            if (npcHold.empty()) npcHold = GetNPCHoldName(actor);
             if (npcHold.empty()) npcHold = "Unknown";
 
             // Distance from player (approximate — loaded actors only)

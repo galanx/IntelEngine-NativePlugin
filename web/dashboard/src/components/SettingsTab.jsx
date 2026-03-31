@@ -52,6 +52,17 @@ const CONFIRM_ACTIONS = [
   { key: 'confirmScheduleDelivery', label: 'Schedule Delivery' },
 ];
 
+const SKIP_FOLLOWER_ACTIONS = [
+  { key: 'skipFollowerGoToLocation', label: 'Go To Location' },
+  { key: 'skipFollowerDeliverMessage', label: 'Deliver Message' },
+  { key: 'skipFollowerFetchPerson', label: 'Fetch Person' },
+  { key: 'skipFollowerEscortTarget', label: 'Escort Target' },
+  { key: 'skipFollowerSearchForActor', label: 'Search For Actor' },
+  { key: 'skipFollowerScheduleMeeting', label: 'Schedule Meeting' },
+  { key: 'skipFollowerScheduleFetch', label: 'Schedule Fetch' },
+  { key: 'skipFollowerScheduleDelivery', label: 'Schedule Delivery' },
+];
+
 const VK_NAMES = {
   '-1': 'Disabled',
   '48': '0', '49': '1', '50': '2', '51': '3', '52': '4',
@@ -275,6 +286,37 @@ function SettingsTab({ config, onSettingChange, pluginConfig, onPluginConfigChan
             </div>
           );
         })}
+      </Accordion>
+
+      {/* Skip Action for Followers */}
+      <Accordion title="Skip Action for Followers" isOpen={openSections.skipFollowers} onToggle={() => toggle('skipFollowers')}>
+        <p className="text-[10px] text-gray-500 mb-2">Silently block actions when performed by active followers</p>
+        {SKIP_FOLLOWER_ACTIONS.map(({ key, label }) => (
+          <ToggleRow
+            key={key}
+            label={label}
+            value={config[key]}
+            onChange={v => onSettingChange(key, v)}
+          />
+        ))}
+      </Accordion>
+
+      {/* Auto Dynamic Bio Updates */}
+      <Accordion title="Auto Dynamic Bio" isOpen={openSections.autoBio} onToggle={() => toggle('autoBio')}>
+        <p className="text-[10px] text-gray-500 mb-2">Automatically update NPC dynamic bios after X dialogue lines (per-NPC tracking)</p>
+        <ToggleRow
+          label="Enabled"
+          value={config.autoBioEnabled}
+          onChange={v => onSettingChange('autoBioEnabled', v)}
+          hint="When enabled, NPCs get their dynamic bio refreshed after a set number of dialogue exchanges."
+        />
+        <SliderRow
+          label="Lines Before Update"
+          value={parseInt(config.autoBioThreshold) || 20}
+          min={5} max={1000} step={5}
+          onCommit={v => onSettingChange('autoBioThreshold', v)}
+          hint="Number of dialogue lines per NPC before triggering a bio update. Counter resets after each update."
+        />
       </Accordion>
 
       {/* Quest Types */}

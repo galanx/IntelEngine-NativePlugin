@@ -83,6 +83,14 @@ namespace IntelEngine::SkyrimNetAPI {
     /** Get a single string config value by dot-path from a plugin's settings. */
     inline std::string (*GetPluginConfigValue)(const char* pluginName, const char* path, const char* defaultValue) = nullptr;
 
+    // ---- Event Callback API (v3.1+) ----
+
+    /** Register a callback for a specific event type (e.g., "dialogue"). Thread-safe. */
+    inline uint64_t (*RegisterEventCallback)(const char* eventType, std::function<void(const char*)> callback) = nullptr;
+
+    /** Unregister a previously registered event callback by ID. */
+    inline bool (*UnregisterEventCallback)(uint64_t callbackId) = nullptr;
+
     /**
      * Initialize the SkyrimNet API by loading function pointers from the DLL.
      * Returns true if SkyrimNet was found and API version is >= 3.
@@ -152,13 +160,23 @@ namespace IntelEngine::SkyrimNetAPI {
         GetPluginConfigValue = reinterpret_cast<std::string(*)(const char*, const char*, const char*)>(
             GetProcAddress(hDLL, "PublicGetPluginConfigValue"));
 
+        // Event callback API (v3.1+)
+        RegisterEventCallback = reinterpret_cast<uint64_t(*)(const char*, std::function<void(const char*)>)>(
+            GetProcAddress(hDLL, "PublicRegisterEventCallback"));
+
+        UnregisterEventCallback = reinterpret_cast<bool(*)(uint64_t)>(
+            GetProcAddress(hDLL, "PublicUnregisterEventCallback"));
+
+        // Bio template API
         logger::info("SkyrimNet Data API: Memories={}, Events={}, Dialogue={}, LatestDialogue={}, Ready={}, "
-                     "ActorEngagement={}, RelatedActors={}, PlayerContext={}, EventPairs={}",
+                     "ActorEngagement={}, RelatedActors={}, PlayerContext={}, EventPairs={}, "
+                     "EventCallback={}, BioTemplate={}",
                      GetMemoriesForActor != nullptr, GetRecentEvents != nullptr,
                      GetRecentDialogue != nullptr, GetLatestDialogueInfo != nullptr,
                      IsMemorySystemReady != nullptr, GetActorEngagement != nullptr,
                      GetRelatedActors != nullptr, GetPlayerContext != nullptr,
-                     GetEventPairCounts != nullptr);
+                     GetEventPairCounts != nullptr,
+                     RegisterEventCallback != nullptr, GetBioTemplateName != nullptr);
 
         return true;
     }

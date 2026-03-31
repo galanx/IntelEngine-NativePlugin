@@ -553,6 +553,37 @@ namespace IntelEngine {
         return true;
     }
 
+    bool CellAnalyzer::IsLocationNonCombative(RE::BGSLocation* location) {
+        if (!location) return false;
+
+        // Keyword-based: only temples are universally non-combative.
+        // Castles, guild halls, and inns are intentionally excluded —
+        // sieges, guild defense, and faction battles at these locations are lore-appropriate.
+        static auto* s_templeKW = RE::TESForm::LookupByEditorID<RE::BGSKeyword>("LocTypeTemple");
+        if (s_templeKW && location->HasKeyword(s_templeKW)) {
+            return true;
+        }
+
+        // Name-based: specific sacred/peaceful locations that should never have combat quests.
+        // Does NOT walk parent chain — sub-dungeons inside castles (Nchuand-Zel, dragon trap)
+        // are valid combat zones even if their parent is a protected location.
+        auto locName = location->GetFullName();
+        if (locName && locName[0]) {
+            static const std::vector<std::string> kNonCombative = {
+                "High Hrothgar", "Sky Haven Temple",
+                "Eldergleam Sanctuary", "Ancestor Glade",
+                "Blue Palace", "Palace of the Kings",
+                "Mistveil Keep", "Understone Keep", "Dragonsreach"
+            };
+            std::string name(locName);
+            for (const auto& sacred : kNonCombative) {
+                if (name.find(sacred) != std::string::npos) return true;
+            }
+        }
+
+        return false;
+    }
+
     bool CellAnalyzer::IsPlayerInDangerousLocation() {
         auto* player = RE::PlayerCharacter::GetSingleton();
         if (!player) return false;

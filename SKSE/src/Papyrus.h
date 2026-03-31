@@ -60,6 +60,8 @@ namespace IntelEngine::Papyrus {
     RE::TESObjectREFR* ResolveAnyDestination(RE::StaticFunctionTag*,
                                               RE::Actor* akNPC,
                                               RE::BSFixedString destination);
+    // Check if an ObjectReference's location is non-combative (temple, castle, guild, etc.)
+    bool IsLocationNonCombative(RE::StaticFunctionTag*, RE::TESObjectREFR* ref);
 
     RE::BSFixedString GetCellSpatialInfo(RE::StaticFunctionTag*, RE::Actor* akNPC);
 
@@ -488,5 +490,15 @@ namespace IntelEngine::Papyrus {
     void TestValidation(RE::StaticFunctionTag*, RE::BSFixedString actionType, RE::BSFixedString target);
     void SetDebugLevel(RE::StaticFunctionTag*, int level);
     RE::BSFixedString GetVersion(RE::StaticFunctionTag*);
+
+    // Utility
+    int HexToInt(RE::StaticFunctionTag*, RE::BSFixedString hexStr);
+
+    // Dialogue Tracker
+    void SetAutoBioEnabled(RE::StaticFunctionTag*, bool enabled);
+    void SetAutoBioThreshold(RE::StaticFunctionTag*, int threshold);
+    void SetAutoBioCount(RE::StaticFunctionTag*, RE::Actor* actor, int count);
+    int GetAutoBioCount(RE::StaticFunctionTag*, RE::Actor* actor);
+    RE::BSFixedString GetAutoBioCountsJson(RE::StaticFunctionTag*);
 
 }  // namespace IntelEngine::Papyrus

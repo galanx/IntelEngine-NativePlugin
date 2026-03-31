@@ -193,6 +193,25 @@ namespace IntelEngine {
         // The SkyrimNet API caches values in memory and can return stale data
         // after direct file writes (e.g., user changes hotkey in dashboard UI).
         std::string path = GetSettingsPath();
+
+        // Auto-create settings.yaml with defaults if missing
+        if (!std::filesystem::exists(path)) {
+            logger::info("DashboardConfig: settings.yaml not found, creating defaults at {}", path);
+            std::filesystem::create_directories(std::filesystem::path(path).parent_path());
+            std::ofstream out(path);
+            if (out.is_open()) {
+                out << "ui:\n"
+                    << "  dashboard_hotkey: " << kDefaultHotkey << "\n"
+                    << "  dashboard_modifiers: " << kDefaultModifiers << "\n"
+                    << "story:\n"
+                    << "  faction_whitelist: \"\"\n"
+                    << "  npc_whitelist: \"\"\n"
+                    << "  location_whitelist: \"\"\n";
+                out.close();
+                logger::info("DashboardConfig: Default settings.yaml created");
+            }
+        }
+
         if (std::filesystem::exists(path)) {
             dashboardHotkey_.store(ReadYamlInt(path, "ui", "dashboard_hotkey", kDefaultHotkey));
             dashboardModifiers_.store(ReadYamlInt(path, "ui", "dashboard_modifiers", kDefaultModifiers));
