@@ -83,8 +83,9 @@ namespace IntelEngine {
         // Priority (highest first):
         //   1. Dynamic bio:    _saves/{saveId}/characters/dynamic/{template}.dynamic.prompt
         //   2. Save-specific:  _saves/{saveId}/characters/{template}.prompt
-        //   3. Edited bio:     prompts/characters/{template}.prompt
-        //   4. Original:       original_prompts/characters/{template}.prompt
+        //   3. Dynamic bio:    prompts/characters/dynamic/{template}.dynamic.prompt
+        //   4. Edited bio:     prompts/characters/{template}.prompt
+        //   5. Original:       original_prompts/characters/{template}.prompt
         const std::string promptFile = bioTemplate + ".prompt";
         const std::string dynamicPromptFile = bioTemplate + ".dynamic.prompt";
         std::string filePath;
@@ -130,7 +131,15 @@ namespace IntelEngine {
             }
         }
 
-        // Priority 3-4: edited, then original
+        // Priority 3: non-save-specific dynamic bio
+        if (filePath.empty()) {
+            std::string dynamicBioPath = "Data/SKSE/Plugins/SkyrimNet/prompts/characters/dynamic/" + dynamicPromptFile;
+            if (std::filesystem::exists(dynamicBioPath, ec)) {
+                filePath = dynamicBioPath;
+            }
+        }
+
+        // Priority 4-5: edited, then original
         if (filePath.empty()) {
             if (std::filesystem::exists(editedPath, ec)) {
                 filePath = editedPath;
@@ -174,7 +183,7 @@ namespace IntelEngine {
             };
 
             // Fuzzy fallback follows the same priority as exact match:
-            // 1. save-specific dynamic, 2. save-specific, 3. edited, 4. original
+            // 1. save-specific dynamic, 2. save-specific, 3. dynamic, 4. edited, 5. original
             std::string match;
             for (auto& saveDir : saveDirs) {
                 match = scanDir((saveDir.path() / "characters" / "dynamic").string());
@@ -186,6 +195,7 @@ namespace IntelEngine {
                     if (!match.empty()) break;
                 }
             }
+            if (match.empty()) match = scanDir("Data/SKSE/Plugins/SkyrimNet/prompts/characters/dynamic");
             if (match.empty()) match = scanDir("Data/SKSE/Plugins/SkyrimNet/prompts/characters");
             if (match.empty()) match = scanDir("Data/SKSE/Plugins/SkyrimNet/original_prompts/characters");
 
@@ -252,7 +262,7 @@ namespace IntelEngine {
         }
 
         if (summary.empty()) {
-            logger::warn("MemoryDB: No bio summary for FormID 0x{:08X} (template: '{}', tried: _saves/*/characters/dynamic/, _saves/*/characters/, '{}', '{}')",
+            logger::warn("MemoryDB: No bio summary for FormID 0x{:08X} (template: '{}', tried: _saves/*/characters/dynamic/, _saves/*/characters/, prompts/characters/dynamic/, '{}', '{}')",
                 formId, bioTemplate, editedPath, originalPath);
         } else {
             logger::info("MemoryDB: Bio loaded for 0x{:08X} ({}) from {}: {}...",
