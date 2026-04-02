@@ -449,6 +449,9 @@ namespace IntelEngine::Papyrus {
     /** Decay all non-zero player standings by decayRate toward 0. Returns count decayed. */
     int DecayPlayerStandings(RE::StaticFunctionTag*, int decayRate);
 
+    /** Sync vanilla faction membership with political standing. Returns count synced. */
+    int SyncVanillaFactionStandings(RE::StaticFunctionTag*);
+
     /** Write political_state.json for pull-based NPC awareness. Call after standing changes. */
     void WritePoliticalStateFile(RE::StaticFunctionTag*);
 

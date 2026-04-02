@@ -77,6 +77,7 @@ namespace IntelEngine {
         static void OnDashboardAction(const char* actionName, const char* jsonArg);
         static void OnCancelTaskStatic(const char* jsonArg);
         static void OnCancelScheduleStatic(const char* jsonArg);
+        static void OnCancelQuestStatic(const char* jsonArg);
         static void OnToggleStoryTypeStatic(const char* jsonArg);
         static void OnChangeSettingStatic(const char* jsonArg);
         static void OnRemovePackagesStatic(const char* jsonArg);

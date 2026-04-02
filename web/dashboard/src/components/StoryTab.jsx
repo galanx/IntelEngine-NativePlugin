@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 
 const STORY_TYPES = [
   { key: 'seek_player', label: 'Seek Player', icon: '\u{1F50D}' },
@@ -16,6 +16,7 @@ const STORY_TYPES = [
 const TYPE_ICON_MAP = Object.fromEntries(STORY_TYPES.map(t => [t.key, t.icon]));
 
 function StoryTab({ story, quest, social, npcSocialLog, sendAction }) {
+  const [expandedLog, setExpandedLog] = useState(null);
   if (!story) {
     return (
       <div className="p-3">
@@ -127,6 +128,12 @@ function StoryTab({ story, quest, social, npcSocialLog, sendAction }) {
                 Item: {quest.itemName}
               </div>
             )}
+            <button
+              className="mt-2 px-3 py-1 text-xs rounded bg-red-900/40 hover:bg-red-800/60 text-red-300 border border-red-700/30 transition-colors"
+              onClick={() => sendAction('cancelQuest')}
+            >
+              Cancel Quest
+            </button>
           </div>
         </section>
       )}
@@ -179,6 +186,11 @@ function StoryTab({ story, quest, social, npcSocialLog, sendAction }) {
                   <span className="text-xs text-gray-200 font-medium">
                     {entry.npc1} & {entry.npc2}
                   </span>
+                  {entry.location && (
+                    <span className="text-[10px] text-gray-600">
+                      {entry.location}
+                    </span>
+                  )}
                   <span className="text-[10px] text-gray-500 ml-auto">
                     {entry.type === 'npc_gossip' ? 'gossip' : 'interaction'}
                   </span>
@@ -186,6 +198,25 @@ function StoryTab({ story, quest, social, npcSocialLog, sendAction }) {
                 <div className="text-xs text-gray-400 leading-relaxed pl-6">
                   {entry.text}
                 </div>
+                {(entry.detail) && entry.type === 'npc_gossip' ? (
+                  <div className="text-[11px] text-gray-300 mt-1 pl-6 italic">
+                    {entry.detail.replace(/^Gossip:\s*/i, '')}
+                  </div>
+                ) : (entry.detail) && (
+                  <div className="pl-6 mt-1">
+                    <button
+                      className="text-[10px] text-blue-400 hover:text-blue-300"
+                      onClick={() => setExpandedLog(expandedLog === i ? null : i)}
+                    >
+                      {expandedLog === i ? 'hide details' : 'show details'}
+                    </button>
+                    {expandedLog === i && (
+                      <div className="text-[11px] text-gray-300 mt-1 p-2 rounded bg-black/30 leading-relaxed">
+                        {entry.detail}
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             ))}
           </div>

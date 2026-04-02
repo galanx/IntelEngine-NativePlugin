@@ -911,6 +911,7 @@ namespace IntelEngine {
             "Spriggan", "Thrall Wolf", "Troll", "Unknown", "Wisp",
             "Wolf", "Flame Atronach", "Frost Atronach", "Storm Atronach",
             "Hagraven", "Chaurus", "Horker", "Fox",
+            "Dremora", "Dremora Lord", "Dremora Markynaz", "Dremora Caitiff",
             // Test cell actors — should never appear in story dispatch
             "TestTony", "Marker Storage Unit"
         };
@@ -2240,6 +2241,15 @@ namespace IntelEngine {
             if (actor->IsHostileToActor(player)) return false;
             if (tracker && (tracker->HasActiveTask(actor) || tracker->IsOnCooldown(actor))) return false;
             if (kwActorTypeNPC && !actor->HasKeyword(kwActorTypeNPC)) return false;
+            // Exclude active followers — they're with the player, not independently socializing.
+            // Their transient location (wherever the player is) creates false location groupings
+            // and their high MemoryDB social scores cause them to dominate NPC picks.
+            if (actor->IsPlayerTeammate()) return false;
+            // Filter out empty/unknown names, generic creatures, and test cell actors
+            auto displayName = actor->GetDisplayFullName();
+            if (!displayName || !displayName[0]) return false;
+            std::string nameStr(displayName);
+            if (IsGenericCreatureName(nameStr)) return false;
             // Filter out child NPCs
             if (auto* race = actor->GetRace()) {
                 if (race->IsChildRace()) return false;
@@ -2251,6 +2261,8 @@ namespace IntelEngine {
 
             std::string loc = GetNPCLocationName(actor);
             if (loc.empty()) return false;
+            // Filter out test cell locations
+            if (loc == "Marker Storage Unit" || loc == "TestTony") return false;
 
             std::string locLower = StringUtils::ToLowerStd(loc);
             std::string nameLower = StringUtils::ToLowerStd(actor->GetDisplayFullName());

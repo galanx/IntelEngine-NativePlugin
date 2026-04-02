@@ -358,6 +358,15 @@ namespace IntelEngine {
         });
     }
 
+    void DashboardUIManager::OnCancelQuestStatic(const char* /*jsonArg*/) {
+        auto* task = SKSE::GetTaskInterface();
+        if (!task) return;
+        task->AddTask([]() {
+            DashboardUIManager::GetSingleton()->SendModEvent(
+                "IntelEngine_DashboardCancelQuest", "", 0.0f);
+        });
+    }
+
     void DashboardUIManager::OnCancelScheduleStatic(const char* jsonArg) {
         auto* task = SKSE::GetTaskInterface();
         if (!task) return;
@@ -527,6 +536,7 @@ namespace IntelEngine {
         // Dashboard action listeners
         prismaUI_->RegisterJSListener(dashboardView_, "onDashboard_cancelTask", OnCancelTaskStatic);
         prismaUI_->RegisterJSListener(dashboardView_, "onDashboard_cancelSchedule", OnCancelScheduleStatic);
+        prismaUI_->RegisterJSListener(dashboardView_, "onDashboard_cancelQuest", OnCancelQuestStatic);
         prismaUI_->RegisterJSListener(dashboardView_, "onDashboard_toggleStoryType", OnToggleStoryTypeStatic);
         prismaUI_->RegisterJSListener(dashboardView_, "onDashboard_changeSetting", OnChangeSettingStatic);
         prismaUI_->RegisterJSListener(dashboardView_, "onDashboard_removePackages", OnRemovePackagesStatic);

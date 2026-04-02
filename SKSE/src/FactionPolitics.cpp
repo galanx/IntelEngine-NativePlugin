@@ -248,6 +248,7 @@ default_relations:
         initialized_.store(true);
 
         SnapshotCrimeGoldBaseline();
+        vanillaSynced_.clear();  // Reset per-save vanilla faction sync tracking
         WritePoliticalStateFile();
         logger::info("FactionPolitics: Initialized successfully");
     }
@@ -499,25 +500,42 @@ default_relations:
     // =========================================================================
 
     nlohmann::json FactionPolitics::FactionToJson(const FactionConfig& f) {
+        // Filter out dead leaders — prevents LLM from generating events involving dead NPCs
+        // Essential NPCs can't permanently die (bleedout ≠ death), so never exclude them
+        nlohmann::json aliveLeaders = nlohmann::json::array();
+        auto* npcIndex = NPCIndex::GetSingleton();
+        int resolved = 0;
+        int confirmedDead = 0;
+        for (const auto& leaderName : f.leaderNames) {
+            auto* actor = npcIndex ? npcIndex->FindByName(leaderName) : nullptr;
+            if (!actor) {
+                // Unloaded — assume alive
+                aliveLeaders.push_back(leaderName);
+                continue;
+            }
+            ++resolved;
+            if (actor->IsDead() && !actor->IsEssential()) {
+                logger::debug("FactionToJson: leader '{}' is dead (non-essential) — excluding", leaderName);
+                ++confirmedDead;
+                continue;
+            }
+            aliveLeaders.push_back(leaderName);
+        }
+
+        // Disband only if ALL leaders were resolved AND ALL are confirmed permanently dead
+        if (aliveLeaders.empty() && !f.leaderNames.empty() &&
+            resolved == static_cast<int>(f.leaderNames.size()) && confirmedDead == resolved) {
+            logger::info("FactionToJson: all {} leaders of '{}' confirmed dead — faction disbanded",
+                resolved, f.name);
+            return nlohmann::json();  // empty = skip this faction
+        }
+
         nlohmann::json fj;
         fj["id"] = f.id;
         fj["name"] = f.name;
         fj["type"] = f.type;
         fj["hold"] = f.hold;
         if (!f.skyrimFactionId.empty()) fj["skyrim_faction_id"] = f.skyrimFactionId;
-
-        // Filter out dead leaders — prevents LLM from generating events involving dead NPCs
-        nlohmann::json aliveLeaders = nlohmann::json::array();
-        auto* npcIndex = NPCIndex::GetSingleton();
-        for (const auto& leaderName : f.leaderNames) {
-            auto* actor = npcIndex ? npcIndex->FindByName(leaderName) : nullptr;
-            if (actor && actor->IsDead()) {
-                logger::debug("FactionToJson: leader '{}' is dead — excluding from context", leaderName);
-                continue;
-            }
-            // Include if alive OR if we can't resolve (unloaded — assume alive)
-            aliveLeaders.push_back(leaderName);
-        }
         fj["leaders"] = aliveLeaders;
         return fj;
     }
@@ -549,6 +567,7 @@ default_relations:
             nlohmann::json factionsJson = nlohmann::json::array();
             for (const auto& f : factions_) {
                 auto fj = FactionToJson(f);
+                if (fj.empty()) continue;  // All leaders dead — faction disbanded
                 if (!f.conflictStyle.empty()) fj["conflict_style"] = f.conflictStyle;
                 if (f.baseArmyStrength > 0) fj["army_strength"] = f.baseArmyStrength;
                 fj["war_threshold"] = f.warThreshold;
@@ -803,7 +822,17 @@ default_relations:
             std::lock_guard<std::mutex> lock(configMutex_);
             nlohmann::json factionsJson = nlohmann::json::array();
             for (const auto& f : factions_) {
-                factionsJson.push_back(FactionToJson(f));
+                auto fj = FactionToJson(f);
+                if (fj.empty()) {
+                    // Show disbanded factions in dashboard with a flag
+                    fj["id"] = f.id;
+                    fj["name"] = f.name;
+                    fj["type"] = f.type;
+                    fj["hold"] = f.hold;
+                    fj["leaders"] = nlohmann::json::array();
+                    fj["disbanded"] = true;
+                }
+                factionsJson.push_back(fj);
             }
             dashboard["factions"] = factionsJson;
         }
@@ -1467,6 +1496,62 @@ default_relations:
         return decayed;
     }
 
+    int FactionPolitics::SyncVanillaFactionStandings() {
+        if (!initialized_.load()) return 0;
+
+        auto* db = PoliticalDB::GetSingleton();
+        if (!db || !db->IsReady()) return 0;
+
+        auto* player = RE::PlayerCharacter::GetSingleton();
+        if (!player) return 0;
+
+        auto* cal = RE::Calendar::GetSingleton();
+        float gameTime = cal ? cal->GetCurrentGameTime() : 0.0f;
+
+        int synced = 0;
+        std::lock_guard<std::mutex> lock(configMutex_);
+
+        for (const auto& fac : factions_) {
+            if (fac.skyrimFactionId.empty()) continue;
+            // Only sync once per faction per save — don't override player-earned standing
+            if (vanillaSynced_.count(fac.id)) continue;
+
+            // Check if player is in the vanilla faction
+            auto* skyrimFac = RE::TESForm::LookupByEditorID<RE::TESFaction>(fac.skyrimFactionId);
+            if (!skyrimFac) continue;
+
+            bool inFaction = false;
+            player->VisitFactions([skyrimFac, &inFaction](RE::TESFaction* f, std::int8_t rank) -> bool {
+                if (f == skyrimFac && rank >= 0) {
+                    inFaction = true;
+                    return true;
+                }
+                return false;
+            });
+
+            if (!inFaction) continue;
+
+            // Mark as synced regardless of current standing — we only check once
+            vanillaSynced_.insert(fac.id);
+
+            // Only boost if currently at 0 (never interacted with the political system)
+            auto standings = db->GetAllPlayerStandings();
+            int currentStanding = 0;
+            for (const auto& ps : standings) {
+                if (ps.factionId == fac.id) { currentStanding = ps.standing; break; }
+            }
+
+            if (currentStanding == 0) {
+                db->AdjustPlayerStanding(fac.id, 40, gameTime);
+                logger::info("SyncVanillaFactions: Player is in {} ({}), granted initial standing 40",
+                    fac.name, fac.skyrimFactionId);
+                ++synced;
+            }
+        }
+
+        return synced;
+    }
+
     // =========================================================================
     // War Lifecycle
     // =========================================================================
@@ -1732,7 +1817,9 @@ default_relations:
             std::lock_guard<std::mutex> lock(configMutex_);
             nlohmann::json factionsJson = nlohmann::json::array();
             for (const auto& f : factions_) {
-                factionsJson.push_back(FactionToJson(f));
+                auto fj = FactionToJson(f);
+                if (fj.empty()) continue;  // All leaders dead — faction disbanded
+                factionsJson.push_back(fj);
             }
             state["factions"] = factionsJson;
         }
@@ -2260,28 +2347,32 @@ default_relations:
             out["standingsApplied"] = applied;
         }
 
-        // --- Run standing mechanics (decay + crime) ---
+        // --- Run standing mechanics (vanilla sync + decay + crime) ---
+        int vanillaSynced = SyncVanillaFactionStandings();
         int decayed = DecayPlayerStandings(1);
         int crimeChanges = CheckCrimeGoldStandings();
-        if (decayed > 0 || crimeChanges > 0) {
+        if (decayed > 0 || crimeChanges > 0 || vanillaSynced > 0) {
             WritePoliticalStateFile();
         }
         out["decayed"] = decayed;
         out["crimeChanges"] = crimeChanges;
+        out["vanillaSynced"] = vanillaSynced;
 
         return out.dump();
     }
 
     std::string FactionPolitics::RunStandingMechanicsInternal() {
         nlohmann::json out;
+        int vanillaSynced = SyncVanillaFactionStandings();
         int decayed = DecayPlayerStandings(1);
         int crimeChanges = CheckCrimeGoldStandings();
-        if (decayed > 0 || crimeChanges > 0) {
+        if (decayed > 0 || crimeChanges > 0 || vanillaSynced > 0) {
             WritePoliticalStateFile();
         }
         out["decayed"] = decayed;
         out["crimeChanges"] = crimeChanges;
-        out["updated"] = (decayed > 0 || crimeChanges > 0);
+        out["vanillaSynced"] = vanillaSynced;
+        out["updated"] = (decayed > 0 || crimeChanges > 0 || vanillaSynced > 0);
         return out.dump();
     }
 

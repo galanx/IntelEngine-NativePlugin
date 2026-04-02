@@ -6,6 +6,7 @@
  */
 
 #include "SlotTracker.h"
+#include "SkyrimNetAPI.h"
 #include <chrono>
 #include <nlohmann/json.hpp>
 
@@ -23,13 +24,44 @@ namespace IntelEngine {
                                   const std::string& taskType, const std::string& targetName) {
         if (slot < 0 || slot >= MAX_SLOTS) return;
 
-        std::unique_lock lock(m_mutex);
-        auto& s = m_slots[slot];
+        RE::FormID prevFormId = 0;
+        RE::FormID newFormId = agent ? agent->GetFormID() : 0;
+        {
+            std::unique_lock lock(m_mutex);
+            auto& s = m_slots[slot];
+            if (s.agent && s.agent != agent) {
+                prevFormId = s.agent->GetFormID();
+            }
+            s.agent = agent;
+            s.state = state;
+            s.taskType = taskType;
+            s.targetName = targetName;
+        }
 
-        s.agent = agent;
-        s.state = state;
-        s.taskType = taskType;
-        s.targetName = targetName;
+        // SkyrimNet busy API calls outside lock (avoids lock ordering issues)
+        if (prevFormId && SkyrimNetAPI::ClearActorBusy) {
+            SkyrimNetAPI::ClearActorBusy(prevFormId);
+        }
+
+        // States where the NPC is idle (arrived, lingering, waiting) — clear busy so they
+        // can accept new tasks without the player needing to cancel first.
+        // State 1 = traveling, 3 = returning — these are active movement, keep busy.
+        // State 2 = waiting at dest, 5 = group wait, 8 = at-target interaction — idle, clear busy.
+        bool isIdleState = (state == 2 || state == 5 || state == 8 || state == 0);
+        if (newFormId && isIdleState && SkyrimNetAPI::ClearActorBusy) {
+            SkyrimNetAPI::ClearActorBusy(newFormId);
+        } else if (newFormId && !isIdleState && SkyrimNetAPI::SetActorBusy) {
+            // Human-readable reason so busy_reason() decorator gives the LLM useful context
+            std::string reason;
+            if (taskType == "travel") reason = "traveling to " + targetName;
+            else if (taskType == "fetch_npc") reason = "fetching " + targetName;
+            else if (taskType == "deliver_message") reason = "delivering a message to " + targetName;
+            else if (taskType == "escort_target") reason = "escorting " + targetName;
+            else if (taskType == "search_for_actor") reason = "searching for " + targetName;
+            else if (taskType == "assassination") reason = "on an assassination task";
+            else reason = taskType + ": " + targetName;
+            SkyrimNetAPI::SetActorBusy(newFormId, reason.c_str());
+        }
 
         logger::debug("SlotTracker: Updated slot {} -> agent={}, state={}, type={}, target={}",
                      slot, agent ? agent->GetDisplayFullName() : "null", state, taskType, targetName);
@@ -38,14 +70,24 @@ namespace IntelEngine {
     void SlotTracker::ClearSlot(int slot) {
         if (slot < 0 || slot >= MAX_SLOTS) return;
 
-        std::unique_lock lock(m_mutex);
-        auto& s = m_slots[slot];
+        RE::FormID busyFormId = 0;
+        {
+            std::unique_lock lock(m_mutex);
+            auto& s = m_slots[slot];
+            if (s.agent) {
+                busyFormId = s.agent->GetFormID();
+            }
+            s.agent = nullptr;
+            s.state = 0;
+            s.taskType.clear();
+            s.targetName.clear();
+            // Note: cooldown is NOT cleared here — it's per-actor, not per-slot
+        }
 
-        s.agent = nullptr;
-        s.state = 0;
-        s.taskType.clear();
-        s.targetName.clear();
-        // Note: cooldown is NOT cleared here — it's per-actor, not per-slot
+        // Clear busy outside lock
+        if (busyFormId && SkyrimNetAPI::ClearActorBusy) {
+            SkyrimNetAPI::ClearActorBusy(busyFormId);
+        }
 
         logger::debug("SlotTracker: Cleared slot {}", slot);
     }
@@ -180,16 +222,29 @@ namespace IntelEngine {
     }
 
     void SlotTracker::ClearAll() {
-        std::unique_lock lock(m_mutex);
-        for (auto& s : m_slots) {
-            s.agent = nullptr;
-            s.state = 0;
-            s.taskType.clear();
-            s.targetName.clear();
-            s.cooldownExpiry = 0.0f;
+        // Collect busy actors under lock, then clear busy outside lock
+        std::vector<RE::FormID> busyFormIds;
+        {
+            std::unique_lock lock(m_mutex);
+            for (auto& s : m_slots) {
+                if (s.agent) {
+                    busyFormIds.push_back(s.agent->GetFormID());
+                }
+                s.agent = nullptr;
+                s.state = 0;
+                s.taskType.clear();
+                s.targetName.clear();
+                s.cooldownExpiry = 0.0f;
+            }
+            m_cooldowns.clear();
         }
-        m_cooldowns.clear();
-        logger::info("SlotTracker: All slots cleared");
+        // Clear SkyrimNet busy state outside lock (avoids lock ordering issues)
+        if (SkyrimNetAPI::ClearActorBusy) {
+            for (auto formId : busyFormIds) {
+                SkyrimNetAPI::ClearActorBusy(formId);
+            }
+        }
+        logger::info("SlotTracker: All slots cleared ({} busy states released)", busyFormIds.size());
     }
 
 }  // namespace IntelEngine

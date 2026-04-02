@@ -4,21 +4,20 @@
 
 namespace IntelEngine {
 
-    // Helper: send a ModEvent on the game thread with FormID as hex string (avoids float precision loss)
-    static void SendFormIdModEvent(RE::FormID formId, const char* eventName, const std::string& extraArg) {
+    // Helper: send a ModEvent on the game thread with the Actor as sender (avoids FormID encoding entirely)
+    static void SendActorModEvent(RE::FormID formId, const char* eventName, const std::string& strArg) {
         auto* task = SKSE::GetTaskInterface();
         if (!task) return;
-        std::string hexId = fmt::format("{:08X}", formId);
-        task->AddTask([hexId, eventName = std::string(eventName), extraArg]() {
+        task->AddTask([formId, eventName = std::string(eventName), strArg]() {
+            auto* actor = RE::TESForm::LookupByID<RE::Actor>(formId);
+            if (!actor) return;
             auto* eventMgr = SKSE::GetModCallbackEventSource();
             if (!eventMgr) return;
-            // strArg = "formIdHex|extraArg", numArg = 0
-            std::string strArg = hexId + "|" + extraArg;
             auto event = SKSE::ModCallbackEvent();
             event.eventName = eventName.c_str();
             event.strArg = strArg.c_str();
             event.numArg = 0.0f;
-            event.sender = nullptr;
+            event.sender = actor;
             eventMgr->SendEvent(&event);
         });
     }
@@ -104,12 +103,12 @@ namespace IntelEngine {
             }
 
             if (shouldUpdate) {
-                // Threshold reached — trigger bio update (also resets persisted count)
+                // Threshold reached — trigger bio update. Actor passed as sender (no FormID encoding needed)
                 logger::info("DialogueTracker: threshold reached for FormID {:08X}", formId);
-                SendFormIdModEvent(formId, "IntelEngine_AutoBioUpdate", "");
+                SendActorModEvent(formId, "IntelEngine_AutoBioUpdate", "");
             } else if (newCount > 0 && newCount % 5 == 0) {
-                // Persist intermediate count every 5 lines (survives save/load)
-                SendFormIdModEvent(formId, "IntelEngine_SaveBioCount", std::to_string(newCount));
+                // Persist intermediate count every 5 lines. strArg = count, sender = Actor
+                SendActorModEvent(formId, "IntelEngine_SaveBioCount", std::to_string(newCount));
             }
         } catch (const std::exception& e) {
             logger::debug("DialogueTracker: Failed to parse dialogue event: {}", e.what());

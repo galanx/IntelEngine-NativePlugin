@@ -83,6 +83,27 @@ namespace IntelEngine::SkyrimNetAPI {
     /** Get a single string config value by dot-path from a plugin's settings. */
     inline std::string (*GetPluginConfigValue)(const char* pluginName, const char* path, const char* defaultValue) = nullptr;
 
+    // ---- Decorator API (v3.1+) ----
+
+    /** Register a native C++ decorator. Callback receives RE::Actor*, returns string for Inja templates.
+     *  Used in eligibilityRules (synchronous, no cache delay) and prompt templates. */
+    inline bool (*RegisterDecorator)(const char* name, const char* description,
+        std::function<std::string(RE::Actor*)> callback) = nullptr;
+
+    /** Check if a decorator with this name already exists. */
+    inline bool (*HasDecorator)(const char* name) = nullptr;
+
+    // ---- Actor Busy API (v3.1+) ----
+
+    /** Mark an actor as busy with a reason string. Blocks actions with is_busy eligibility check. */
+    inline bool (*SetActorBusy)(uint32_t formId, const char* reason) = nullptr;
+
+    /** Clear busy state for an actor. */
+    inline bool (*ClearActorBusy)(uint32_t formId) = nullptr;
+
+    /** Check if an actor is busy. */
+    inline bool (*IsActorBusy)(uint32_t formId) = nullptr;
+
     // ---- Event Callback API (v3.1+) ----
 
     /** Register a callback for a specific event type (e.g., "dialogue"). Thread-safe. */
@@ -159,6 +180,24 @@ namespace IntelEngine::SkyrimNetAPI {
 
         GetPluginConfigValue = reinterpret_cast<std::string(*)(const char*, const char*, const char*)>(
             GetProcAddress(hDLL, "PublicGetPluginConfigValue"));
+
+        // Decorator API (v3.1+)
+        RegisterDecorator = reinterpret_cast<bool(*)(const char*, const char*,
+            std::function<std::string(RE::Actor*)>)>(
+            GetProcAddress(hDLL, "PublicRegisterDecorator"));
+
+        HasDecorator = reinterpret_cast<bool(*)(const char*)>(
+            GetProcAddress(hDLL, "PublicHasDecorator"));
+
+        // Actor Busy API (v3.1+)
+        SetActorBusy = reinterpret_cast<bool(*)(uint32_t, const char*)>(
+            GetProcAddress(hDLL, "PublicSetActorBusy"));
+
+        ClearActorBusy = reinterpret_cast<bool(*)(uint32_t)>(
+            GetProcAddress(hDLL, "PublicClearActorBusy"));
+
+        IsActorBusy = reinterpret_cast<bool(*)(uint32_t)>(
+            GetProcAddress(hDLL, "PublicIsActorBusy"));
 
         // Event callback API (v3.1+)
         RegisterEventCallback = reinterpret_cast<uint64_t(*)(const char*, std::function<void(const char*)>)>(

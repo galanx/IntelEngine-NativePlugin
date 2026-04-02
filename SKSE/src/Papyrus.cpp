@@ -95,6 +95,7 @@ namespace IntelEngine::Papyrus {
                               RE::BSFixedString, RE::BSFixedString);
     int CheckCrimeGoldStandings(RE::StaticFunctionTag*);
     int DecayPlayerStandings(RE::StaticFunctionTag*, int);
+    int SyncVanillaFactionStandings(RE::StaticFunctionTag*);
     void WritePoliticalStateFile(RE::StaticFunctionTag*);
     void SetPoliticsEnabled(RE::StaticFunctionTag*, bool);
     void SetPoliticsTickInterval(RE::StaticFunctionTag*, int);
@@ -426,6 +427,7 @@ namespace IntelEngine::Papyrus {
         a_vm->RegisterFunction("ProcessPlayerConduct", SCRIPT_NAME, ProcessPlayerConduct); ++count;
         a_vm->RegisterFunction("CheckCrimeGoldStandings", SCRIPT_NAME, CheckCrimeGoldStandings); ++count;
         a_vm->RegisterFunction("DecayPlayerStandings", SCRIPT_NAME, DecayPlayerStandings); ++count;
+        a_vm->RegisterFunction("SyncVanillaFactionStandings", SCRIPT_NAME, SyncVanillaFactionStandings); ++count;
         a_vm->RegisterFunction("WritePoliticalStateFile", SCRIPT_NAME, WritePoliticalStateFile); ++count;
         a_vm->RegisterFunction("SetPoliticsEnabled", SCRIPT_NAME, SetPoliticsEnabled); ++count;
 
@@ -3999,6 +4001,10 @@ namespace IntelEngine::Papyrus {
         return FactionPolitics::GetSingleton()->DecayPlayerStandings(decayRate);
     }
 
+    int SyncVanillaFactionStandings(RE::StaticFunctionTag*) {
+        return FactionPolitics::GetSingleton()->SyncVanillaFactionStandings();
+    }
+
     void WritePoliticalStateFile(RE::StaticFunctionTag*) {
         FactionPolitics::GetSingleton()->WritePoliticalStateFile();
     }
@@ -4128,10 +4134,14 @@ namespace IntelEngine::Papyrus {
         RE::Actor* bestUnique = nullptr;
         float bestUniqueDist = (std::numeric_limits<float>::max)();
 
+        static auto* kwActorTypeNPC = RE::TESForm::LookupByID<RE::BGSKeyword>(0x00013794);
+
         ProcessUtils::ForEachLoadedActor([&](RE::Actor* actor) -> bool {
             if (!actor || actor == player) return false;
             if (actor->IsDead() || actor->IsDisabled()) return false;
             if (actor->IsInCombat()) return false;
+            // Only humanoid NPCs — skip creatures, animals, daedra (e.g., Volkihar death hounds)
+            if (kwActorTypeNPC && !actor->HasKeyword(kwActorTypeNPC)) return false;
 
             // Skip high-status NPCs (Jarls, court wizards, stewards, housecarls)
             if (NPCIndex::IsHighStatus(actor)) return false;

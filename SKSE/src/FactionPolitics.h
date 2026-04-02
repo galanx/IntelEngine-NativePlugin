@@ -20,6 +20,7 @@
 #include <string>
 #include <vector>
 #include <unordered_map>
+#include <unordered_set>
 
 namespace IntelEngine {
 
@@ -337,6 +338,11 @@ namespace IntelEngine {
          *  Called on initialization to avoid re-penalizing existing bounties. */
         void SnapshotCrimeGoldBaseline();
 
+        /** Sync vanilla faction membership with political standing.
+         *  If player is in a vanilla faction (via skyrim_faction_id) but has 0 standing,
+         *  grants initial standing of 40 (friendly threshold). Called on each political tick. */
+        int SyncVanillaFactionStandings();
+
     private:
         FactionPolitics() = default;
         ~FactionPolitics() = default;
@@ -389,6 +395,11 @@ namespace IntelEngine {
         // Crime gold baseline — last-known crime gold per faction (factionId → gold)
         // Used to detect NEW crime gold increases since last check
         std::unordered_map<std::string, int> crimeGoldBaseline_;
+
+        // Tracks which factions have been synced from vanilla membership this session.
+        // Prevents repeated boosting if the player later loses standing through gameplay.
+        // Cleared on Initialize() (new game / load).
+        std::unordered_set<std::string> vanillaSynced_;
     };
 
 }  // namespace IntelEngine
