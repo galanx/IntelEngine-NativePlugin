@@ -7,6 +7,7 @@
  */
 
 #include "MemoryDB.h"
+#include "Plugin.h"
 #include "SkyrimNetAPI.h"
 #include "Settings.h"
 #include "StringUtils.h"
@@ -94,40 +95,31 @@ namespace IntelEngine {
         std::string editedPath = "Data/SKSE/Plugins/SkyrimNet/prompts/characters/" + promptFile;
         std::string originalPath = "Data/SKSE/Plugins/SkyrimNet/original_prompts/characters/" + promptFile;
 
-        // Collect and sort save dirs once (shared by dynamic and save-specific lookups)
-        std::string savesDir = "Data/SKSE/Plugins/SkyrimNet/prompts/_saves";
-        std::vector<std::filesystem::directory_entry> saveDirs;
-        if (std::filesystem::exists(savesDir, ec) && std::filesystem::is_directory(savesDir, ec)) {
-            for (auto& entry : std::filesystem::directory_iterator(savesDir, ec)) {
-                if (entry.is_directory(ec)) {
-                    saveDirs.push_back(entry);
-                }
+        // Current save directory (uses SkyrimNet's save ID, not IntelEngine's)
+        std::string skyrimNetSaveID;
+        if (SkyrimNetAPI::GetSaveUniqueID) {
+            try {
+                skyrimNetSaveID = SkyrimNetAPI::GetSaveUniqueID();
+            } catch (...) {
+                logger::warn("MemoryDB: GetSaveUniqueID exception");
             }
-            // Sort descending by directory name (newest save first)
-            std::sort(saveDirs.begin(), saveDirs.end(),
-                [](const auto& a, const auto& b) {
-                    return a.path().filename().string() > b.path().filename().string();
-                });
         }
+        std::filesystem::path saveDir = std::filesystem::path("Data/SKSE/Plugins/SkyrimNet/prompts/_saves") / skyrimNetSaveID;
+        bool saveExists = !skyrimNetSaveID.empty() && std::filesystem::exists(saveDir, ec) && std::filesystem::is_directory(saveDir, ec);
 
-        // Priority 1: Dynamic bios in _saves/{saveId}/characters/dynamic/
-        // SkyrimNet returns the full template name (including any suffix), so exact match.
-        for (auto& saveDir : saveDirs) {
-            auto dynamicBioPath = saveDir.path() / "characters" / "dynamic" / dynamicPromptFile;
+        // Priority 1: save-specific dynamic bio
+        if (saveExists) {
+            auto dynamicBioPath = saveDir / "characters" / "dynamic" / dynamicPromptFile;
             if (std::filesystem::exists(dynamicBioPath, ec)) {
                 filePath = dynamicBioPath.string();
-                break;
             }
         }
 
-        // Priority 2: save-specific (non-dynamic) in _saves/{saveId}/characters/
-        if (filePath.empty()) {
-            for (auto& saveDir : saveDirs) {
-                auto saveBioPath = saveDir.path() / "characters" / promptFile;
-                if (std::filesystem::exists(saveBioPath, ec)) {
-                    filePath = saveBioPath.string();
-                    break;
-                }
+        // Priority 2: save-specific (non-dynamic)
+        if (filePath.empty() && saveExists) {
+            auto saveBioPath = saveDir / "characters" / promptFile;
+            if (std::filesystem::exists(saveBioPath, ec)) {
+                filePath = saveBioPath.string();
             }
         }
 
@@ -185,15 +177,9 @@ namespace IntelEngine {
             // Fuzzy fallback follows the same priority as exact match:
             // 1. save-specific dynamic, 2. save-specific, 3. dynamic, 4. edited, 5. original
             std::string match;
-            for (auto& saveDir : saveDirs) {
-                match = scanDir((saveDir.path() / "characters" / "dynamic").string());
-                if (!match.empty()) break;
-            }
-            if (match.empty()) {
-                for (auto& saveDir : saveDirs) {
-                    match = scanDir((saveDir.path() / "characters").string());
-                    if (!match.empty()) break;
-                }
+            if (saveExists) {
+                match = scanDir((saveDir / "characters" / "dynamic").string());
+                if (match.empty()) match = scanDir((saveDir / "characters").string());
             }
             if (match.empty()) match = scanDir("Data/SKSE/Plugins/SkyrimNet/prompts/characters/dynamic");
             if (match.empty()) match = scanDir("Data/SKSE/Plugins/SkyrimNet/prompts/characters");

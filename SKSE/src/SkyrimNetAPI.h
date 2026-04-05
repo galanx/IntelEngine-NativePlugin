@@ -44,6 +44,9 @@ namespace IntelEngine::SkyrimNetAPI {
     /** Get the bio template name for an actor (used for bio prompt file lookup). */
     inline std::string (*GetBioTemplateName)(uint32_t formId) = nullptr;
 
+    /** Get SkyrimNet's unique save ID for the current save game. */
+    inline std::string (*GetSaveUniqueID)() = nullptr;
+
     // ---- Data API (v3+) ----
 
     /** Retrieve memories for an actor. contextQuery enables semantic search if non-empty. */
@@ -125,6 +128,10 @@ namespace IntelEngine::SkyrimNetAPI {
         GetBioTemplateName = reinterpret_cast<std::string(*)(uint32_t)>(
             GetProcAddress(hDLL, "PublicGetBioTemplateName"));
 
+        // v3+ — Save ID (for locating save-specific character prompts)
+        GetSaveUniqueID = reinterpret_cast<std::string(*)()>(
+            GetProcAddress(hDLL, "PublicGetSaveUniqueID"));
+
         // v3+ function pointers — Data API
         GetMemoriesForActor = reinterpret_cast<std::string(*)(uint32_t, int, const char*)>(
             GetProcAddress(hDLL, "PublicGetMemoriesForActor"));
@@ -170,13 +177,14 @@ namespace IntelEngine::SkyrimNetAPI {
         // Bio template API
         logger::info("SkyrimNet Data API: Memories={}, Events={}, Dialogue={}, LatestDialogue={}, Ready={}, "
                      "ActorEngagement={}, RelatedActors={}, PlayerContext={}, EventPairs={}, "
-                     "EventCallback={}, BioTemplate={}",
+                     "EventCallback={}, BioTemplate={}, SaveID={}",
                      GetMemoriesForActor != nullptr, GetRecentEvents != nullptr,
                      GetRecentDialogue != nullptr, GetLatestDialogueInfo != nullptr,
                      IsMemorySystemReady != nullptr, GetActorEngagement != nullptr,
                      GetRelatedActors != nullptr, GetPlayerContext != nullptr,
                      GetEventPairCounts != nullptr,
-                     RegisterEventCallback != nullptr, GetBioTemplateName != nullptr);
+                     RegisterEventCallback != nullptr, GetBioTemplateName != nullptr,
+                     GetSaveUniqueID != nullptr);
 
         return true;
     }
