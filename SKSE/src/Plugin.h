@@ -10,7 +10,7 @@
 #include <SKSE/SKSE.h>
 #include <spdlog/sinks/basic_file_sink.h>
 
-#define INTELENGINE_VERSION "3.1.0"
+#define INTELENGINE_VERSION "3.2.1"
 
 using namespace std::literals;
 
