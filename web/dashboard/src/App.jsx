@@ -196,6 +196,7 @@ function App() {
             <DirectorTab
               loadedNpcs={state.loadedNpcs || []}
               actions={state.actions || []}
+              factions={state.politics?.factions || []}
               sendAction={sendAction}
             />
           )}

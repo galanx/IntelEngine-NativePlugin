@@ -226,7 +226,7 @@ const SOCIAL_TYPE_FIELDS = {
   ],
 };
 
-function DirectorTab({ loadedNpcs, actions, sendAction }) {
+function DirectorTab({ loadedNpcs, actions, factions = [], sendAction }) {
   // Story dispatch state
   const [storyNpc, setStoryNpc] = useState('');
   const [storyType, setStoryType] = useState('seek_player');
@@ -506,20 +506,26 @@ function DirectorTab({ loadedNpcs, actions, sendAction }) {
         <h2 className="section-header mb-2">Political Event</h2>
         <div className="space-y-2">
           <div className="flex gap-2">
-            <input
-              type="text"
+            <select
               value={polFactionA}
               onChange={e => setPolFactionA(e.target.value)}
-              placeholder="Faction A (e.g. StormcloakFaction)"
-              className="flex-1 bg-white/5 border border-white/10 rounded px-2 py-1.5 text-xs text-gray-200 outline-none placeholder:text-gray-600"
-            />
-            <input
-              type="text"
+              className="flex-1 bg-white/5 border border-white/10 rounded px-2 py-1.5 text-xs text-gray-200 outline-none"
+            >
+              <option value="">Faction A</option>
+              {factions.map(f => (
+                <option key={f.id} value={f.id}>{f.name} ({f.id})</option>
+              ))}
+            </select>
+            <select
               value={polFactionB}
               onChange={e => setPolFactionB(e.target.value)}
-              placeholder="Faction B (e.g. ThalmorFaction)"
-              className="flex-1 bg-white/5 border border-white/10 rounded px-2 py-1.5 text-xs text-gray-200 outline-none placeholder:text-gray-600"
-            />
+              className="flex-1 bg-white/5 border border-white/10 rounded px-2 py-1.5 text-xs text-gray-200 outline-none"
+            >
+              <option value="">Faction B</option>
+              {factions.map(f => (
+                <option key={f.id} value={f.id}>{f.name} ({f.id})</option>
+              ))}
+            </select>
           </div>
           <div className="flex gap-2">
             <select
