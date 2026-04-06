@@ -134,6 +134,25 @@ Get-ChildItem "$SKSEDir\Plugins\SkyrimNet\prompts" -Recurse -File -ErrorAction S
 }
 
 # =============================================================================
+# PrismaUI / Dashboard: Data → Testing → Vanilla Test → CK
+# =============================================================================
+Write-Host "`n=== PrismaUI ===" -ForegroundColor Cyan
+Get-ChildItem "$DataDir\PrismaUI" -Recurse -File -ErrorAction SilentlyContinue | ForEach-Object {
+    $relPath = $_.FullName.Substring("$DataDir\".Length)
+    Compare-File "PrismaUI $relPath -> Testing" `
+        $_.FullName `
+        "$TestDest\$relPath" -UseHash
+
+    Compare-File "PrismaUI $relPath -> Vanilla Test" `
+        $_.FullName `
+        "$VanillaDest\$relPath" -UseHash
+
+    Compare-File "PrismaUI $relPath -> CK" `
+        $_.FullName `
+        "$CKDest\$relPath" -UseHash
+}
+
+# =============================================================================
 # ESP/ESL plugins: Data → Testing → CK
 # =============================================================================
 Write-Host "`n=== Plugins (ESP/ESL) ===" -ForegroundColor Cyan

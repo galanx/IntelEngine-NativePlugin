@@ -407,9 +407,15 @@ namespace IntelEngine {
 
                 std::string lowerName = StringUtils::ToLowerStd(baseName);
                 auto it = m_npcFormIds.find(lowerName);
-                if (it != m_npcFormIds.end() && it->second == base->GetFormID()) {
-                    it->second = actor->GetFormID();
-                    count++;
+                if (it != m_npcFormIds.end()) {
+                    if (it->second == base->GetFormID()) {
+                        it->second = actor->GetFormID();
+                        count++;
+                    } else if (actor->GetFormID() > it->second) {
+                        logger::warn("NPC '{}' has multiple persistent refs: 0x{:08X} supersedes 0x{:08X}",
+                            baseName, actor->GetFormID(), it->second);
+                        it->second = actor->GetFormID();
+                    }
                 }
                 return RE::BSContainer::ForEachResult::kContinue;
             });

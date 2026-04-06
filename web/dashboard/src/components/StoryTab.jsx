@@ -198,11 +198,7 @@ function StoryTab({ story, quest, social, npcSocialLog, sendAction }) {
                 <div className="text-xs text-gray-400 leading-relaxed pl-6">
                   {entry.text}
                 </div>
-                {(entry.detail) && entry.type === 'npc_gossip' ? (
-                  <div className="text-[11px] text-gray-300 mt-1 pl-6 italic">
-                    {entry.detail.replace(/^Gossip:\s*/i, '')}
-                  </div>
-                ) : (entry.detail) && (
+                {entry.detail && entry.type !== 'npc_gossip' && (
                   <div className="pl-6 mt-1">
                     <button
                       className="text-[10px] text-blue-400 hover:text-blue-300"
