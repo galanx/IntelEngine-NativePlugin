@@ -2712,8 +2712,7 @@ namespace IntelEngine {
                 json += "{\"name\":\"";
                 auto name = actor->GetDisplayFullName();
                 std::string nameStr = name ? name : "Unknown";
-                for (auto& c : nameStr) { if (c == '"') c = '\''; }
-                json += nameStr;
+                json += MemoryDB::EscapeJsonString(nameStr);
                 json += "\",\"formId\":";
                 json += std::to_string(actor->GetFormID());
                 json += ",\"pkgType\":\"";

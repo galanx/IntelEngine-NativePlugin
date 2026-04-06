@@ -1090,14 +1090,75 @@ namespace IntelEngine {
     std::string MemoryDB::EscapeJsonString(const std::string& text) {
         std::string result;
         result.reserve(text.size() + 16);
-        for (char c : text) {
-            switch (c) {
-                case '"':  result += "\\\""; break;
-                case '\\': result += "\\\\"; break;
-                case '\n': result += "\\n";  break;
-                case '\r': break;
-                case '\t': result += "\\t";  break;
-                default:   result += c;      break;
+        size_t i = 0;
+        while (i < text.size()) {
+            unsigned char c = static_cast<unsigned char>(text[i]);
+            if (c < 0x80) {
+                // ASCII range — standard JSON escaping
+                switch (c) {
+                    case '"':  result += "\\\""; break;
+                    case '\\': result += "\\\\"; break;
+                    case '\n': result += "\\n";  break;
+                    case '\r': break;
+                    case '\t': result += "\\t";  break;
+                    default:
+                        if (c < 0x20) {
+                            // Control chars must be escaped per JSON spec
+                            char buf[8];
+                            snprintf(buf, sizeof(buf), "\\u%04X", c);
+                            result += buf;
+                        } else {
+                            result += static_cast<char>(c);
+                        }
+                        break;
+                }
+                ++i;
+            } else {
+                // Non-ASCII: decode UTF-8, emit as \uXXXX JSON escapes.
+                // Prevents crashes when strings with non-English characters
+                // (Cyrillic, CJK, etc.) cross the BSFixedString/Papyrus boundary,
+                // which internally uses WideCharToMultiByte with the system code page.
+                uint32_t codepoint = 0;
+                int seqLen = 0;
+
+                if ((c & 0xE0) == 0xC0)      { codepoint = c & 0x1F; seqLen = 2; }
+                else if ((c & 0xF0) == 0xE0)  { codepoint = c & 0x0F; seqLen = 3; }
+                else if ((c & 0xF8) == 0xF0)  { codepoint = c & 0x07; seqLen = 4; }
+
+                bool valid = seqLen > 0;
+                for (int j = 1; j < seqLen && valid; ++j) {
+                    if (i + j >= text.size() ||
+                        (static_cast<unsigned char>(text[i + j]) & 0xC0) != 0x80) {
+                        valid = false;
+                    } else {
+                        codepoint = (codepoint << 6) |
+                                    (static_cast<unsigned char>(text[i + j]) & 0x3F);
+                    }
+                }
+
+                if (valid && seqLen > 0) {
+                    i += seqLen;
+                    // Reject surrogate halves (U+D800-U+DFFF) — invalid in JSON
+                    if (codepoint >= 0xD800 && codepoint <= 0xDFFF) {
+                        result += "\\uFFFD";
+                    } else if (codepoint <= 0xFFFF) {
+                        char buf[8];
+                        snprintf(buf, sizeof(buf), "\\u%04X", codepoint);
+                        result += buf;
+                    } else {
+                        // Supplementary plane — UTF-16 surrogate pair
+                        codepoint -= 0x10000;
+                        char buf[14];
+                        snprintf(buf, sizeof(buf), "\\u%04X\\u%04X",
+                                 0xD800 + (codepoint >> 10),
+                                 0xDC00 + (codepoint & 0x3FF));
+                        result += buf;
+                    }
+                } else {
+                    // Invalid UTF-8 byte — replacement character
+                    result += "\\uFFFD";
+                    ++i;
+                }
             }
         }
         return result;

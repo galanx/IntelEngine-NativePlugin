@@ -35,6 +35,9 @@
 namespace IntelEngine::Papyrus {
 
     // Forward declarations for functions defined after Register()
+    void MarkSystemPending(RE::StaticFunctionTag*, RE::BSFixedString, float);
+    void ClearSystemPending(RE::StaticFunctionTag*, RE::BSFixedString);
+    bool ShouldResetPending(RE::StaticFunctionTag*, RE::BSFixedString, float, float);
     RE::Actor* ResolveStoryCandidate(RE::StaticFunctionTag*, RE::BSFixedString);
     RE::Actor* FindMessengerForSender(RE::StaticFunctionTag*, RE::Actor*);
     void NotifyStoryCooldown(RE::StaticFunctionTag*, RE::Actor*, float);
@@ -550,6 +553,11 @@ namespace IntelEngine::Papyrus {
         a_vm->RegisterFunction("TestValidation", SCRIPT_NAME, TestValidation); ++count;
         a_vm->RegisterFunction("SetDebugLevel", SCRIPT_NAME, SetDebugLevel); ++count;
         a_vm->RegisterFunction("GetVersion", SCRIPT_NAME, GetVersion); ++count;
+
+        // System Pending Watchdog
+        a_vm->RegisterFunction("MarkSystemPending", SCRIPT_NAME, MarkSystemPending); ++count;
+        a_vm->RegisterFunction("ClearSystemPending", SCRIPT_NAME, ClearSystemPending); ++count;
+        a_vm->RegisterFunction("ShouldResetPending", SCRIPT_NAME, ShouldResetPending); ++count;
 
         // Utility
         a_vm->RegisterFunction("HexToInt", SCRIPT_NAME, HexToInt); ++count;
@@ -1846,8 +1854,8 @@ namespace IntelEngine::Papyrus {
         // Build JSON fragment — hardcoded keys, zero Papyrus string involvement
         std::string json;
         json.reserve(256);
-        json += ",\"";  json += pfx;  json += "Name\":\"";    json += name;  json += "\"";
-        json += ",\"";  json += pfx;  json += "Race\":\"";    json += race;  json += "\"";
+        json += ",\"";  json += pfx;  json += "Name\":\"";    json += MemoryDB::EscapeJsonString(name);  json += "\"";
+        json += ",\"";  json += pfx;  json += "Race\":\"";    json += MemoryDB::EscapeJsonString(race);  json += "\"";
         json += ",\"";  json += pfx;  json += "Gender\":\"";  json += (isMale ? "Male" : "Female");  json += "\"";
 
         // Numeric form ID for SkyrimNet decorators (get_relevant_memories, etc.)
@@ -4951,6 +4959,61 @@ namespace IntelEngine::Papyrus {
             }
         } catch (...) {}
         return RE::BSFixedString("");
+    }
+
+    // ==========================================================================
+    // System Pending Watchdog
+    //
+    // Tracks when each system (politics, npcInteraction, storyDM) entered a
+    // "pending" state (waiting for LLM callback). If the callback is lost
+    // (SkyrimNet crash, save reload, etc.), the pending flag stays stuck in
+    // the Papyrus save data forever, blocking all future ticks.
+    //
+    // The DLL always loads fresh, so these timestamps reset on every game load.
+    // Papyrus calls MarkSystemPending/ClearSystemPending around LLM calls,
+    // and checks ShouldResetPending before honoring its own guard flag.
+    // ==========================================================================
+
+    static struct {
+        std::mutex mtx;
+        struct Entry { bool pending = false; float gameTime = 0.0f; };
+        std::unordered_map<std::string, Entry> systems;
+    } g_pendingWatchdog;
+
+    void MarkSystemPending(RE::StaticFunctionTag*, RE::BSFixedString system, float gameTime) {
+        std::lock_guard lock(g_pendingWatchdog.mtx);
+        auto& entry = g_pendingWatchdog.systems[system.c_str()];
+        entry.pending = true;
+        entry.gameTime = gameTime;
+    }
+
+    void ClearSystemPending(RE::StaticFunctionTag*, RE::BSFixedString system) {
+        std::lock_guard lock(g_pendingWatchdog.mtx);
+        auto& entry = g_pendingWatchdog.systems[system.c_str()];
+        entry.pending = false;
+        entry.gameTime = 0.0f;
+    }
+
+    bool ShouldResetPending(RE::StaticFunctionTag*, RE::BSFixedString system,
+                            float timeoutHours, float currentGameTime) {
+        std::lock_guard lock(g_pendingWatchdog.mtx);
+        auto it = g_pendingWatchdog.systems.find(system.c_str());
+        if (it == g_pendingWatchdog.systems.end() || !it->second.pending) {
+            // C++ has no record of this system being pending.
+            // This means either: (a) the DLL was reloaded (game restart/load),
+            // or (b) ClearSystemPending was already called.
+            // In both cases, the Papyrus flag is stale — tell it to reset.
+            return true;
+        }
+        // C++ knows it's pending — check if it's been too long
+        float elapsedHours = (currentGameTime - it->second.gameTime) * 24.0f;
+        if (elapsedHours > timeoutHours) {
+            it->second.pending = false;
+            logger::info("Watchdog: {} stuck for {:.1f}h (> {:.1f}h), resetting",
+                         system.c_str(), elapsedHours, timeoutHours);
+            return true;
+        }
+        return false;
     }
 
 }  // namespace IntelEngine::Papyrus
