@@ -870,14 +870,18 @@ namespace IntelEngine {
 
         for (auto& entry : std::filesystem::directory_iterator(dir)) {
             if (!entry.is_regular_file()) continue;
-            auto ext = entry.path().extension().string();
-            if (ext != ".yaml" && ext != ".yml") continue;
+            auto wext = entry.path().extension().wstring();
+            if (wext != L".yaml" && wext != L".yml") continue;
 
             std::ifstream file(entry.path());
             if (!file.is_open()) continue;
 
             ActionMeta meta;
-            meta.fileName = entry.path().stem().string();
+            try {
+                meta.fileName = entry.path().stem().string();
+            } catch (...) {
+                continue; // skip files with non-ANSI names
+            }
 
             std::string line;
             bool inParamBlock = false;

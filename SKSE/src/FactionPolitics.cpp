@@ -204,6 +204,15 @@ default_relations:
         }
         });  // end call_once
 
+        // Log the absolute resolved path so users can verify which file is being read
+        // (important for MO2 setups where Overwrite can shadow mod files)
+        try {
+            auto absPath = std::filesystem::absolute(configPath);
+            logger::info("FactionPolitics: Loading factions from {}", absPath.string());
+        } catch (...) {
+            logger::info("FactionPolitics: Loading factions from {}", configPath);
+        }
+
         auto result = LoadFactionConfigFromFile(configPath);
         if (!result.success) {
             logger::error("FactionPolitics: Failed to load factions.yaml");
@@ -216,10 +225,14 @@ default_relations:
 
         factionIndex_.clear();
         nameToId_.clear();
+        std::string loadedIds;
         for (size_t i = 0; i < factions_.size(); ++i) {
             factionIndex_[factions_[i].id] = i;
             nameToId_[ToLower(factions_[i].name)] = factions_[i].id;
+            if (!loadedIds.empty()) loadedIds += ", ";
+            loadedIds += factions_[i].id;
         }
+        logger::info("FactionPolitics: Loaded {} factions: [{}]", factions_.size(), loadedIds);
 
         return true;
     }

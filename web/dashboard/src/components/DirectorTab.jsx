@@ -1,4 +1,52 @@
-import { useState, useMemo, useCallback } from 'react';
+import { useState, useMemo, useCallback, useRef, useEffect } from 'react';
+
+/** Text input with dropdown suggestions. Works in Ultralight (no <datalist> needed). */
+function FactionInput({ value, onChange, factions, placeholder }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+
+  // Close dropdown on outside click
+  useEffect(() => {
+    const handler = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, []);
+
+  // Filter suggestions based on current value (single source of truth)
+  const filtered = useMemo(() => {
+    if (!value) return factions;
+    const lc = value.toLowerCase();
+    // Hide suggestions if value exactly matches a faction ID (already selected)
+    if (factions.some(f => f.id === value)) return [];
+    return factions.filter(f => f.id.toLowerCase().includes(lc) || f.name.toLowerCase().includes(lc));
+  }, [factions, value]);
+
+  return (
+    <div ref={ref} className="flex-1 relative">
+      <input
+        type="text"
+        value={value}
+        onChange={e => { onChange(e.target.value); setOpen(true); }}
+        onFocus={() => setOpen(true)}
+        placeholder={placeholder}
+        className="w-full bg-white/5 border border-white/10 rounded px-2 py-1.5 text-xs text-gray-200 outline-none placeholder:text-gray-600"
+      />
+      {open && filtered.length > 0 && (
+        <div className="absolute z-50 top-full left-0 right-0 mt-0.5 max-h-32 overflow-y-auto bg-[#1a1a2e] border border-white/10 rounded shadow-lg">
+          {filtered.map(f => (
+            <div
+              key={f.id}
+              onClick={() => { onChange(f.id); setOpen(false); }}
+              className="px-2 py-1 text-xs text-gray-300 hover:bg-white/10 cursor-pointer truncate"
+            >
+              {f.name} <span className="text-gray-600">({f.id})</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
 
 const DIRECTOR_STORY_TYPES = [
   { key: 'seek_player', label: 'Seek Player' },
@@ -506,26 +554,18 @@ function DirectorTab({ loadedNpcs, actions, factions = [], sendAction }) {
         <h2 className="section-header mb-2">Political Event</h2>
         <div className="space-y-2">
           <div className="flex gap-2">
-            <select
+            <FactionInput
               value={polFactionA}
-              onChange={e => setPolFactionA(e.target.value)}
-              className="flex-1 bg-white/5 border border-white/10 rounded px-2 py-1.5 text-xs text-gray-200 outline-none"
-            >
-              <option value="">Faction A</option>
-              {factions.map(f => (
-                <option key={f.id} value={f.id}>{f.name} ({f.id})</option>
-              ))}
-            </select>
-            <select
+              onChange={setPolFactionA}
+              factions={factions}
+              placeholder="Faction A (e.g. StormcloakFaction)"
+            />
+            <FactionInput
               value={polFactionB}
-              onChange={e => setPolFactionB(e.target.value)}
-              className="flex-1 bg-white/5 border border-white/10 rounded px-2 py-1.5 text-xs text-gray-200 outline-none"
-            >
-              <option value="">Faction B</option>
-              {factions.map(f => (
-                <option key={f.id} value={f.id}>{f.name} ({f.id})</option>
-              ))}
-            </select>
+              onChange={setPolFactionB}
+              factions={factions}
+              placeholder="Faction B (e.g. ThalmorFaction)"
+            />
           </div>
           <div className="flex gap-2">
             <select

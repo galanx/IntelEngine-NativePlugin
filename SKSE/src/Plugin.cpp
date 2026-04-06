@@ -21,6 +21,7 @@
 #include "SkyrimNetAPI.h"
 #include "DialogueTracker.h"
 #include "QuestStateTracker.h"
+#include "StringUtils.h"
 
 #include <fstream>
 #include <chrono>
@@ -29,6 +30,19 @@
 #include <filesystem>
 
 namespace IntelEngine {
+
+    /** Convert a filesystem path to a UTF-8 narrow string (avoids ANSI code page crash on Korean Windows). */
+    static std::string PathToUtf8(const std::filesystem::path& p) {
+        auto wide = p.wstring();
+        if (wide.empty()) return "";
+        int len = WideCharToMultiByte(CP_UTF8, 0, wide.c_str(), static_cast<int>(wide.size()),
+                                      nullptr, 0, nullptr, nullptr);
+        if (len <= 0) return "";
+        std::string result(len, '\0');
+        WideCharToMultiByte(CP_UTF8, 0, wide.c_str(), static_cast<int>(wide.size()),
+                            result.data(), len, nullptr, nullptr);
+        return result;
+    }
 
     // =========================================================================
     // SKSE Serialization — Per-Save Unique ID
@@ -120,8 +134,8 @@ namespace IntelEngine {
             db->Shutdown();
         }
 
-        if (!db->Initialize(dbPath.string())) {
-            logger::error("Failed to initialize PoliticalDB at: {}", dbPath.string());
+        if (!db->Initialize(PathToUtf8(dbPath))) {
+            logger::error("Failed to initialize PoliticalDB");
             return;
         }
 
@@ -431,6 +445,8 @@ SKSEPluginLoad(const SKSE::LoadInterface* skse) {
         // Ensure log directory exists
         std::filesystem::create_directories(path->parent_path());
 
+        // NOTE: spdlog uses fopen() which expects ANSI, not UTF-8. Use path->string() here
+        // (ANSI) so fopen can open the file. PathToUtf8 would produce UTF-8 that fopen misinterprets.
         auto sink = std::make_shared<spdlog::sinks::basic_file_sink_mt>(path->string(), true);
         auto log = std::make_shared<spdlog::logger>("global log", std::move(sink));
         log->set_level(spdlog::level::info);
