@@ -20,6 +20,7 @@
 #include "FactionPolitics.h"
 #include "SkyrimNetAPI.h"
 #include "DialogueTracker.h"
+#include "QuestStateTracker.h"
 
 #include <fstream>
 #include <chrono>
@@ -328,6 +329,22 @@ namespace IntelEngine {
                 logger::info("Data loaded - initializing SkyrimNet API and NPC index");
                 MemoryDB::GetSingleton()->InitializeAPI();
                 DialogueTracker::GetSingleton()->Initialize();
+
+                // Register quest decorator with SkyrimNet (soft dependency — skipped if API unavailable)
+                if (SkyrimNetAPI::RegisterDecorator) {
+                    bool ok = SkyrimNetAPI::RegisterDecorator(
+                        "get_intelengine_quests",
+                        "Returns active IntelEngine quest details (location, type, briefing, objectives). "
+                        "Use instead of generic quest list entry for IntelEngine quests.",
+                        [](RE::Actor*) -> std::string {
+                            return QuestStateTracker::GetSingleton()->GetFormattedQuestInfo();
+                        });
+                    if (ok) {
+                        logger::info("Registered SkyrimNet decorator: get_intelengine_quests");
+                    } else {
+                        logger::warn("Failed to register SkyrimNet decorator: get_intelengine_quests");
+                    }
+                }
 
                 DashboardConfig::GetSingleton()->Load();
                 DashboardUIManager::GetSingleton()->Initialize();

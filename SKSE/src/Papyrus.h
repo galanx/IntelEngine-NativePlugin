@@ -272,6 +272,16 @@ namespace IntelEngine::Papyrus {
     // Notify that a quest location was used (for rotation tracking).
     void NotifyQuestLocationUsed(RE::StaticFunctionTag*, RE::BSFixedString locationName);
 
+    // Push active quest state to C++ for SkyrimNet decorator exposure.
+    void NotifyQuestActive(RE::StaticFunctionTag*, RE::BSFixedString locationName,
+                           RE::BSFixedString subType, RE::BSFixedString enemyType,
+                           RE::BSFixedString giverName, RE::BSFixedString briefing,
+                           RE::BSFixedString victimName, RE::BSFixedString itemName,
+                           RE::BSFixedString alliedFaction);
+
+    // Clear quest state when quest completes, fails, or expires.
+    void NotifyQuestCleared(RE::StaticFunctionTag*);
+
     // Quest boss spawning — spawns a boss-tier leveled actor near a location.
     RE::Actor* SpawnQuestBoss(RE::StaticFunctionTag*, RE::TESObjectREFR* location,
                               RE::BSFixedString enemyType);

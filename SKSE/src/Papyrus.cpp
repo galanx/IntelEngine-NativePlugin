@@ -28,6 +28,7 @@
 #include "BattleManager.h"
 #include "ProcessUtils.h"
 #include "DialogueTracker.h"
+#include "QuestStateTracker.h"
 #include <Windows.h>
 #include <nlohmann/json.hpp>
 
@@ -370,6 +371,8 @@ namespace IntelEngine::Papyrus {
         a_vm->RegisterFunction("NotifyQuestItemUsed", SCRIPT_NAME, NotifyQuestItemUsed); ++count;
         a_vm->RegisterFunction("NotifyRescueVictimUsed", SCRIPT_NAME, NotifyRescueVictimUsed); ++count;
         a_vm->RegisterFunction("NotifyQuestLocationUsed", SCRIPT_NAME, NotifyQuestLocationUsed); ++count;
+        a_vm->RegisterFunction("NotifyQuestActive", SCRIPT_NAME, NotifyQuestActive); ++count;
+        a_vm->RegisterFunction("NotifyQuestCleared", SCRIPT_NAME, NotifyQuestCleared); ++count;
 
         // MemoryDB Functions (SkyrimNet SQLite reader)
         a_vm->RegisterFunction("GetNPCMemories", SCRIPT_NAME, GetNPCMemories); ++count;
@@ -3079,6 +3082,24 @@ namespace IntelEngine::Papyrus {
         auto* str = locationName.c_str();
         if (!str || !*str) return;
         NPCIndex::GetSingleton()->NotifyQuestLocationUsed(str);
+    }
+
+    void NotifyQuestActive(RE::StaticFunctionTag*, RE::BSFixedString locationName,
+                           RE::BSFixedString subType, RE::BSFixedString enemyType,
+                           RE::BSFixedString giverName, RE::BSFixedString briefing,
+                           RE::BSFixedString victimName, RE::BSFixedString itemName,
+                           RE::BSFixedString alliedFaction) {
+        auto safe = [](const char* s) -> const char* { return s ? s : ""; };
+        QuestStateTracker::GetSingleton()->SetActive(
+            safe(locationName.c_str()), safe(subType.c_str()), safe(enemyType.c_str()),
+            safe(giverName.c_str()), safe(briefing.c_str()), safe(victimName.c_str()),
+            safe(itemName.c_str()), safe(alliedFaction.c_str()));
+        logger::info("[IntelEngine] Quest active: {} at {}", safe(subType.c_str()), safe(locationName.c_str()));
+    }
+
+    void NotifyQuestCleared(RE::StaticFunctionTag*) {
+        QuestStateTracker::GetSingleton()->Clear();
+        logger::info("[IntelEngine] Quest cleared");
     }
 
     // =========================================================================
