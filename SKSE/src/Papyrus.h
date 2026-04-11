@@ -223,6 +223,30 @@ namespace IntelEngine::Papyrus {
     // Called from Maintenance when co-save data exists (skips StorageUtil reads).
     void SyncArraysFromSlotTracker(RE::StaticFunctionTag*);
 
+    // --- ProximityMonitor watches (C++ frame-rate distance/deadline checking) ---
+
+    // Register a distance watch between two refs.
+    // Fires ModEvent "IntelEngine_ProximityEvent" with strArg=eventType, numArg=watchId.
+    void RegisterDistanceWatch(RE::StaticFunctionTag*, int id, RE::Actor* source,
+                               RE::TESObjectREFR* target, float threshold,
+                               RE::BSFixedString eventType, bool greaterThan,
+                               float zTolerance);
+
+    // Register a distance-to-player watch.
+    void RegisterPlayerWatch(RE::StaticFunctionTag*, int id, RE::Actor* source,
+                             float threshold, RE::BSFixedString eventType,
+                             bool greaterThan);
+
+    // Register a game-time deadline watch.
+    void RegisterDeadlineWatch(RE::StaticFunctionTag*, int id, float gameTime,
+                               RE::BSFixedString eventType);
+
+    // Clear all watches for a given ID (slot index).
+    void ClearProximityWatches(RE::StaticFunctionTag*, int id);
+
+    // Clear a specific watch by ID + event type.
+    void ClearProximityWatch(RE::StaticFunctionTag*, int id, RE::BSFixedString eventType);
+
     // Check if actor is available for new tasks (no active task + no cooldown).
     // Used as SkyrimNet tag via Papyrus wrapper.
     bool IsActorAvailable(RE::StaticFunctionTag*, RE::Actor* akActor);

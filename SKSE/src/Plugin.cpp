@@ -29,6 +29,7 @@
 #include <sstream>
 #include <filesystem>
 #include <thread>
+#include "ProximityMonitor.h"
 
 namespace IntelEngine {
 
@@ -127,7 +128,9 @@ namespace IntelEngine {
         // Previously this was in kPostLoadGame, but that ran AFTER LoadCallback
         // and wiped the co-save data we just loaded.
         tracker->ClearAll();
-        logger::info("RevertCallback: Save ID and SlotTracker cleared (gen={})",
+        // Stop ProximityMonitor — will restart on kPostLoadGame
+        ProximityMonitor::GetSingleton()->Stop();
+        logger::info("RevertCallback: Save ID, SlotTracker, ProximityMonitor cleared (gen={})",
             tracker->loadGeneration.load(std::memory_order_relaxed));
     }
 
@@ -417,6 +420,9 @@ namespace IntelEngine {
                         });
                     }
                 }
+                // Start C++ ProximityMonitor (frame-rate distance/deadline checking)
+                ProximityMonitor::GetSingleton()->Start();
+
                 // Defer Maintenance dispatch — gives RealNames Extended and other mods
                 // time to complete their load-time StorageUtil reads before IntelEngine
                 // starts its StorageUtil-heavy recovery (RecoverActiveTasks).

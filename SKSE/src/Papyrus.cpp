@@ -13,6 +13,7 @@
 #include <mutex>
 #include "LocationResolver.h"
 #include "StringUtils.h"
+#include "ProximityMonitor.h"
 #include "CellAnalyzer.h"
 #include "ActionValidator.h"
 #include "DepartureDetector.h"
@@ -323,6 +324,14 @@ namespace IntelEngine::Papyrus {
         a_vm->RegisterFunction("SetSlotOffscreenArrival", SCRIPT_NAME, SetSlotOffscreenArrival); ++count;
         a_vm->RegisterFunction("HasCoSaveTaskData", SCRIPT_NAME, HasCoSaveTaskData); ++count;
         a_vm->RegisterFunction("SyncArraysFromSlotTracker", SCRIPT_NAME, SyncArraysFromSlotTracker); ++count;
+
+        // ProximityMonitor Functions (C++ frame-rate distance/deadline checking)
+        a_vm->RegisterFunction("RegisterDistanceWatch", SCRIPT_NAME, RegisterDistanceWatch); ++count;
+        a_vm->RegisterFunction("RegisterPlayerWatch", SCRIPT_NAME, RegisterPlayerWatch); ++count;
+        a_vm->RegisterFunction("RegisterDeadlineWatch", SCRIPT_NAME, RegisterDeadlineWatch); ++count;
+        a_vm->RegisterFunction("ClearProximityWatches", SCRIPT_NAME, ClearProximityWatches); ++count;
+        a_vm->RegisterFunction("ClearProximityWatch", SCRIPT_NAME, ClearProximityWatch); ++count;
+
         a_vm->RegisterFunction("IsActorAvailable", SCRIPT_NAME, IsActorAvailable); ++count;
         a_vm->RegisterFunction("HasBaseAIPackages", SCRIPT_NAME, HasBaseAIPackages); ++count;
         a_vm->RegisterFunction("HasNonSandboxAI", SCRIPT_NAME, HasNonSandboxAI); ++count;
@@ -1468,6 +1477,40 @@ namespace IntelEngine::Papyrus {
         }
 
         logger::info("SyncArraysFromSlotTracker: Synced {} active slots to Papyrus arrays", synced);
+    }
+
+    // --- ProximityMonitor native functions ---
+
+    void RegisterDistanceWatch(RE::StaticFunctionTag*, int id, RE::Actor* source,
+                               RE::TESObjectREFR* target, float threshold,
+                               RE::BSFixedString eventType, bool greaterThan,
+                               float zTolerance) {
+        if (!source || !target) return;
+        ProximityMonitor::GetSingleton()->RegisterDistanceWatch(
+            id, source->GetFormID(), target->GetFormID(),
+            threshold, eventType.c_str(), greaterThan, zTolerance);
+    }
+
+    void RegisterPlayerWatch(RE::StaticFunctionTag*, int id, RE::Actor* source,
+                             float threshold, RE::BSFixedString eventType,
+                             bool greaterThan) {
+        if (!source) return;
+        ProximityMonitor::GetSingleton()->RegisterPlayerWatch(
+            id, source->GetFormID(), threshold, eventType.c_str(), greaterThan);
+    }
+
+    void RegisterDeadlineWatch(RE::StaticFunctionTag*, int id, float gameTime,
+                               RE::BSFixedString eventType) {
+        ProximityMonitor::GetSingleton()->RegisterDeadlineWatch(
+            id, gameTime, eventType.c_str());
+    }
+
+    void ClearProximityWatches(RE::StaticFunctionTag*, int id) {
+        ProximityMonitor::GetSingleton()->ClearWatches(id);
+    }
+
+    void ClearProximityWatch(RE::StaticFunctionTag*, int id, RE::BSFixedString eventType) {
+        ProximityMonitor::GetSingleton()->ClearWatch(id, eventType.c_str());
     }
 
     bool IsActorAvailable(RE::StaticFunctionTag*, RE::Actor* akActor) {

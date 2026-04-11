@@ -42,6 +42,7 @@ set(SOURCES
     src/DepartureDetector.cpp
     src/OffScreenTracker.cpp
     src/SlotTracker.cpp
+    src/ProximityMonitor.cpp
     src/MemoryDB.cpp
     src/DashboardConfig.cpp
     src/DashboardUIManager.cpp
