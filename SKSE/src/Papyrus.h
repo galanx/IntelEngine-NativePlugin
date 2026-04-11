@@ -211,6 +211,18 @@ namespace IntelEngine::Papyrus {
     // Called by Core.ClearSlot.
     void ClearSlotState(RE::StaticFunctionTag*, int slot);
 
+    // Set per-slot fields in C++ SlotTracker (for co-save persistence).
+    void SetSlotSpeed(RE::StaticFunctionTag*, int slot, int speed);
+    void SetSlotDeadline(RE::StaticFunctionTag*, int slot, float deadline);
+    void SetSlotOffscreenArrival(RE::StaticFunctionTag*, int slot, float arrival);
+
+    // Returns true if SlotTracker was loaded from co-save data.
+    bool HasCoSaveTaskData(RE::StaticFunctionTag*);
+
+    // Push C++ SlotTracker state TO Papyrus arrays.
+    // Called from Maintenance when co-save data exists (skips StorageUtil reads).
+    void SyncArraysFromSlotTracker(RE::StaticFunctionTag*);
+
     // Check if actor is available for new tasks (no active task + no cooldown).
     // Used as SkyrimNet tag via Papyrus wrapper.
     bool IsActorAvailable(RE::StaticFunctionTag*, RE::Actor* akActor);

@@ -28,6 +28,7 @@
 #include <random>
 #include <sstream>
 #include <filesystem>
+#include <thread>
 
 namespace IntelEngine {
 
@@ -88,6 +89,9 @@ namespace IntelEngine {
         a_intfc->WriteRecordData(&len, sizeof(len));
         a_intfc->WriteRecordData(id.data(), len);
         logger::info("SaveCallback: Wrote save ID '{}'", id);
+
+        // Persist slot tracker state (task recovery without StorageUtil on load)
+        SlotTracker::GetSingleton()->Save(a_intfc);
     }
 
     void LoadCallback(SKSE::SerializationInterface* a_intfc) {
@@ -106,6 +110,8 @@ namespace IntelEngine {
                     g_currentSaveID = id;
                     logger::info("LoadCallback: Loaded save ID '{}'", g_currentSaveID);
                 }
+            } else if (type == 'IETK') {
+                SlotTracker::GetSingleton()->Load(a_intfc);
             }
         }
     }
@@ -113,7 +119,16 @@ namespace IntelEngine {
     void RevertCallback(SKSE::SerializationInterface*) {
         g_currentSaveID.clear();
         g_hasReverted = true;
-        logger::info("RevertCallback: Save ID cleared");
+        // Increment load generation to cancel any pending deferred Maintenance dispatch
+        // from a previous load (prevents double-dispatch on rapid save reload).
+        auto* tracker = SlotTracker::GetSingleton();
+        tracker->loadGeneration.fetch_add(1, std::memory_order_relaxed);
+        // Clear SlotTracker here (before LoadCallback repopulates from co-save).
+        // Previously this was in kPostLoadGame, but that ran AFTER LoadCallback
+        // and wiped the co-save data we just loaded.
+        tracker->ClearAll();
+        logger::info("RevertCallback: Save ID and SlotTracker cleared (gen={})",
+            tracker->loadGeneration.load(std::memory_order_relaxed));
     }
 
     /** Initialize PoliticalDB with per-save database path + timeline cleanup. */
@@ -160,15 +175,8 @@ namespace IntelEngine {
     // Papyrus Maintenance Bootstrap
     // =========================================================================
 
-    // Shared quest handle resolution — used by both Maintenance and FixupScriptProperties
-    struct QuestHandleResult {
-        RE::TESQuest* quest = nullptr;
-        RE::BSScript::Internal::VirtualMachine* vm = nullptr;
-        RE::VMHandle handle = 0;
-        bool valid = false;
-    };
-
-    QuestHandleResult ResolveQuestHandle(bool startIfStopped = false) {
+    // Definition — declaration in Plugin.h
+    QuestHandleResult ResolveQuestHandle(bool startIfStopped) {
         QuestHandleResult r;
 
         auto* handler = RE::TESDataHandler::GetSingleton();
@@ -253,26 +261,14 @@ namespace IntelEngine {
             }
         }
 
-        // Safety net: dispatch all subsystem restart calls directly.
-        // Stale save bytecode in Maintenance may skip these, killing subsystems.
-        // The DLL always runs fresh code, so this guarantees all systems restart.
-        auto dispatchNoArgs = [&](const char* script, const char* func) {
-            RE::BSFixedString cls(script);
-            RE::BSFixedString fn(func);
-            auto* a = RE::MakeFunctionArguments();
-            RE::BSTSmartPointer<RE::BSScript::IStackCallbackFunctor> cb;
-            bool r = qh.vm->DispatchMethodCall2(qh.handle, cls, fn, a, cb);
-            logger::info("DispatchSafetyNet: {}.{} -> {}", script, func,
-                r ? "queued" : "FAILED");
-        };
-
-        dispatchNoArgs("IntelEngine_Travel", "RestartMonitoring");
-        dispatchNoArgs("IntelEngine_NPCTasks", "RestartMonitoring");
-        dispatchNoArgs("IntelEngine_Schedule", "RestartMonitoring");
-        dispatchNoArgs("IntelEngine_StoryEngine", "RestartMonitoring");
-        dispatchNoArgs("IntelEngine_StoryEngine", "StartScheduler");
-        dispatchNoArgs("IntelEngine_Politics", "Maintenance");
-        dispatchNoArgs("IntelEngine_Battle", "OnGameReload");
+        // NOTE: Subsystem restarts (Travel/NPCTasks/Schedule/StoryEngine/Politics/Battle)
+        // are handled by Maintenance() itself (Core.psc lines 278-296).
+        // Previously we dispatched them here as a "safety net" against stale bytecode,
+        // but DispatchMethodCall2 uses the same save bytecode — no additional protection.
+        // Worse, the safety-net dispatches ran BEFORE Maintenance's self-heal code,
+        // causing None-cast errors and flooding the VM with 9 concurrent calls on load.
+        // This contention interfered with RealNames Extended's StorageUtil persistence,
+        // causing NPC names to regenerate on every save load.
     }
 
     // =========================================================================
@@ -387,9 +383,9 @@ namespace IntelEngine {
                 break;
 
             case SKSE::MessagingInterface::kPostLoadGame:
-                // Game loaded — clear SlotTracker, invalidate MemoryDB (lazy reconnect on first query)
-                logger::info("Game loaded - clearing SlotTracker, clearing MemoryDB caches");
-                SlotTracker::GetSingleton()->ClearAll();
+                // Game loaded — SlotTracker already populated from co-save (LoadCallback).
+                // ClearAll moved to RevertCallback to avoid wiping co-save data.
+                logger::info("Game loaded - refreshing indexes, clearing MemoryDB caches");
                 NPCIndex::GetSingleton()->RefreshIndex();
                 MemoryDB::GetSingleton()->ClearCaches();
                 // Initialize per-save political DB (save ID restored via serialization)
@@ -398,15 +394,59 @@ namespace IntelEngine {
                     InitializePoliticalDB();
                     FactionPolitics::GetSingleton()->Initialize();
                 }
-                // Fix stale script properties, then bootstrap Maintenance
+                // Re-sync SkyrimNet busy state from co-save-loaded SlotTracker
+                // (LoadCallback fires before SkyrimNet is ready, so we sync here)
+                {
+                    auto* tracker = SlotTracker::GetSingleton();
+                    if (tracker->HasCoSaveData() && SkyrimNetAPI::SetActorBusy) {
+                        for (int i = 0; i < MAX_SLOTS; ++i) {
+                            auto slot = tracker->GetSlotDataCopy(i);
+                            if (slot.state != 0 && slot.agentFormID) {
+                                auto reason = SlotTracker::BuildBusyReason(slot.taskType, slot.targetName);
+                                SkyrimNetAPI::SetActorBusy(slot.agentFormID, reason.c_str());
+                            }
+                        }
+                    }
+                }
+                // Fix stale script properties immediately (C++ only, no VM contention)
                 {
                     auto* task = SKSE::GetTaskInterface();
                     if (task) {
                         task->AddTask([]() {
                             FixupScriptProperties();
-                            DispatchMaintenanceCall(false);
                         });
                     }
+                }
+                // Defer Maintenance dispatch — gives RealNames Extended and other mods
+                // time to complete their load-time StorageUtil reads before IntelEngine
+                // starts its StorageUtil-heavy recovery (RecoverActiveTasks).
+                // Without this delay, IntelEngine's 9 concurrent VM dispatches caused
+                // contention that made RealNames' HasStringValue check fail intermittently.
+                {
+                    // Capture current load generation to detect stale dispatches
+                    // (player loads another save within the 3s window).
+                    uint32_t gen = SlotTracker::GetSingleton()->loadGeneration.load(
+                        std::memory_order_relaxed);
+                    std::thread([gen]() {
+                        std::this_thread::sleep_for(std::chrono::seconds(3));
+                        // Check if a new load/revert happened while we slept
+                        if (SlotTracker::GetSingleton()->loadGeneration.load(
+                                std::memory_order_relaxed) != gen) {
+                            logger::info("Deferred Maintenance cancelled (load generation changed)");
+                            return;
+                        }
+                        auto* deferredTask = SKSE::GetTaskInterface();
+                        if (deferredTask) {
+                            deferredTask->AddTask([gen]() {
+                                // Double-check on main thread too
+                                if (SlotTracker::GetSingleton()->loadGeneration.load(
+                                        std::memory_order_relaxed) != gen) {
+                                    return;
+                                }
+                                DispatchMaintenanceCall(false);
+                            });
+                        }
+                    }).detach();
                 }
                 break;
 

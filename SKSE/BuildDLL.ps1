@@ -25,10 +25,11 @@ $ramGB = [Math]::Round((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemor
 $ramAvailGB = [Math]::Round((Get-CimInstance Win32_OperatingSystem).FreePhysicalMemory / 1MB)
 $cpuCores = [Environment]::ProcessorCount
 
-# Reserve 4 GB for OS + other apps, allow ~2.5 GB per compiler instance from remaining RAM
-$ramSafeThreads = [Math]::Max(1, [Math]::Floor(($ramAvailGB - 4) / 2.5))
-# Also cap at half CPU cores to avoid thrashing
-$cpuSafeThreads = [Math]::Max(1, [Math]::Floor($cpuCores / 2))
+# Reserve 8 GB for OS + other apps, allow ~3 GB per compiler instance from remaining RAM
+# (CommonLibSSE-NG template-heavy headers can spike well above 2.5 GB per instance)
+$ramSafeThreads = [Math]::Max(1, [Math]::Floor(($ramAvailGB - 8) / 3))
+# Cap at quarter CPU cores to avoid thrashing (half was still too aggressive)
+$cpuSafeThreads = [Math]::Max(1, [Math]::Floor($cpuCores / 4))
 
 if ($Threads -le 0) {
     # Auto mode: pick the lower of RAM-safe and CPU-safe limits
@@ -38,8 +39,8 @@ if ($Threads -le 0) {
     $Threads = [Math]::Min($Threads, $ramSafeThreads)
 }
 
-# Absolute bounds: at least 1, at most 8 (CommonLibSSE is too heavy for more)
-$Threads = [Math]::Max(1, [Math]::Min(8, $Threads))
+# Absolute bounds: at least 1, at most 4 (CommonLibSSE is too heavy for more)
+$Threads = [Math]::Max(1, [Math]::Min(4, $Threads))
 
 Write-Host "System: ${ramGB} GB RAM total, ${ramAvailGB} GB available, ${cpuCores} cores" -ForegroundColor Cyan
 Write-Host "Safe threads: $Threads (RAM-safe: $ramSafeThreads, CPU-safe: $cpuSafeThreads, max: 8)" -ForegroundColor Cyan

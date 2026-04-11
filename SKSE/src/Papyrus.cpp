@@ -318,6 +318,11 @@ namespace IntelEngine::Papyrus {
         // Slot Tracker Functions (C++ state mirror for SkyrimNet decorators)
         a_vm->RegisterFunction("UpdateSlotState", SCRIPT_NAME, UpdateSlotState); ++count;
         a_vm->RegisterFunction("ClearSlotState", SCRIPT_NAME, ClearSlotState); ++count;
+        a_vm->RegisterFunction("SetSlotSpeed", SCRIPT_NAME, SetSlotSpeed); ++count;
+        a_vm->RegisterFunction("SetSlotDeadline", SCRIPT_NAME, SetSlotDeadline); ++count;
+        a_vm->RegisterFunction("SetSlotOffscreenArrival", SCRIPT_NAME, SetSlotOffscreenArrival); ++count;
+        a_vm->RegisterFunction("HasCoSaveTaskData", SCRIPT_NAME, HasCoSaveTaskData); ++count;
+        a_vm->RegisterFunction("SyncArraysFromSlotTracker", SCRIPT_NAME, SyncArraysFromSlotTracker); ++count;
         a_vm->RegisterFunction("IsActorAvailable", SCRIPT_NAME, IsActorAvailable); ++count;
         a_vm->RegisterFunction("HasBaseAIPackages", SCRIPT_NAME, HasBaseAIPackages); ++count;
         a_vm->RegisterFunction("HasNonSandboxAI", SCRIPT_NAME, HasNonSandboxAI); ++count;
@@ -1383,6 +1388,86 @@ namespace IntelEngine::Papyrus {
 
     void ClearSlotState(RE::StaticFunctionTag*, int slot) {
         SlotTracker::GetSingleton()->ClearSlot(slot);
+    }
+
+    void SetSlotSpeed(RE::StaticFunctionTag*, int slot, int speed) {
+        SlotTracker::GetSingleton()->SetSlotSpeed(slot, speed);
+    }
+
+    void SetSlotDeadline(RE::StaticFunctionTag*, int slot, float deadline) {
+        SlotTracker::GetSingleton()->SetSlotDeadline(slot, deadline);
+    }
+
+    void SetSlotOffscreenArrival(RE::StaticFunctionTag*, int slot, float arrival) {
+        SlotTracker::GetSingleton()->SetSlotOffscreenArrival(slot, arrival);
+    }
+
+    bool HasCoSaveTaskData(RE::StaticFunctionTag*) {
+        return SlotTracker::GetSingleton()->HasCoSaveData();
+    }
+
+    void SyncArraysFromSlotTracker(RE::StaticFunctionTag*) {
+        auto qh = ResolveQuestHandle(false);
+        if (!qh.valid) {
+            logger::error("SyncArraysFromSlotTracker: Quest handle resolution failed");
+            return;
+        }
+
+        RE::BSTSmartPointer<RE::BSScript::Object> coreObj;
+        if (!qh.vm->FindBoundObject(qh.handle, "IntelEngine_Core", coreObj) || !coreObj) {
+            logger::error("SyncArraysFromSlotTracker: IntelEngine_Core not bound");
+            return;
+        }
+
+        auto setArrayInt = [&](const char* name, int idx, int val) {
+            auto* prop = coreObj->GetProperty(name);
+            if (!prop) return;
+            auto arr = prop->GetArray();
+            if (!arr || idx >= static_cast<int>(arr->size())) return;
+            (*arr)[idx].SetSInt(val);
+        };
+        auto setArrayFloat = [&](const char* name, int idx, float val) {
+            auto* prop = coreObj->GetProperty(name);
+            if (!prop) return;
+            auto arr = prop->GetArray();
+            if (!arr || idx >= static_cast<int>(arr->size())) return;
+            (*arr)[idx].SetFloat(val);
+        };
+        auto setArrayString = [&](const char* name, int idx, const std::string& val) {
+            auto* prop = coreObj->GetProperty(name);
+            if (!prop) return;
+            auto arr = prop->GetArray();
+            if (!arr || idx >= static_cast<int>(arr->size())) return;
+            (*arr)[idx].SetString(val);
+        };
+
+        auto* tracker = SlotTracker::GetSingleton();
+        int synced = 0;
+
+        for (int i = 0; i < MAX_SLOTS; ++i) {
+            auto slot = tracker->GetSlotDataCopy(i);
+
+            setArrayInt("SlotStates", i, slot.state);
+            setArrayString("SlotTaskTypes", i, slot.taskType);
+            setArrayString("SlotTargetNames", i, slot.targetName);
+            setArrayInt("SlotSpeeds", i, slot.speed);
+            setArrayFloat("SlotDeadlines", i, slot.deadline);
+
+            if (slot.state != 0) {
+                synced++;
+
+                // Re-init off-screen tracker — resolve actor fresh from FormID
+                // (the snapshot's agent pointer may be stale after lock release)
+                if (slot.offscreenArrival > 0.0f && slot.agentFormID) {
+                    auto* actor = RE::TESForm::LookupByID<RE::Actor>(slot.agentFormID);
+                    if (actor && !actor->IsDead()) {
+                        InitOffScreenTravel(nullptr, i, slot.offscreenArrival, actor);
+                    }
+                }
+            }
+        }
+
+        logger::info("SyncArraysFromSlotTracker: Synced {} active slots to Papyrus arrays", synced);
     }
 
     bool IsActorAvailable(RE::StaticFunctionTag*, RE::Actor* akActor) {
