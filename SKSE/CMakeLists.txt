@@ -6,7 +6,7 @@ cmake_minimum_required(VERSION 3.21)
 
 project(
     IntelEngine
-    VERSION 3.3.0
+    VERSION 3.3.1
     DESCRIPTION "Intelligent NPC Task Execution for SkyrimNet"
     LANGUAGES CXX
 )
@@ -41,6 +41,7 @@ set(SOURCES
     src/StuckDetector.cpp
     src/DepartureDetector.cpp
     src/OffScreenTracker.cpp
+    src/ProximityMonitor.cpp
     src/SlotTracker.cpp
     src/ProximityMonitor.cpp
     src/MemoryDB.cpp
@@ -51,6 +52,7 @@ set(SOURCES
     src/FactionConfigLoader.cpp
     src/BattleManager.cpp
     src/DialogueTracker.cpp
+    src/AsyncDispatch.cpp
 )
 
 # =============================================================================

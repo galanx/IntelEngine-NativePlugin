@@ -15,6 +15,7 @@
 #include "Plugin.h"
 #include "StringUtils.h"
 #include "SlotTracker.h"
+#include "MemoryDB.h"  // RankedCandidate (used by StoryDMPhaseAPrefetch)
 
 #include <deque>
 #include <unordered_map>
@@ -263,6 +264,10 @@ namespace IntelEngine {
          */
         static std::string GetNPCBioLine(RE::Actor* actor);
 
+        // Engine-touch fallback only (no bio file I/O). Use in Phase A snapshots
+        // so the slow file read can move to Phase B (worker thread).
+        static std::string GetNPCBioFallbackLine(RE::Actor* actor);
+
         /**
          * Resolve a name from the DM response to the exact Actor from the last candidate pool.
          * Uses stored FormIDs from BuildDungeonMasterContext/BuildNPCInteractionContext,
@@ -380,6 +385,118 @@ namespace IntelEngine {
          * @return Pre-escaped context string, or empty if no eligible groups
          */
         std::string BuildNPCInteractionContext(int maxPairs);
+
+        // -----------------------------------------------------------------
+        // Async tick infrastructure (no engine touches in Phase B/markdown).
+        // -----------------------------------------------------------------
+
+        /** Per-actor data captured by Phase A (main thread). All fields are values. */
+        struct NPCTickActorSnapshot {
+            RE::FormID  formId        = 0;
+            RE::FormID  cellFormId    = 0;
+            std::string nameDisplay;
+            std::string nameLower;
+            std::string location;     // pre-resolved via LocationResolver
+            std::string archetype;    // pre-classified
+            std::string bio;          // pre-fetched
+            bool        isFemale      = false;
+            bool        isFollower    = false;
+        };
+
+        /** Tick-level snapshot for the NPC interaction tick (NPC DM). */
+        struct NPCTickSnapshot {
+            int               maxPairs           = 4;
+            float             currentGameTime    = 0.f;
+            RE::FormID        playerCellFormId   = 0;
+            std::string       playerName;
+            std::string       playerLocation;
+            std::string       timeOfDayString;
+            std::vector<NPCTickActorSnapshot> candidates;
+        };
+
+        /**
+         * Phase A — main thread. Capture engine state for the NPC interaction tick.
+         * Iterates loaded actors, applies all engine-touching eligibility filters
+         * (alive, not in combat/hostile, NPC keyword, not follower, not on cooldown),
+         * pre-resolves location/archetype/bio, returns a value-only snapshot.
+         */
+        NPCTickSnapshot BuildNPCTickSnapshot(int maxPairs);
+
+        /**
+         * Phase B — worker thread. Build markdown context from the snapshot.
+         * Performs SQL queries (GetSociallyActiveFormIDs, GetFormattedMemories) and
+         * formats the output. Updates m_npcCandidatePool under m_mutex.
+         */
+        std::string BuildNPCInteractionContextFromSnapshot(const NPCTickSnapshot& snap);
+
+        /** Per-actor data for Story DM tick (richer than NPC tick — has position + dbFormId). */
+        struct StoryDMActorSnapshot {
+            RE::FormID  formId        = 0;
+            RE::FormID  dbFormId      = 0;     // FormID used for MemoryDB queries (may be stale-but-valid)
+            std::string nameDisplay;
+            std::string nameLower;
+            std::string location;
+            std::string archetype;
+            std::string bio;
+            std::string npcHold;       // settlement (city/town) or hold fallback
+            std::string factionName;   // pre-resolved political faction display name (empty if none)
+            bool        isFemale      = false;
+            bool        is3DLoaded    = false;
+            float       posX          = 0.f;
+            float       posY          = 0.f;
+            float       dbScore       = 0.f;   // initial MemoryDB ranking score (0 for randoms/locmates)
+            bool        fromMemoryDB  = false;
+        };
+
+        /** Tick-level snapshot for the Story DM tick. */
+        struct StoryDMTickSnapshot {
+            int               maxCandidates           = 7;
+            float             absenceDays             = 3.0f;
+            float             currentGameTime         = 0.f;
+            float             currentDBHours          = 0.f;
+            std::string       playerName;
+            std::string       playerLocation;
+            std::string       playerHold;
+            bool              playerInteriorCell      = false;
+            bool              playerInDangerousLocation = false;
+            bool              playerAtInn             = false;
+            float             playerX                 = 0.f;
+            float             playerY                 = 0.f;
+            std::string       timeOfDayString;
+            float             lastStoryDispatchGameTime = 0.f;
+            std::string       lastStoryDispatchType;
+            int               memoriesPerCandidate    = 2;   // snapshotted from Settings on main thread
+            std::vector<StoryDMActorSnapshot> candidates;
+        };
+
+        /** Worker-safe pre-fetch: results of the two SQL queries Story DM Phase A
+         *  used to make synchronously. Done on the worker thread before Phase A so
+         *  the main thread doesn't pay the cross-DLL SQLite cost. */
+        struct StoryDMPhaseAPrefetch {
+            std::unordered_set<std::string> recentPlayerNPCs;  // GetPlayerContext SQL
+            std::vector<RankedCandidate>    ranked;            // GetActorEngagement SQL
+        };
+
+        /** Phase 0 — worker thread. Fetches the SQL inputs Phase A needs. */
+        StoryDMPhaseAPrefetch FetchStoryDMPhaseAPrefetch(int maxCandidates, float absenceDays);
+
+        /**
+         * Phase A — main thread. Capture engine state for the Story DM tick.
+         * Runs the same 3-pass actor scan as BuildDungeonMasterContext (MemoryDB-ranked +
+         * random encounters + location-mates). The two SQL inputs (recentPlayerNPCs,
+         * ranked) are pre-fetched on the worker thread by FetchStoryDMPhaseAPrefetch
+         * so this function does only engine-touch work. Returns empty candidates
+         * if player is in a blocked location.
+         */
+        StoryDMTickSnapshot BuildStoryDMTickSnapshot(int maxCandidates, float absenceDays,
+                                                     const StoryDMPhaseAPrefetch& prefetch);
+
+        /**
+         * Phase B — worker thread. Score candidates, sort, trim, build markdown.
+         * All per-candidate SQL queries run here (memories, dialogue, events, related,
+         * bio relationships). Updates m_dmCandidatePool under m_mutex.
+         */
+        std::string BuildDungeonMasterContextFromSnapshot(const StoryDMTickSnapshot& snap);
 
         /**
          * Get FormIDs of all NPCs in the last DM candidate pool.

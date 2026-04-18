@@ -191,6 +191,52 @@ namespace IntelEngine {
         std::string BuildPoliticalContext(float currentGameTime);
 
         // =================================================================
+        // Async Political DM Tick — split for off-main-thread context build.
+        // =================================================================
+
+        /** Per-leader snapshot used by the async politics tick.
+         *  wasResolved: FindByName returned non-null on the main thread.
+         *  confirmedDead: actor was resolved AND IsDead() AND !IsEssential() — used by
+         *  the worker-safe FactionToJsonFromSnapshot to filter out permanently dead leaders
+         *  without re-touching the engine. */
+        struct PoliticsLeaderSnapshot {
+            std::string name;
+            std::string factionId;
+            std::string hold;
+            bool        nearby = false;
+            RE::FormID  formId = 0;          // 0 if FindByName failed
+            bool        wasResolved = false; // FindByName returned a valid actor
+            bool        confirmedDead = false;
+        };
+
+        /** Tick-level snapshot for the politics tick. */
+        struct PoliticsTickSnapshot {
+            float       currentGameTime = 0.f;
+            RE::FormID  playerFormId    = 0;
+            std::string playerHold;
+            std::vector<PoliticsLeaderSnapshot> leaders;
+        };
+
+        /**
+         * Phase A — main thread. Resolve faction leaders to actors, capture nearby
+         * status, capture player formId + hold. No SQL; no markdown; just engine reads.
+         */
+        PoliticsTickSnapshot BuildPoliticsTickSnapshot(float currentGameTime);
+
+        /**
+         * Phase B — worker thread. Build the political DM JSON context using the
+         * snapshot. All DB queries (relations, wars, standings, MemoryDB enrichment
+         * per leader, recent player dialogue) run here.
+         */
+        std::string BuildPoliticalContextFromSnapshot(const PoliticsTickSnapshot& snap);
+
+        /** Worker-safe FactionToJson variant — uses the snapshot's pre-resolved
+         *  per-leader liveness instead of calling NPCIndex::FindByName + actor->IsDead.
+         *  Returns empty json if all leaders are confirmed dead (faction disbanded). */
+        nlohmann::json FactionToJsonFromSnapshot(const FactionConfig& f,
+                                                 const PoliticsTickSnapshot& snap) const;
+
+        // =================================================================
         // Relation Status Helpers
         // =================================================================
 
@@ -224,14 +270,20 @@ namespace IntelEngine {
         std::string BuildDashboardJson();
 
         /** Build a compact markdown summary for injection into Story DM / NPC DM contexts.
-         *  Includes: non-neutral relations, recent events, active wars. Lightweight. */
+         *  Includes: non-neutral relations, recent events, active wars. Lightweight.
+         *  Worker-thread-safe overload: caller passes currentGameTime to avoid
+         *  RE::Calendar access from non-main threads. The no-arg version reads
+         *  Calendar on the main thread and forwards. */
         std::string BuildPoliticalSummary();
+        std::string BuildPoliticalSummary(float currentGameTime);
 
         /** Get the most recent witnessable political event (assassination, brawl,
          *  sabotage, espionage, border_skirmish) that happened within the current
          *  tick window. Returns empty string if none. Used by Story DM to hint
-         *  at events the player could witness nearby. */
+         *  at events the player could witness nearby.
+         *  Worker-thread-safe overload: caller passes currentGameTime. */
         std::string GetLatestWitnessableEvent();
+        std::string GetLatestWitnessableEvent(float currentGameTime);
 
         /** Check if a political event should physically manifest near the player.
          *  Compares player's hold against involved factions' holds.

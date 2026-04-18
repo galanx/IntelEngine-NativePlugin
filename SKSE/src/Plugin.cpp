@@ -22,6 +22,8 @@
 #include "DialogueTracker.h"
 #include "QuestStateTracker.h"
 #include "StringUtils.h"
+#include "AsyncDispatch.h"
+#include "ProximityMonitor.h"
 
 #include <fstream>
 #include <chrono>
@@ -29,7 +31,6 @@
 #include <sstream>
 #include <filesystem>
 #include <thread>
-#include "ProximityMonitor.h"
 
 namespace IntelEngine {
 
@@ -128,9 +129,8 @@ namespace IntelEngine {
         // Previously this was in kPostLoadGame, but that ran AFTER LoadCallback
         // and wiped the co-save data we just loaded.
         tracker->ClearAll();
-        // Stop ProximityMonitor — will restart on kPostLoadGame
-        ProximityMonitor::GetSingleton()->Stop();
-        logger::info("RevertCallback: Save ID, SlotTracker, ProximityMonitor cleared (gen={})",
+        ProximityMonitor::GetSingleton()->DisarmAll();
+        logger::info("RevertCallback: Save ID and SlotTracker cleared (gen={})",
             tracker->loadGeneration.load(std::memory_order_relaxed));
     }
 
@@ -371,6 +371,7 @@ namespace IntelEngine {
                 // New game — clear SlotTracker state, force DB re-discovery
                 logger::info("New game - clearing SlotTracker, clearing MemoryDB caches");
                 SlotTracker::GetSingleton()->ClearAll();
+                ProximityMonitor::GetSingleton()->DisarmAll();
                 NPCIndex::GetSingleton()->RefreshIndex();
                 MemoryDB::GetSingleton()->ClearCaches();
                 // Initialize per-save political DB (new save ID generated)
@@ -420,9 +421,6 @@ namespace IntelEngine {
                         });
                     }
                 }
-                // Start C++ ProximityMonitor (frame-rate distance/deadline checking)
-                ProximityMonitor::GetSingleton()->Start();
-
                 // Defer Maintenance dispatch — gives RealNames Extended and other mods
                 // time to complete their load-time StorageUtil reads before IntelEngine
                 // starts its StorageUtil-heavy recovery (RecoverActiveTasks).
@@ -513,6 +511,19 @@ SKSEPluginLoad(const SKSE::LoadInterface* skse) {
 
     // Load settings
     IntelEngine::Settings::GetSingleton()->Load();
+
+    // Start async worker for off-main-thread DM tick context building.
+    // Register Shutdown via atexit so the worker is joined before static destructors
+    // tear down singletons / SQLite connections / spdlog. Without this, an in-flight
+    // Phase B task could touch destroyed state at process exit.
+    IntelEngine::AsyncDispatch::Initialize();
+    std::atexit([]() { IntelEngine::AsyncDispatch::Shutdown(); });
+
+    // Start proximity monitor — 150ms tick detects NPC arrival within 30-60
+    // units of the target, replacing Papyrus's 3s poll that lets running NPCs
+    // overshoot by 900-1800 units (face-bumping).
+    IntelEngine::ProximityMonitor::GetSingleton()->Start();
+    std::atexit([]() { IntelEngine::ProximityMonitor::GetSingleton()->Stop(); });
 
     // Register for SKSE messages
     auto messaging = SKSE::GetMessagingInterface();

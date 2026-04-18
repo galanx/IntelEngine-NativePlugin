@@ -1,278 +1,185 @@
+/**
+ * Proximity Monitor Implementation
+ *
+ * Main-thread distance checks at 150ms cadence. See header for rationale.
+ */
+
 #include "ProximityMonitor.h"
-#include <cmath>
+#include "AsyncDispatch.h"
+
 #include <chrono>
+#include <cmath>
 
 namespace IntelEngine {
 
-    void ProximityMonitor::Start() {
-        if (m_running.load(std::memory_order_acquire)) return;
-
-        // Ensure previous thread is fully joined before spawning a new one
-        // (assigning to a joinable std::thread calls std::terminate)
-        if (m_thread.joinable()) {
-            m_thread.join();
+    void ProximityMonitor::Arm(int slot, RE::TESObjectREFR* agent, RE::TESObjectREFR* target,
+                               float threshold, float zTolerance,
+                               const std::string& questEditorId,
+                               const std::string& scriptName,
+                               const std::string& callbackFn) {
+        if (slot < 0 || slot >= MAX_SLOTS) {
+            logger::warn("ProximityMonitor::Arm: invalid slot {}", slot);
+            return;
+        }
+        if (!agent || !target) {
+            logger::warn("ProximityMonitor::Arm: null agent or target for slot {}", slot);
+            return;
         }
 
-        m_running.store(true, std::memory_order_release);
-        m_thread = std::thread([this]() {
-            logger::info("ProximityMonitor: Started (500ms interval)");
-            while (m_running.load(std::memory_order_acquire)) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(500));
-                if (!m_running.load(std::memory_order_acquire)) break;
+        // Auto-select defaults based on target kind. Actor targets need a tighter
+        // conversational threshold and a tighter Z window (an NPC a floor above
+        // the player shouldn't fire arrival). Marker targets (doors, furniture)
+        // use the legacy Papyrus 300u radius and a looser Z window because markers
+        // are often placed at floor level while the navmesh endpoint sits higher.
+        const bool targetIsActor = target->As<RE::Actor>() != nullptr;
+        if (threshold <= 0.0f) {
+            threshold = targetIsActor ? DEFAULT_ACTOR_THRESHOLD : DEFAULT_MARKER_THRESHOLD;
+        }
+        if (zTolerance <= 0.0f) {
+            zTolerance = targetIsActor ? DEFAULT_ACTOR_Z_TOLERANCE : DEFAULT_MARKER_Z_TOLERANCE;
+        }
 
-                auto* task = SKSE::GetTaskInterface();
-                if (task) {
-                    task->AddTask([this]() {
-                        Tick();
-                    });
-                }
-            }
-            logger::info("ProximityMonitor: Stopped");
-        });
+        std::unique_lock lock(m_mutex);
+        auto& w = m_slots[slot];
+        w.armed = true;
+        w.agentFormID = agent->GetFormID();
+        w.targetFormID = target->GetFormID();
+        w.threshold = threshold;
+        w.zTolerance = zTolerance;
+        w.questEditorId = questEditorId;
+        w.scriptName = scriptName;
+        w.callbackFn = callbackFn;
+
+        logger::info("ProximityMonitor::Arm slot={} agent={:08X} target={:08X} "
+                     "actor={} threshold={:.0f} z={:.0f} -> {}::{}",
+                     slot, w.agentFormID, w.targetFormID, targetIsActor,
+                     w.threshold, w.zTolerance, scriptName, callbackFn);
+    }
+
+    void ProximityMonitor::Disarm(int slot) {
+        if (slot < 0 || slot >= MAX_SLOTS) return;
+
+        std::unique_lock lock(m_mutex);
+        auto& w = m_slots[slot];
+        if (!w.armed) return;
+
+        logger::info("ProximityMonitor::Disarm slot={}", slot);
+        w = Watch{};
+    }
+
+    void ProximityMonitor::DisarmAll() {
+        std::unique_lock lock(m_mutex);
+        for (auto& w : m_slots) w = Watch{};
+        logger::info("ProximityMonitor::DisarmAll");
+    }
+
+    void ProximityMonitor::Start() {
+        bool expected = false;
+        if (!m_running.compare_exchange_strong(expected, true)) return;
+        m_thread = std::thread(&ProximityMonitor::WorkerLoop, this);
+        logger::info("ProximityMonitor: worker started (tick={}ms)", TICK_INTERVAL_MS);
     }
 
     void ProximityMonitor::Stop() {
-        m_running.store(false, std::memory_order_release);
-        if (m_thread.joinable()) {
-            m_thread.join();
-        }
-        ClearAll();
+        bool expected = true;
+        if (!m_running.compare_exchange_strong(expected, false)) return;
+        if (m_thread.joinable()) m_thread.join();
     }
 
-    void ProximityMonitor::RegisterDistanceWatch(int id, RE::FormID source, RE::FormID target,
-                                                  float threshold, const std::string& eventType,
-                                                  bool greaterThan, float zTolerance, bool oneShot) {
-        std::unique_lock lock(m_mutex);
-        // Remove existing watch with same id + eventType (prevent duplicates)
-        m_watches.erase(
-            std::remove_if(m_watches.begin(), m_watches.end(),
-                [&](const Watch& w) { return w.id == id && w.eventType == eventType; }),
-            m_watches.end());
+    void ProximityMonitor::WorkerLoop() {
+        // Sleep-poll loop. Each wake submits a main-thread task. RE::* getters
+        // (GetPosition, Is3DLoaded, LookupByID) are not thread-safe, so all
+        // the work happens in Tick() on the main thread.
+        while (m_running.load(std::memory_order_acquire)) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(TICK_INTERVAL_MS));
+            if (!m_running.load(std::memory_order_acquire)) break;
 
-        Watch w{};
-        w.id = id;
-        w.type = WatchType::Distance;
-        w.direction = greaterThan ? WatchDirection::GreaterThan : WatchDirection::LessThan;
-        w.sourceFormID = source;
-        w.targetFormID = target;
-        w.threshold = threshold;
-        w.zTolerance = zTolerance;
-        w.eventType = eventType;
-        w.oneShot = oneShot;
-        w.fired = false;
-        m_watches.push_back(std::move(w));
+            auto* task = SKSE::GetTaskInterface();
+            if (!task) continue;
 
-        logger::debug("ProximityMonitor: Registered distance watch id={} type={} threshold={} dir={}",
-                      id, eventType, threshold, greaterThan ? "GT" : "LT");
-    }
-
-    void ProximityMonitor::RegisterPlayerWatch(int id, RE::FormID source, float threshold,
-                                               const std::string& eventType,
-                                               bool greaterThan, bool oneShot) {
-        std::unique_lock lock(m_mutex);
-        m_watches.erase(
-            std::remove_if(m_watches.begin(), m_watches.end(),
-                [&](const Watch& w) { return w.id == id && w.eventType == eventType; }),
-            m_watches.end());
-
-        Watch w{};
-        w.id = id;
-        w.type = WatchType::PlayerDistance;
-        w.direction = greaterThan ? WatchDirection::GreaterThan : WatchDirection::LessThan;
-        w.sourceFormID = source;
-        w.targetFormID = 0;
-        w.threshold = threshold;
-        w.eventType = eventType;
-        w.oneShot = oneShot;
-        w.fired = false;
-        m_watches.push_back(std::move(w));
-
-        logger::debug("ProximityMonitor: Registered player watch id={} type={} threshold={} dir={}",
-                      id, eventType, threshold, greaterThan ? "GT" : "LT");
-    }
-
-    void ProximityMonitor::RegisterDeadlineWatch(int id, float gameTime,
-                                                  const std::string& eventType, bool oneShot) {
-        std::unique_lock lock(m_mutex);
-        m_watches.erase(
-            std::remove_if(m_watches.begin(), m_watches.end(),
-                [&](const Watch& w) { return w.id == id && w.eventType == eventType; }),
-            m_watches.end());
-
-        Watch w{};
-        w.id = id;
-        w.type = WatchType::Deadline;
-        w.direction = WatchDirection::GreaterThan;  // currentTime >= deadline
-        w.sourceFormID = 0;
-        w.targetFormID = 0;
-        w.threshold = gameTime;
-        w.eventType = eventType;
-        w.oneShot = oneShot;
-        w.fired = false;
-        m_watches.push_back(std::move(w));
-
-        logger::debug("ProximityMonitor: Registered deadline watch id={} type={} gameTime={}",
-                      id, eventType, gameTime);
-    }
-
-    void ProximityMonitor::ClearWatches(int id) {
-        std::unique_lock lock(m_mutex);
-        auto before = m_watches.size();
-        m_watches.erase(
-            std::remove_if(m_watches.begin(), m_watches.end(),
-                [id](const Watch& w) { return w.id == id; }),
-            m_watches.end());
-        auto removed = before - m_watches.size();
-        if (removed > 0) {
-            logger::debug("ProximityMonitor: Cleared {} watches for id={}", removed, id);
+            task->AddTask([]() {
+                ProximityMonitor::GetSingleton()->Tick();
+            });
         }
     }
 
-    void ProximityMonitor::ClearWatch(int id, const std::string& eventType) {
-        std::unique_lock lock(m_mutex);
-        m_watches.erase(
-            std::remove_if(m_watches.begin(), m_watches.end(),
-                [&](const Watch& w) { return w.id == id && w.eventType == eventType; }),
-            m_watches.end());
-    }
-
-    void ProximityMonitor::ClearAll() {
-        std::unique_lock lock(m_mutex);
-        auto count = m_watches.size();
-        m_watches.clear();
-        if (count > 0) {
-            logger::info("ProximityMonitor: Cleared all {} watches", count);
-        }
-    }
-
-    int ProximityMonitor::GetActiveWatchCount() const {
-        std::shared_lock lock(m_mutex);
-        return static_cast<int>(m_watches.size());
-    }
-
+    /**
+     * Per-tick distance check on the main thread.
+     *
+     * 1. Take a snapshot of armed slots under shared_lock (fast, no writers blocked).
+     * 2. Early-out if nothing is armed — the common case is zero active dispatches.
+     * 3. For each armed slot, resolve agent+target via FormID lookup (returns nullptr
+     *    if the form was deleted). Skip until both references are 3D-loaded; off-screen
+     *    arrival is handled by the Papyrus 3s poll's time-based estimator (OffScreenTracker).
+     * 4. Compute horizontal (XY) distance and absolute Z delta. Fire when both are
+     *    within the slot's threshold.
+     * 5. On fire: claim the slot by clearing its armed flag under unique_lock and
+     *    capture the callback, then invoke the Papyrus VM synchronously. Clearing
+     *    inside the lock makes this a single-shot per Arm without needing a separate
+     *    fired flag; a concurrent Arm will re-enable the slot with fresh state.
+     *
+     * Post-Stop() safety: the worker thread is joined, but any Tick already queued on
+     * the SKSE task interface may run after Stop(). The m_running guard at entry
+     * prevents that queued task from touching slot state during teardown.
+     */
     void ProximityMonitor::Tick() {
-        // Snapshot watches under lock, then process without lock
-        // (engine position reads and ModEvent sends must not hold our lock)
-        std::vector<Watch> snapshot;
+        if (!m_running.load(std::memory_order_acquire)) return;
+
+        std::array<Watch, MAX_SLOTS> snapshot;
+        bool anyArmed = false;
         {
             std::shared_lock lock(m_mutex);
-            if (m_watches.empty()) return;
-            snapshot = m_watches;
-        }
-
-        auto* player = RE::PlayerCharacter::GetSingleton();
-        if (!player) return;
-
-        // Get game time once for all deadline checks
-        auto* calendar = RE::Calendar::GetSingleton();
-        float gameTime = calendar ? calendar->GetCurrentGameTime() : 0.0f;
-
-        std::vector<int> firedIndices;
-
-        for (int i = 0; i < static_cast<int>(snapshot.size()); ++i) {
-            auto& w = snapshot[i];
-            if (w.fired) continue;
-
-            bool triggered = false;
-
-            if (w.type == WatchType::Deadline) {
-                // Game time comparison
-                if (gameTime >= w.threshold) {
-                    triggered = true;
-                }
-            } else {
-                // Distance check — resolve refs
-                RE::TESObjectREFR* sourceRef = nullptr;
-                RE::TESObjectREFR* targetRef = nullptr;
-
-                if (w.sourceFormID) {
-                    sourceRef = RE::TESForm::LookupByID<RE::TESObjectREFR>(w.sourceFormID);
-                }
-                if (w.type == WatchType::PlayerDistance) {
-                    targetRef = player;
-                } else if (w.targetFormID) {
-                    targetRef = RE::TESForm::LookupByID<RE::TESObjectREFR>(w.targetFormID);
-                }
-
-                // Both refs must exist and have 3D loaded
-                if (!sourceRef || !targetRef) continue;
-                if (!sourceRef->Is3DLoaded() || !targetRef->Is3DLoaded()) continue;
-
-                auto posA = sourceRef->GetPosition();
-                auto posB = targetRef->GetPosition();
-
-                // Z tolerance check (multi-floor interior validation)
-                if (w.zTolerance > 0.0f) {
-                    float zDiff = std::abs(posA.z - posB.z);
-                    if (zDiff > w.zTolerance) continue;  // Wrong floor, skip
-                }
-
-                float dx = posA.x - posB.x;
-                float dy = posA.y - posB.y;
-                float dz = posA.z - posB.z;
-                float dist = std::sqrt(dx * dx + dy * dy + dz * dz);
-
-                if (w.direction == WatchDirection::LessThan) {
-                    triggered = (dist < w.threshold);
-                } else {
-                    triggered = (dist > w.threshold);
-                }
-            }
-
-            if (triggered) {
-                firedIndices.push_back(i);
+            for (int i = 0; i < MAX_SLOTS; ++i) {
+                snapshot[i] = m_slots[i];
+                if (snapshot[i].armed) anyArmed = true;
             }
         }
+        if (!anyArmed) return;
 
-        // Fire events and clean up — needs write lock
-        if (!firedIndices.empty()) {
-            // Fire events first (outside lock)
-            for (int idx : firedIndices) {
-                FireEvent(snapshot[idx]);
-            }
+        for (int slot = 0; slot < MAX_SLOTS; ++slot) {
+            const Watch& w = snapshot[slot];
+            if (!w.armed) continue;
 
-            // Now remove one-shot watches under write lock
-            std::unique_lock lock(m_mutex);
-            for (int idx : firedIndices) {
-                const auto& fired = snapshot[idx];
-                if (fired.oneShot) {
-                    m_watches.erase(
-                        std::remove_if(m_watches.begin(), m_watches.end(),
-                            [&](const Watch& w) {
-                                return w.id == fired.id && w.eventType == fired.eventType;
-                            }),
-                        m_watches.end());
-                } else {
-                    // Mark as fired in the actual vector (for persistent watches)
-                    for (auto& w : m_watches) {
-                        if (w.id == fired.id && w.eventType == fired.eventType) {
-                            w.fired = true;
-                            break;
-                        }
-                    }
+            auto* agent = RE::TESForm::LookupByID<RE::TESObjectREFR>(w.agentFormID);
+            auto* target = RE::TESForm::LookupByID<RE::TESObjectREFR>(w.targetFormID);
+            if (!agent || !target) continue;
+
+            // Both must be in the rendered world. Off-screen arrival is handled by
+            // Papyrus's game-time estimator in OffScreenTracker.
+            if (!agent->Is3DLoaded() || !target->Is3DLoaded()) continue;
+
+            auto aPos = agent->GetPosition();
+            auto tPos = target->GetPosition();
+            float dx = aPos.x - tPos.x;
+            float dy = aPos.y - tPos.y;
+            float horiz = std::sqrt(dx * dx + dy * dy);
+            float dz = std::fabs(aPos.z - tPos.z);
+
+            if (horiz > w.threshold || dz > w.zTolerance) continue;
+
+            // Claim + disarm atomically; a concurrent Arm on the same slot would
+            // have bumped the agentFormID, so we re-check to avoid firing a stale
+            // callback against the new watch's agent.
+            std::string qeid, script, fn;
+            {
+                std::unique_lock lk(m_mutex);
+                auto& live = m_slots[slot];
+                if (!live.armed || live.agentFormID != w.agentFormID ||
+                    live.targetFormID != w.targetFormID) {
+                    continue;
                 }
+                qeid = live.questEditorId;
+                script = live.scriptName;
+                fn = live.callbackFn;
+                live = Watch{};  // single-shot per Arm
             }
+
+            logger::info("ProximityMonitor: slot {} arrived agent={:08X} target={:08X} "
+                         "horiz={:.1f}u dz={:.1f}u -> {}::{}",
+                         slot, w.agentFormID, w.targetFormID, horiz, dz, script, fn);
+
+            AsyncDispatch::ExecuteQuestFunctionString(qeid, script, fn, std::to_string(slot));
         }
-    }
-
-    void ProximityMonitor::FireEvent(const Watch& watch) {
-        auto* eventSource = SKSE::GetModCallbackEventSource();
-        if (!eventSource) return;
-
-        SKSE::ModCallbackEvent modEvent{};
-        modEvent.eventName = "IntelEngine_ProximityEvent";
-        modEvent.strArg = watch.eventType;
-        modEvent.numArg = static_cast<float>(watch.id);
-
-        // Set sender to the source actor if available
-        if (watch.sourceFormID) {
-            modEvent.sender = RE::TESForm::LookupByID(watch.sourceFormID);
-        }
-
-        eventSource->SendEvent(&modEvent);
-
-        logger::info("ProximityMonitor: Fired '{}' for id={} (source={:X})",
-                     watch.eventType, watch.id, watch.sourceFormID);
     }
 
 }  // namespace IntelEngine

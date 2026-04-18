@@ -512,34 +512,35 @@ default_relations:
     // Shared Helpers
     // =========================================================================
 
-    nlohmann::json FactionPolitics::FactionToJson(const FactionConfig& f) {
-        // Filter out dead leaders — prevents LLM from generating events involving dead NPCs
-        // Essential NPCs can't permanently die (bleedout ≠ death), so never exclude them
+    // -------------------------------------------------------------------------
+    // FactionToJsonCore — shared algorithm used by both the live (engine-touch)
+    // FactionToJson variant and the worker-safe FactionToJsonFromSnapshot variant.
+    // Caller supplies a per-leader liveness lookup; this helper handles the
+    // alive-leader array build, disband detection, and JSON shape.
+    // -------------------------------------------------------------------------
+    template <typename ResolveFn>
+    static nlohmann::json BuildFactionJsonCore(const FactionConfig& f, ResolveFn resolveLeader) {
         nlohmann::json aliveLeaders = nlohmann::json::array();
-        auto* npcIndex = NPCIndex::GetSingleton();
         int resolved = 0;
-        int confirmedDead = 0;
+        int permanentlyDead = 0;
         for (const auto& leaderName : f.leaderNames) {
-            auto* actor = npcIndex ? npcIndex->FindByName(leaderName) : nullptr;
-            if (!actor) {
-                // Unloaded — assume alive
+            auto liveness = resolveLeader(leaderName);  // {wasResolved, permanentlyDead}
+            if (!liveness.first) {
+                // Unloaded — assume alive (matches original behavior)
                 aliveLeaders.push_back(leaderName);
                 continue;
             }
             ++resolved;
-            if (actor->IsDead() && !actor->IsEssential()) {
-                logger::debug("FactionToJson: leader '{}' is dead (non-essential) — excluding", leaderName);
-                ++confirmedDead;
+            if (liveness.second) {
+                ++permanentlyDead;
                 continue;
             }
             aliveLeaders.push_back(leaderName);
         }
 
-        // Disband only if ALL leaders were resolved AND ALL are confirmed permanently dead
+        // Disband only if ALL leaders were resolved AND ALL are permanently dead
         if (aliveLeaders.empty() && !f.leaderNames.empty() &&
-            resolved == static_cast<int>(f.leaderNames.size()) && confirmedDead == resolved) {
-            logger::info("FactionToJson: all {} leaders of '{}' confirmed dead — faction disbanded",
-                resolved, f.name);
+            resolved == static_cast<int>(f.leaderNames.size()) && permanentlyDead == resolved) {
             return nlohmann::json();  // empty = skip this faction
         }
 
@@ -551,6 +552,17 @@ default_relations:
         if (!f.skyrimFactionId.empty()) fj["skyrim_faction_id"] = f.skyrimFactionId;
         fj["leaders"] = aliveLeaders;
         return fj;
+    }
+
+    nlohmann::json FactionPolitics::FactionToJson(const FactionConfig& f) {
+        // Engine-touch variant: resolves liveness via NPCIndex + Actor methods.
+        // Essential NPCs can't permanently die (bleedout ≠ death), so never exclude them.
+        auto* npcIndex = NPCIndex::GetSingleton();
+        return BuildFactionJsonCore(f, [npcIndex](const std::string& name) -> std::pair<bool, bool> {
+            auto* actor = npcIndex ? npcIndex->FindByName(name) : nullptr;
+            if (!actor) return {false, false};
+            return {true, actor->IsDead() && !actor->IsEssential()};
+        });
     }
 
     std::unordered_map<std::string, std::string> FactionPolitics::BuildIdToNameMap() const {
@@ -567,20 +579,115 @@ default_relations:
     // =========================================================================
 
     std::string FactionPolitics::BuildPoliticalContext(float currentGameTime) {
+        // Sync wrapper: runs Phase A snapshot + Phase B build inline on the calling thread.
+        // Single source of truth — the FromSnapshot variant has the full logic.
+        return BuildPoliticalContextFromSnapshot(BuildPoliticsTickSnapshot(currentGameTime));
+    }
+
+    // =========================================================================
+    // Async Political DM tick — Phase A (snapshot, main thread)
+    // =========================================================================
+
+    FactionPolitics::PoliticsTickSnapshot FactionPolitics::BuildPoliticsTickSnapshot(float currentGameTime) {
+        PoliticsTickSnapshot snap;
+        snap.currentGameTime = currentGameTime;
+
+        if (!initialized_.load()) return snap;
+
+        auto* player = RE::PlayerCharacter::GetSingleton();
+        if (!player) return snap;
+        snap.playerFormId = player->GetFormID();
+
+        std::string playerHold = NPCIndex::GetNPCHoldName(player);
+        if (!playerHold.empty()) snap.playerHold = playerHold;
+
+        auto* npcIndex = NPCIndex::GetSingleton();
+        if (!npcIndex) return snap;
+
+        // Snapshot leader (name, factionId, hold) under config lock, then release.
+        struct LeaderInfo { std::string name; std::string factionId; std::string hold; };
+        std::vector<LeaderInfo> leaderList;
+        {
+            std::lock_guard<std::mutex> lock(configMutex_);
+            for (const auto& f : factions_) {
+                for (const auto& leaderName : f.leaderNames) {
+                    leaderList.push_back({leaderName, f.id, f.hold});
+                }
+            }
+        }
+
+        auto* playerWorld = player->GetWorldspace();
+
+        snap.leaders.reserve(leaderList.size());
+        for (const auto& info : leaderList) {
+            PoliticsLeaderSnapshot e;
+            e.name = info.name;
+            e.factionId = info.factionId;
+            e.hold = info.hold;
+
+            auto* leader = npcIndex->FindByName(info.name);
+            if (leader) {
+                e.formId = leader->GetFormID();
+                e.wasResolved = true;
+                // Pre-resolve dead/essential flags so Phase B can filter without engine touches.
+                if (leader->IsDead() && !leader->IsEssential()) {
+                    e.confirmedDead = true;
+                }
+                if (playerWorld && leader->Is3DLoaded() && leader->GetWorldspace() == playerWorld) {
+                    float dx = leader->GetPositionX() - player->GetPositionX();
+                    float dy = leader->GetPositionY() - player->GetPositionY();
+                    float dz = leader->GetPositionZ() - player->GetPositionZ();
+                    float dist = std::sqrt(dx * dx + dy * dy + dz * dz);
+                    if (dist < NEARBY_LEADER_DISTANCE) e.nearby = true;
+                }
+            }
+            snap.leaders.push_back(std::move(e));
+        }
+        return snap;
+    }
+
+    // -------------------------------------------------------------------------
+    // FactionToJsonFromSnapshot — worker-safe variant of FactionToJson.
+    // Reads the snapshot's pre-resolved per-leader liveness instead of touching
+    // NPCIndex::FindByName / actor->IsDead / actor->IsEssential. Returns empty
+    // json if all leaders are confirmed dead (faction disbanded), matching the
+    // semantics of FactionToJson.
+    // -------------------------------------------------------------------------
+    nlohmann::json FactionPolitics::FactionToJsonFromSnapshot(const FactionConfig& f,
+                                                              const PoliticsTickSnapshot& snap) const {
+        // Worker-safe variant: liveness comes from snapshot fields populated in Phase A.
+        // Snapshot has all leaders for all factions; we filter by (factionId, name).
+        return BuildFactionJsonCore(f, [&f, &snap](const std::string& name) -> std::pair<bool, bool> {
+            for (const auto& s : snap.leaders) {
+                if (s.factionId == f.id && s.name == name) {
+                    return {s.wasResolved, s.confirmedDead};
+                }
+            }
+            return {false, false};  // not in snapshot — assume alive
+        });
+    }
+
+    // =========================================================================
+    // Async Political DM tick — Phase B (JSON build, worker thread)
+    // =========================================================================
+
+    std::string FactionPolitics::BuildPoliticalContextFromSnapshot(const PoliticsTickSnapshot& snap) {
         if (!initialized_.load()) return "{}";
 
         auto* db = PoliticalDB::GetSingleton();
         if (!db->IsReady()) return "{}";
 
         nlohmann::json state;
+        const float currentGameTime = snap.currentGameTime;
 
-        // Factions (extended version with combat/political metadata for the DM)
+        // Factions (extended with combat/political metadata for the DM)
         {
             std::lock_guard<std::mutex> lock(configMutex_);
             nlohmann::json factionsJson = nlohmann::json::array();
             for (const auto& f : factions_) {
-                auto fj = FactionToJson(f);
-                if (fj.empty()) continue;  // All leaders dead — faction disbanded
+                // Use snapshot-based variant — no engine touches (this runs on worker thread)
+                auto fj = FactionToJsonFromSnapshot(f, snap);
+                if (fj.empty()) continue;
                 if (!f.conflictStyle.empty()) fj["conflict_style"] = f.conflictStyle;
                 if (f.baseArmyStrength > 0) fj["army_strength"] = f.baseArmyStrength;
                 fj["war_threshold"] = f.warThreshold;
@@ -604,7 +711,7 @@ default_relations:
         }
         state["relations"] = relationsJson;
 
-        // Recent events (last 15, oldest first so most recent is last = stronger LLM signal)
+        // Recent events
         auto recentEvents = db->GetRecentEvents(15);
         std::reverse(recentEvents.begin(), recentEvents.end());
         nlohmann::json eventsJson = nlohmann::json::array();
@@ -618,7 +725,6 @@ default_relations:
             float daysAgoF = currentGameTime - e.gameTime;
             int daysAgo = static_cast<int>(daysAgoF);
             ej["days_ago"] = daysAgo;
-            // Human-readable recency for LLM context
             if (daysAgoF < 0.25f) ej["when"] = "just now";
             else if (daysAgoF < 1.0f) ej["when"] = "earlier today";
             else if (daysAgo == 1) ej["when"] = "yesterday";
@@ -627,7 +733,7 @@ default_relations:
         }
         state["recent_events"] = eventsJson;
 
-        // Active wars (with duration and recent battle history for DM context)
+        // Active wars
         auto activeWars = db->GetActiveWars();
         nlohmann::json warsJson = nlohmann::json::array();
         for (const auto& w : activeWars) {
@@ -642,7 +748,6 @@ default_relations:
             float warDays = currentGameTime - w.startTime;
             wj["war_days"] = static_cast<int>(warDays);
 
-            // Embed recent battle history (oldest first, most recent last for LLM recency)
             auto battles = db->GetBattlesForWar(w.id, 5);
             if (!battles.empty()) {
                 std::reverse(battles.begin(), battles.end());
@@ -652,7 +757,8 @@ default_relations:
                     bj["location"] = b.locationName;
                     bj["attacker"] = b.attacker;
                     bj["result"] = b.result;
-                    bj["victor"] = (b.result == "attacker_victory") ? b.attacker : (b.result == "defender_victory") ? b.defender : "draw";
+                    bj["victor"] = (b.result == "attacker_victory") ? b.attacker
+                                  : (b.result == "defender_victory") ? b.defender : "draw";
                     bj["attacker_losses"] = b.attackerLosses;
                     bj["defender_losses"] = b.defenderLosses;
                     float daysAgoF = currentGameTime - b.gameTime;
@@ -667,18 +773,16 @@ default_relations:
                 }
                 wj["recent_battles"] = battlesJson;
             }
-
             warsJson.push_back(wj);
         }
         state["active_wars"] = warsJson;
 
-        // War cooldowns — faction pairs that recently ended a war and can't redeclare yet
+        // War cooldowns
         int cooldownDays = warDeclarationCooldownDays_.load();
         if (cooldownDays > 0) {
             nlohmann::json cooldownsJson = nlohmann::json::array();
-            // Check all relations for Critical pairs with recent war history
             for (const auto& r : allRelations) {
-                if (!r.warActive) {  // Only check pairs not currently at war
+                if (!r.warActive) {
                     auto recentWar = db->GetMostRecentWar(r.factionA, r.factionB);
                     if (recentWar && recentWar->endTime > 0.0f) {
                         float daysSinceEnd = currentGameTime - recentWar->endTime;
@@ -692,9 +796,7 @@ default_relations:
                     }
                 }
             }
-            if (!cooldownsJson.empty()) {
-                state["war_cooldowns"] = cooldownsJson;
-            }
+            if (!cooldownsJson.empty()) state["war_cooldowns"] = cooldownsJson;
         }
 
         // Player standings
@@ -711,101 +813,49 @@ default_relations:
 
         state["current_game_time"] = currentGameTime;
 
-        // Faction leaders — all leaders get bio/relationships, those the player
-        // interacted with also get memories/dialogue/events
-        {
-            auto* player = RE::PlayerCharacter::GetSingleton();
-            auto* npcIndex = NPCIndex::GetSingleton();
-            if (player && npcIndex) {
-                // Snapshot faction leader data under lock, then release
-                struct LeaderInfo { std::string name; std::string factionId; std::string hold; };
-                std::vector<LeaderInfo> leaderSnapshot;
-                {
-                    std::lock_guard<std::mutex> lock(configMutex_);
-                    for (const auto& f : factions_) {
-                        for (const auto& leaderName : f.leaderNames) {
-                            leaderSnapshot.push_back({leaderName, f.id, f.hold});
-                        }
-                    }
+        // Faction leaders — use the snapshot's pre-resolved data, then enrich via MemoryDB
+        if (!snap.leaders.empty()) {
+            auto* memDB = MemoryDB::GetSingleton();
+            nlohmann::json leadersJson = nlohmann::json::array();
+            for (const auto& e : snap.leaders) {
+                nlohmann::json leaderEntry;
+                leaderEntry["name"] = e.name;
+                leaderEntry["faction"] = e.factionId;
+                leaderEntry["hold"] = e.hold;
+                leaderEntry["nearby"] = e.nearby;
+
+                if (e.formId != 0 && memDB) {
+                    auto bio = memDB->GetNPCBioSummary(e.formId);
+                    if (!bio.empty()) leaderEntry["bio"] = bio;
+
+                    auto relationships = memDB->GetNPCBioRelationships(e.formId);
+                    if (!relationships.empty()) leaderEntry["relationships"] = relationships;
+
+                    auto memories = memDB->GetFormattedMemories(e.formId, 3);
+                    if (!memories.empty()) leaderEntry["memories"] = memories;
+
+                    auto dialogue = memDB->GetRecentDialogueForActor(e.formId, 3);
+                    if (!dialogue.empty()) leaderEntry["recent_dialogue"] = dialogue;
+
+                    auto events = memDB->GetRecentEventsForActor(e.formId, 3);
+                    if (!events.empty()) leaderEntry["recent_events"] = events;
                 }
-
-                auto* memDB = MemoryDB::GetSingleton();
-                nlohmann::json leadersJson = nlohmann::json::array();
-
-                // Check which leaders are physically nearby (exterior, within range)
-                std::unordered_set<std::string> nearbyLeaders;
-                auto* playerWorld = player->GetWorldspace();
-                if (playerWorld) {
-                    for (const auto& info : leaderSnapshot) {
-                        auto* leader = npcIndex->FindByName(info.name);
-                        if (!leader || !leader->Is3DLoaded()) continue;
-                        if (leader->GetWorldspace() != playerWorld) continue;
-
-                        float dx = leader->GetPositionX() - player->GetPositionX();
-                        float dy = leader->GetPositionY() - player->GetPositionY();
-                        float dz = leader->GetPositionZ() - player->GetPositionZ();
-                        float dist = std::sqrt(dx * dx + dy * dy + dz * dz);
-                        if (dist < NEARBY_LEADER_DISTANCE) {
-                            nearbyLeaders.insert(info.name);
-                        }
-                    }
-                }
-
-                // Build context for ALL leaders
-                for (const auto& info : leaderSnapshot) {
-                    nlohmann::json leaderEntry;
-                    leaderEntry["name"] = info.name;
-                    leaderEntry["faction"] = info.factionId;
-                    leaderEntry["hold"] = info.hold;
-                    leaderEntry["nearby"] = nearbyLeaders.count(info.name) > 0;
-
-                    // Try to resolve actor for MemoryDB enrichment
-                    auto* leader = npcIndex->FindByName(info.name);
-                    if (leader && memDB) {
-                        RE::FormID leaderId = leader->GetFormID();
-
-                        // Bio + relationships always included (cached, cheap)
-                        auto bio = memDB->GetNPCBioSummary(leaderId);
-                        if (!bio.empty()) leaderEntry["bio"] = bio;
-
-                        auto relationships = memDB->GetNPCBioRelationships(leaderId);
-                        if (!relationships.empty()) leaderEntry["relationships"] = relationships;
-
-                        // Memories, dialogue, events — included when available
-                        auto memories = memDB->GetFormattedMemories(leaderId, 3);
-                        if (!memories.empty()) leaderEntry["memories"] = memories;
-
-                        auto dialogue = memDB->GetRecentDialogueForActor(leaderId, 3);
-                        if (!dialogue.empty()) leaderEntry["recent_dialogue"] = dialogue;
-
-                        auto events = memDB->GetRecentEventsForActor(leaderId, 3);
-                        if (!events.empty()) leaderEntry["recent_events"] = events;
-                    }
-
-                    leadersJson.push_back(leaderEntry);
-                }
-
-                if (!leadersJson.empty()) {
-                    state["faction_leaders"] = leadersJson;
-                    std::string playerHold = NPCIndex::GetNPCHoldName(player);
-                    if (!playerHold.empty()) {
-                        state["player_hold"] = playerHold;
-                    }
-                }
+                leadersJson.push_back(leaderEntry);
+            }
+            if (!leadersJson.empty()) {
+                state["faction_leaders"] = leadersJson;
+                if (!snap.playerHold.empty()) state["player_hold"] = snap.playerHold;
             }
         }
 
-        // Recent player dialogues (for player standing analysis)
-        if (SkyrimNetAPI::GetRecentDialogue) {
-            auto* player = RE::PlayerCharacter::GetSingleton();
-            if (player) {
-                std::string dialogueJson = SkyrimNetAPI::GetRecentDialogue(player->GetFormID(), 5);
-                if (!dialogueJson.empty() && dialogueJson != "[]") {
-                    try {
-                        state["recent_player_dialogues"] = nlohmann::json::parse(dialogueJson);
-                    } catch (...) {
-                        state["recent_player_dialogues"] = dialogueJson;
-                    }
+        // Recent player dialogues
+        if (SkyrimNetAPI::GetRecentDialogue && snap.playerFormId != 0) {
+            std::string dialogueJson = SkyrimNetAPI::GetRecentDialogue(snap.playerFormId, 5);
+            if (!dialogueJson.empty() && dialogueJson != "[]") {
+                try {
+                    state["recent_player_dialogues"] = nlohmann::json::parse(dialogueJson);
+                } catch (...) {
+                    state["recent_player_dialogues"] = dialogueJson;
                 }
             }
         }
@@ -937,6 +987,13 @@ default_relations:
     // =========================================================================
 
     std::string FactionPolitics::BuildPoliticalSummary() {
+        // Main-thread entry — reads Calendar then delegates to worker-safe overload.
+        auto* cal = RE::Calendar::GetSingleton();
+        float now = cal ? cal->GetCurrentGameTime() : 0.f;
+        return BuildPoliticalSummary(now);
+    }
+
+    std::string FactionPolitics::BuildPoliticalSummary(float currentGameTime) {
         if (!initialized_.load() || !enabled_.load()) return "";
 
         auto* db = PoliticalDB::GetSingleton();
@@ -954,16 +1011,14 @@ default_relations:
 
         // Get active wars FIRST so we can cross-reference with relations
         auto activeWars = db->GetActiveWars();
-        // Build a set of active war pairs for quick lookup
         std::set<std::pair<std::string, std::string>> warPairs;
         for (const auto& w : activeWars) {
             warPairs.insert({w.factionA, w.factionB});
-            warPairs.insert({w.factionB, w.factionA});  // both directions
+            warPairs.insert({w.factionB, w.factionA});
         }
 
         auto allRelations = db->GetAllRelations();
         for (const auto& r : allRelations) {
-            // Use actual war records, not stale warActive flag from relation table
             bool isAtWar = warPairs.count({r.factionA, r.factionB}) > 0;
             if (r.relationScore == 0 && !r.tradeActive && !isAtWar) continue;
             md += "- ";
@@ -1004,7 +1059,6 @@ default_relations:
         auto recentEvents = db->GetRecentEvents(10);
         if (!recentEvents.empty()) {
             std::reverse(recentEvents.begin(), recentEvents.end());
-            float currentGameTime = RE::Calendar::GetSingleton() ? RE::Calendar::GetSingleton()->GetCurrentGameTime() : 0.0f;
             md += "Recent political events (oldest first, most recent last):\n";
             for (const auto& e : recentEvents) {
                 md += "- (";
@@ -1076,15 +1130,18 @@ default_relations:
     // =========================================================================
 
     std::string FactionPolitics::GetLatestWitnessableEvent() {
+        // Main-thread entry — reads Calendar then delegates to worker-safe overload.
+        auto* cal = RE::Calendar::GetSingleton();
+        if (!cal) return "";
+        return GetLatestWitnessableEvent(cal->GetCurrentGameTime());
+    }
+
+    std::string FactionPolitics::GetLatestWitnessableEvent(float currentTime) {
         if (!initialized_.load() || !enabled_.load()) return "";
 
         auto* db = PoliticalDB::GetSingleton();
         if (!db->IsReady()) return "";
 
-        auto* cal = RE::Calendar::GetSingleton();
-        if (!cal) return "";
-
-        float currentTime = cal->GetCurrentGameTime();
         float tickWindow = static_cast<float>(tickIntervalHours_.load()) / 24.0f;
 
         auto events = db->GetRecentEvents(1);

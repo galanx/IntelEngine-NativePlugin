@@ -13,12 +13,12 @@
 #include <mutex>
 #include "LocationResolver.h"
 #include "StringUtils.h"
-#include "ProximityMonitor.h"
 #include "CellAnalyzer.h"
 #include "ActionValidator.h"
 #include "DepartureDetector.h"
 #include "StuckDetector.h"
 #include "OffScreenTracker.h"
+#include "ProximityMonitor.h"
 #include "SlotTracker.h"
 #include "MemoryDB.h"
 #include "Settings.h"
@@ -30,6 +30,7 @@
 #include "ProcessUtils.h"
 #include "DialogueTracker.h"
 #include "QuestStateTracker.h"
+#include "AsyncDispatch.h"
 #include <Windows.h>
 #include <nlohmann/json.hpp>
 
@@ -42,6 +43,9 @@ namespace IntelEngine::Papyrus {
     RE::Actor* ResolveStoryCandidate(RE::StaticFunctionTag*, RE::BSFixedString);
     RE::Actor* FindMessengerForSender(RE::StaticFunctionTag*, RE::Actor*);
     void NotifyStoryCooldown(RE::StaticFunctionTag*, RE::Actor*, float);
+    void BeginAsyncNPCDMTick(RE::StaticFunctionTag*, std::int32_t, RE::TESQuest*, RE::BSFixedString, RE::BSFixedString);
+    void BeginAsyncStoryDMTick(RE::StaticFunctionTag*, std::int32_t, float, RE::BSFixedString, RE::TESQuest*, RE::BSFixedString, RE::BSFixedString);
+    void BeginAsyncPoliticalTick(RE::StaticFunctionTag*, float, RE::TESQuest*, RE::BSFixedString, RE::BSFixedString);
     bool IsActorOnStoryCooldown(RE::StaticFunctionTag*, RE::Actor*);
     void NotifySocialCooldown(RE::StaticFunctionTag*, RE::Actor*, float, float);
     void NotifyStoryTypePicked(RE::StaticFunctionTag*, RE::BSFixedString);
@@ -308,6 +312,10 @@ namespace IntelEngine::Papyrus {
         a_vm->RegisterFunction("CheckOffScreenProgress", SCRIPT_NAME, CheckOffScreenProgress); ++count;
         a_vm->RegisterFunction("ResetOffScreenSlot", SCRIPT_NAME, ResetOffScreenSlot); ++count;
 
+        // Proximity Monitor Functions (fast-path arrival detection)
+        a_vm->RegisterFunction("ArmProximityArrival", SCRIPT_NAME, ArmProximityArrival); ++count;
+        a_vm->RegisterFunction("DisarmProximityArrival", SCRIPT_NAME, DisarmProximityArrival); ++count;
+
         // Waypoint Navigation Functions
         a_vm->RegisterFunction("FindNearestWaypointToward", SCRIPT_NAME, FindNearestWaypointToward); ++count;
 
@@ -324,14 +332,6 @@ namespace IntelEngine::Papyrus {
         a_vm->RegisterFunction("SetSlotOffscreenArrival", SCRIPT_NAME, SetSlotOffscreenArrival); ++count;
         a_vm->RegisterFunction("HasCoSaveTaskData", SCRIPT_NAME, HasCoSaveTaskData); ++count;
         a_vm->RegisterFunction("SyncArraysFromSlotTracker", SCRIPT_NAME, SyncArraysFromSlotTracker); ++count;
-
-        // ProximityMonitor Functions (C++ frame-rate distance/deadline checking)
-        a_vm->RegisterFunction("RegisterDistanceWatch", SCRIPT_NAME, RegisterDistanceWatch); ++count;
-        a_vm->RegisterFunction("RegisterPlayerWatch", SCRIPT_NAME, RegisterPlayerWatch); ++count;
-        a_vm->RegisterFunction("RegisterDeadlineWatch", SCRIPT_NAME, RegisterDeadlineWatch); ++count;
-        a_vm->RegisterFunction("ClearProximityWatches", SCRIPT_NAME, ClearProximityWatches); ++count;
-        a_vm->RegisterFunction("ClearProximityWatch", SCRIPT_NAME, ClearProximityWatch); ++count;
-
         a_vm->RegisterFunction("IsActorAvailable", SCRIPT_NAME, IsActorAvailable); ++count;
         a_vm->RegisterFunction("HasBaseAIPackages", SCRIPT_NAME, HasBaseAIPackages); ++count;
         a_vm->RegisterFunction("HasNonSandboxAI", SCRIPT_NAME, HasNonSandboxAI); ++count;
@@ -364,6 +364,9 @@ namespace IntelEngine::Papyrus {
         a_vm->RegisterFunction("BuildDungeonMasterContext", SCRIPT_NAME, BuildDungeonMasterContext); ++count;
         a_vm->RegisterFunction("BuildNPCInteractionContext", SCRIPT_NAME, BuildNPCInteractionContext); ++count;
         a_vm->RegisterFunction("BuildNPCInteractionRequestJson", SCRIPT_NAME, BuildNPCInteractionRequestJson); ++count;
+        a_vm->RegisterFunction("BeginAsyncNPCDMTick", SCRIPT_NAME, BeginAsyncNPCDMTick); ++count;
+        a_vm->RegisterFunction("BeginAsyncStoryDMTick", SCRIPT_NAME, BeginAsyncStoryDMTick); ++count;
+        a_vm->RegisterFunction("BeginAsyncPoliticalTick", SCRIPT_NAME, BeginAsyncPoliticalTick); ++count;
         a_vm->RegisterFunction("NotifyStoryCooldown", SCRIPT_NAME, NotifyStoryCooldown); ++count;
         a_vm->RegisterFunction("IsActorOnStoryCooldown", SCRIPT_NAME, IsActorOnStoryCooldown); ++count;
         a_vm->RegisterFunction("NotifySocialCooldown", SCRIPT_NAME, NotifySocialCooldown); ++count;
@@ -383,6 +386,7 @@ namespace IntelEngine::Papyrus {
         a_vm->RegisterFunction("ScanAheadForAnchor", SCRIPT_NAME, ScanAheadForAnchor); ++count;
         a_vm->RegisterFunction("GetDungeonBossAnchor", SCRIPT_NAME, GetDungeonBossAnchor); ++count;
         a_vm->RegisterFunction("IsQuestItemInChest", SCRIPT_NAME, IsQuestItemInChest); ++count;
+        a_vm->RegisterFunction("EnsureQuestItemInChest", SCRIPT_NAME, EnsureQuestItemInChest); ++count;
         a_vm->RegisterFunction("ValidateQuestItem", SCRIPT_NAME, ValidateQuestItem); ++count;
         a_vm->RegisterFunction("GetRandomQuestItemName", SCRIPT_NAME, GetRandomQuestItemName); ++count;
         a_vm->RegisterFunction("NotifyQuestItemUsed", SCRIPT_NAME, NotifyQuestItemUsed); ++count;
@@ -1356,6 +1360,32 @@ namespace IntelEngine::Papyrus {
     }
 
     // ==========================================================================
+    // Proximity Monitor Functions (fast-path arrival detection, see ProximityMonitor.h)
+    // ==========================================================================
+
+    void ArmProximityArrival(RE::StaticFunctionTag*, int slot, RE::TESObjectREFR* agent,
+                             RE::TESObjectREFR* target, RE::TESQuest* callbackQuest,
+                             RE::BSFixedString scriptName, RE::BSFixedString callbackFn) {
+        if (!agent || !target || !callbackQuest) {
+            logger::warn("ArmProximityArrival slot={}: null agent/target/quest", slot);
+            return;
+        }
+        const char* qeid = callbackQuest->GetFormEditorID();
+        if (!qeid || !*qeid) {
+            logger::warn("ArmProximityArrival slot={}: callback quest has no editor ID", slot);
+            return;
+        }
+        // Thresholds auto-selected by ProximityMonitor::Arm based on target kind
+        // (actor vs marker). Pass 0.0 to request the default.
+        ProximityMonitor::GetSingleton()->Arm(slot, agent, target, 0.0f, 0.0f,
+            qeid, scriptName.c_str(), callbackFn.c_str());
+    }
+
+    void DisarmProximityArrival(RE::StaticFunctionTag*, int slot) {
+        ProximityMonitor::GetSingleton()->Disarm(slot);
+    }
+
+    // ==========================================================================
     // Waypoint Navigation Functions
     // ==========================================================================
 
@@ -1477,40 +1507,6 @@ namespace IntelEngine::Papyrus {
         }
 
         logger::info("SyncArraysFromSlotTracker: Synced {} active slots to Papyrus arrays", synced);
-    }
-
-    // --- ProximityMonitor native functions ---
-
-    void RegisterDistanceWatch(RE::StaticFunctionTag*, int id, RE::Actor* source,
-                               RE::TESObjectREFR* target, float threshold,
-                               RE::BSFixedString eventType, bool greaterThan,
-                               float zTolerance) {
-        if (!source || !target) return;
-        ProximityMonitor::GetSingleton()->RegisterDistanceWatch(
-            id, source->GetFormID(), target->GetFormID(),
-            threshold, eventType.c_str(), greaterThan, zTolerance);
-    }
-
-    void RegisterPlayerWatch(RE::StaticFunctionTag*, int id, RE::Actor* source,
-                             float threshold, RE::BSFixedString eventType,
-                             bool greaterThan) {
-        if (!source) return;
-        ProximityMonitor::GetSingleton()->RegisterPlayerWatch(
-            id, source->GetFormID(), threshold, eventType.c_str(), greaterThan);
-    }
-
-    void RegisterDeadlineWatch(RE::StaticFunctionTag*, int id, float gameTime,
-                               RE::BSFixedString eventType) {
-        ProximityMonitor::GetSingleton()->RegisterDeadlineWatch(
-            id, gameTime, eventType.c_str());
-    }
-
-    void ClearProximityWatches(RE::StaticFunctionTag*, int id) {
-        ProximityMonitor::GetSingleton()->ClearWatches(id);
-    }
-
-    void ClearProximityWatch(RE::StaticFunctionTag*, int id, RE::BSFixedString eventType) {
-        ProximityMonitor::GetSingleton()->ClearWatch(id, eventType.c_str());
     }
 
     bool IsActorAvailable(RE::StaticFunctionTag*, RE::Actor* akActor) {
@@ -2025,26 +2021,94 @@ namespace IntelEngine::Papyrus {
         return RE::BSFixedString(result);
     }
 
-    RE::BSFixedString BuildNPCInteractionRequestJson(RE::StaticFunctionTag*,
-                                                      RE::BSFixedString npcContext) {
-        // npcContext is already JSON-escaped by BuildNPCInteractionContext — do NOT double-escape
+    // Worker-thread-safe core: no engine touches. Callers pass pre-resolved values:
+    //   playerAtInn:     FactionPolitics::IsPlayerAtInn() (main thread)
+    //   currentGameTime: RE::Calendar::GetCurrentGameTime() (main thread)
+    static std::string BuildNPCInteractionRequestJsonCore(const std::string& npcContext,
+                                                           bool playerAtInn,
+                                                           float currentGameTime) {
         auto preferred = NPCIndex::GetSingleton()->GetPreferredNPCType();
         std::string json = "{";
-        json += "\"npcPairPool\":\"" + std::string(npcContext.c_str()) + "\"";
+        json += "\"npcPairPool\":\"" + npcContext + "\"";
         json += ",\"preferredType\":\"" + preferred + "\"";
+        json += ",\"player_at_inn\":\"" + std::string(playerAtInn ? "1" : "0") + "\"";
 
-        json += ",\"player_at_inn\":\"" + std::string(FactionPolitics::IsPlayerAtInn() ? "1" : "0") + "\"";
-
-        // Latest witnessable event — anchors political gossip to a specific event
-        std::string witnessEvent = FactionPolitics::GetSingleton()->GetLatestWitnessableEvent();
+        std::string witnessEvent = FactionPolitics::GetSingleton()->GetLatestWitnessableEvent(currentGameTime);
         if (!witnessEvent.empty()) {
             json += ",\"latest_witness_event\":\"" + MemoryDB::EscapeJsonString(witnessEvent) + "\"";
         } else {
             json += ",\"latest_witness_event\":\"\"";
         }
-
         json += "}";
-        return RE::BSFixedString(json);
+        return json;
+    }
+
+    RE::BSFixedString BuildNPCInteractionRequestJson(RE::StaticFunctionTag*,
+                                                      RE::BSFixedString npcContext) {
+        // npcContext is already JSON-escaped by BuildNPCInteractionContext — do NOT double-escape
+        auto* cal = RE::Calendar::GetSingleton();
+        float now = cal ? cal->GetCurrentGameTime() : 0.f;
+        return RE::BSFixedString(BuildNPCInteractionRequestJsonCore(
+            npcContext.c_str(), FactionPolitics::IsPlayerAtInn(), now));
+    }
+
+    // -------------------------------------------------------------------------
+    // BeginAsyncNPCDMTick — main-thread snapshot, worker-thread context build,
+    // dispatched callback fires Papyrus OnNPCDMContextReady(String contextJson).
+    // -------------------------------------------------------------------------
+    void BeginAsyncNPCDMTick(RE::StaticFunctionTag*,
+                              std::int32_t maxPairs,
+                              RE::TESQuest* callbackQuest,
+                              RE::BSFixedString callbackScript,
+                              RE::BSFixedString callbackFn) {
+        if (!callbackQuest) {
+            logger::error("BeginAsyncNPCDMTick: null callback quest");
+            return;
+        }
+        const char* qedit = callbackQuest->GetFormEditorID();
+        if (!qedit || !qedit[0]) {
+            logger::error("BeginAsyncNPCDMTick: callback quest has no editor ID");
+            return;
+        }
+        std::string questEditorId = qedit;
+        std::string scriptName    = callbackScript.c_str();
+        std::string functionName  = callbackFn.c_str();
+
+        if (maxPairs <= 0) maxPairs = 4;
+
+        // Phase A — main thread: snapshot engine state.
+        auto snap = NPCIndex::GetSingleton()->BuildNPCTickSnapshot(static_cast<int>(maxPairs));
+        bool playerAtInn = FactionPolitics::IsPlayerAtInn();
+
+        // If snapshot has nothing, fire empty callback inline (already main thread).
+        if (snap.candidates.empty()) {
+            AsyncDispatch::ExecuteQuestFunctionString(questEditorId, scriptName, functionName, "");
+            return;
+        }
+
+        // Phase B — worker thread: build context + JSON, then marshal back for callback.
+        AsyncDispatch::Submit([snap = std::move(snap), playerAtInn,
+                               questEditorId = std::move(questEditorId),
+                               scriptName = std::move(scriptName),
+                               functionName = std::move(functionName)]() mutable {
+            std::string md = NPCIndex::GetSingleton()->BuildNPCInteractionContextFromSnapshot(snap);
+            std::string requestJson;
+            if (!md.empty()) {
+                requestJson = BuildNPCInteractionRequestJsonCore(md, playerAtInn, snap.currentGameTime);
+            }
+            // Phase C — back to main thread for VM dispatch.
+            auto* task = SKSE::GetTaskInterface();
+            if (!task) {
+                logger::error("BeginAsyncNPCDMTick: TaskInterface unavailable, callback dropped");
+                return;
+            }
+            task->AddTask([questEditorId = std::move(questEditorId),
+                           scriptName = std::move(scriptName),
+                           functionName = std::move(functionName),
+                           requestJson = std::move(requestJson)]() mutable {
+                AsyncDispatch::ExecuteQuestFunctionString(questEditorId, scriptName, functionName, requestJson);
+            });
+        });
     }
 
     void NotifyStoryCooldown(RE::StaticFunctionTag*, RE::Actor* akActor, float gameTime) {
@@ -2363,28 +2427,26 @@ namespace IntelEngine::Papyrus {
         return RE::BSFixedString(json);
     }
 
-    RE::BSFixedString BuildStoryDMRequestJson(RE::StaticFunctionTag*,
-                                               RE::BSFixedString dmContext,
-                                               RE::BSFixedString excludedTypes) {
-        // dmContext is already JSON-escaped by BuildDungeonMasterContext — do NOT double-escape
-
-        // Parse comma-separated excluded types into a set for per-type show flags.
-        // Prompt template uses {% if show_X == "1" %} to conditionally render each type.
+    // Worker-thread-safe core. Caller pre-resolves engine-touching values:
+    //   playerAtInn:      FactionPolitics::IsPlayerAtInn()
+    //   currentGameTime:  RE::Calendar::GetCurrentGameTime()
+    // Everything else inside is DB/cache-only.
+    static std::string BuildStoryDMRequestJsonCore(const std::string& dmContext,
+                                                    const std::string& excludedTypes,
+                                                    bool playerAtInn,
+                                                    float currentGameTime) {
         std::unordered_set<std::string> excludedSet;
         {
-            std::string excl = excludedTypes.c_str();
+            const std::string& excl = excludedTypes;
             size_t pos = 0;
             while (pos < excl.size()) {
                 size_t comma = excl.find(',', pos);
                 if (comma == std::string::npos) comma = excl.size();
                 std::string token = excl.substr(pos, comma - pos);
-                // Trim whitespace
                 size_t start = token.find_first_not_of(" \t");
                 size_t end = token.find_last_not_of(" \t");
                 if (start != std::string::npos) {
                     std::string trimmed = token.substr(start, end - start + 1);
-                    // Lowercase: Papyrus VM may capitalize string literals
-                    // (e.g., "ambush" → "Ambush") so we normalize to match allTypes[].
                     std::transform(trimmed.begin(), trimmed.end(), trimmed.begin(), ::tolower);
                     excludedSet.insert(trimmed);
                 }
@@ -2411,7 +2473,7 @@ namespace IntelEngine::Papyrus {
         }
 
         std::string json = "{";
-        json += "\"candidatePool\":\"" + std::string(dmContext.c_str()) + "\",";
+        json += "\"candidatePool\":\"" + dmContext + "\",";
 
         // Per-type show flags: "1" if allowed, "0" if excluded.
         // MUST always include ALL keys with non-empty values. Inja's variable
@@ -2426,10 +2488,11 @@ namespace IntelEngine::Papyrus {
                     (excludedSet.count(t) ? "0" : "1") + "\",";
         }
 
-        json += "\"player_at_inn\":\"" + std::string(FactionPolitics::IsPlayerAtInn() ? "1" : "0") + "\",";
+        json += "\"player_at_inn\":\"" + std::string(playerAtInn ? "1" : "0") + "\",";
 
         // Latest witnessable political event (assassination, brawl, sabotage, etc.)
-        std::string witnessEvent = FactionPolitics::GetSingleton()->GetLatestWitnessableEvent();
+        // Pass currentGameTime so this can run on a worker thread without touching RE::Calendar.
+        std::string witnessEvent = FactionPolitics::GetSingleton()->GetLatestWitnessableEvent(currentGameTime);
         if (!witnessEvent.empty()) {
             std::string escaped = MemoryDB::EscapeJsonString(witnessEvent);
             json += "\"latest_witness_event\":\"" + escaped + "\",";
@@ -2502,9 +2565,7 @@ namespace IntelEngine::Papyrus {
         {
             auto* npcIdx = NPCIndex::GetSingleton();
             float lastDispatch = npcIdx->GetLastDispatchGameTime();
-            auto* cal = RE::Calendar::GetSingleton();
-            float now = cal ? cal->GetCurrentGameTime() : 0.f;
-            bool worldQuiet = (lastDispatch <= 0.f) || ((now - lastDispatch) > 3.f);
+            bool worldQuiet = (lastDispatch <= 0.f) || ((currentGameTime - lastDispatch) > 3.f);
             json += "\"world_quiet\":\"" + std::string(worldQuiet ? "1" : "0") + "\",";
         }
 
@@ -2512,7 +2573,102 @@ namespace IntelEngine::Papyrus {
         if (json.back() == ',') json.pop_back();
         json += "}";
 
-        return RE::BSFixedString(json);
+        return json;
+    }
+
+    RE::BSFixedString BuildStoryDMRequestJson(RE::StaticFunctionTag*,
+                                               RE::BSFixedString dmContext,
+                                               RE::BSFixedString excludedTypes) {
+        // dmContext is already JSON-escaped by BuildDungeonMasterContext — do NOT double-escape
+        auto* cal = RE::Calendar::GetSingleton();
+        float now = cal ? cal->GetCurrentGameTime() : 0.f;
+        return RE::BSFixedString(
+            BuildStoryDMRequestJsonCore(dmContext.c_str(), excludedTypes.c_str(),
+                                         FactionPolitics::IsPlayerAtInn(), now));
+    }
+
+    // -------------------------------------------------------------------------
+    // BeginAsyncStoryDMTick — main-thread snapshot, worker-thread context build,
+    // dispatched callback fires Papyrus OnStoryDMContextReady(String contextJson).
+    // -------------------------------------------------------------------------
+    void BeginAsyncStoryDMTick(RE::StaticFunctionTag*,
+                                std::int32_t maxCandidates,
+                                float absenceDays,
+                                RE::BSFixedString excludedTypes,
+                                RE::TESQuest* callbackQuest,
+                                RE::BSFixedString callbackScript,
+                                RE::BSFixedString callbackFn) {
+        if (!callbackQuest) {
+            logger::error("BeginAsyncStoryDMTick: null callback quest");
+            return;
+        }
+        const char* qedit = callbackQuest->GetFormEditorID();
+        if (!qedit || !qedit[0]) {
+            logger::error("BeginAsyncStoryDMTick: callback quest has no editor ID");
+            return;
+        }
+        std::string questEditorId = qedit;
+        std::string scriptName    = callbackScript.c_str();
+        std::string functionName  = callbackFn.c_str();
+        std::string excludedStr   = excludedTypes.c_str();
+
+        if (maxCandidates <= 0) maxCandidates = 7;
+        int maxC = static_cast<int>(maxCandidates);
+
+        // Phase 0 — worker thread: SQL prefetch (GetActorEngagement + GetPlayerContext).
+        // Phase A then runs on main thread once prefetch is ready.
+        AsyncDispatch::Submit([maxC, absenceDays, excludedStr = std::move(excludedStr),
+                               questEditorId = std::move(questEditorId),
+                               scriptName = std::move(scriptName),
+                               functionName = std::move(functionName)]() mutable {
+            auto prefetch = NPCIndex::GetSingleton()->FetchStoryDMPhaseAPrefetch(maxC, absenceDays);
+
+            // Phase A — main thread (engine snapshot using pre-fetched SQL).
+            auto* task = SKSE::GetTaskInterface();
+            if (!task) {
+                logger::error("BeginAsyncStoryDMTick: TaskInterface unavailable, dropped");
+                return;
+            }
+            task->AddTask([maxC, absenceDays, prefetch = std::move(prefetch),
+                           excludedStr = std::move(excludedStr),
+                           questEditorId = std::move(questEditorId),
+                           scriptName = std::move(scriptName),
+                           functionName = std::move(functionName)]() mutable {
+                auto snap = NPCIndex::GetSingleton()->BuildStoryDMTickSnapshot(maxC, absenceDays, prefetch);
+                bool playerAtInn = FactionPolitics::IsPlayerAtInn();
+                float currentGameTime = snap.currentGameTime;
+
+                if (snap.candidates.empty()) {
+                    AsyncDispatch::ExecuteQuestFunctionString(questEditorId, scriptName, functionName, "");
+                    return;
+                }
+
+                // Phase B — worker thread: scoring + per-candidate SQL + markdown.
+                AsyncDispatch::Submit([snap = std::move(snap), playerAtInn, currentGameTime,
+                                       excludedStr = std::move(excludedStr),
+                                       questEditorId = std::move(questEditorId),
+                                       scriptName = std::move(scriptName),
+                                       functionName = std::move(functionName)]() mutable {
+                    std::string md = NPCIndex::GetSingleton()->BuildDungeonMasterContextFromSnapshot(snap);
+                    std::string requestJson;
+                    if (!md.empty()) {
+                        requestJson = BuildStoryDMRequestJsonCore(md, excludedStr, playerAtInn, currentGameTime);
+                    }
+                    // Phase C — back to main thread for Papyrus VM dispatch.
+                    auto* t2 = SKSE::GetTaskInterface();
+                    if (!t2) {
+                        logger::error("BeginAsyncStoryDMTick Phase C: TaskInterface unavailable, callback dropped");
+                        return;
+                    }
+                    t2->AddTask([questEditorId = std::move(questEditorId),
+                                 scriptName = std::move(scriptName),
+                                 functionName = std::move(functionName),
+                                 requestJson = std::move(requestJson)]() mutable {
+                        AsyncDispatch::ExecuteQuestFunctionString(questEditorId, scriptName, functionName, requestJson);
+                    });
+                });
+            });
+        });
     }
 
     // ==========================================================================
@@ -3749,6 +3905,40 @@ namespace IntelEngine::Papyrus {
         return false;  // Item not found — player took it
     }
 
+    // Re-populate a quest chest once its cell has loaded. Containers created via
+    // PlaceObjectAtMe in unloaded cells don't sync their ExtraContainerChanges to
+    // the inventory UI until first-open — so a script-added quest item is invisible
+    // on the player's first interaction. Calling this from the first-3D-load hook
+    // (cell now loaded) adds the item cleanly via the normal container path, which
+    // the UI picks up on the next open. Returns true if the item is present after.
+    bool EnsureQuestItemInChest(RE::StaticFunctionTag*, RE::TESObjectREFR* container,
+                                 RE::BSFixedString itemName) {
+        if (!container) return false;
+
+        std::string nameStr(itemName.c_str());
+        if (nameStr.empty()) return false;
+
+        auto* itemObj = ItemIndex::GetSingleton()->FindByName(nameStr);
+        if (!itemObj) {
+            logger::error("[IntelEngine] EnsureQuestItemInChest: item '{}' not found in ItemIndex", nameStr);
+            return false;
+        }
+
+        // Already present? Skip add to avoid duplicate stacks.
+        auto inventory = container->GetInventory();
+        for (auto& [form, data] : inventory) {
+            if (form && form->GetFormID() == itemObj->GetFormID() && data.first > 0) {
+                return true;
+            }
+        }
+
+        container->InitInventoryIfRequired();
+        container->AddObjectToContainer(itemObj, nullptr, 1, nullptr);
+        logger::info("[IntelEngine] EnsureQuestItemInChest: added '{}' to chest {:08X} on cell load",
+                    itemObj->GetName(), container->GetFormID());
+        return true;
+    }
+
     // ==========================================================================
     // Faction Politics Functions
     // ==========================================================================
@@ -3801,6 +3991,57 @@ namespace IntelEngine::Papyrus {
         auto* politics = FactionPolitics::GetSingleton();
         if (!politics->IsReady()) return RE::BSFixedString("{}");
         return RE::BSFixedString(politics->BuildPoliticalContext(currentGameTime).c_str());
+    }
+
+    // -------------------------------------------------------------------------
+    // BeginAsyncPoliticalTick — main-thread leader snapshot, worker-thread JSON,
+    // dispatched callback fires Papyrus OnPoliticsDMContextReady(String contextJson).
+    // -------------------------------------------------------------------------
+    void BeginAsyncPoliticalTick(RE::StaticFunctionTag*,
+                                  float currentGameTime,
+                                  RE::TESQuest* callbackQuest,
+                                  RE::BSFixedString callbackScript,
+                                  RE::BSFixedString callbackFn) {
+        if (!callbackQuest) {
+            logger::error("BeginAsyncPoliticalTick: null callback quest");
+            return;
+        }
+        const char* qedit = callbackQuest->GetFormEditorID();
+        if (!qedit || !qedit[0]) {
+            logger::error("BeginAsyncPoliticalTick: callback quest has no editor ID");
+            return;
+        }
+        std::string questEditorId = qedit;
+        std::string scriptName    = callbackScript.c_str();
+        std::string functionName  = callbackFn.c_str();
+
+        auto* politics = FactionPolitics::GetSingleton();
+        if (!politics->IsReady()) {
+            // Empty-context sentinel: consistent "" across all 3 BeginAsync* paths.
+            AsyncDispatch::ExecuteQuestFunctionString(questEditorId, scriptName, functionName, "");
+            return;
+        }
+
+        // Phase A — main thread.
+        auto snap = politics->BuildPoliticsTickSnapshot(currentGameTime);
+
+        AsyncDispatch::Submit([snap = std::move(snap),
+                               questEditorId = std::move(questEditorId),
+                               scriptName = std::move(scriptName),
+                               functionName = std::move(functionName)]() mutable {
+            std::string requestJson = FactionPolitics::GetSingleton()->BuildPoliticalContextFromSnapshot(snap);
+            auto* task = SKSE::GetTaskInterface();
+            if (!task) {
+                logger::error("BeginAsyncPoliticalTick: TaskInterface unavailable, callback dropped");
+                return;
+            }
+            task->AddTask([questEditorId = std::move(questEditorId),
+                           scriptName = std::move(scriptName),
+                           functionName = std::move(functionName),
+                           requestJson = std::move(requestJson)]() mutable {
+                AsyncDispatch::ExecuteQuestFunctionString(questEditorId, scriptName, functionName, requestJson);
+            });
+        });
     }
 
     RE::BSFixedString BuildPoliticalDashboardJson(RE::StaticFunctionTag*) {

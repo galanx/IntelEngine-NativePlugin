@@ -179,6 +179,15 @@ namespace IntelEngine::Papyrus {
     void ResetOffScreenSlot(RE::StaticFunctionTag*, int slot);
 
     // ==========================================================================
+    // Proximity Monitor Functions
+    // ==========================================================================
+
+    void ArmProximityArrival(RE::StaticFunctionTag*, int slot, RE::TESObjectREFR* agent,
+                             RE::TESObjectREFR* target, RE::TESQuest* callbackQuest,
+                             RE::BSFixedString scriptName, RE::BSFixedString callbackFn);
+    void DisarmProximityArrival(RE::StaticFunctionTag*, int slot);
+
+    // ==========================================================================
     // Waypoint Navigation Functions
     // ==========================================================================
 
@@ -222,30 +231,6 @@ namespace IntelEngine::Papyrus {
     // Push C++ SlotTracker state TO Papyrus arrays.
     // Called from Maintenance when co-save data exists (skips StorageUtil reads).
     void SyncArraysFromSlotTracker(RE::StaticFunctionTag*);
-
-    // --- ProximityMonitor watches (C++ frame-rate distance/deadline checking) ---
-
-    // Register a distance watch between two refs.
-    // Fires ModEvent "IntelEngine_ProximityEvent" with strArg=eventType, numArg=watchId.
-    void RegisterDistanceWatch(RE::StaticFunctionTag*, int id, RE::Actor* source,
-                               RE::TESObjectREFR* target, float threshold,
-                               RE::BSFixedString eventType, bool greaterThan,
-                               float zTolerance);
-
-    // Register a distance-to-player watch.
-    void RegisterPlayerWatch(RE::StaticFunctionTag*, int id, RE::Actor* source,
-                             float threshold, RE::BSFixedString eventType,
-                             bool greaterThan);
-
-    // Register a game-time deadline watch.
-    void RegisterDeadlineWatch(RE::StaticFunctionTag*, int id, float gameTime,
-                               RE::BSFixedString eventType);
-
-    // Clear all watches for a given ID (slot index).
-    void ClearProximityWatches(RE::StaticFunctionTag*, int id);
-
-    // Clear a specific watch by ID + event type.
-    void ClearProximityWatch(RE::StaticFunctionTag*, int id, RE::BSFixedString eventType);
 
     // Check if actor is available for new tasks (no active task + no cooldown).
     // Used as SkyrimNet tag via Papyrus wrapper.
@@ -352,6 +337,10 @@ namespace IntelEngine::Papyrus {
     // Check if the specific quest item is still inside a container.
     bool IsQuestItemInChest(RE::StaticFunctionTag*, RE::TESObjectREFR* container,
                             RE::BSFixedString itemName);
+    // Re-populate chest on cell load — fixes the "first-open invisible" bug for
+    // chests created via PlaceObjectAtMe in unloaded cells.
+    bool EnsureQuestItemInChest(RE::StaticFunctionTag*, RE::TESObjectREFR* container,
+                                RE::BSFixedString itemName);
 
     // ==========================================================================
     // MemoryDB Functions (SkyrimNet SQLite reader)

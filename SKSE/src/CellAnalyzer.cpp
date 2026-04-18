@@ -524,7 +524,14 @@ namespace IntelEngine {
             "LocTypeInn", "LocTypeStore", "LocTypeHouse",
             "LocTypePlayerHouse", "LocTypeTemple", "LocTypeGuild",
             "LocTypeFarm", "LocTypeLumberMill", "LocTypeCastle",
-            "LocTypeJail"
+            "LocTypeJail",
+            // City/town/settlement keywords — Whiterun streets, Riverwood square, etc.
+            // These exterior hubs don't carry the interior-building keywords above,
+            // so without them the city itself falls through as "dangerous" and the
+            // civilian-block policy aborts quest couriers walking into town.
+            "LocTypeHabitation", "LocTypeHabitationHasInn",
+            "LocTypeCity", "LocTypeTown", "LocTypeSettlement",
+            "LocTypeHoldCapital", "LocTypeHoldMajor", "LocTypeHold"
         };
 
         for (auto* editorID : safeEditorIDs) {
