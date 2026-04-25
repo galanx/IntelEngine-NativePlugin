@@ -2016,14 +2016,40 @@ namespace IntelEngine {
         // Pass 1: MemoryDB-ranked candidates (allows unloaded NPCs).
         int dbUnresolved = 0, dbIneligible = 0, dbPlayerCell = 0, dbAccepted = 0, dbCreature = 0;
         for (const auto& [formId, name, score] : ranked) {
-            if (IsGenericCreatureName(name)) { dbCreature++; continue; }
-            if (recentPlayerNPCs.count(StringUtils::ToLowerStd(name))) continue;
+            if (IsGenericCreatureName(name)) {
+                dbCreature++;
+                logger::info("[StoryDM Pass1] skipped-creature: '{}' (score={:.1f})", name, score);
+                continue;
+            }
+            if (recentPlayerNPCs.count(StringUtils::ToLowerStd(name))) {
+                logger::info("[StoryDM Pass1] skipped-recent: '{}' (score={:.1f})", name, score);
+                continue;
+            }
             auto* actor = ResolveFromMemoryDB(formId, name);
-            if (!actor) { dbUnresolved++; continue; }
-            if (!IsEligibleStoryCandidateRelaxed(actor, player, tracker)) { dbIneligible++; continue; }
-            if (actor->GetParentCell() && actor->GetParentCell() == playerCell) { dbPlayerCell++; continue; }
+            if (!actor) {
+                dbUnresolved++;
+                logger::info("[StoryDM Pass1] skipped-unresolved: '{}' (formId=0x{:08X}, score={:.1f})", name, formId, score);
+                continue;
+            }
+            if (!IsEligibleStoryCandidateRelaxed(actor, player, tracker)) {
+                dbIneligible++;
+                // IsEligibleStoryCandidateRelaxed logs rejection reason via PassesCommonEligibility(verbose=true),
+                // but IsPlayerTeammate rejection is silent — log it here.
+                if (actor->IsPlayerTeammate()) {
+                    logger::info("[StoryDM Pass1] skipped-teammate: '{}' (score={:.1f})", name, score);
+                } else {
+                    logger::info("[StoryDM Pass1] skipped-ineligible: '{}' (score={:.1f}) — see Rejected log above", name, score);
+                }
+                continue;
+            }
+            if (actor->GetParentCell() && actor->GetParentCell() == playerCell) {
+                dbPlayerCell++;
+                logger::info("[StoryDM Pass1] skipped-playercell: '{}' (score={:.1f})", name, score);
+                continue;
+            }
             staged.push_back({actor, formId, score, true});
             dbAccepted++;
+            logger::info("[StoryDM Pass1] ACCEPTED: '{}' (score={:.1f})", name, score);
         }
         logger::info("[StoryDM async] MemoryDB candidates: {} ranked, {} accepted, "
             "{} creature, {} unresolved, {} ineligible, {} player-cell",
@@ -2044,8 +2070,10 @@ namespace IntelEngine {
                 staged.push_back({actor, actor->GetFormID(), 0.f, false});
                 stagedIds.insert(actor->GetFormID());
                 randomsAdded++;
+                logger::info("[StoryDM Pass2] ACCEPTED-loaded: '{}'", actor->GetDisplayFullName());
                 return false;
             });
+            logger::info("[StoryDM Pass2] added {} random-encounter slots", randomsAdded);
         }
 
         // Pass 3: location-mate candidates (for npc_interaction/npc_gossip variety).
@@ -2075,8 +2103,11 @@ namespace IntelEngine {
                 staged.push_back({actor, actor->GetFormID(), 1.f, false});
                 stagedIds.insert(actor->GetFormID());
                 locationMatesAdded++;
+                logger::info("[StoryDM Pass3] ACCEPTED-locmate: '{}' at '{}'", actor->GetDisplayFullName(), actorLoc);
                 return false;
             });
+            logger::info("[StoryDM Pass3] added {} location-mate slots (pool locations: {})",
+                locationMatesAdded, poolLocations.size());
         }
 
         // Convert staged to value snapshots
@@ -2229,7 +2260,7 @@ namespace IntelEngine {
             if (hoursSinceDispatch < 5.f) {
                 md += "- Last story dispatched: ";
                 md += std::to_string(static_cast<int>(hoursSinceDispatch));
-                md += " game hours ago" + typeHint + " — recent, avoid dispatching the EXACT same type/subtype. Different subtypes (e.g., quest/rescue vs quest/faction_battle) are fine.\n";
+                md += " game hours ago" + typeHint + " — recent, avoid dispatching the EXACT same type/subtype. A different subtype is fine; only consider types/subtypes listed under Available Story Types below.\n";
             } else if (hoursSinceDispatch < 24.f) {
                 md += "- Last story dispatched: ";
                 md += std::to_string(static_cast<int>(hoursSinceDispatch));
