@@ -2294,10 +2294,10 @@ namespace IntelEngine {
         // Recent Dispatch History — concrete record of the last few Story DM ticks
         // so the LLM can verify Rule 14 (vary dispatcher) and Rule 15 (don't strike
         // at the same beloved NPC twice in a row). Most recent first.
-        // Format anchor for Rule 14: "<age> ago: <type>[/<subtype>] — <dispatcher> (<narration>)"
+        // Format anchor for Rule 14: "<age> ago: <type>[/<subtype>] — <dispatcher> (<narration>) [STATUS]"
         if (!snap.recentDispatches.empty()) {
             md += "## Recent Dispatch History (most recent first — vary types/dispatchers)\n";
-            md += "Format: `<age> ago: <type>[/<subtype>] — <dispatcher> (<narration>)`\n";
+            md += "Format: `<age> ago: <type>[/<subtype>] — <dispatcher> (<narration>) [DISPATCHED|REJECTED — reason]`\n";
             for (const auto& d : snap.recentDispatches) {
                 float hoursAgo = (snap.currentGameTime - d.gameTime) * 24.f;
                 if (hoursAgo < 0.f) hoursAgo = 0.f;
@@ -2332,6 +2332,13 @@ namespace IntelEngine {
                         md += "...";
                     }
                     md += ")";
+                }
+                if (d.outcome == DispatchOutcome::Rejected) {
+                    md += " [REJECTED";
+                    if (!d.reason.empty()) { md += " — "; md += d.reason; }
+                    md += "]";
+                } else {
+                    md += " [DISPATCHED]";
                 }
                 md += "\n";
             }
@@ -2551,6 +2558,22 @@ namespace IntelEngine {
         }
     }
 
+    namespace {
+        // Strip markdown-structural / control characters from LLM-authored
+        // strings (subType, npcName, narration, rejection reasons) so they
+        // can't break the dispatch-history bullet list. Whitespace runs
+        // collapsed; trimmed.
+        std::string SanitizeForHistory(std::string s) {
+            for (char& c : s) {
+                if (c == '\n' || c == '\r' || c == '\t' || c == '|' || c == '`') c = ' ';
+            }
+            size_t start = s.find_first_not_of(' ');
+            size_t end   = s.find_last_not_of(' ');
+            if (start == std::string::npos) return {};
+            return s.substr(start, end - start + 1);
+        }
+    }
+
     void NPCIndex::RecordStoryDispatch(const std::string& storyType,
                                         const std::string& subType,
                                         const std::string& npcName,
@@ -2559,29 +2582,16 @@ namespace IntelEngine {
         // NPC DM types are tracked elsewhere — keep this ring buffer Story-DM-only.
         if (storyType == "npc_interaction" || storyType == "npc_gossip") return;
 
-        // Strip markdown-structural / control characters from LLM-authored
-        // strings (subType, npcName, narration) so they can't break the
-        // dispatch-history bullet list. Whitespace runs are collapsed.
-        auto sanitize = [](std::string s) {
-            for (char& c : s) {
-                if (c == '\n' || c == '\r' || c == '\t' || c == '|' || c == '`') c = ' ';
-            }
-            // Trim leading/trailing whitespace.
-            size_t start = s.find_first_not_of(' ');
-            size_t end   = s.find_last_not_of(' ');
-            if (start == std::string::npos) return std::string{};
-            return s.substr(start, end - start + 1);
-        };
-
         auto* cal = RE::Calendar::GetSingleton();
         float now = cal ? cal->GetCurrentGameTime() : 0.f;
 
         StoryDispatchEntry entry;
-        entry.type      = sanitize(storyType);
-        entry.subType   = sanitize(subType);
-        entry.npcName   = sanitize(npcName);
-        entry.narration = sanitize(narration);  // full text — emission truncates per prompt budget
+        entry.type      = SanitizeForHistory(storyType);
+        entry.subType   = SanitizeForHistory(subType);
+        entry.npcName   = SanitizeForHistory(npcName);
+        entry.narration = SanitizeForHistory(narration);  // full text — emission truncates per prompt budget
         entry.gameTime  = now;
+        entry.outcome   = DispatchOutcome::Dispatched;  // optimistic; flipped by MarkLastDispatchFailed on validation abort
 
         if (entry.type.empty()) return;
 
@@ -2590,6 +2600,17 @@ namespace IntelEngine {
         while (static_cast<int>(m_recentDispatches.size()) > MAX_RECENT_DISPATCHES) {
             m_recentDispatches.pop_back();
         }
+    }
+
+    void NPCIndex::MarkLastDispatchFailed(const std::string& reason) {
+        std::string clean = SanitizeForHistory(reason);
+        if (clean.size() > 80) clean.resize(80);  // keep history block compact
+
+        std::unique_lock lock(m_mutex);
+        if (m_recentDispatches.empty()) return;
+        auto& head = m_recentDispatches.front();
+        head.outcome = DispatchOutcome::Rejected;
+        head.reason  = std::move(clean);
     }
 
     void NPCIndex::SetRecentGossipContext(const std::string& gossipLines) {

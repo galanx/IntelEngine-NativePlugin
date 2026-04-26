@@ -319,6 +319,22 @@ namespace IntelEngine {
                                   const std::string& npcName,
                                   const std::string& narration);
 
+        /**
+         * Flip the most recent Story DM dispatch entry to Rejected with a
+         * reason string. Called from Papyrus when any validation gate aborts
+         * the dispatch (NPC not found / dead / disabled / on cooldown / hold
+         * restriction / interior, etc.). The rejected entry stays in the ring
+         * buffer so the next DM tick's prompt sees it and can avoid retrying
+         * the same name / type combination.
+         *
+         * No-op if the ring buffer is empty (defensive — shouldn't happen
+         * when called from a code path that just recorded a dispatch).
+         *
+         * @param reason  Short rejection reason (e.g., "name not found",
+         *                "npc dead", "on cooldown"). Truncated/sanitized.
+         */
+        void MarkLastDispatchFailed(const std::string& reason);
+
         /** Set recent gossip context for the Story DM prompt.
          *  Injects hold names by resolving the first NPC name in each line. */
         void SetRecentGossipContext(const std::string& gossipLines);
@@ -464,17 +480,29 @@ namespace IntelEngine {
             bool        fromMemoryDB  = false;
         };
 
+        /** Outcome of a Story DM dispatch attempt. Recorded entries start as
+         *  Dispatched (optimistic) and are flipped to Rejected if any
+         *  validation gate aborts the dispatch. The history block surfaces
+         *  both states so the LLM can see its own past errors and avoid
+         *  retry-loops on bad name guesses, dead/disabled NPCs, etc. */
+        enum class DispatchOutcome {
+            Dispatched,  // dispatch committed (action queued / quest started)
+            Rejected     // dispatch aborted at a validation gate
+        };
+
         /** A single Story DM dispatch — kept in a rolling history so the prompt
-         *  can show the last few ticks (type + dispatcher + brief beat).
-         *  Stores full narration; truncation is applied only at markdown emit
-         *  time so future consumers (debug logs, dashboard) can see the full
-         *  text. */
+         *  can show the last few ticks (type + dispatcher + brief beat +
+         *  outcome). Stores full narration; truncation is applied only at
+         *  markdown emit time so future consumers (debug logs, dashboard) can
+         *  see the full text. */
         struct StoryDispatchEntry {
-            std::string type;       // story type (seek_player, quest, informant, etc.)
-            std::string subType;    // empty unless quest sub-type (parsed from "type/sub")
-            std::string npcName;    // dispatcher display name
-            std::string narration;  // full narration; truncated only at emit
-            float       gameTime  = 0.f;  // game-time, in days (matches RE::Calendar::GetCurrentGameTime())
+            std::string     type;       // story type (seek_player, quest, informant, etc.)
+            std::string     subType;    // empty unless quest sub-type (parsed from "type/sub")
+            std::string     npcName;    // dispatcher display name
+            std::string     narration;  // full narration; truncated only at emit
+            float           gameTime  = 0.f;  // game-time, in days (matches RE::Calendar::GetCurrentGameTime())
+            DispatchOutcome outcome   = DispatchOutcome::Dispatched;
+            std::string     reason;     // empty when Dispatched; rejection reason when Rejected
         };
 
         /** Tick-level snapshot for the Story DM tick. */

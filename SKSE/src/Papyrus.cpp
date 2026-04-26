@@ -50,6 +50,7 @@ namespace IntelEngine::Papyrus {
     void NotifySocialCooldown(RE::StaticFunctionTag*, RE::Actor*, float, float);
     void NotifyStoryTypePicked(RE::StaticFunctionTag*, RE::BSFixedString);
     void RecordStoryDispatch(RE::StaticFunctionTag*, RE::BSFixedString, RE::BSFixedString, RE::BSFixedString);
+    void MarkLastDispatchFailed(RE::StaticFunctionTag*, RE::BSFixedString);
     void WarmStoryTypeCountsFromCSV(RE::StaticFunctionTag*, RE::BSFixedString);
     void SetRecentGossipContext(RE::StaticFunctionTag*, RE::BSFixedString);
     std::vector<int> GetDMCandidatePoolFormIDs(RE::StaticFunctionTag*);
@@ -373,6 +374,7 @@ namespace IntelEngine::Papyrus {
         a_vm->RegisterFunction("NotifySocialCooldown", SCRIPT_NAME, NotifySocialCooldown); ++count;
         a_vm->RegisterFunction("NotifyStoryTypePicked", SCRIPT_NAME, NotifyStoryTypePicked); ++count;
         a_vm->RegisterFunction("RecordStoryDispatch", SCRIPT_NAME, RecordStoryDispatch); ++count;
+        a_vm->RegisterFunction("MarkLastDispatchFailed", SCRIPT_NAME, MarkLastDispatchFailed); ++count;
         a_vm->RegisterFunction("WarmStoryTypeCountsFromCSV", SCRIPT_NAME, WarmStoryTypeCountsFromCSV); ++count;
         a_vm->RegisterFunction("SetRecentGossipContext", SCRIPT_NAME, SetRecentGossipContext); ++count;
         a_vm->RegisterFunction("GetDMCandidatePoolFormIDs", SCRIPT_NAME, GetDMCandidatePoolFormIDs); ++count;
@@ -2172,6 +2174,17 @@ namespace IntelEngine::Papyrus {
         }
 
         NPCIndex::GetSingleton()->RecordStoryDispatch(type, subType, npcName.c_str(), narration.c_str());
+    }
+
+    /**
+     * Papyrus → C++ shim: flip the most recent dispatch entry to Rejected.
+     * Called from any early-return validation gate that aborted a dispatch
+     * after RecordStoryDispatch was already called. The reason string surfaces
+     * in the next DM tick's history block so the LLM can avoid retrying the
+     * same name / type / NPC combination.
+     */
+    void MarkLastDispatchFailed(RE::StaticFunctionTag*, RE::BSFixedString reason) {
+        NPCIndex::GetSingleton()->MarkLastDispatchFailed(reason.c_str() ? reason.c_str() : "");
     }
 
     void WarmStoryTypeCountsFromCSV(RE::StaticFunctionTag*, RE::BSFixedString csv) {
