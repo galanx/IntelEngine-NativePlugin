@@ -465,13 +465,16 @@ namespace IntelEngine {
         };
 
         /** A single Story DM dispatch — kept in a rolling history so the prompt
-         *  can show the last few ticks (type + dispatcher + brief beat). */
+         *  can show the last few ticks (type + dispatcher + brief beat).
+         *  Stores full narration; truncation is applied only at markdown emit
+         *  time so future consumers (debug logs, dashboard) can see the full
+         *  text. */
         struct StoryDispatchEntry {
             std::string type;       // story type (seek_player, quest, informant, etc.)
-            std::string subType;    // empty unless quest sub-type
+            std::string subType;    // empty unless quest sub-type (parsed from "type/sub")
             std::string npcName;    // dispatcher display name
-            std::string narration;  // brief beat (truncated to ~100 chars)
-            float       gameTime  = 0.f;  // when (game-time days)
+            std::string narration;  // full narration; truncated only at emit
+            float       gameTime  = 0.f;  // game-time, in days (matches RE::Calendar::GetCurrentGameTime())
         };
 
         /** Tick-level snapshot for the Story DM tick. */
@@ -610,7 +613,8 @@ namespace IntelEngine {
         // StoryDispatchEntry is declared near the top of NPCIndex (before
         // StoryDMTickSnapshot) so the snapshot's `recentDispatches` vector
         // can reference it.
-        static constexpr int MAX_RECENT_DISPATCHES = 6;
+        static constexpr int    MAX_RECENT_DISPATCHES         = 6;
+        static constexpr size_t MAX_DISPATCH_NARRATION_CHARS  = 100;  // truncated only at emit
         std::deque<StoryDispatchEntry> m_recentDispatches;
 
         // Recent quest items FIFO (volatile per session, for rotation)

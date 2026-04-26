@@ -2294,14 +2294,20 @@ namespace IntelEngine {
         // Recent Dispatch History — concrete record of the last few Story DM ticks
         // so the LLM can verify Rule 14 (vary dispatcher) and Rule 15 (don't strike
         // at the same beloved NPC twice in a row). Most recent first.
+        // Format anchor for Rule 14: "<age> ago: <type>[/<subtype>] — <dispatcher> (<narration>)"
         if (!snap.recentDispatches.empty()) {
             md += "## Recent Dispatch History (most recent first — vary types/dispatchers)\n";
+            md += "Format: `<age> ago: <type>[/<subtype>] — <dispatcher> (<narration>)`\n";
             for (const auto& d : snap.recentDispatches) {
                 float hoursAgo = (snap.currentGameTime - d.gameTime) * 24.f;
                 if (hoursAgo < 0.f) hoursAgo = 0.f;
                 md += "- ";
-                if (hoursAgo < 1.f) md += "<1h ago: ";
-                else if (hoursAgo < 24.f) {
+                if (hoursAgo < 1.f) {
+                    int mins = static_cast<int>(hoursAgo * 60.f);
+                    if (mins < 1) mins = 1;
+                    md += std::to_string(mins);
+                    md += "m ago: ";
+                } else if (hoursAgo < 24.f) {
                     md += std::to_string(static_cast<int>(hoursAgo));
                     md += "h ago: ";
                 } else {
@@ -2311,7 +2317,22 @@ namespace IntelEngine {
                 md += d.type;
                 if (!d.subType.empty()) { md += "/"; md += d.subType; }
                 if (!d.npcName.empty()) { md += " — "; md += d.npcName; }
-                if (!d.narration.empty()) { md += " ("; md += d.narration; md += ")"; }
+                if (!d.narration.empty()) {
+                    // UTF-8-safe truncation: walk back from the byte cap to the
+                    // previous lead byte so we don't split a multi-byte sequence.
+                    md += " (";
+                    if (d.narration.size() <= MAX_DISPATCH_NARRATION_CHARS) {
+                        md += d.narration;
+                    } else {
+                        size_t cut = MAX_DISPATCH_NARRATION_CHARS;
+                        while (cut > 0 && (static_cast<unsigned char>(d.narration[cut]) & 0xC0u) == 0x80u) {
+                            --cut;
+                        }
+                        md += d.narration.substr(0, cut);
+                        md += "...";
+                    }
+                    md += ")";
+                }
                 md += "\n";
             }
             md += "\n";
@@ -2538,16 +2559,31 @@ namespace IntelEngine {
         // NPC DM types are tracked elsewhere — keep this ring buffer Story-DM-only.
         if (storyType == "npc_interaction" || storyType == "npc_gossip") return;
 
+        // Strip markdown-structural / control characters from LLM-authored
+        // strings (subType, npcName, narration) so they can't break the
+        // dispatch-history bullet list. Whitespace runs are collapsed.
+        auto sanitize = [](std::string s) {
+            for (char& c : s) {
+                if (c == '\n' || c == '\r' || c == '\t' || c == '|' || c == '`') c = ' ';
+            }
+            // Trim leading/trailing whitespace.
+            size_t start = s.find_first_not_of(' ');
+            size_t end   = s.find_last_not_of(' ');
+            if (start == std::string::npos) return std::string{};
+            return s.substr(start, end - start + 1);
+        };
+
         auto* cal = RE::Calendar::GetSingleton();
         float now = cal ? cal->GetCurrentGameTime() : 0.f;
 
         StoryDispatchEntry entry;
-        entry.type      = storyType;
-        entry.subType   = subType;
-        entry.npcName   = npcName;
-        // Truncate narration to keep the prompt history block compact.
-        entry.narration = narration.size() > 100 ? narration.substr(0, 100) + "..." : narration;
+        entry.type      = sanitize(storyType);
+        entry.subType   = sanitize(subType);
+        entry.npcName   = sanitize(npcName);
+        entry.narration = sanitize(narration);  // full text — emission truncates per prompt budget
         entry.gameTime  = now;
+
+        if (entry.type.empty()) return;
 
         std::unique_lock lock(m_mutex);
         m_recentDispatches.push_front(std::move(entry));

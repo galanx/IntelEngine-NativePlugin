@@ -2148,27 +2148,30 @@ namespace IntelEngine::Papyrus {
         NPCIndex::GetSingleton()->NotifyStoryTypePicked(type);
     }
 
+    /**
+     * Papyrus → C++ shim: record a successful Story DM dispatch for the
+     * rolling history block. Papyrus passes the type as either bare
+     * ("quest", "seek_player", etc.) or with sub-type appended ("quest/rescue",
+     * "quest/find_item"). The shim splits on '/' to fill StoryDispatchEntry's
+     * type and subType cleanly — single source of truth for sub-type
+     * derivation lives in Papyrus, not duplicated against a cached JSON field.
+     */
     void RecordStoryDispatch(RE::StaticFunctionTag*,
                               RE::BSFixedString storyType,
                               RE::BSFixedString npcName,
                               RE::BSFixedString narration) {
-        std::string type(storyType.c_str());
-        std::string subType;
-        std::string npc(npcName.c_str());
-        std::string beat(narration.c_str());
-        if (type.empty()) return;
+        std::string fullType(storyType.c_str());
+        if (fullType.empty()) return;
 
-        // Pull sub-type from the cached LLM response (matches NotifyStoryTypePicked behavior).
-        if (type == "quest") {
-            std::lock_guard<std::mutex> lock(s_jsonCacheMutex);
-            if (!s_cachedFields.empty()) {
-                auto it = s_cachedFields.find("questsubtype");
-                if (it != s_cachedFields.end() && !it->second.empty()) {
-                    subType = it->second;
-                }
-            }
+        std::string type    = fullType;
+        std::string subType;
+        auto slash = fullType.find('/');
+        if (slash != std::string::npos) {
+            type    = fullType.substr(0, slash);
+            subType = fullType.substr(slash + 1);
         }
-        NPCIndex::GetSingleton()->RecordStoryDispatch(type, subType, npc, beat);
+
+        NPCIndex::GetSingleton()->RecordStoryDispatch(type, subType, npcName.c_str(), narration.c_str());
     }
 
     void WarmStoryTypeCountsFromCSV(RE::StaticFunctionTag*, RE::BSFixedString csv) {
