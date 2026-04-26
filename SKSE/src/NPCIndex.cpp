@@ -2561,8 +2561,10 @@ namespace IntelEngine {
     namespace {
         // Strip markdown-structural / control characters from LLM-authored
         // strings (subType, npcName, narration, rejection reasons) so they
-        // can't break the dispatch-history bullet list. Whitespace runs
-        // collapsed; trimmed.
+        // can't break the dispatch-history bullet list. Newlines / tabs /
+        // pipes / backticks are replaced with single spaces; leading and
+        // trailing whitespace is trimmed. Internal multi-space runs are NOT
+        // collapsed — that's a cosmetic-only concern.
         std::string SanitizeForHistory(std::string s) {
             for (char& c : s) {
                 if (c == '\n' || c == '\r' || c == '\t' || c == '|' || c == '`') c = ' ';
@@ -2571,6 +2573,19 @@ namespace IntelEngine {
             size_t end   = s.find_last_not_of(' ');
             if (start == std::string::npos) return {};
             return s.substr(start, end - start + 1);
+        }
+
+        // UTF-8-safe byte-cap truncation. Walks back from the cap to the
+        // previous lead byte so a multi-byte sequence is never split. Append
+        // ellipsis if anything was actually trimmed.
+        void TruncateUtf8Inplace(std::string& s, size_t maxBytes) {
+            if (s.size() <= maxBytes) return;
+            size_t cut = maxBytes;
+            while (cut > 0 && (static_cast<unsigned char>(s[cut]) & 0xC0u) == 0x80u) {
+                --cut;
+            }
+            s.resize(cut);
+            s += "...";
         }
     }
 
@@ -2604,10 +2619,16 @@ namespace IntelEngine {
 
     void NPCIndex::MarkLastDispatchFailed(const std::string& reason) {
         std::string clean = SanitizeForHistory(reason);
-        if (clean.size() > 80) clean.resize(80);  // keep history block compact
+        TruncateUtf8Inplace(clean, MAX_DISPATCH_REASON_CHARS);
 
         std::unique_lock lock(m_mutex);
-        if (m_recentDispatches.empty()) return;
+        if (m_recentDispatches.empty()) {
+            // Caller invoked Mark without a preceding RecordStoryDispatch — defensive
+            // log so the wrong-entry-flagged bug class surfaces during testing rather
+            // than silently corrupting state.
+            logger::warn("MarkLastDispatchFailed called on empty dispatch history (reason='{}')", clean);
+            return;
+        }
         auto& head = m_recentDispatches.front();
         head.outcome = DispatchOutcome::Rejected;
         head.reason  = std::move(clean);

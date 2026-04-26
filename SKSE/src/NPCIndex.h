@@ -643,6 +643,7 @@ namespace IntelEngine {
         // can reference it.
         static constexpr int    MAX_RECENT_DISPATCHES         = 6;
         static constexpr size_t MAX_DISPATCH_NARRATION_CHARS  = 100;  // truncated only at emit
+        static constexpr size_t MAX_DISPATCH_REASON_CHARS     = 80;   // rejection reason cap
         std::deque<StoryDispatchEntry> m_recentDispatches;
 
         // Recent quest items FIFO (volatile per session, for rotation)
