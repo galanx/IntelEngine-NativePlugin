@@ -125,6 +125,59 @@ namespace IntelEngine {
          */
         std::string GetRecentEventsForActor(RE::FormID formId, int maxCount);
 
+        /**
+         * Get world knowledge entry contents applicable to an NPC.
+         *
+         * Wraps SkyrimNet's PublicGetWorldKnowledgeForActor (v9+). Returns up to
+         * `maxCount` entries — by default the cheap deterministic path: shared
+         * cache + condition evaluation, no HNSW. Pass a non-empty `searchQuery`
+         * to also include semantic-search results (only worth it when the caller
+         * has a concrete query like "war faction").
+         *
+         * Thread-safe. Returns empty vector when SkyrimNet is older than v9 or
+         * the API is unavailable.
+         *
+         * @param formId      NPC's Skyrim FormID
+         * @param maxCount    Maximum entries to return
+         * @param searchQuery Optional Inja semantic query, "" for always-inject only
+         * @return Vector of entry content strings (no formatting)
+         */
+        std::vector<std::string> GetWorldKnowledgeForActor(RE::FormID formId, int maxCount,
+                                                           const std::string& searchQuery = "");
+
+        /**
+         * Get faction-scoped world knowledge by querying every resolved leader
+         * and union-ing the results, deduplicated by content.
+         *
+         * Single-rep selection was fragile: a fact's condition might evaluate
+         * true for one leader and false for another within the same faction
+         * (e.g., `is_in_faction(actorUUID, "X")` works for Galmar but not for
+         * Ulfric if the engine's faction list differs between them, or a
+         * leader-specific Pattern A only matches one named individual). By
+         * iterating every resolved leader and merging deduped contents, we
+         * surface a fact whenever it would pass for ANY member — which is the
+         * semantically correct interpretation of "this fact applies to this
+         * faction".
+         *
+         * Each call to PublicGetWorldKnowledgeForActor is the cheap path
+         * (always-inject only, no HNSW). Per-faction cost: O(N_leaders) cache
+         * scans plus condition evaluations. Total per political tick:
+         * ~N_factions × N_leaders ≈ 60 calls in a typical loadlist, all in
+         * milliseconds on a worker thread.
+         *
+         * Thread-safe (KnowledgeManager guards its cache with shared_mutex).
+         *
+         * @param factionsWithLeaders  Pairs of (factionId, [resolved leader
+         *                             formIds for that faction]).
+         * @param maxPerFaction        Maximum deduplicated entries per faction.
+         * @return Map: factionId → deduplicated vector of fact contents.
+         *         Factions with no matching entries are omitted.
+         */
+        std::unordered_map<std::string, std::vector<std::string>>
+            GetFactionWorldKnowledgeMap(
+                const std::vector<std::pair<std::string, std::vector<RE::FormID>>>& factionsWithLeaders,
+                int maxPerFaction);
+
         // =================================================================
         // Story Candidate Selection (return FormID+score for C++ filtering)
         // =================================================================

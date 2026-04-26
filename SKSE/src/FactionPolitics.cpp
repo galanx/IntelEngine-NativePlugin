@@ -681,20 +681,67 @@ default_relations:
         const float currentGameTime = snap.currentGameTime;
 
         // Factions (extended with combat/political metadata for the DM)
+        //
+        // Per-faction world knowledge — single seat for ALL world facts the
+        // political DM should respect. For each faction, gather every resolved
+        // leader formId and let SkyrimNet's Inja engine evaluate each entry's
+        // condition against each leader; results are merged and deduplicated
+        // by content per faction. A fact surfaces whenever it would pass for
+        // ANY member of the faction (Pattern B faction-wide, Pattern A about
+        // any individual leader, Pattern C global) — robust to engine faction-
+        // list quirks, dynamic quest state, and leader-name title prefixes.
+        //
+        // Lock discipline: copy the config slice we need under configMutex_,
+        // release the lock, THEN call into SkyrimNet. Holding the lock across
+        // a cross-DLL call would block all Papyrus-thread config readers
+        // (GetFactionData, GetCrimeGoldBaseline, hot-reload via SetFactionConfig)
+        // for the duration of N per-faction Inja evaluations. Pattern matches
+        // SeedDefaultRelations above (see "lock ordering inversion" comment).
+        static constexpr int kMaxWorldKnowledgePerFaction = 5;
+        std::vector<FactionConfig> factionsCopy;
+        std::vector<std::pair<std::string, std::vector<RE::FormID>>> factionsWithLeaders;
         {
             std::lock_guard<std::mutex> lock(configMutex_);
-            nlohmann::json factionsJson = nlohmann::json::array();
-            for (const auto& f : factions_) {
-                // Use snapshot-based variant — no engine touches (this runs on worker thread)
-                auto fj = FactionToJsonFromSnapshot(f, snap);
-                if (fj.empty()) continue;
-                if (!f.conflictStyle.empty()) fj["conflict_style"] = f.conflictStyle;
-                if (f.baseArmyStrength > 0) fj["army_strength"] = f.baseArmyStrength;
-                fj["war_threshold"] = f.warThreshold;
-                factionsJson.push_back(fj);
-            }
-            state["factions"] = factionsJson;
+            factionsCopy = factions_;
         }
+        factionsWithLeaders.reserve(factionsCopy.size());
+        for (const auto& f : factionsCopy) {
+            std::vector<RE::FormID> leaders;
+            for (const auto& e : snap.leaders) {
+                if (e.factionId == f.id && e.formId != 0) {
+                    leaders.push_back(e.formId);
+                }
+            }
+            if (!leaders.empty()) {
+                factionsWithLeaders.emplace_back(f.id, std::move(leaders));
+            }
+        }
+        auto* memDB = MemoryDB::GetSingleton();
+        std::unordered_map<std::string, std::vector<std::string>> factionKnowledge;
+        if (memDB) {
+            factionKnowledge = memDB->GetFactionWorldKnowledgeMap(
+                factionsWithLeaders, kMaxWorldKnowledgePerFaction);
+        }
+
+        nlohmann::json factionsJson = nlohmann::json::array();
+        for (const auto& f : factionsCopy) {
+            // Use snapshot-based variant — no engine touches (this runs on worker thread)
+            auto fj = FactionToJsonFromSnapshot(f, snap);
+            if (fj.empty()) continue;
+            if (!f.conflictStyle.empty()) fj["conflict_style"] = f.conflictStyle;
+            if (f.baseArmyStrength > 0) fj["army_strength"] = f.baseArmyStrength;
+            fj["war_threshold"] = f.warThreshold;
+
+            auto kit = factionKnowledge.find(f.id);
+            if (kit != factionKnowledge.end() && !kit->second.empty()) {
+                nlohmann::json kj = nlohmann::json::array();
+                for (const auto& k : kit->second) kj.push_back(k);
+                fj["world_knowledge"] = std::move(kj);
+            }
+
+            factionsJson.push_back(fj);
+        }
+        state["factions"] = factionsJson;
 
         // Current relations
         auto allRelations = db->GetAllRelations();
@@ -840,6 +887,10 @@ default_relations:
                     auto events = memDB->GetRecentEventsForActor(e.formId, 3);
                     if (!events.empty()) leaderEntry["recent_events"] = events;
                 }
+                // World knowledge is NOT attached here — it lives once at the
+                // faction-scope (state.factions[].world_knowledge). Putting it
+                // on leaders too would duplicate the same fact across multiple
+                // seats and bloat the prompt.
                 leadersJson.push_back(leaderEntry);
             }
             if (!leadersJson.empty()) {

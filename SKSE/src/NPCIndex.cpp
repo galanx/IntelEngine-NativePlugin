@@ -1879,6 +1879,20 @@ namespace IntelEngine {
                     md += ": ";  md += memories;
                 }
                 md += "\n";
+
+                // World knowledge applicable to this NPC — keeps NPC-to-NPC
+                // gossip and interactions current with major world facts
+                // (faction leader deaths, dragon attacks, etc.). 2 entries per
+                // NPC × ≤3 NPCs × ≤4 groups = 24 cheap-path calls max.
+                auto knowledge = memDB->GetWorldKnowledgeForActor(a->formId, 2);
+                if (!knowledge.empty()) {
+                    md += "  Knows:";
+                    for (const auto& k : knowledge) {
+                        md += " ";  md += k;
+                        if (!k.empty() && k.back() != '.') md += ".";
+                    }
+                    md += "\n";
+                }
             }
             md += "\n";
         }
@@ -2415,6 +2429,16 @@ namespace IntelEngine {
             auto recentEvents = memDB->GetRecentEventsForActor(a->dbFormId, 3);
             if (!recentEvents.empty()) {
                 md += "Recent:\n";  md += recentEvents;  md += "\n";
+            }
+
+            // World knowledge — facts about this NPC's world that the author
+            // flagged always_inject. Cheap path, ~5-8 candidates per build.
+            auto knowledge = memDB->GetWorldKnowledgeForActor(a->dbFormId, 3);
+            if (!knowledge.empty()) {
+                md += "Knows:\n";
+                for (const auto& k : knowledge) {
+                    md += "- ";  md += k;  md += "\n";
+                }
             }
 
             auto relatedNPCs = memDB->GetRelatedCandidateFormIDs(a->dbFormId, 5);

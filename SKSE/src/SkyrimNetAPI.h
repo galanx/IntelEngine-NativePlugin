@@ -112,6 +112,18 @@ namespace IntelEngine::SkyrimNetAPI {
     /** Unregister a previously registered event callback by ID. */
     inline bool (*UnregisterEventCallback)(uint64_t callbackId) = nullptr;
 
+    // ---- World Knowledge API (v7+ for global, v9+ for per-actor) ----
+
+    /** Get all world knowledge entries as a JSON array.
+     *  Each entry includes id, content, condition_expr, always_inject, importance,
+     *  display_name, is_active. Returns "[]" on error. v7+. */
+    inline std::string (*GetWorldKnowledge)(int maxCount) = nullptr;
+
+    /** Get world knowledge entries applicable to an actor as a JSON array.
+     *  Empty searchQuery returns deterministic always-inject entries only (cheap, no HNSW).
+     *  Non-empty searchQuery enables semantic search. Returns "[]" on error or if SkyrimNet older than v9. */
+    inline std::string (*GetWorldKnowledgeForActor)(uint32_t formId, int maxResults, const char* searchQuery) = nullptr;
+
     /**
      * Initialize the SkyrimNet API by loading function pointers from the DLL.
      * Returns true if SkyrimNet was found and API version is >= 3.
@@ -206,16 +218,24 @@ namespace IntelEngine::SkyrimNetAPI {
         UnregisterEventCallback = reinterpret_cast<bool(*)(uint64_t)>(
             GetProcAddress(hDLL, "PublicUnregisterEventCallback"));
 
+        // World knowledge API — global (v7+) and per-actor (v9+).
+        // Null on older SkyrimNet builds; callers must null-check.
+        GetWorldKnowledge = reinterpret_cast<std::string(*)(int)>(
+            GetProcAddress(hDLL, "PublicGetWorldKnowledge"));
+        GetWorldKnowledgeForActor = reinterpret_cast<std::string(*)(uint32_t, int, const char*)>(
+            GetProcAddress(hDLL, "PublicGetWorldKnowledgeForActor"));
+
         // Bio template API
         logger::info("SkyrimNet Data API: Memories={}, Events={}, Dialogue={}, LatestDialogue={}, Ready={}, "
                      "ActorEngagement={}, RelatedActors={}, PlayerContext={}, EventPairs={}, "
-                     "EventCallback={}, BioTemplate={}",
+                     "EventCallback={}, BioTemplate={}, WorldKnowledge={}",
                      GetMemoriesForActor != nullptr, GetRecentEvents != nullptr,
                      GetRecentDialogue != nullptr, GetLatestDialogueInfo != nullptr,
                      IsMemorySystemReady != nullptr, GetActorEngagement != nullptr,
                      GetRelatedActors != nullptr, GetPlayerContext != nullptr,
                      GetEventPairCounts != nullptr,
-                     RegisterEventCallback != nullptr, GetBioTemplateName != nullptr);
+                     RegisterEventCallback != nullptr, GetBioTemplateName != nullptr,
+                     GetWorldKnowledgeForActor != nullptr);
 
         return true;
     }

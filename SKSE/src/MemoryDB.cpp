@@ -481,6 +481,79 @@ namespace IntelEngine {
         }
     }
 
+    // =========================================================================
+    // GetWorldKnowledgeForActor — world facts applicable to this NPC
+    // =========================================================================
+    //
+    // Bridges to SkyrimNet's v9 PublicGetWorldKnowledgeForActor. Empty
+    // searchQuery selects the cheap path (always-inject only, no HNSW), which
+    // is what hot per-NPC enrichment loops want — politics tick (~10-20 leaders),
+    // Story DM candidate pool (~5-8 NPCs), and NPC pair pool (~12 NPCs).
+    //
+    // Each call resolves formId → UUID inside SkyrimNet, takes a shared lock on
+    // KnowledgeManager's cache, and evaluates the entry's Inja condition for
+    // this actor. Safe from worker threads.
+
+    std::vector<std::string> MemoryDB::GetWorldKnowledgeForActor(RE::FormID formId, int maxCount,
+                                                                  const std::string& searchQuery) {
+        std::vector<std::string> out;
+        if (!SkyrimNetAPI::GetWorldKnowledgeForActor) return out;
+        if (formId == 0 || maxCount <= 0) return out;
+        try {
+            auto jsonStr = SkyrimNetAPI::GetWorldKnowledgeForActor(formId, maxCount, searchQuery.c_str());
+            if (jsonStr.empty() || jsonStr == "[]") return out;
+            auto arr = nlohmann::json::parse(jsonStr);
+            if (!arr.is_array()) return out;
+            out.reserve(arr.size());
+            for (const auto& entry : arr) {
+                if (!entry.is_object()) continue;
+                std::string content = entry.value("content", "");
+                if (content.empty()) continue;
+                out.push_back(std::move(content));
+            }
+        } catch (...) {
+            logger::warn("MemoryDB: GetWorldKnowledgeForActor exception for 0x{:08X}", formId);
+        }
+        return out;
+    }
+
+    // GetFactionWorldKnowledgeMap — see header for design rationale.
+
+    std::unordered_map<std::string, std::vector<std::string>>
+        MemoryDB::GetFactionWorldKnowledgeMap(
+            const std::vector<std::pair<std::string, std::vector<RE::FormID>>>& factionsWithLeaders,
+            int maxPerFaction) {
+        std::unordered_map<std::string, std::vector<std::string>> result;
+        if (!SkyrimNetAPI::GetWorldKnowledgeForActor) return result;
+        if (factionsWithLeaders.empty() || maxPerFaction <= 0) return result;
+
+        for (const auto& [factionId, leaders] : factionsWithLeaders) {
+            if (factionId.empty() || leaders.empty()) continue;
+
+            // Union pass: query EVERY leader, accumulate uniques. Truncation
+            // happens only AFTER the full union is built, so a non-prominent
+            // leader's Pattern A facts can't be starved by an earlier leader
+            // saturating the cap with Pattern B/C entries.
+            std::unordered_set<std::string> seen;
+            std::vector<std::string> merged;
+            for (auto formId : leaders) {
+                if (formId == 0) continue;
+                auto entries = GetWorldKnowledgeForActor(formId, maxPerFaction);
+                for (auto& entry : entries) {
+                    if (seen.insert(entry).second) {
+                        merged.push_back(std::move(entry));
+                    }
+                }
+            }
+            if (static_cast<int>(merged.size()) > maxPerFaction) {
+                merged.resize(maxPerFaction);
+            }
+
+            if (!merged.empty()) result.emplace(factionId, std::move(merged));
+        }
+        return result;
+    }
+
     std::string MemoryDB::FormatActorEventsFromJson(const std::string& jsonStr, float currentTime) {
         try {
             auto arr = nlohmann::json::parse(jsonStr);
