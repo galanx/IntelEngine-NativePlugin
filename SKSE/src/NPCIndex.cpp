@@ -2008,6 +2008,7 @@ namespace IntelEngine {
             std::shared_lock<std::shared_mutex> lock(m_mutex);
             snap.lastStoryDispatchGameTime = m_lastStoryDispatchGameTime;
             snap.lastStoryDispatchType     = m_lastStoryDispatchType;
+            snap.recentDispatches.assign(m_recentDispatches.begin(), m_recentDispatches.end());
         }
 
         // Snapshot Settings on the main thread — Settings is non-atomic / unlocked
@@ -2290,6 +2291,32 @@ namespace IntelEngine {
         }
         md += "\n";
 
+        // Recent Dispatch History — concrete record of the last few Story DM ticks
+        // so the LLM can verify Rule 14 (vary dispatcher) and Rule 15 (don't strike
+        // at the same beloved NPC twice in a row). Most recent first.
+        if (!snap.recentDispatches.empty()) {
+            md += "## Recent Dispatch History (most recent first — vary types/dispatchers)\n";
+            for (const auto& d : snap.recentDispatches) {
+                float hoursAgo = (snap.currentGameTime - d.gameTime) * 24.f;
+                if (hoursAgo < 0.f) hoursAgo = 0.f;
+                md += "- ";
+                if (hoursAgo < 1.f) md += "<1h ago: ";
+                else if (hoursAgo < 24.f) {
+                    md += std::to_string(static_cast<int>(hoursAgo));
+                    md += "h ago: ";
+                } else {
+                    md += std::to_string(static_cast<int>(hoursAgo / 24.f));
+                    md += "d ago: ";
+                }
+                md += d.type;
+                if (!d.subType.empty()) { md += "/"; md += d.subType; }
+                if (!d.npcName.empty()) { md += " — "; md += d.npcName; }
+                if (!d.narration.empty()) { md += " ("; md += d.narration; md += ")"; }
+                md += "\n";
+            }
+            md += "\n";
+        }
+
         // Recent gossip — populated by Papyrus before each DM tick via SetRecentGossipContext
         {
             std::unique_lock lock(m_mutex);
@@ -2500,6 +2527,32 @@ namespace IntelEngine {
         } else {
             m_lastStoryDispatchType = storyType;
             m_lastStoryDispatchGameTime = now;
+        }
+    }
+
+    void NPCIndex::RecordStoryDispatch(const std::string& storyType,
+                                        const std::string& subType,
+                                        const std::string& npcName,
+                                        const std::string& narration) {
+        if (storyType.empty()) return;
+        // NPC DM types are tracked elsewhere — keep this ring buffer Story-DM-only.
+        if (storyType == "npc_interaction" || storyType == "npc_gossip") return;
+
+        auto* cal = RE::Calendar::GetSingleton();
+        float now = cal ? cal->GetCurrentGameTime() : 0.f;
+
+        StoryDispatchEntry entry;
+        entry.type      = storyType;
+        entry.subType   = subType;
+        entry.npcName   = npcName;
+        // Truncate narration to keep the prompt history block compact.
+        entry.narration = narration.size() > 100 ? narration.substr(0, 100) + "..." : narration;
+        entry.gameTime  = now;
+
+        std::unique_lock lock(m_mutex);
+        m_recentDispatches.push_front(std::move(entry));
+        while (static_cast<int>(m_recentDispatches.size()) > MAX_RECENT_DISPATCHES) {
+            m_recentDispatches.pop_back();
         }
     }
 

@@ -303,6 +303,22 @@ namespace IntelEngine {
          */
         void NotifyStoryTypePicked(const std::string& storyType);
 
+        /**
+         * Record a successful Story DM dispatch with full beat detail.
+         * Maintains a rolling history (MAX_RECENT_DISPATCHES) the DM uses to
+         * vary types and dispatchers and avoid back-to-back beloved-NPC
+         * targeting. Volatile (per session).
+         *
+         * @param storyType   Story type ("quest", "seek_player", ...).
+         * @param subType     Sub-type ("rescue", "combat", "find_item", ...) or "".
+         * @param npcName     Dispatcher display name (the NPC who acted).
+         * @param narration   Past-tense narration string (caller may truncate).
+         */
+        void RecordStoryDispatch(const std::string& storyType,
+                                  const std::string& subType,
+                                  const std::string& npcName,
+                                  const std::string& narration);
+
         /** Set recent gossip context for the Story DM prompt.
          *  Injects hold names by resolving the first NPC name in each line. */
         void SetRecentGossipContext(const std::string& gossipLines);
@@ -448,6 +464,16 @@ namespace IntelEngine {
             bool        fromMemoryDB  = false;
         };
 
+        /** A single Story DM dispatch — kept in a rolling history so the prompt
+         *  can show the last few ticks (type + dispatcher + brief beat). */
+        struct StoryDispatchEntry {
+            std::string type;       // story type (seek_player, quest, informant, etc.)
+            std::string subType;    // empty unless quest sub-type
+            std::string npcName;    // dispatcher display name
+            std::string narration;  // brief beat (truncated to ~100 chars)
+            float       gameTime  = 0.f;  // when (game-time days)
+        };
+
         /** Tick-level snapshot for the Story DM tick. */
         struct StoryDMTickSnapshot {
             int               maxCandidates           = 7;
@@ -467,6 +493,7 @@ namespace IntelEngine {
             std::string       lastStoryDispatchType;
             int               memoriesPerCandidate    = 2;   // snapshotted from Settings on main thread
             std::vector<StoryDMActorSnapshot> candidates;
+            std::vector<StoryDispatchEntry> recentDispatches;  // immutable copy of the ring buffer
         };
 
         /** Worker-safe pre-fetch: results of the two SQL queries Story DM Phase A
@@ -575,6 +602,16 @@ namespace IntelEngine {
         std::string m_lastStoryDispatchType;      // Story DM last dispatch type
         float m_lastNPCDispatchGameTime = 0.f;    // NPC DM last dispatch time
         std::string m_recentGossipContext;   // Pre-built gossip lines for DM context
+
+        // Recent dispatch history — Story DM rotation memory.
+        // Lets the DM see what was actually dispatched in the last few ticks
+        // (type + dispatcher NPC + brief beat) so it can reliably vary types
+        // and dispatchers and avoid striking at the same beloved-NPC twice.
+        // StoryDispatchEntry is declared near the top of NPCIndex (before
+        // StoryDMTickSnapshot) so the snapshot's `recentDispatches` vector
+        // can reference it.
+        static constexpr int MAX_RECENT_DISPATCHES = 6;
+        std::deque<StoryDispatchEntry> m_recentDispatches;
 
         // Recent quest items FIFO (volatile per session, for rotation)
         static constexpr int MAX_RECENT_QUEST_ITEMS = 8;

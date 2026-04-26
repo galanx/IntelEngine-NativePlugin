@@ -49,6 +49,7 @@ namespace IntelEngine::Papyrus {
     bool IsActorOnStoryCooldown(RE::StaticFunctionTag*, RE::Actor*);
     void NotifySocialCooldown(RE::StaticFunctionTag*, RE::Actor*, float, float);
     void NotifyStoryTypePicked(RE::StaticFunctionTag*, RE::BSFixedString);
+    void RecordStoryDispatch(RE::StaticFunctionTag*, RE::BSFixedString, RE::BSFixedString, RE::BSFixedString);
     void WarmStoryTypeCountsFromCSV(RE::StaticFunctionTag*, RE::BSFixedString);
     void SetRecentGossipContext(RE::StaticFunctionTag*, RE::BSFixedString);
     std::vector<int> GetDMCandidatePoolFormIDs(RE::StaticFunctionTag*);
@@ -371,6 +372,7 @@ namespace IntelEngine::Papyrus {
         a_vm->RegisterFunction("IsActorOnStoryCooldown", SCRIPT_NAME, IsActorOnStoryCooldown); ++count;
         a_vm->RegisterFunction("NotifySocialCooldown", SCRIPT_NAME, NotifySocialCooldown); ++count;
         a_vm->RegisterFunction("NotifyStoryTypePicked", SCRIPT_NAME, NotifyStoryTypePicked); ++count;
+        a_vm->RegisterFunction("RecordStoryDispatch", SCRIPT_NAME, RecordStoryDispatch); ++count;
         a_vm->RegisterFunction("WarmStoryTypeCountsFromCSV", SCRIPT_NAME, WarmStoryTypeCountsFromCSV); ++count;
         a_vm->RegisterFunction("SetRecentGossipContext", SCRIPT_NAME, SetRecentGossipContext); ++count;
         a_vm->RegisterFunction("GetDMCandidatePoolFormIDs", SCRIPT_NAME, GetDMCandidatePoolFormIDs); ++count;
@@ -2144,6 +2146,29 @@ namespace IntelEngine::Papyrus {
             }
         }
         NPCIndex::GetSingleton()->NotifyStoryTypePicked(type);
+    }
+
+    void RecordStoryDispatch(RE::StaticFunctionTag*,
+                              RE::BSFixedString storyType,
+                              RE::BSFixedString npcName,
+                              RE::BSFixedString narration) {
+        std::string type(storyType.c_str());
+        std::string subType;
+        std::string npc(npcName.c_str());
+        std::string beat(narration.c_str());
+        if (type.empty()) return;
+
+        // Pull sub-type from the cached LLM response (matches NotifyStoryTypePicked behavior).
+        if (type == "quest") {
+            std::lock_guard<std::mutex> lock(s_jsonCacheMutex);
+            if (!s_cachedFields.empty()) {
+                auto it = s_cachedFields.find("questsubtype");
+                if (it != s_cachedFields.end() && !it->second.empty()) {
+                    subType = it->second;
+                }
+            }
+        }
+        NPCIndex::GetSingleton()->RecordStoryDispatch(type, subType, npc, beat);
     }
 
     void WarmStoryTypeCountsFromCSV(RE::StaticFunctionTag*, RE::BSFixedString csv) {
