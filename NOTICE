@@ -1,0 +1,20 @@
+IntelEngine Native Plugin
+Copyright 2026 Galanx
+
+This product includes software developed by Galanx.
+
+"IntelEngine" is a trademark of Galanx. The Apache License 2.0 grants
+copyright and patent rights to this software but, per Section 6 of the
+License, does not grant permission to use the "IntelEngine" name, logo,
+or other Galanx trademarks except as required to describe the origin of
+the Work and to reproduce the content of this NOTICE file.
+
+Forks, derivative works, and redistributions must:
+  * retain this NOTICE and the accompanying LICENSE file, and
+  * be renamed so as not to imply endorsement by, or affiliation with,
+    Galanx, and must not use the "IntelEngine" name in the project
+    title, package name, or marketing without prior written permission
+    from Galanx.
+
+Attribution must be preserved in source distributions and in any
+documentation or "about" screens that list third-party components.
