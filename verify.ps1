@@ -1,69 +1,129 @@
 # IntelEngine Deployment Verification Script
-# Compares file sizes between source-of-truth locations, Data/, Testing, and CK.
+# Compares repository source assets with the separate Data repository and,
+# unless requested otherwise, each configured deployment target.
 # Returns exit code 0 on success, 1 on any mismatch.
 #
 # Usage:
-#   .\verify.ps1           # Full verification (all pairs)
-#   .\verify.ps1 -Quiet    # Only print failures + summary
+#   .\verify.ps1
+#   .\verify.ps1 -Quiet
+#   .\verify.ps1 -DataDir D:\git\IntelEngine-GamePlugin -SkipDeployTargets
 
 param(
-    [switch]$Quiet
+    [switch]$Quiet,
+    [switch]$SkipDeployTargets,
+    [string]$DataDir = "E:\Tools\spookys-automod-toolkit\Mods\IntelEngine\Data",
+    [string]$TestDest = "E:\Modding\Lorerim\mods\Galanx_IntelEngine",
+    [string]$VanillaDest = "E:\Modding\VanillaTest\mods\Galanx_IntelEngine",
+    [string]$CKDest = "D:\SkyrimVR-MO2\mods\Galanx_IntelEngine"
 )
 
 $ErrorActionPreference = "Continue"
+$DataDir = [System.IO.Path]::GetFullPath($DataDir).TrimEnd([char[]]@('\', '/'))
 
-$Root      = "E:\Tools\spookys-automod-toolkit"
-$ModRoot   = "$Root\Mods\IntelEngine"
-$DataDir   = "$ModRoot\Data"
-$SKSEDir   = "$ModRoot\SKSE"
-$TestDest     = "E:\Modding\Lorerim\mods\Galanx_IntelEngine"
-$VanillaDest  = "E:\Modding\VanillaTest\mods\Galanx_IntelEngine"
-$CKDest       = "D:\SkyrimVR-MO2\mods\Galanx_IntelEngine"
+$RepoRoot = $PSScriptRoot
+$SKSEDir = Join-Path $RepoRoot "SKSE"
+$ExternalSource = Join-Path $SKSEDir "Plugins\SkyrimNet\external\galanx.intelengine"
+$ExternalData = Join-Path $DataDir "SKSE\Plugins\SkyrimNet\external\galanx.intelengine"
+$PluginConfigSource = Join-Path $SKSEDir "Plugins\SkyrimNet\config\plugins\IntelEngine"
+$PluginConfigData = Join-Path $DataDir "SKSE\Plugins\SkyrimNet\config\plugins\IntelEngine"
 
-$ok        = $true
-$checked   = 0
+$deployTargets = @(
+    [pscustomobject]@{ Label = "Testing"; Path = $TestDest },
+    [pscustomobject]@{ Label = "Vanilla Test"; Path = $VanillaDest },
+    [pscustomobject]@{ Label = "CK"; Path = $CKDest }
+)
+
+$legacyActionFiles = @(
+    "intel_travel.yaml",
+    "intel_fetchnpc.yaml",
+    "intel_escorttarget.yaml",
+    "intel_searchforactor.yaml",
+    "intel_delivermessage.yaml",
+    "intel_canceltask.yaml",
+    "intel_changespeed.yaml",
+    "intel_schedulemeeting.yaml",
+    "intel_schedulefetch.yaml",
+    "intel_scheduledelivery.yaml",
+    "intel_report_player_conduct.yaml",
+    "cat_travel.yaml",
+    "cat_scheduling.yaml",
+    "cat_communication.yaml"
+)
+
+$legacyPromptFiles = @(
+    "intel_story_dm.prompt",
+    "intel_story_npc_dm.prompt",
+    "intel_political_dm.prompt",
+    "intel_schedule_safety_net.prompt",
+    "submodules\character_bio\0197_intel_received_messages.prompt",
+    "submodules\character_bio\0198_intel_schedule_awareness.prompt",
+    "submodules\character_bio\0199_intel_meeting_outcome.prompt",
+    "submodules\character_bio\0200_intel_gossip.prompt",
+    "submodules\character_bio\0800_intel_facts.prompt",
+    "submodules\character_bio\0801_intel_task_awareness.prompt",
+    "submodules\character_bio\0810_intel_political_awareness.prompt"
+)
+
+$ok = $true
+$checked = 0
 $mismatches = @()
+
+function Add-Failure {
+    param(
+        [Parameter(Mandatory = $true)][string]$Label,
+        [Parameter(Mandatory = $true)][string]$Message
+    )
+
+    Write-Host "  $Message" -ForegroundColor Red
+    $script:ok = $false
+    $script:mismatches += $Label
+}
+
+function Get-Sha256Hex {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    $stream = [System.IO.File]::OpenRead($Path)
+    try {
+        $sha256 = [System.Security.Cryptography.SHA256]::Create()
+        try {
+            return ([System.BitConverter]::ToString($sha256.ComputeHash($stream))).Replace("-", "")
+        } finally {
+            $sha256.Dispose()
+        }
+    } finally {
+        $stream.Dispose()
+    }
+}
 
 function Compare-File {
     param(
-        [string]$Label,
-        [string]$SourcePath,
-        [string]$DestPath,
-        [switch]$UseHash  # Use SHA256 hash instead of size-only (for DLLs that can change content without changing size)
+        [Parameter(Mandatory = $true)][string]$Label,
+        [Parameter(Mandatory = $true)][string]$SourcePath,
+        [Parameter(Mandatory = $true)][string]$DestPath,
+        [switch]$UseHash
     )
 
     $script:checked++
-    $src = Get-Item $SourcePath -ErrorAction SilentlyContinue
-    $dst = Get-Item $DestPath -ErrorAction SilentlyContinue
+    $src = Get-Item -LiteralPath $SourcePath -ErrorAction SilentlyContinue
+    $dst = Get-Item -LiteralPath $DestPath -ErrorAction SilentlyContinue
 
     if (-not $src) {
-        if (-not $Quiet) { Write-Host "  SKIP: $Label (source not found: $SourcePath)" -ForegroundColor Yellow }
+        Add-Failure -Label $Label -Message "MISSING SOURCE: $Label ($SourcePath)"
         return
     }
     if (-not $dst) {
-        Write-Host "  MISSING: $Label" -ForegroundColor Red
-        Write-Host "    Expected: $DestPath" -ForegroundColor Red
-        $script:ok = $false
-        $script:mismatches += $Label
+        Add-Failure -Label $Label -Message "MISSING: $Label (expected $DestPath)"
         return
     }
     if ($src.Length -ne $dst.Length) {
-        Write-Host "  MISMATCH: $Label" -ForegroundColor Red
-        Write-Host "    Source: $($src.Length) bytes ($SourcePath)" -ForegroundColor Red
-        Write-Host "    Dest:   $($dst.Length) bytes ($DestPath)" -ForegroundColor Red
-        $script:ok = $false
-        $script:mismatches += $Label
+        Add-Failure -Label $Label -Message "MISMATCH: $Label ($($src.Length) bytes at source, $($dst.Length) bytes at destination)"
         return
     }
     if ($UseHash) {
-        $srcHash = (Get-FileHash $SourcePath -Algorithm SHA256).Hash
-        $dstHash = (Get-FileHash $DestPath -Algorithm SHA256).Hash
+        $srcHash = Get-Sha256Hex -Path $SourcePath
+        $dstHash = Get-Sha256Hex -Path $DestPath
         if ($srcHash -ne $dstHash) {
-            Write-Host "  HASH MISMATCH: $Label (same size, different content!)" -ForegroundColor Red
-            Write-Host "    Source: $srcHash" -ForegroundColor Red
-            Write-Host "    Dest:   $dstHash" -ForegroundColor Red
-            $script:ok = $false
-            $script:mismatches += $Label
+            Add-Failure -Label $Label -Message "HASH MISMATCH: $Label"
             return
         }
     }
@@ -72,99 +132,158 @@ function Compare-File {
     }
 }
 
-# =============================================================================
-# DLL: Build → Data → Testing → Vanilla Test → CK
-# =============================================================================
-Write-Host "`n=== DLL ===" -ForegroundColor Cyan
-Compare-File "DLL: Build -> Data" `
-    "$SKSEDir\build\Release\IntelEngine.dll" `
-    "$DataDir\SKSE\Plugins\IntelEngine.dll" -UseHash
+function Assert-FileAbsent {
+    param(
+        [Parameter(Mandatory = $true)][string]$Label,
+        [Parameter(Mandatory = $true)][string]$Path
+    )
 
-Compare-File "DLL: Data -> Testing" `
-    "$DataDir\SKSE\Plugins\IntelEngine.dll" `
-    "$TestDest\SKSE\Plugins\IntelEngine.dll" -UseHash
+    $script:checked++
+    if (Test-Path -LiteralPath $Path -PathType Leaf) {
+        Add-Failure -Label $Label -Message "LEGACY FILE PRESENT: $Label ($Path)"
+    } elseif (-not $Quiet) {
+        Write-Host "  OK: $Label absent" -ForegroundColor Green
+    }
+}
 
-Compare-File "DLL: Data -> Vanilla Test" `
-    "$DataDir\SKSE\Plugins\IntelEngine.dll" `
-    "$VanillaDest\SKSE\Plugins\IntelEngine.dll" -UseHash
+function Compare-SourceTree {
+    param(
+        [Parameter(Mandatory = $true)][string]$Label,
+        [Parameter(Mandatory = $true)][string]$SourceRoot,
+        [Parameter(Mandatory = $true)][string]$DataRoot,
+        [string[]]$ExcludedNames = @()
+    )
 
-Compare-File "DLL: Data -> CK" `
-    "$DataDir\SKSE\Plugins\IntelEngine.dll" `
-    "$CKDest\SKSE\Plugins\IntelEngine.dll" -UseHash
+    if (-not (Test-Path -LiteralPath $SourceRoot -PathType Container)) {
+        $script:checked++
+        Add-Failure -Label $Label -Message "MISSING SOURCE TREE: $Label ($SourceRoot)"
+        return
+    }
 
-# =============================================================================
-# PEX: Data → Testing → CK
-# =============================================================================
-Write-Host "`n=== Compiled Scripts (PEX) ===" -ForegroundColor Cyan
-Get-ChildItem "$DataDir\Scripts\IntelEngine*.pex" -ErrorAction SilentlyContinue | ForEach-Object {
-    $name = $_.Name
-    Compare-File "PEX $name -> Testing" `
-        $_.FullName `
-        "$TestDest\Scripts\$name"
+    $files = @(
+        Get-ChildItem -LiteralPath $SourceRoot -Recurse -File -Force |
+            Where-Object { $ExcludedNames -notcontains $_.Name }
+    )
+    if ($files.Count -eq 0) {
+        $script:checked++
+        Add-Failure -Label $Label -Message "EMPTY SOURCE TREE: $Label ($SourceRoot)"
+        return
+    }
 
-    Compare-File "PEX $name -> Vanilla Test" `
-        $_.FullName `
-        "$VanillaDest\Scripts\$name"
+    foreach ($file in $files) {
+        $relativePath = $file.FullName.Substring($SourceRoot.Length + 1)
+        $dataFile = Join-Path $DataRoot $relativePath
+        Compare-File "$Label source -> Data: $relativePath" $file.FullName $dataFile -UseHash
 
-    Compare-File "PEX $name -> CK" `
-        $_.FullName `
-        "$CKDest\Scripts\$name"
+        if (-not $SkipDeployTargets -and (Test-Path -LiteralPath $dataFile -PathType Leaf)) {
+            foreach ($target in $deployTargets) {
+                $targetFile = Join-Path $target.Path $dataFile.Substring($DataDir.Length + 1)
+                Compare-File "$Label Data -> $($target.Label): $relativePath" $dataFile $targetFile -UseHash
+            }
+        }
+    }
 }
 
 # =============================================================================
-# Action YAMLs: SKSE source → Data
+# External bundle: repository source -> Data -> configured targets
 # =============================================================================
-Write-Host "`n=== Action YAMLs ===" -ForegroundColor Cyan
-Get-ChildItem "$SKSEDir\Plugins\SkyrimNet\config\actions\*.yaml" -ErrorAction SilentlyContinue | ForEach-Object {
-    $name = $_.Name
-    Compare-File "YAML $name SKSE -> Data" `
-        $_.FullName `
-        "$DataDir\SKSE\Plugins\SkyrimNet\config\actions\$name"
+Write-Host "`n=== SkyrimNet External Bundle ===" -ForegroundColor Cyan
+Compare-SourceTree `
+    -Label "External bundle" `
+    -SourceRoot $ExternalSource `
+    -DataRoot $ExternalData
+
+# =============================================================================
+# IntelEngine plugin config remains outside the external bundle
+# =============================================================================
+Write-Host "`n=== IntelEngine Plugin Configuration ===" -ForegroundColor Cyan
+Compare-SourceTree `
+    -Label "Plugin config" `
+    -SourceRoot $PluginConfigSource `
+    -DataRoot $PluginConfigData `
+    -ExcludedNames @("settings.yaml", "factions.yaml")
+
+# =============================================================================
+# Known retired loose files must be absent; shared roots remain untouched
+# =============================================================================
+Write-Host "`n=== Retired IntelEngine Loose Content ===" -ForegroundColor Cyan
+$rootsToCheck = @(
+    [pscustomobject]@{ Label = "Repository"; Path = $RepoRoot },
+    [pscustomobject]@{ Label = "Data"; Path = $DataDir }
+)
+if (-not $SkipDeployTargets) {
+    $rootsToCheck += $deployTargets
+}
+
+foreach ($root in $rootsToCheck) {
+    foreach ($name in $legacyActionFiles) {
+        Assert-FileAbsent `
+            "$($root.Label) legacy action $name" `
+            (Join-Path $root.Path "SKSE\Plugins\SkyrimNet\config\actions\$name")
+    }
+    foreach ($relativePath in $legacyPromptFiles) {
+        Assert-FileAbsent `
+            "$($root.Label) legacy prompt $relativePath" `
+            (Join-Path $root.Path "SKSE\Plugins\SkyrimNet\prompts\$relativePath")
+    }
 }
 
 # =============================================================================
-# Prompt files: SKSE source → Data
+# Optional compiled/package assets: Data -> configured targets
 # =============================================================================
-Write-Host "`n=== Prompt Files ===" -ForegroundColor Cyan
-Get-ChildItem "$SKSEDir\Plugins\SkyrimNet\prompts" -Recurse -File -ErrorAction SilentlyContinue | ForEach-Object {
-    $relPath = $_.FullName.Substring("$SKSEDir\Plugins\SkyrimNet\prompts\".Length)
-    Compare-File "Prompt $relPath SKSE -> Data" `
-        $_.FullName `
-        "$DataDir\SKSE\Plugins\SkyrimNet\prompts\$relPath"
-}
+if (-not $SkipDeployTargets) {
+    Write-Host "`n=== DLL ===" -ForegroundColor Cyan
+    $dllBuild = Join-Path $SKSEDir "build\Release\IntelEngine.dll"
+    $dllFallback = Join-Path $SKSEDir "Plugins\IntelEngine.dll"
+    $dllData = Join-Path $DataDir "SKSE\Plugins\IntelEngine.dll"
+    $dllSource = $null
+    if (Test-Path -LiteralPath $dllBuild -PathType Leaf) {
+        $dllSource = $dllBuild
+    } elseif (Test-Path -LiteralPath $dllFallback -PathType Leaf) {
+        $dllSource = $dllFallback
+    }
 
-# =============================================================================
-# PrismaUI / Dashboard: Data → Testing → Vanilla Test → CK
-# =============================================================================
-Write-Host "`n=== PrismaUI ===" -ForegroundColor Cyan
-Get-ChildItem "$DataDir\PrismaUI" -Recurse -File -ErrorAction SilentlyContinue | ForEach-Object {
-    $relPath = $_.FullName.Substring("$DataDir\".Length)
-    Compare-File "PrismaUI $relPath -> Testing" `
-        $_.FullName `
-        "$TestDest\$relPath" -UseHash
+    if ($dllSource) {
+        Compare-File "DLL repository -> Data" $dllSource $dllData -UseHash
+    } elseif (-not $Quiet) {
+        Write-Host "  SKIP: no repository DLL found" -ForegroundColor Yellow
+    }
 
-    Compare-File "PrismaUI $relPath -> Vanilla Test" `
-        $_.FullName `
-        "$VanillaDest\$relPath" -UseHash
+    if (Test-Path -LiteralPath $dllData -PathType Leaf) {
+        foreach ($target in $deployTargets) {
+            Compare-File "DLL Data -> $($target.Label)" $dllData (Join-Path $target.Path "SKSE\Plugins\IntelEngine.dll") -UseHash
+        }
+    }
 
-    Compare-File "PrismaUI $relPath -> CK" `
-        $_.FullName `
-        "$CKDest\$relPath" -UseHash
-}
+    Write-Host "`n=== Compiled Scripts (PEX) ===" -ForegroundColor Cyan
+    Get-ChildItem -Path (Join-Path $DataDir "Scripts\IntelEngine*.pex") -ErrorAction SilentlyContinue | ForEach-Object {
+        foreach ($target in $deployTargets) {
+            Compare-File "PEX $($_.Name) -> $($target.Label)" $_.FullName (Join-Path $target.Path "Scripts\$($_.Name)") -UseHash
+        }
+    }
 
-# =============================================================================
-# ESP/ESL plugins: Data → Testing → CK
-# =============================================================================
-Write-Host "`n=== Plugins (ESP/ESL) ===" -ForegroundColor Cyan
-$plugins = @(Get-ChildItem "$DataDir\*.esp", "$DataDir\*.esl" -ErrorAction SilentlyContinue)
-if ($plugins.Count -eq 0) {
-    if (-not $Quiet) { Write-Host "  No ESP/ESL plugins in Data (OK)" -ForegroundColor Gray }
-} else {
-    foreach ($p in $plugins) {
-        $name = $p.Name
-        Compare-File "Plugin $name -> Testing" $p.FullName "$TestDest\$name"
-        Compare-File "Plugin $name -> Vanilla Test" $p.FullName "$VanillaDest\$name"
-        Compare-File "Plugin $name -> CK" $p.FullName "$CKDest\$name"
+    Write-Host "`n=== PrismaUI ===" -ForegroundColor Cyan
+    Get-ChildItem -LiteralPath (Join-Path $DataDir "PrismaUI") -Recurse -File -ErrorAction SilentlyContinue | ForEach-Object {
+        $relativePath = $_.FullName.Substring($DataDir.Length + 1)
+        foreach ($target in $deployTargets) {
+            Compare-File "PrismaUI $relativePath -> $($target.Label)" $_.FullName (Join-Path $target.Path $relativePath) -UseHash
+        }
+    }
+
+    Write-Host "`n=== Plugins (ESP/ESL) ===" -ForegroundColor Cyan
+    $plugins = @(
+        Get-ChildItem -Path (Join-Path $DataDir "*.esp"), (Join-Path $DataDir "*.esl") -ErrorAction SilentlyContinue
+    )
+    if ($plugins.Count -eq 0) {
+        if (-not $Quiet) {
+            Write-Host "  No ESP/ESL plugins in Data (OK)" -ForegroundColor Gray
+        }
+    } else {
+        foreach ($plugin in $plugins) {
+            foreach ($target in $deployTargets) {
+                Compare-File "Plugin $($plugin.Name) -> $($target.Label)" $plugin.FullName (Join-Path $target.Path $plugin.Name) -UseHash
+            }
+        }
     }
 }
 
@@ -175,8 +294,8 @@ Write-Host ""
 if ($ok) {
     Write-Host "VERIFIED: $checked checks passed" -ForegroundColor Green
     exit 0
-} else {
-    Write-Host "FAILED: $($mismatches.Count) mismatches out of $checked checks" -ForegroundColor Red
-    $mismatches | ForEach-Object { Write-Host "  - $_" -ForegroundColor Red }
-    exit 1
 }
+
+Write-Host "FAILED: $($mismatches.Count) mismatches out of $checked checks" -ForegroundColor Red
+$mismatches | ForEach-Object { Write-Host "  - $_" -ForegroundColor Red }
+exit 1
