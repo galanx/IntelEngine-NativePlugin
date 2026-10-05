@@ -395,8 +395,10 @@ namespace IntelEngine {
 
         // Shared resolver: upgrades base FormIDs to Actor reference FormIDs for unique NPCs
         auto resolveBaseFormIDs = [this](RE::TESObjectCELL* cell, int& count) {
-            cell->ForEachReference([&](RE::TESObjectREFR& ref) {
-                auto* actor = ref.As<RE::Actor>();
+            cell->ForEachReference([&](RE::TESObjectREFR* ref) {
+                if (!ref) return RE::BSContainer::ForEachResult::kContinue;
+
+                auto* actor = ref->As<RE::Actor>();
                 if (!actor || actor->IsDeleted()) return RE::BSContainer::ForEachResult::kContinue;
 
                 auto* base = actor->GetActorBase();

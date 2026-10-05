@@ -954,14 +954,13 @@ namespace IntelEngine::Papyrus {
         int bestNameScore = 999;
 
         // Iterate through cell references
-        // Note: CommonLibSSE-NG ForEachReference takes TESObjectREFR& (reference), not pointer
-        cell->ForEachReference([&](RE::TESObjectREFR& ref) -> RE::BSContainer::ForEachResult {
-            if (&ref == akActor) {
+        cell->ForEachReference([&](RE::TESObjectREFR* ref) -> RE::BSContainer::ForEachResult {
+            if (!ref || ref == akActor) {
                 return RE::BSContainer::ForEachResult::kContinue;
             }
 
             // Skip non-item references (actors, doors, etc.)
-            auto* baseObj = ref.GetBaseObject();
+            auto* baseObj = ref->GetBaseObject();
             if (!baseObj) {
                 return RE::BSContainer::ForEachResult::kContinue;
             }
@@ -981,7 +980,7 @@ namespace IntelEngine::Papyrus {
             }
 
             // Check distance
-            float dist = ref.GetPosition().GetDistance(actorPos);
+            float dist = ref->GetPosition().GetDistance(actorPos);
             if (dist > radius) {
                 return RE::BSContainer::ForEachResult::kContinue;
             }
@@ -1013,7 +1012,7 @@ namespace IntelEngine::Papyrus {
 
             // Update best match (prefer better name match, then closer distance)
             if (nameScore < bestNameScore || (nameScore == bestNameScore && dist < bestDistance)) {
-                bestMatch = &ref;  // Take address of reference
+                bestMatch = ref;
                 bestDistance = dist;
                 bestNameScore = nameScore;
             }
@@ -1551,9 +1550,9 @@ namespace IntelEngine::Papyrus {
             if (!pkg) continue;
             auto type = pkg->packData.packType.get();
             // Anything other than sandbox/wander/doNothing counts as "schedule" AI
-            if (type != RE::PACKAGE_PROCEDURE_TYPE::kSandbox &&
-                type != RE::PACKAGE_PROCEDURE_TYPE::kWander &&
-                type != RE::PACKAGE_PROCEDURE_TYPE::kDoNothing) {
+            if (type != RE::PACKAGE_TYPE::kSandbox &&
+                type != RE::PACKAGE_TYPE::kWander &&
+                type != RE::PACKAGE_TYPE::kDoNothing) {
                 logger::info("HasNonSandboxAI({}): TRUE — found package type {}",
                             akActor->GetDisplayFullName(), static_cast<int>(type));
                 return true;
@@ -1654,18 +1653,18 @@ namespace IntelEngine::Papyrus {
         auto markerPos = questLocation->GetPosition();
         bool found = false;
 
-        cell->ForEachReference([&](RE::TESObjectREFR& doorRef) {
+        cell->ForEachReference([&](RE::TESObjectREFR* doorRef) {
             if (found) return RE::BSContainer::ForEachResult::kStop;
-            if (doorRef.IsDisabled()) return RE::BSContainer::ForEachResult::kContinue;
+            if (!doorRef || doorRef->IsDisabled()) return RE::BSContainer::ForEachResult::kContinue;
 
-            auto* base = doorRef.GetBaseObject();
+            auto* base = doorRef->GetBaseObject();
             if (!base || base->GetFormType() != RE::FormType::Door)
                 return RE::BSContainer::ForEachResult::kContinue;
 
-            if (markerPos.GetDistance(doorRef.GetPosition()) > 3000.0f)
+            if (markerPos.GetDistance(doorRef->GetPosition()) > 3000.0f)
                 return RE::BSContainer::ForEachResult::kContinue;
 
-            auto* teleport = doorRef.extraList.GetByType<RE::ExtraTeleport>();
+            auto* teleport = doorRef->extraList.GetByType<RE::ExtraTeleport>();
             if (!teleport || !teleport->teleportData)
                 return RE::BSContainer::ForEachResult::kContinue;
 
@@ -3521,15 +3520,15 @@ namespace IntelEngine::Papyrus {
         RE::TESObjectREFR* coffin = nullptr;
         RE::TESObjectREFR* shrine = nullptr;
 
-        cell->ForEachReference([&](RE::TESObjectREFR& ref) {
-            if (ref.IsDisabled()) return RE::BSContainer::ForEachResult::kContinue;
+        cell->ForEachReference([&](RE::TESObjectREFR* ref) {
+            if (!ref || ref->IsDisabled()) return RE::BSContainer::ForEachResult::kContinue;
 
-            auto* baseObj = ref.GetBaseObject();
+            auto* baseObj = ref->GetBaseObject();
             if (!baseObj) return RE::BSContainer::ForEachResult::kContinue;
 
             auto editorId = baseObj->GetFormEditorID();
             std::string editorIdStr = editorId ? StringUtils::ToLowerStd(editorId) : "";
-            auto refName = ref.GetName();
+            auto refName = ref->GetName();
             std::string nameStr = refName ? StringUtils::ToLowerStd(refName) : "";
 
             auto formType = baseObj->GetFormType();
@@ -3538,7 +3537,7 @@ namespace IntelEngine::Papyrus {
             if (!wordWall && formType == RE::FormType::Static) {
                 if (editorIdStr.find("wordwall") != std::string::npos ||
                     editorIdStr.find("word_wall") != std::string::npos) {
-                    wordWall = &ref;
+                    wordWall = ref;
                     logger::info("[IntelEngine] FindDeeperSpawnPoint: word wall '{}'", editorIdStr);
                 }
             }
@@ -3546,7 +3545,7 @@ namespace IntelEngine::Papyrus {
             // Boss Chests — TESObjectCONT with "boss" in editor ID
             if (!bossChest && formType == RE::FormType::Container) {
                 if (editorIdStr.find("boss") != std::string::npos) {
-                    bossChest = &ref;
+                    bossChest = ref;
                     logger::info("[IntelEngine] FindDeeperSpawnPoint: boss chest '{}'", editorIdStr);
                 }
             }
@@ -3555,7 +3554,7 @@ namespace IntelEngine::Papyrus {
             if (!chest && !bossChest && formType == RE::FormType::Container) {
                 if (editorIdStr.find("chest") != std::string::npos ||
                     editorIdStr.find("treas") != std::string::npos) {
-                    chest = &ref;
+                    chest = ref;
                     logger::info("[IntelEngine] FindDeeperSpawnPoint: chest '{}'", editorIdStr);
                 }
             }
@@ -3564,7 +3563,7 @@ namespace IntelEngine::Papyrus {
             if (!coffin && (formType == RE::FormType::Static || formType == RE::FormType::Furniture)) {
                 if (StringUtils::ContainsAny(editorIdStr, {"coffin", "sarcophag"}) ||
                     StringUtils::ContainsAny(nameStr, {"coffin", "sarcophag"})) {
-                    coffin = &ref;
+                    coffin = ref;
                     logger::info("[IntelEngine] FindDeeperSpawnPoint: coffin '{}'", editorIdStr);
                 }
             }
@@ -3573,7 +3572,7 @@ namespace IntelEngine::Papyrus {
             if (!shrine && (formType == RE::FormType::Activator || formType == RE::FormType::Static)) {
                 if (StringUtils::ContainsAny(editorIdStr, {"shrine", "altar"}) ||
                     StringUtils::ContainsAny(nameStr, {"shrine", "altar"})) {
-                    shrine = &ref;
+                    shrine = ref;
                     logger::info("[IntelEngine] FindDeeperSpawnPoint: shrine/altar '{}'", editorIdStr);
                 }
             }
@@ -3634,10 +3633,10 @@ namespace IntelEngine::Papyrus {
 
         const char* tag = furnitureOnly ? "UsablePrisonerScan" : "PrisonerScan";
 
-        cell->ForEachReference([&](RE::TESObjectREFR& ref) {
-            if (ref.IsDisabled()) return RE::BSContainer::ForEachResult::kContinue;
+        cell->ForEachReference([&](RE::TESObjectREFR* ref) {
+            if (!ref || ref->IsDisabled()) return RE::BSContainer::ForEachResult::kContinue;
 
-            auto* baseObj = ref.GetBaseObject();
+            auto* baseObj = ref->GetBaseObject();
             if (!baseObj) return RE::BSContainer::ForEachResult::kContinue;
 
             auto formType = baseObj->GetFormType();
@@ -3659,21 +3658,21 @@ namespace IntelEngine::Papyrus {
             if (editorIdStr.empty()) return RE::BSContainer::ForEachResult::kContinue;
 
             if (!shackle && StringUtils::ContainsAny(editorIdStr, {"shackle", "manacle"})) {
-                shackle = &ref;
+                shackle = ref;
                 logger::info("[IntelEngine] {}: shackle '{}' in '{}'", tag, editorIdStr, cell->GetName());
             }
             if (!cage && StringUtils::ContainsAny(editorIdStr, {"cage", "gibbet"})) {
-                cage = &ref;
+                cage = ref;
                 logger::info("[IntelEngine] {}: cage '{}' in '{}'", tag, editorIdStr, cell->GetName());
             }
             if (!stocks && StringUtils::ContainsAny(editorIdStr, {"stock", "pillory"})) {
                 if (editorIdStr.find("livestock") == std::string::npos) {
-                    stocks = &ref;
+                    stocks = ref;
                     logger::info("[IntelEngine] {}: stocks '{}' in '{}'", tag, editorIdStr, cell->GetName());
                 }
             }
             if (!prison && StringUtils::ContainsAny(editorIdStr, {"prison", "captive", "torture"})) {
-                prison = &ref;
+                prison = ref;
                 logger::info("[IntelEngine] {}: prison furniture '{}' in '{}'", tag, editorIdStr, cell->GetName());
             }
 
@@ -3702,44 +3701,44 @@ namespace IntelEngine::Papyrus {
         RE::TESObjectREFR* coffin = nullptr;
         RE::TESObjectREFR* shrine = nullptr;
 
-        cell->ForEachReference([&](RE::TESObjectREFR& ref) {
-            if (ref.IsDisabled()) return RE::BSContainer::ForEachResult::kContinue;
-            auto* baseObj = ref.GetBaseObject();
+        cell->ForEachReference([&](RE::TESObjectREFR* ref) {
+            if (!ref || ref->IsDisabled()) return RE::BSContainer::ForEachResult::kContinue;
+            auto* baseObj = ref->GetBaseObject();
             if (!baseObj) return RE::BSContainer::ForEachResult::kContinue;
 
             auto editorId = baseObj->GetFormEditorID();
             std::string editorIdStr = editorId ? StringUtils::ToLowerStd(editorId) : "";
-            auto refName = ref.GetName();
+            auto refName = ref->GetName();
             std::string nameStr = refName ? StringUtils::ToLowerStd(refName) : "";
             auto formType = baseObj->GetFormType();
 
             if (!wordWall && formType == RE::FormType::Static) {
                 if (editorIdStr.find("wordwall") != std::string::npos ||
                     editorIdStr.find("word_wall") != std::string::npos) {
-                    wordWall = &ref;
+                    wordWall = ref;
                 }
             }
             if (!bossChest && formType == RE::FormType::Container) {
                 if (editorIdStr.find("boss") != std::string::npos) {
-                    bossChest = &ref;
+                    bossChest = ref;
                 }
             }
             if (!chest && !bossChest && formType == RE::FormType::Container) {
                 if (editorIdStr.find("chest") != std::string::npos ||
                     editorIdStr.find("treas") != std::string::npos) {
-                    chest = &ref;
+                    chest = ref;
                 }
             }
             if (!coffin && (formType == RE::FormType::Static || formType == RE::FormType::Furniture)) {
                 if (StringUtils::ContainsAny(editorIdStr, {"coffin", "sarcophag"}) ||
                     StringUtils::ContainsAny(nameStr, {"coffin", "sarcophag"})) {
-                    coffin = &ref;
+                    coffin = ref;
                 }
             }
             if (!shrine && (formType == RE::FormType::Activator || formType == RE::FormType::Static)) {
                 if (StringUtils::ContainsAny(editorIdStr, {"shrine", "altar"}) ||
                     StringUtils::ContainsAny(nameStr, {"shrine", "altar"})) {
-                    shrine = &ref;
+                    shrine = ref;
                 }
             }
             if (wordWall) return RE::BSContainer::ForEachResult::kStop;

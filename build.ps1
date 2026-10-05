@@ -303,18 +303,13 @@ if (-not (Test-Path -LiteralPath $DataDir)) {
 }
 
 $dllBuild = Join-Path $SKSEDir "build\Release\IntelEngine.dll"
-$dllFallback = Join-Path $SKSEDir "Plugins\IntelEngine.dll"
 $dllDest = Join-Path $DataDir "SKSE\Plugins\IntelEngine.dll"
-if (Test-Path -LiteralPath $dllBuild) {
+if (Test-Path -LiteralPath $dllBuild -PathType Leaf) {
     New-Item -ItemType Directory -Path (Split-Path $dllDest -Parent) -Force | Out-Null
     Copy-Item -LiteralPath $dllBuild -Destination $dllDest -Force
     Write-Host "  DLL synced (from repository build output)"
-} elseif (Test-Path -LiteralPath $dllFallback) {
-    New-Item -ItemType Directory -Path (Split-Path $dllDest -Parent) -Force | Out-Null
-    Copy-Item -LiteralPath $dllFallback -Destination $dllDest -Force
-    Write-Host "  DLL synced (from repository SKSE assets)"
 } else {
-    Write-Host "  WARN: DLL not found" -ForegroundColor Yellow
+    throw "Canonical repository DLL not found: $dllBuild"
 }
 
 $removedFromData = Remove-LegacyIntelEngineContent -DestinationRoot $DataDir

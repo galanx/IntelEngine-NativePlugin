@@ -13,10 +13,10 @@ The `IntelEngine.dll` SKSE plugin provides high-performance functions that would
 
 ## Build Requirements
 
-- Visual Studio 2022
-- CommonLibSSE-NG (for AE/SE/VR support)
-- CMake 3.21+
-- vcpkg for dependencies
+- Visual Studio 2022 (the supported script uses the VS 2022 Community developer shell), CMake, Ninja, and PowerShell on Windows.
+- Dependencies are resolved through the repository's vcpkg manifest and baseline. CommonLibSSE is built from source at the enforced MinLL/CommonLibVR commit `550cc4fb9114649dcf526d1f3d73d710c5d7003b` (v4.39.5, MIT); the build verifies the Git revision, clean checkout, and license rather than accepting an imported prebuilt CommonLib target.
+- The build applies one audited SE/AE header correction without modifying that checkout: generated `commonlib-abi/include/RE/T/TESObjectREFR.h` omits the VR-only `Unk_8C` virtual declaration. CMake verifies the upstream header's LF-normalized SHA-256 and places the generated include ahead of the upstream header for both CommonLib and IntelEngine. This corrects the pinned fork's non-VR virtual-slot shift; it is not a general patch or alternate-dependency mechanism.
+- The native plugin is configured for Skyrim SE and AE with Address Library compatibility. The documented runtime targets are **1.5.97.0, 1.6.640.0, 1.6.1170.0, 1.7.99.0, and 1.7.104.0**. Address Library is the compatibility mechanism; this is not a fixed-version whitelist. VR is disabled and unsupported.
 
 ## Papyrus API
 
@@ -450,18 +450,42 @@ All functions are thread-safe and can be called from multiple Papyrus threads si
 
 ## Building the DLL
 
-```bash
-# Clone CommonLibSSE-NG
-git clone https://github.com/CharmedBaryon/CommonLibSSE-NG
+Use the repository helper rather than cloning CommonLib or configuring CMake manually. From the repository root, choose a new, repository-local build directory that does not already contain a build (use a distinct name for each fresh build):
 
-# Configure
-cmake -B build -S . -DCMAKE_TOOLCHAIN_FILE=vcpkg/scripts/buildsystems/vcpkg.cmake
-
-# Build
-cmake --build build --config Release
-
-# Output: build/Release/IntelEngine.dll
+```powershell
+Set-Location SKSE
+.\BuildDLL.ps1 -BuildDir .\build-minll-fresh
 ```
+
+`-BuildDir` accepts a path resolved from PowerShell's current location. The helper configures a Release Ninja build using the VS 2022 toolchain, x64-windows-static vcpkg triplet, and the static `/MT` runtime. It temporarily clears `SKYRIM_FOLDER` and `SKYRIM_MODS_FOLDER` before every configuration and build, then restores their prior values; it also restores process priority and vcpkg concurrency. The build writes to the chosen build directory and copies the result only to the canonical `SKSE/build/Release/IntelEngine.dll`, verifying that the two DLLs have matching SHA-256 hashes. It does not install or deploy the DLL to a game/mod directory. Keep the selected build directory inside the repository; do not use an installed-mod or other external destination.
+
+The root `build.ps1` is an asset staging/deployment pipeline, not an isolated DLL build: `-SkipDeploy -SkipGit` still writes to its configured Data tree. Its DLL selection and the corresponding `verify.ps1` check use only the canonical path, with no stale-DLL fallback. `verify.ps1 -SkipDeployTargets` skips that DLL check and is not fresh-build proof.
+
+`verify.ps1` is read-only. Its default Data root is the sibling `IntelEngine-GamePlugin` directory, relative to this repository; it no longer selects machine-specific mod directories automatically. Supply `-DataDir` to override that root and `-TestDest`, `-VanillaDest`, or `-CKDest` to check particular full-content deployment directories. Only supplied targets are checked. `-SkipDeployTargets` still omits both deployment checks and the canonical-DLL comparison; it checks source assets and retired loose content, not native build provenance.
+
+```powershell
+.\verify.ps1 -Quiet
+.\verify.ps1 -DataDir D:\git\IntelEngine-GamePlugin -SkipDeployTargets
+.\verify.ps1 -TestDest D:\Modlists\Example\mods\IntelEngine
+```
+
+The root `build.ps1` retains its existing toolkit/Data/deployment defaults. Pass its paths and opt-out flags explicitly; the verifier's defaults do not configure or authorize staging.
+
+## Verification Evidence
+
+Evidence must be described at the state actually observed; a source declaration or successful compile does not show installation, deployment, or runtime behavior.
+
+- **Source/configuration:** the plugin declares Independent struct compatibility and Address Library mode, with minimum SKSE version 0. The build enables Skyrim SE and AE and disables VR.
+- **Original RC1 build:** the initial Ninja Release build in `SKSE/build-minll-989d4fb1` completed 513 steps and exported the expected SKSE entry points and Address Library metadata. Its DLL was 3,818,496 bytes, SHA-256 `69ce3e0c2797a561eb9311d8f3c398849d3513d6de1af642a64b792cea5fa2eb`. It was packaged as `IntelEngine-v3.5.2-rc1-dll.zip` and is now named `IntelEngine-v3.5.2-rc1-dllOnly.zip`; the archive still contains the original failing DLL, whose native metadata/log version is 3.5.1. This candidate is rejected for testing after the startup crash; successful compilation and metadata inspection did not establish ABI safety.
+- **Installed RC1 incident artifact (historical):** at the time of the startup crash, the DLL in ADT's `IntelEngine-v3.5.2-rc1-dllOnly/SKSE/Plugins` folder matched the original RC1 hash. Read-only inspection established the selected `SkyrimNet_iActions_dev` profile with that mod enabled. This records the incident's installed-folder provenance, not the folder's later contents or a memory-image hash. No installed DLL was changed by the assistant.
+- **Observed 1170 failure:** `crash-2026-10-05-20-17-52.log` faults in engine `TESObjectCELL::GetLocation` through `LocationHasKeyword` condition evaluation. The bad cell pointer is the actor's `SetParentCell` function address. Disassembly of the RC1 DLL shows saved-cell reads dispatching to slot `0x98`; the actual 1170 engine getter is at `0x97`. One compiled call loads the setter address into `RDX` before invoking it, matching the code-pointer-as-cell corruption.
+- **Offline correction smoke:** the same engine-compatible saved-cell fixture compiled against the original header reported `FAIL: getter=0 setter=1 returned_expected=0 parent_unchanged=0`; with the generated corrected header it reported `PASS: getter=1 setter=0 returned_expected=1 parent_unchanged=1`. No Skyrim executable or plugin DLL was loaded by this fixture. The generated header SHA-256 is `066933f1dd09d4d2f0b681f90de4f9a4562a704bcbc3275178690afbfaf181ca`; the original LF-normalized header SHA-256 is `98a8a1cb24f51b893b4343c4c552e363d9bc90ee7a611c05f7719c2479bec2b6`.
+- **Corrected compiled artifact:** all 513 source-build steps were attempted; the last link initially failed because the output DLL was held by the assistant's PE-inspection mapping. After closing that mapping, the remaining link succeeded. Fresh `SKSE/build-minll-989d4fb1/IntelEngine.dll` and canonical `SKSE/build/Release/IntelEngine.dll` are byte-identical: 3,818,496 bytes, SHA-256 `914d280e60f2183f627d1ca4fbbcaa89ea80f82d9fe9a39d673c8072f50a6ead`. Linked getter sites use `0x4B8` (slot `0x97`), not the former `0x4C0` (setter slot `0x98`); this was checked at the same four incident-relevant RVAs and across 24 indirect-call/load candidates. The three SKSE exports, native version 3.5.1, struct/address-library flags, and minimum SKSE 0 remain unchanged.
+- **Corrected DLL-only package:** `SKSE/build/Release/IntelEngine-v3.5.2-rc2-dllOnly.zip` contains the corrected DLL plus ten license/notice files, without scripts or other gameplay assets. All eleven members were verified by byte comparison, ZIP CRC checks, and independent Windows ZIP extraction/hashing. The archive is 1,684,848 bytes, SHA-256 `09ffc0c11ccbe2883126738a8e2b09bbbfa1dce4dfab9e8091dbcfb1038e5f82`. RC2 is the package label; native metadata remains 3.5.1. The original RC1 archive still contains the rejected DLL.
+- **Installed corrected artifact:** after the user's successful run, read-only inspection of the DLL in ADT's still-RC1-named enabled mod folder found the corrected `914d280e...` SHA-256 above. Folder/package names do not establish DLL identity. This is an installed-file hash, not a loaded-memory-image hash; the assistant did not replace the installed DLL or launch the game.
+- **Observed corrected 1170 run:** the user's `SkyrimNetOutput_ADT_2026-10-05_21-23-25-556_7d79f3d1.zip`, correlated with separately captured native and SKSE logs, establishes Skyrim 1.6.1170.0, SKSE 2.2.6, and SkyrimNet Beta 26/API 12. IntelEngine loaded, registered 285 Papyrus functions, completed NPC/location indexing, and loaded a save. A dashboard FetchPerson request reached `ProximityMonitor::Arm`. Task arrival/completion and a serialized task save/reload round trip were not established by this capture.
+- **IntelEngine runtime-audit limits:** the same session reports seven unavailable native static bindings and `None`-to-array cast errors in Core/Schedule Papyrus paths. Their cause and functional impact are not established; the loaded/VFS-winning script bytes were not captured. These findings are not proof of a new CommonLib ABI regression, and a DLL-only package does not update scripts.
+- **Full runtime verification:** all five full NPC/location/action/save-load smoke scenarios remain incomplete. The corrected DLL has partial user-run evidence on 1.6.1170.0, not a full smoke pass; it has no established game run on 1.5.97.0, 1.6.640.0, 1.7.99.0, or 1.7.104.0. The separate original-RC1 user-reported 1.7.104.0 crash has no supplied crash log and no established shared signature. Further installation, game actions, deployment, commits, and publishing require separate authorization.
 
 ## Testing
 

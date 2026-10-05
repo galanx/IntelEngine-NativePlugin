@@ -1,20 +1,21 @@
 # IntelEngine Deployment Verification Script
 # Compares repository source assets with the separate Data repository and,
-# unless requested otherwise, each configured deployment target.
+# only when explicitly supplied, configured deployment targets.
 # Returns exit code 0 on success, 1 on any mismatch.
 #
 # Usage:
 #   .\verify.ps1
 #   .\verify.ps1 -Quiet
+#   .\verify.ps1 -TestDest D:\Modlists\Example\mods\IntelEngine
 #   .\verify.ps1 -DataDir D:\git\IntelEngine-GamePlugin -SkipDeployTargets
 
 param(
     [switch]$Quiet,
     [switch]$SkipDeployTargets,
-    [string]$DataDir = "E:\Tools\spookys-automod-toolkit\Mods\IntelEngine\Data",
-    [string]$TestDest = "E:\Modding\Lorerim\mods\Galanx_IntelEngine",
-    [string]$VanillaDest = "E:\Modding\VanillaTest\mods\Galanx_IntelEngine",
-    [string]$CKDest = "D:\SkyrimVR-MO2\mods\Galanx_IntelEngine"
+    [string]$DataDir = (Join-Path (Split-Path -Parent $PSScriptRoot) "IntelEngine-GamePlugin"),
+    [string]$TestDest,
+    [string]$VanillaDest,
+    [string]$CKDest
 )
 
 $ErrorActionPreference = "Continue"
@@ -31,7 +32,7 @@ $deployTargets = @(
     [pscustomobject]@{ Label = "Testing"; Path = $TestDest },
     [pscustomobject]@{ Label = "Vanilla Test"; Path = $VanillaDest },
     [pscustomobject]@{ Label = "CK"; Path = $CKDest }
-)
+) | Where-Object { -not [string]::IsNullOrWhiteSpace($_.Path) }
 
 $legacyActionFiles = @(
     "intel_travel.yaml",
@@ -234,19 +235,12 @@ foreach ($root in $rootsToCheck) {
 if (-not $SkipDeployTargets) {
     Write-Host "`n=== DLL ===" -ForegroundColor Cyan
     $dllBuild = Join-Path $SKSEDir "build\Release\IntelEngine.dll"
-    $dllFallback = Join-Path $SKSEDir "Plugins\IntelEngine.dll"
     $dllData = Join-Path $DataDir "SKSE\Plugins\IntelEngine.dll"
-    $dllSource = $null
-    if (Test-Path -LiteralPath $dllBuild -PathType Leaf) {
-        $dllSource = $dllBuild
-    } elseif (Test-Path -LiteralPath $dllFallback -PathType Leaf) {
-        $dllSource = $dllFallback
-    }
 
-    if ($dllSource) {
-        Compare-File "DLL repository -> Data" $dllSource $dllData -UseHash
-    } elseif (-not $Quiet) {
-        Write-Host "  SKIP: no repository DLL found" -ForegroundColor Yellow
+    if (Test-Path -LiteralPath $dllBuild -PathType Leaf) {
+        Compare-File "DLL repository -> Data" $dllBuild $dllData -UseHash
+    } else {
+        Add-Failure -Label "DLL repository -> Data" -Message "MISSING CANONICAL REPOSITORY DLL: $dllBuild"
     }
 
     if (Test-Path -LiteralPath $dllData -PathType Leaf) {

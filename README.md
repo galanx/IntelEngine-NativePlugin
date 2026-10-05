@@ -1,8 +1,8 @@
 # IntelEngine
 ### NPC Autonomy, Faction Politics & Player-Driven Task Framework for SkyrimNet
 
-> [!IMPORTANT]
 > **Compatibility:** IntelEngine 3.5.1 and later requires **SkyrimNet Beta 25 or newer**. It is not compatible with SkyrimNet Beta 24 or earlier.
+> The native plugin targets Skyrim runtimes **1.5.97.0, 1.6.640.0, 1.6.1170.0, 1.7.99.0, and 1.7.104.0** through Address Library compatibility. These are documented targets, not in-game test results; VR is not supported.
 >
 > This repository carries a compatibility update for current SkyrimNet releases. IntelEngine was originally created by [Galanx](https://github.com/galanx).
 
@@ -407,11 +407,13 @@ IntelEngine is under active development. The following features are planned for 
 
 > **SkyrimNet Beta 25 / IntelEngine 3.5.1 migration:** IntelEngine content now loads from external plugin id `galanx.intelengine`. After upgrading, review its enablement and priority in SkyrimNet. Existing action names are unchanged, so per-action settings retain their keys, but should still be reviewed after the content-layer migration. Do not move or delete `config/plugins/IntelEngine`; it continues to own IntelEngine settings and faction configuration.
 
+The MinLL native candidate targets Skyrim **1.5.97.0, 1.6.640.0, 1.6.1170.0, 1.7.99.0, and 1.7.104.0** with matching SKSE and Address Library; VR is disabled. The original `v3.5.2-rc1` DLL-only ZIP has a demonstrated non-VR ABI defect and must not be used for further testing. The build applies an audited header correction, packaged as `v3.5.2-rc2-dllOnly`; a user run established 1.6.1170.0 startup, save loading, and task arming. All five full runtime smoke scenarios remain incomplete. See [native build and verification evidence](docs/DLL_API.md#verification-evidence).
+
 ---
 
 ## Requirements
 
-- Skyrim Special Edition / Skyrim VR
+- Skyrim Special Edition / Anniversary Edition; the current native build does not support VR
 - [SKSE](https://skse.silverlock.org/)
 - [SkyrimNet Beta 25 or newer](https://github.com/MinLL/SkyrimNet-GamePlugin)
 - [SkyUI](https://www.nexusmods.com/skyrimspecialedition/mods/12604) (MCM)

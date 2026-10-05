@@ -3,12 +3,33 @@
   "name": "intelengine",
   "version-string": "1.0.0",
   "description": "Intelligent NPC Task Execution for SkyrimNet",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "dependencies": [
-    "commonlibsse-ng",
-    "fmt",
+    {
+      "name": "directxmath",
+      "version>=": "2025-04-03"
+    },
+    {
+      "name": "directxtk",
+      "version>=": "2025-10-27"
+    },
+    {
+      "name": "fmt",
+      "version>=": "12.1.0"
+    },
+    {
+      "name": "nlohmann-json",
+      "version>=": "3.12.0"
+    },
+    {
+      "name": "rapidcsv",
+      "version>=": "8.90"
+    },
     "rapidfuzz",
-    "nlohmann-json",
+    {
+      "name": "spdlog",
+      "version>=": "1.16.0"
+    },
     "sqlite3"
   ]
 }

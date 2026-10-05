@@ -7,6 +7,7 @@ Data/
 
 # CMake build output (massive — rebuild locally)
 SKSE/build/
+SKSE/build-*/
 
 # Node.js dependencies (rebuild with npm install)
 node_modules/
@@ -25,6 +26,9 @@ nul
 README-discord*.md
 RELEASE_PITCH.md
 
+# Internal plans & specs
+openspec/
+
 # Deprecated/backup verify scripts
 _verify.ps1
 _verify_prompt.ps1
@@ -35,6 +39,7 @@ _verify_prompt.ps1
 *.vs/
 .vs/
 *.sln.DotSettings.user
+.vscode/
 
 # OS artifacts
 Thumbs.db
