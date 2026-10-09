@@ -14,6 +14,12 @@ project(
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+if(MSVC)
+    set(CMAKE_CXX23_STANDARD_COMPILE_OPTION "/std:c++23preview")
+    set(CMAKE_CXX23_EXTENSION_COMPILE_OPTION "/std:c++23preview")
+    set(CMAKE_CXX_FLAGS_RELEASE "/Od /Ob0 /DNDEBUG" CACHE STRING "MSVC Release flags" FORCE)
+endif()
+
 # =============================================================================
 # Dependencies
 # =============================================================================
@@ -178,11 +184,6 @@ target_precompile_headers(
         src/Plugin.h
 )
 
-# Workaround for MSVC Internal Compiler Error (C1001) in heavy template code
-# (CommonLibSSE Relocation.h / xstring). Safe to remove if MSVC is updated.
-if(MSVC)
-    target_compile_options(${PROJECT_NAME} PRIVATE /d2ReducedOptimizeHugeFunctions)
-endif()
 
 # =============================================================================
 # Output Configuration
