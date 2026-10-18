@@ -13,6 +13,7 @@
 #include <mutex>
 #include "LocationResolver.h"
 #include "StringUtils.h"
+#include "RenderedCacheCodec.h"
 #include "CellAnalyzer.h"
 #include "ActionValidator.h"
 #include "DepartureDetector.h"
@@ -60,6 +61,7 @@ namespace IntelEngine::Papyrus {
     RE::BSFixedString RenderGossipHeardSection(RE::StaticFunctionTag*, std::vector<RE::BSFixedString>, std::vector<RE::BSFixedString>, std::vector<float>, float);
     RE::BSFixedString RenderGossipToldSection(RE::StaticFunctionTag*, std::vector<RE::BSFixedString>, std::vector<RE::BSFixedString>, std::vector<float>, float);
     RE::BSFixedString RenderTaskHistorySection(RE::StaticFunctionTag*, std::vector<RE::BSFixedString>, std::vector<float>, float);
+    RE::BSFixedString EncodeRenderedCache(RE::StaticFunctionTag*, RE::BSFixedString);
     void SetDangerZonePolicy(RE::StaticFunctionTag*, int);
     void SetPlayerHomePolicy(RE::StaticFunctionTag*, int);
     void SetHoldRestrictionPolicy(RE::StaticFunctionTag*, RE::BSFixedString, int);
@@ -422,6 +424,7 @@ namespace IntelEngine::Papyrus {
         a_vm->RegisterFunction("RenderGossipHeardSection", SCRIPT_NAME, RenderGossipHeardSection); ++count;
         a_vm->RegisterFunction("RenderGossipToldSection", SCRIPT_NAME, RenderGossipToldSection); ++count;
         a_vm->RegisterFunction("RenderTaskHistorySection", SCRIPT_NAME, RenderTaskHistorySection); ++count;
+        a_vm->RegisterFunction("EncodeRenderedCache", SCRIPT_NAME, EncodeRenderedCache); ++count;
 
         // Dashboard Config Functions
         a_vm->RegisterFunction("NotifyDashboardSlotChanged", SCRIPT_NAME, NotifyDashboardSlotChanged); ++count;
@@ -2719,6 +2722,10 @@ namespace IntelEngine::Papyrus {
     // list-based bio sections as single strings, stored via SetStringValue which
     // IS visible to papyrus_util("GetStringValue") immediately.
     // Only first-person rendering — templates fall back to list-based for 3P.
+
+    RE::BSFixedString EncodeRenderedCache(RE::StaticFunctionTag*, RE::BSFixedString text) {
+        return RE::BSFixedString(IntelEngine::EncodeRenderedCache(static_cast<std::string_view>(text)));
+    }
 
     static std::string FormatRelativeTimeFromDays(float currentGameDays, float eventGameDays) {
         float hoursPassed = (currentGameDays - eventGameDays) * 24.0f;

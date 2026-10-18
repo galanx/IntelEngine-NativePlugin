@@ -223,7 +223,7 @@ The coordinator then performs the actual in-game actions, dashboard toggle, sett
 2. Copy only IntelEngine's current `prompts/**` and `config/actions/**` into that temporary tree.
 3. Do not copy `config/plugins/IntelEngine`, user settings, generated files, save content, dashboard output, DLLs, scripts, or ESP files into converter input.
 4. Create temporary manifest-fields JSON using the contract above.
-5. Build or locate SkyrimNet's `content-convert` executable from `D:\git\SkyrimNet`.
+5. Build or locate SkyrimNet's `content-convert` executable from `<SkyrimNet checkout>`.
 
 **Checkpoint:** converter input contains exactly 25 source content files and no configuration or runtime assets.
 
@@ -253,7 +253,7 @@ The coordinator then performs the actual in-game actions, dashboard toggle, sett
 5. Change `DashboardUIManager.cpp` action enumeration and toggle paths to `Data/SKSE/Plugins/SkyrimNet/external/galanx.intelengine/actions`.
 6. Keep `DashboardConfig.cpp`, `FactionPolitics.cpp`, `NPCIndex.cpp`, and their `GetPluginConfigValue("IntelEngine", ...)` calls on `config/plugins/IntelEngine`; that configuration system is separate from content distribution.
 7. Keep `MemoryDB.cpp` character-bio and save paths unchanged; they refer to SkyrimNet-owned runtime content, not IntelEngine's packaged prompts.
-8. Make the build scripts operate intentionally on this repository rather than silently sourcing `E:\Tools\spookys-automod-toolkit\Mods\IntelEngine`. Prefer `$PSScriptRoot` for repository assets and explicit parameters/configuration for the separate Data repository and deploy targets.
+8. Make the build scripts operate intentionally on this repository rather than silently sourcing `<toolkit checkout>\Mods\IntelEngine`. Prefer `$PSScriptRoot` for repository assets and explicit parameters/configuration for the separate Data repository and deploy targets.
 9. During migration work, invoke deployment with `-SkipGit`; the build script must not commit or push either repository as a side effect of validation.
 
 **Checkpoint:** no executable code opens IntelEngine action YAMLs from the retired directory, and the build can stage the external bundle from this branch.

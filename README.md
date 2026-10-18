@@ -394,6 +394,7 @@ IntelEngine is under active development. The following features are planned for 
 - **Eliminate Target** — dispatch an NPC to kill a specific person. Assassinations, bounty hunting, or settling grudges — carried out autonomously across the world.
 - **Lockpick Door** — send an NPC to pick a locked door, gaining access to restricted areas without doing the dirty work yourself.
 - **Steal Item** — task an NPC with stealing something from someone's inventory or home. Risk and reward — their skill determines success.
+- **Background events in SkyrimNet History — backlog, not implemented:** show actual NPC social interactions, rumor/gossip exchanges and political outcomes in the UI event history with meaningful categories, participants and summaries, rather than only travel-oriented `intel_task_event` entries. Owner screenshot/request captured 2026-10-14. Investigate IntelEngine event emission versus SkyrimNet history/schema/filter support before choosing the implementation owner; distinguish executed outcomes from model proposals, rejections and cooldown blocks.
 
 ---
 
@@ -406,6 +407,10 @@ IntelEngine is under active development. The following features are planned for 
 > **If you use another SkyrimNet mod that provides similar actions** (travel, fetch, deliver, cancel, etc.), you must **disable the overlapping actions** in either IntelEngine or the other mod. Each action YAML has an `enabled: true/false` flag — set conflicting actions to `enabled: false` in whichever mod you want to defer.
 
 > **SkyrimNet Beta 25 / IntelEngine 3.5.1 migration:** IntelEngine content now loads from external plugin id `galanx.intelengine`. After upgrading, review its enablement and priority in SkyrimNet. Existing action names are unchanged, so per-action settings retain their keys, but should still be reviewed after the content-layer migration. Do not move or delete `config/plugins/IntelEngine`; it continues to own IntelEngine settings and faction configuration.
+
+> **Unreleased rendered-cache repair:** rendered facts, gossip and task-history caches are now stored encoded, so saved text can no longer corrupt later co-save values such as stored NPC names. Verified on Skyrim 1.6.1170: caches, stored RNE names and on-screen names survive warm and independent cold reloads. **Requires a fresh new game** with the complete repaired DLL, both affected PEX files and all three prompts; existing saves are unsupported, and existing-save migration is planned separately. Never mix old and new components. See [protocol, verification and limits](docs/DLL_API.md#rendered-cache-persistence).
+>
+> **Papyrus API and array guards:** seven existing native functions are now declared in `IntelEngine.psc`, and three array-null checks use boolean guards. Maintenance, recovery and schedule retention were exercised across save/reload.
 
 The **v3.5.2 compatibility release** uses pinned MinLL/CommonLibVR with the audited non-VR header correction. A user run established Skyrim **1.6.1170** startup, save loading, dashboard use, and action dispatch; Epicrob also confirmed success on his affected **1.7.x** setup. Use matching SKSE and Address Library. VR is disabled, and these observations do not establish every supported runtime or task scenario. The historical `v3.5.2-rc1` DLL has a demonstrated ABI defect and must not be used. See [native build and verification evidence](docs/DLL_API.md#verification-evidence).
 

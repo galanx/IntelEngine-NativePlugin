@@ -7,21 +7,39 @@
 #   .\build.ps1 -Scripts Travel,MCM
 #   .\build.ps1 -DeployOnly -SkipGit
 #   .\build.ps1 -DeployOnly -SkipDeploy -SkipGit
-#   .\build.ps1 -DataDir D:\git\IntelEngine-GamePlugin -SkipGit
+#   .\build.ps1 -DataDir "<IntelEngine-GamePlugin checkout>" -SkipGit
 
 param(
     [string[]]$Scripts,
     [switch]$DeployOnly,
     [switch]$SkipDeploy,
     [switch]$SkipGit,
-    [string]$DataDir = "E:\Tools\spookys-automod-toolkit\Mods\IntelEngine\Data",
-    [string]$ToolkitRoot = "E:\Tools\spookys-automod-toolkit",
-    [string]$TestDest = "E:\Modding\Lorerim\mods\Galanx_IntelEngine",
-    [string]$VanillaDest = "E:\Modding\VanillaTest\mods\Galanx_IntelEngine",
-    [string]$CKDest = "D:\SkyrimVR-MO2\mods\Galanx_IntelEngine"
+    [string]$DataDir,
+    [string]$ToolkitRoot,
+    [string]$TestDest,
+    [string]$VanillaDest,
+    [string]$CKDest
 )
 
 $ErrorActionPreference = "Stop"
+# Optional private defaults; explicitly supplied parameters always win.
+$localDefaultsPath = Join-Path $PSScriptRoot "build.local.psd1"
+if (Test-Path -LiteralPath $localDefaultsPath) {
+    $localDefaults = Import-PowerShellDataFile -LiteralPath $localDefaultsPath
+    foreach ($name in @("DataDir", "ToolkitRoot", "TestDest", "VanillaDest", "CKDest")) {
+        if (-not $PSBoundParameters.ContainsKey($name) -and $localDefaults.ContainsKey($name)) {
+            Set-Variable -Name $name -Value $localDefaults[$name]
+        }
+    }
+}
+$requiredPaths = @("DataDir")
+if (-not $DeployOnly) { $requiredPaths += "ToolkitRoot" }
+if (-not $SkipDeploy) { $requiredPaths += @("TestDest", "VanillaDest", "CKDest") }
+foreach ($name in $requiredPaths) {
+    if ([string]::IsNullOrWhiteSpace((Get-Variable -Name $name -ValueOnly))) {
+        throw "Supply -$name or set $name in build.local.psd1."
+    }
+}
 $DataDir = [System.IO.Path]::GetFullPath($DataDir).TrimEnd([char[]]@('\', '/'))
 
 $RepoRoot = $PSScriptRoot
