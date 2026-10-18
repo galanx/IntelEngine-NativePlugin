@@ -481,15 +481,7 @@ The permanent stdlib-only check uses the real production helper, remains active 
 
 Every decoder-template edit additionally requires a temporary smoke of the actual files through revision-identified SkyrimNet/Inja and verified JSON headers. Only fixture-backed actor/getter/time inputs may be stubbed; never `replace`, literal parsing or output. Do not add Inja to Native dependencies. The DLL retains C++23/MinLL/ABI/release controls; this C++20 source check is not a plugin build or installed-game test.
 
-### Private runtime and offline checkpoint — 2026-10-13
-
-Runtime verification evidence is kept in the maintainer's private evidence log.
-
-### Latest naming diagnostic and indexed audit — 2026-10-14
-
-Runtime and indexed-audit verification evidence is kept in the maintainer's private evidence log.
-
-### Authorized offline script repairs — source and detached artifacts, 2026-10-14
+### Papyrus API declarations and array guards
 
 Native owns the three repaired PSC files; Game's source mirrors are byte-identical. `IntelEngine.psc` now declares the existing registered implementations with these signatures; no native implementation, consumer dispatch or compatibility alias was added:
 
@@ -507,65 +499,22 @@ Schedule hints are `0=none`, `1=meeting`, `2=fetch`, `3=delivery`. `GetSafetyNet
 
 Core `Maintenance` uses `If !SlotStates`; Schedule `RestartMonitoring` uses `If !ScheduledAgents` twice. Initialization, Core's separate length validation, restored arrays, co-save/legacy recovery, recount and monitoring remain unchanged. The encoder declaration, four complete writes and three mirrored readers are preserved.
 
-Detached compilation and artifact verification evidence is kept in the maintainer's private evidence log.
+### Verification status
 
-### Installed script-repair runtime check — partial, stopped 2026-10-14
+Verified on Skyrim 1.6.1170 with the coherent repaired DLL, PEX and prompt set, starting from a fresh new game:
 
-Scoped runtime checks, stopped attempts and schedule-retention verification evidence are kept in the maintainer's private evidence log; full acceptance remains incomplete.
+- Facts, giver/receiver gossip and completed task history are written encoded and render decoded in actual prompts.
+- A saved checkpoint keeps all rendered caches, stored RNE names and on-screen names identical across a warm reload (return to Main Menu in the same process) and an independent cold-process reload.
+- Saved co-save streams parse completely with no raw delimiter bytes in rendered caches.
+- Repaired scripts compile and disassemble cleanly; maintenance, recovery and populated-schedule retention were exercised across save/reload.
 
-### Fresh-lineage names and five-target HUD checkpoint — 2026-10-14
+Not separately verified on 1.7.x for this repair. Detailed run evidence is kept in the maintainer's private evidence log.
 
-Runtime naming and HUD verification evidence is kept in the maintainer's private evidence log.
+### Known limitations
 
-### Offline actor linkage and test preparation — 2026-10-14
-
-Offline actor-linkage and prerequisite verification evidence is kept in the maintainer's private evidence log.
-
-### Semantic-camera attempt — blocked (2026-10-14)
-
-Stopped camera-verification evidence is kept in the maintainer's private evidence log.
-
-### Bannered Mare continuation — indoor camera pass, cross-cell capture blocked (2026-10-14)
-
-Scoped camera-verification evidence is kept in the maintainer's private evidence log.
-
-### Settled-frame continuation — moving-target acquisition blocked (2026-10-14)
-
-Stopped target-acquisition verification evidence is kept in the maintainer's private evidence log.
-
-### Autonomous continuation — one slowed capture and natural Mare observation (2026-10-14)
-
-Scoped capture and natural-observation evidence is kept in the maintainer's private evidence log.
-
-### Root-directed refinement — five automated HUD captures and diagnostic save (2026-10-14)
-
-Runtime HUD and diagnostic-save verification evidence is kept in the maintainer's private evidence log.
-
-### Fresh-lineage qualification stop — 2026-10-15
-
-Stopped fresh-lineage verification evidence is kept in the maintainer's private evidence log.
-
-### Two-save naming discriminator — 2026-10-15
-
-Diagnostic save-comparison evidence is kept in the maintainer's private evidence log.
-
-### Offline storage-loss attribution — 2026-10-15
-
-Offline storage-loss attribution evidence is kept in the maintainer's private evidence log.
-
-### Native seven-reference rejection trace — 2026-10-15
-
-Diagnostic native-load trace evidence is kept in the maintainer's private evidence log.
-
-### Offline lookup binding and temporary-reference attribution — 2026-10-15
-
-Offline lookup-binding and temporary-reference attribution evidence is kept in the maintainer's private evidence log; the cause remains unresolved and migration remains blocked.
-
-### Known limitations / deferred: existing-save migration
-
-**BLOCKED.** Other Intel narration/message/reason scalars (including rescue narration), names/destinations and string-list control handling remain outside this repair. They can still expose persistence defects; this is not general Intel/PapyrusUtil storage safety. For future authorized A/B acceptance, scan the whole framed STRV span for raw TAB/LF/VT/FF/CR before key extraction, attribute only unambiguous boundaries and require expected-field/name equality. Original BEL/space and lone-ESC/empty fidelity in other scalars is unknown from serialized bytes alone.
-
-Migration remains blocked until production codec/grammar and real-template checks, a coherent fresh package, installed winner/module/native-binding identity, immediate rendering, unchanged clean-A warm and independent cold loads, and fresh post-load cache B reload all pass with layered evidence. Source checks alone cannot unblock it. Even all passing gates permit only separately requested planning of an approved follow-up; no automatic migration or discarded-name recovery. The local OpenSpec record is gitignored; local docs/handoffs are not commit/push/publication evidence.
+- **Fresh new games only.** Existing saves are unsupported. Existing-save migration is planned as a separate change and is not part of this repair; already-lost names or history cannot be recovered.
+- Exact binary-to-source provenance for the installed PapyrusUtil is unavailable; acceptance rests on observed behavior of the installed DLL.
+- Other Intel narration/message/reason scalars (including rescue narration), names/destinations and string-list control handling remain outside this repair. This is not general Intel/PapyrusUtil storage safety.
 
 ## Building the DLL
 
