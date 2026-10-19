@@ -171,7 +171,9 @@ Parsed parse(const Bytes& bytes) {
         const auto object=number(), entries=number();
         require(objects.insert(object).second, "duplicate serialized object");
         require(entries > 0 && entries <= (result.end-cursor+1)/4, "invalid entry count");
-        if (object != 0) result.refusals.push_back("unqualified non-global identity: "+std::to_string(object));
+        const auto form=static_cast<std::uint32_t>(object);
+        if (object != 0 && (object >> 32 != 62 || form == 0))
+            result.refusals.push_back("unqualified non-global identity: "+std::to_string(object));
         std::set<std::string> keys;
         for (std::uint64_t n=0; n<entries; ++n) {
             const auto k=token(), v=token();
@@ -188,9 +190,12 @@ Parsed parse(const Bytes& bytes) {
             if (!canonical) result.refusals.push_back("unqualified key text/transport/casing at "+std::to_string(k.first));
             const auto value=view(bytes,v.first,v.second);
             text(value);
+            // No resolution for untouched names; temporary cache targets remain unqualified.
+            if (target(key) && (form >> 24) == 0xff)
+                result.refusals.push_back("unqualified temporary cache identity: "+std::to_string(object));
             if (!target(key)) {
                 for (unsigned char c : value)
-                    if (rawDelimiter(c) || c == 7 || c == 27) {
+                    if (rawDelimiter(c) || c == 27 || (c == 7 && key != "rne_name")) {
                         result.refusals.push_back("unqualified non-cache control at "+std::to_string(v.first));
                         break;
                     }
@@ -219,11 +224,25 @@ std::string transport(std::string value) {
     return value;
 }
 struct Converted { Bytes bytes; Json changes; std::size_t legacy=0; };
+bool actorBasis(const Json& basis) {
+    const auto scope=basis.at("scope").get<std::string>();
+    require(scope == "global" || scope == "actor-in-place", "unqualified scope");
+    if (scope == "global") return false;
+    require(basis.at("legacy_writer") == "IE-3.5.2" && basis.at("actor_bel_policy") == "space" &&
+        basis.at("preserve_rne_name_bel") == true, "missing approved actor transport policy");
+    return true;
+}
 Converted convert(const Bytes& input, const Parsed& parsed, const Json& manifest) {
     require(parsed.refusals.empty(), "whole-stream qualification refusal: "+parsed.refusals.dump());
     require(manifest.at("schema") == 1, "unsupported evidence schema");
     require(manifest.at("skse_sha256") == sha256(input), "SKSE evidence hash mismatch");
-    require(manifest.at("provider_sha256") == Provider && manifest.at("runtime") == "1.6.1170.0" && manifest.at("scope") == "global", "unqualified provider/runtime/scope");
+    require(manifest.at("provider_sha256") == Provider && manifest.at("runtime") == "1.6.1170.0", "unqualified provider/runtime");
+    const bool actor=actorBasis(manifest);
+    for (const auto& f : parsed.fields) {
+        require(actor ? f.object != 0 : f.object == 0, "identity outside qualified scope");
+        if (!actor && !target(f.key))
+            require(view(input,f.start,f.end).find('\a') == std::string_view::npos, "global non-cache BEL refused");
+    }
     require(manifest.at("codec_sha256") == LCM_CODEC_SHA256, "unqualified production codec generation");
     require(!manifest.at("qualification_receipt_sha256").get<std::string>().empty(), "missing qualification receipt hash");
     const auto& evidence=manifest.at("fields");
@@ -248,14 +267,26 @@ Converted convert(const Bytes& input, const Parsed& parsed, const Json& manifest
         require(proof->at("start") == f.start && proof->at("end") == f.end, "field evidence span mismatch");
         require(!proof->at("evidence").get<std::string>().empty(), "missing independent field provenance");
         const auto raw=view(input,f.start,f.end);
+        if (actor) for (unsigned char c : raw)
+            require(c >= 32 ? c != 127 : c == 7 || c == 10, "actor raw ESC/other-control refused");
         const std::string original=unhex(proof->at("original_hex").get<std::string>());
         text(original);
         const auto representation=proof->at("representation").get<std::string>();
         std::string replacement;
-        if (representation == "legacy") {
-            require(raw.find('\a') == std::string_view::npos && raw.find('\x1b') == std::string_view::npos, "legacy BEL/ESC collision: recovery refused");
-            // With both lossy transport bytes excluded, restoration is identity.
-            require(raw == original, "independent original bytes disagree with legacy span");
+        if (representation == "legacy" || representation == "legacy-policy") {
+            if (actor) {
+                if (representation == "legacy-policy")
+                    require(proof->at("original_basis") == "owner-policy", "missing policy-derived original basis");
+                for (unsigned char c : original)
+                    require(c >= 32 ? c != 127 : c == 10, "actor original BEL/ESC/other-control refused");
+                std::string restored(raw);
+                for (char& c : restored) if (c == '\a') c=' ';
+                require(restored == original, "actor original bytes disagree with restored span");
+            } else {
+                require(representation == "legacy", "actor policy outside actor scope");
+                require(raw.find('\a') == std::string_view::npos && raw.find('\x1b') == std::string_view::npos, "legacy BEL/ESC collision: recovery refused");
+                require(raw == original, "independent original bytes disagree with legacy span");
+            }
             replacement=transport(IntelEngine::EncodeRenderedCache(original));
             ++output.legacy;
         } else if (representation == "encoded") {
@@ -310,7 +341,7 @@ Json readJson(const Source& source) {
 int run(int argc, char** argv) {
     if (argc == 2 && std::string(argv[1]) == "--help") {
         std::cout << "inspect --skse FILE\nconvert --ess FILE --skse FILE --evidence JSON --qualification JSON --codec HEADER --backup NEW_DIR --output NEW_DIR --protected-dir LIVE_SAVE_DIR [--protected-dir DIR ...] [--archive FILE]\n"
-                  << "Offline only. Conversion requires source-bound independent field evidence; global identities only. No force, in-place, installation or loading.\n";
+                  << "Offline only. Global independent evidence or explicitly qualified IE-3.5.2 actor-in-place transport policy. No force, installation, loading or runtime form resolution.\n";
         return 0;
     }
     require(argc >= 4, "use --help for exact inspect/convert arguments");
@@ -340,7 +371,8 @@ int run(int argc, char** argv) {
     require(codec.hash() == LCM_CODEC_SHA256, "build/runtime production codec identity mismatch");
     require(manifest.at("ess_sha256") == ess.hash() && manifest.at("skse_sha256") == skse.hash(), "source pair hash mismatch");
     require(manifest.at("qualification_receipt_sha256") == qualification.hash(), "qualification receipt hash mismatch");
-    require(receipt.at("provider_sha256") == Provider && receipt.at("runtime") == "1.6.1170.0" && receipt.at("scope") == "global" && receipt.at("owner_authorized_offline") == true, "qualification receipt lacks approved restricted basis");
+    require(receipt.at("provider_sha256") == Provider && receipt.at("runtime") == "1.6.1170.0" &&
+        receipt.at("owner_authorized_offline") == true && actorBasis(receipt) == actorBasis(manifest), "qualification receipt lacks approved restricted basis");
     Json archiveInfo=nullptr;
     std::unique_ptr<Source> archive;
     if (args.count("--archive")) {
@@ -373,7 +405,7 @@ int run(int argc, char** argv) {
             {"codec_sha256",codec.hash()},{"qualification_sha256",qualification.hash()},{"evidence_sha256",evidence.hash()},
             {"archive",archiveInfo},{"source_inspection",inspect(backedSkse.bytes(),parsed)},
             {"changes",converted.changes},{"unchanged_ranges_verified",true},
-            {"limits","Offline global-only qualification; no game load, actor resolution, original-data reconstruction or existing-save acceptance."}};
+            {"limits","Offline qualified byte rewrite only; serialized identities preserved, no game load, runtime form resolution or existing-save acceptance."}};
         report["tool_sha256"]=tool.hash();
         auto verifySources=[&]() { ess.verify(); skse.verify(); evidence.verify(); qualification.verify(); codec.verify(); tool.verify(); backedEss.verify(); backedSkse.verify(); if (archive) archive->verify(); };
         verifySources();

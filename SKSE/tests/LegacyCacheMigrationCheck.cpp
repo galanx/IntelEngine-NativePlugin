@@ -20,7 +20,8 @@ Bytes fixture(const std::string& payload) {
     return bytes;
 }
 Json evidence(const Bytes& input, const std::vector<std::string>& original,
-              const std::vector<std::string>& representations={"legacy","legacy","legacy"}) {
+              const std::vector<std::string>& representations={"legacy","legacy","legacy"},
+              const std::string& scope="global") {
     Json fields=Json::array(); std::size_t i=0;
     for (const auto& f : parse(input).fields) if (target(f.key)) {
         fields.push_back({{"object",std::to_string(f.object)},{"key",f.key},{"start",f.start},{"end",f.end},
@@ -28,9 +29,15 @@ Json evidence(const Bytes& input, const std::vector<std::string>& original,
             {"writer_codec_sha256",LCM_CODEC_SHA256},{"evidence","independently specified synthetic input"}});
         ++i;
     }
-    return {{"schema",1},{"skse_sha256",sha256(input)},{"provider_sha256",Provider},
-        {"runtime","1.6.1170.0"},{"scope","global"},{"codec_sha256",LCM_CODEC_SHA256},
+    Json manifest={{"schema",1},{"skse_sha256",sha256(input)},{"provider_sha256",Provider},
+        {"runtime","1.6.1170.0"},{"scope",scope},{"codec_sha256",LCM_CODEC_SHA256},
         {"qualification_receipt_sha256",std::string(64,'a')},{"fields",fields}};
+    if (scope=="actor-in-place") {
+        manifest["legacy_writer"]="IE-3.5.2";
+        manifest["actor_bel_policy"]="space";
+        manifest["preserve_rne_name_bel"]=true;
+    }
+    return manifest;
 }
 void refuses(const std::function<void()>& action, const std::string& reason) {
     try { action(); }
@@ -109,6 +116,72 @@ int main(int argc, char** argv) {
         const auto input=fixture(payload(originals)), expected=fixture(payload(encoded));
         auto manifest=evidence(input,originals);
         const auto result=convert(input,parse(input),manifest);
+        const auto actor1=(std::uint64_t{62}<<32)|0x00123456, actor2=(std::uint64_t{62}<<32)|0x00765432;
+        const std::vector<std::string> actorOriginals{"facts with space\nline","gossip with space\nline","task history\nline"};
+        const std::vector<std::string> actorEncoded{"facts\awith\aspace%0Aline","gossip\awith\aspace%0Aline","task\ahistory%0Aline"};
+        auto actorPayload=[&](std::uint64_t first, std::uint64_t second, const std::vector<std::string>& values) {
+            return "3 "+std::to_string(first)+" 2 intel_factsrendered "+values[0]+" intel_gossiprendered "+values[1]
+                +" "+std::to_string(second)+" 2 intel_taskhistoryrendered "+values[2]+" rne_name qz\aName9"
+                +" "+std::to_string((std::uint64_t{62}<<32)|0xff000dc9)+" 1 rne_name preserved";
+        };
+        std::vector<std::string> actorRaw;
+        for (const auto& value : actorOriginals) actorRaw.push_back(transport(value));
+        const auto actorInput=fixture(actorPayload(actor1,actor2,actorRaw));
+        const auto actorExpected=fixture(actorPayload(actor1,actor2,actorEncoded));
+        auto actorManifest=evidence(actorInput,actorOriginals,{"legacy","legacy","legacy"},"actor-in-place");
+        const auto actorConverted=convert(actorInput,parse(actorInput),actorManifest);
+        require(actorConverted.bytes==actorExpected && actorConverted.legacy==3, "actor-in-place exact bytes or family coverage differs");
+        for (std::size_t i=0; i<actorOriginals.size(); ++i)
+            require(actorConverted.changes[i]["original_hex"]==hex(actorOriginals[i]),
+                "actor production conversion did not preserve exact original bytes");
+        const auto actorParsed=parse(actorExpected);
+        require(actorParsed.fields.size()==5 && actorParsed.fields[0].object==actor1 && actorParsed.fields[1].object==actor1
+            && actorParsed.fields[2].object==actor2 && actorParsed.fields[3].object==actor2
+            && actorParsed.fields[0].key=="intel_factsrendered" && actorParsed.fields[1].key=="intel_gossiprendered"
+            && actorParsed.fields[2].key=="intel_taskhistoryrendered" && actorParsed.fields[3].key=="rne_name"
+            && view(actorExpected,actorParsed.fields[3].start,actorParsed.fields[3].end)=="qz\aName9"
+            && actorParsed.fields[4].object==((std::uint64_t{62}<<32)|0xff000dc9)
+            && actorParsed.fields[4].key=="rne_name"
+            && view(actorExpected,actorParsed.fields[4].start,actorParsed.fields[4].end)=="preserved",
+            "actor identity/key/rne_name BEL preservation changed");
+        auto policyManifest=actorManifest;
+        policyManifest["fields"][0]["representation"]="legacy-policy";
+        policyManifest["fields"][0]["original_basis"]="owner-policy";
+        require(convert(actorInput,parse(actorInput),policyManifest).bytes==actorExpected, "owner-policy actor proof changed output");
+        auto badActor=policyManifest; badActor["fields"][0].erase("original_basis");
+        refuses([&] { convert(actorInput,parse(actorInput),badActor); }, "missing owner-policy original basis");
+        badActor=actorManifest; badActor.erase("actor_bel_policy");
+        refuses([&] { convert(actorInput,parse(actorInput),badActor); }, "missing actor BEL policy");
+        badActor=actorManifest; badActor["fields"][0]["original_hex"]=hex("facts\a with space\nline");
+        refuses([&] { convert(actorInput,parse(actorInput),badActor); }, "actor original raw BEL mismatch");
+        badActor=actorManifest; badActor.erase("preserve_rne_name_bel");
+        refuses([&] { convert(actorInput,parse(actorInput),badActor); }, "missing rne_name BEL preservation policy");
+        badActor=actorManifest; badActor["legacy_writer"]="unknown";
+        refuses([&] { convert(actorInput,parse(actorInput),badActor); }, "unqualified actor legacy writer");
+        for (const auto& control : {std::string("\x1b",1),std::string("\x01",1),std::string("\x7f",1),
+                                    std::string("\t",1),std::string("\r",1),std::string("\v",1),std::string("\f",1)}) {
+            auto unsafeActor=actorRaw;
+            unsafeActor[0]="facts"+control+"line";
+            const auto blob=fixture(actorPayload(actor1,actor2,unsafeActor));
+            refuses([&] {
+                const auto proof=evidence(blob,{"facts"+control+"line",actorOriginals[1],actorOriginals[2]},
+                    {"legacy","legacy","legacy"},"actor-in-place");
+                convert(blob,parse(blob),proof);
+            }, "actor raw ESC/C0/DEL");
+        }
+        for (const auto invalid : {std::uint64_t{62}<<32, (std::uint64_t{62}<<32)|0xff000001}) {
+            const auto blob=fixture(actorPayload(invalid,actor2,actorRaw));
+            const auto parsed=parse(blob);
+            require(!parsed.refusals.empty(), "actor zero/temporary typed identity was not classified");
+            const auto proof=evidence(blob,actorOriginals,{"legacy","legacy","legacy"},"actor-in-place");
+            refuses([&] { convert(blob,parsed,proof); }, "actor zero/temporary typed identity");
+        }
+        auto actorEsc=actorRaw; actorEsc[0]="\x1b";
+        const auto actorEscInput=fixture(actorPayload(actor1,actor2,actorEsc));
+        auto actorEscProof=evidence(actorEscInput,{"",actorOriginals[1],actorOriginals[2]},
+            {"encoded","legacy","legacy"},"actor-in-place");
+        refuses([&] { convert(actorEscInput,parse(actorEscInput),actorEscProof); },
+            "actor encoded empty/ESC control bypass");
         require(result.bytes==expected && result.legacy==3, "all-family whole-file conversion differs from independent bytes");
         const auto known=evidence(expected,originals,{"encoded","encoded","encoded"});
         require(convert(expected,parse(expected),known).bytes==expected, "encoded control double-encoded");
@@ -148,8 +221,14 @@ int main(int argc, char** argv) {
             std::string("1 0 2 intel_factsrendered qz9 rne_name bad\avalue")}) {
             const auto blob=fixture(unsafe);
             const auto p=parse(blob);
-            require(!p.refusals.empty(), "unqualified whole-stream case missed");
-            refuses([&] { convert(blob,p,Json::object()); },"unqualified whole-stream case");
+            if (unsafe.find("rne_name bad\a")!=std::string::npos) {
+                require(p.refusals.empty(), "rne_name BEL was rejected before actor policy evaluation");
+                const auto proof=evidence(blob,{"qz9"});
+                refuses([&] { convert(blob,p,proof); }, "global rne_name BEL refusal");
+            } else {
+                require(!p.refusals.empty(), "unqualified whole-stream case missed");
+                refuses([&] { convert(blob,p,Json::object()); },"unqualified whole-stream case");
+            }
         }
         for (const auto& malformed : {
             "1 0 1 key", "1 0 2 key value", "1 0 2 key value KEY other", "2 0 1 k v 0 1 q z",
@@ -172,7 +251,7 @@ int main(int argc, char** argv) {
         auto trailing=input; trailing.push_back(0);
         refuses([&] { parse(trailing); },"trailing binary bytes");
         filesystemCheck(fs::u8path(argv[1]),input,expected);
-        std::cout << "PASS: exact all-family/literal-percent/control/UTF-8 bytes; mixed/encoded preservation; trailing names/opaque chunks; sentinel/identity/count/case/framing refusals; exclusive locked backup/stage/publication, interrupted/failed publication and unchanged originals.\n";
+        std::cout << "PASS: exact global and actor-in-place all-family bytes; typed identity/key/rne_name BEL preservation; actor policy and control refusals; mixed/encoded preservation; trailing names/opaque chunks; sentinel/identity/count/case/framing refusals; exclusive locked backup/stage/publication, interrupted/failed publication and unchanged originals.\n";
         return 0;
     } catch (const std::exception& error) {
         std::cerr << "FAIL: " << error.what() << '\n'; return 1;
