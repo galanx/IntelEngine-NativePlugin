@@ -2071,48 +2071,68 @@ namespace IntelEngine::Papyrus {
             logger::error("BeginAsyncNPCDMTick: null callback quest");
             return;
         }
-        const char* qedit = callbackQuest->GetFormEditorID();
-        if (!qedit || !qedit[0]) {
-            logger::error("BeginAsyncNPCDMTick: callback quest has no editor ID");
-            return;
-        }
-        std::string questEditorId = qedit;
-        std::string scriptName    = callbackScript.c_str();
-        std::string functionName  = callbackFn.c_str();
-
+        // Papyrus natives may run on VM jobs. Copy only owned argument values here;
+        // do not dereference the quest until the generation-checked main-thread task.
+        const auto generation = SlotTracker::GetSingleton()->loadGeneration.load(std::memory_order_relaxed);
+        std::string scriptName = callbackScript.c_str();
+        std::string functionName = callbackFn.c_str();
         if (maxPairs <= 0) maxPairs = 4;
-
-        // Phase A — main thread: snapshot engine state.
-        auto snap = NPCIndex::GetSingleton()->BuildNPCTickSnapshot(static_cast<int>(maxPairs));
-        bool playerAtInn = FactionPolitics::IsPlayerAtInn();
-
-        // If snapshot has nothing, fire empty callback inline (already main thread).
-        if (snap.candidates.empty()) {
-            AsyncDispatch::ExecuteQuestFunctionString(questEditorId, scriptName, functionName, "");
+        auto* phaseATask = SKSE::GetTaskInterface();
+        if (!phaseATask) {
+            logger::error("BeginAsyncNPCDMTick: TaskInterface unavailable, snapshot dropped");
             return;
         }
-
-        // Phase B — worker thread: build context + JSON, then marshal back for callback.
-        AsyncDispatch::Submit([snap = std::move(snap), playerAtInn,
-                               questEditorId = std::move(questEditorId),
-                               scriptName = std::move(scriptName),
-                               functionName = std::move(functionName)]() mutable {
-            std::string md = NPCIndex::GetSingleton()->BuildNPCInteractionContextFromSnapshot(snap);
-            std::string requestJson;
-            if (!md.empty()) {
-                requestJson = BuildNPCInteractionRequestJsonCore(md, playerAtInn, snap.currentGameTime);
-            }
-            // Phase C — back to main thread for VM dispatch.
-            auto* task = SKSE::GetTaskInterface();
-            if (!task) {
-                logger::error("BeginAsyncNPCDMTick: TaskInterface unavailable, callback dropped");
+        phaseATask->AddTask([callbackQuest, generation, maxPairs,
+                             scriptName = std::move(scriptName),
+                             functionName = std::move(functionName)]() mutable {
+            if (generation != SlotTracker::GetSingleton()->loadGeneration.load(std::memory_order_relaxed)) {
+                logger::debug("[NPCTick] Snapshot dropped: load generation changed");
                 return;
             }
-            task->AddTask([questEditorId = std::move(questEditorId),
-                           scriptName = std::move(scriptName),
-                           functionName = std::move(functionName),
-                           requestJson = std::move(requestJson)]() mutable {
-                AsyncDispatch::ExecuteQuestFunctionString(questEditorId, scriptName, functionName, requestJson);
+            const char* qedit = callbackQuest->GetFormEditorID();
+            if (!qedit || !qedit[0]) {
+                logger::error("BeginAsyncNPCDMTick: callback quest has no editor ID");
+                return;
+            }
+            std::string questEditorId = qedit;
+            logger::debug("[NPCTick] Phase A snapshot (gen={})", generation);
+            auto snap = NPCIndex::GetSingleton()->BuildNPCTickSnapshot(static_cast<int>(maxPairs));
+            const bool playerAtInn = FactionPolitics::IsPlayerAtInn();
+            if (snap.candidates.empty()) {
+                NPCTickResult result;
+                result.loadGeneration = generation;
+                if (NPCIndex::GetSingleton()->PublishNPCTickResult(result)) {
+                    AsyncDispatch::ExecuteQuestFunctionString(questEditorId, scriptName, functionName, "");
+                }
+                return;
+            }
+            // Phase B: owned values only; defer pool publication and VM access to Phase C.
+            AsyncDispatch::Submit([snap = std::move(snap), playerAtInn,
+                                   questEditorId = std::move(questEditorId),
+                                   scriptName = std::move(scriptName),
+                                   functionName = std::move(functionName)]() mutable {
+                auto result = NPCIndex::GetSingleton()->BuildNPCInteractionContextFromSnapshot(snap);
+                std::string requestJson;
+                if (!result.context.empty()) {
+                    requestJson = BuildNPCInteractionRequestJsonCore(result.context, playerAtInn, snap.currentGameTime);
+                }
+                auto* task = SKSE::GetTaskInterface();
+                if (!task) {
+                    logger::error("BeginAsyncNPCDMTick: TaskInterface unavailable, callback dropped");
+                    return;
+                }
+                task->AddTask([result = std::move(result),
+                               questEditorId = std::move(questEditorId),
+                               scriptName = std::move(scriptName),
+                               functionName = std::move(functionName),
+                               requestJson = std::move(requestJson)]() mutable {
+                    if (!NPCIndex::GetSingleton()->PublishNPCTickResult(result)) {
+                        logger::debug("[NPCTick] Result dropped: load generation changed");
+                        return;
+                    }
+                    logger::debug("[NPCTick] Phase C callback (gen={})", result.loadGeneration);
+                    AsyncDispatch::ExecuteQuestFunctionString(questEditorId, scriptName, functionName, requestJson);
+                });
             });
         });
     }
