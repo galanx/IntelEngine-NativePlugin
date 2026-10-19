@@ -6,6 +6,20 @@
 
 namespace {
 using namespace LCM;
+std::filesystem::path publicationCollision;
+void createPublicationCollision() {
+    const auto backup = publicationCollision.parent_path()/"test_IEbackup/original.skse";
+    require(SetFileAttributesW(backup.c_str(),FILE_ATTRIBUTE_NORMAL)!=0,"cannot probe backup locking");
+    const auto writer=CreateFileW(backup.c_str(),GENERIC_WRITE,
+        FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_SHARE_DELETE,nullptr,OPEN_EXISTING,0,nullptr);
+    if (writer!=INVALID_HANDLE_VALUE) CloseHandle(writer);
+    require(writer==INVALID_HANDLE_VALUE,"verified backup is writable during publication");
+    require(SetFileAttributesW(backup.c_str(),FILE_ATTRIBUTE_READONLY)!=0,"cannot restore backup protection");
+    std::ofstream stream(publicationCollision,std::ios::binary);
+    const char marker[]="competitor";
+    stream.write(marker,sizeof(marker)-1);
+    require(static_cast<bool>(stream),"cannot create publication competitor");
+}
 void word(Bytes& bytes, std::uint32_t value) {
     for (unsigned i=0; i<4; ++i) bytes.push_back(static_cast<unsigned char>(value >> (8*i)));
 }
@@ -47,6 +61,10 @@ void refuses(const std::function<void()>& action, const std::string& reason) {
 void write(const fs::path& path, const Bytes& bytes) {
     std::ofstream stream(path,std::ios::binary); stream.write(reinterpret_cast<const char*>(bytes.data()),bytes.size());
     require(static_cast<bool>(stream), "self-check fixture write failed");
+}
+unsigned gameChecks=0;
+void gameStartsBeforePublication() {
+    gameRunning([] { return ++gameChecks==2; });
 }
 void filesystemCheck(const fs::path& area, const Bytes& input, const Bytes& converted) {
     require(!fs::exists(area), "self-check area must not exist");
@@ -100,8 +118,34 @@ void filesystemCheck(const fs::path& area, const Bytes& input, const Bytes& conv
             FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_SHARE_DELETE,nullptr,OPEN_EXISTING,0,nullptr);
         require(handle == INVALID_HANDLE_VALUE, "source write lock ineffective");
     }
+    publicationCollision=source/"test_IEconverted.skse";
+    {
+        Source e(source/"test.ess"), s(source/"test.skse");
+        refuses([&] { publishFixedPair(source/"test.ess",e,s,converted,createPublicationCollision); },
+            "second-output collision after ESS rename");
+    }
+    require(fs::exists(source/"test_IEconverted.ess") && fs::exists(source/"test_IEconverted.skse") &&
+        fs::exists(source/"test_IEbackup/original.ess") && fs::exists(source/"test_IEconverted.staging"),
+        "incomplete publication artifacts were not retained");
+    {
+        std::ifstream stream(publicationCollision,std::ios::binary);
+        std::string marker((std::istreambuf_iterator<char>(stream)),{});
+        require(marker=="competitor","no-replace publication overwrote competitor output");
+    }
     Source finalEss(source/"test.ess"), finalSkse(source/"test.skse");
     require(finalEss.hash()==essHash && finalSkse.hash()==skseHash, "original drift");
+    const auto guarded=source/"guarded.ess";
+    write(guarded,ess);
+    write(source/"guarded.skse",fixture("1 "+std::to_string((std::uint64_t{62}<<32)|0x123456)
+        +" 1 intel_factsrendered text"));
+    require(fix(guarded,gameStartsBeforePublication)==2,"final running-game refusal has wrong exit code");
+    require(!fs::exists(source/"guarded_IEconverted.ess") &&
+        fs::exists(source/"guarded_IEbackup/original.ess"),"final game guard published output");
+    const auto locked=CreateFileW(guarded.c_str(),GENERIC_READ,0,nullptr,OPEN_EXISTING,0,nullptr);
+    require(locked!=INVALID_HANDLE_VALUE,"cannot create source I/O failure");
+    const auto status=fix(guarded,[] {});
+    CloseHandle(locked);
+    require(status==3,"source I/O failure has wrong exit code");
 }
 }
 int main(int argc, char** argv) {
@@ -129,6 +173,30 @@ int main(int argc, char** argv) {
         const auto actorInput=fixture(actorPayload(actor1,actor2,actorRaw));
         const auto actorExpected=fixture(actorPayload(actor1,actor2,actorEncoded));
         auto actorManifest=evidence(actorInput,actorOriginals,{"legacy","legacy","legacy"},"actor-in-place");
+        require(convert(actorInput,parse(actorInput,true),fixEvidence(actorInput,parse(actorInput,true)),true).bytes==actorExpected,
+            "owner-policy fix conversion bytes differ");
+        for (const auto runtime : {Runtime1170,Runtime17104}) {
+            auto runtimeInput=actorInput; put32(runtimeInput,12,runtime);
+            auto runtimeExpected=actorExpected; put32(runtimeExpected,12,runtime);
+            require(convert(runtimeInput,parse(runtimeInput,true),fixEvidence(runtimeInput,parse(runtimeInput,true)),true).bytes==runtimeExpected,
+                "supported fix runtime rejected");
+        }
+        auto otherBuild=actorInput; put32(otherBuild,8,0x12345678);
+        auto otherBuildExpected=actorExpected; put32(otherBuildExpected,8,0x12345678);
+        require(convert(otherBuild,parse(otherBuild,true),fixEvidence(otherBuild,parse(otherBuild,true)),true).bytes==otherBuildExpected,
+            "fix must ignore executable-build header");
+        const auto noTargets=fixture("1 0 1 unrelated x");
+        refuses([&] { fixEvidence(noTargets,parse(noTargets,true)); }, "zero legacy targets");
+        auto wrongStrv=actorInput; put32(wrongStrv,32,0x12345678);
+        refuses([&] { parse(wrongStrv,true); }, "wrong fix STRV");
+        auto wrongOwner=actorInput; put32(wrongOwner,20,0x12345678);
+        refuses([&] { parse(wrongOwner,true); }, "wrong fix owner");
+        auto wrongRuntime=actorInput; put32(wrongRuntime,12,0x01064000);
+        refuses([&] { parse(wrongRuntime,true); }, "unsupported fix runtime");
+        refuses([&] { gameRunning([] { return true; }); }, "running game seam");
+        require(!gameRunning([] { return false; }), "closed-game seam");
+        refuses([&] { gameRunning([] { throw std::runtime_error("enumeration failed"); return false; }); },
+            "process enumeration failure seam");
         const auto actorConverted=convert(actorInput,parse(actorInput),actorManifest);
         require(actorConverted.bytes==actorExpected && actorConverted.legacy==3, "actor-in-place exact bytes or family coverage differs");
         for (std::size_t i=0; i<actorOriginals.size(); ++i)
@@ -168,6 +236,8 @@ int main(int argc, char** argv) {
                     {"legacy","legacy","legacy"},"actor-in-place");
                 convert(blob,parse(blob),proof);
             }, "actor raw ESC/C0/DEL");
+            refuses([&] { convert(blob,parse(blob,true),fixEvidence(blob,parse(blob,true)),true); },
+                "fix raw ESC/C0/DEL");
         }
         for (const auto invalid : {std::uint64_t{62}<<32, (std::uint64_t{62}<<32)|0xff000001}) {
             const auto blob=fixture(actorPayload(invalid,actor2,actorRaw));
@@ -175,6 +245,8 @@ int main(int argc, char** argv) {
             require(!parsed.refusals.empty(), "actor zero/temporary typed identity was not classified");
             const auto proof=evidence(blob,actorOriginals,{"legacy","legacy","legacy"},"actor-in-place");
             refuses([&] { convert(blob,parsed,proof); }, "actor zero/temporary typed identity");
+            refuses([&] { convert(blob,parse(blob,true),fixEvidence(blob,parse(blob,true)),true); },
+                "fix temporary cache target");
         }
         auto actorEsc=actorRaw; actorEsc[0]="\x1b";
         const auto actorEscInput=fixture(actorPayload(actor1,actor2,actorEsc));
@@ -251,7 +323,7 @@ int main(int argc, char** argv) {
         auto trailing=input; trailing.push_back(0);
         refuses([&] { parse(trailing); },"trailing binary bytes");
         filesystemCheck(fs::u8path(argv[1]),input,expected);
-        std::cout << "PASS: exact global and actor-in-place all-family bytes; typed identity/key/rne_name BEL preservation; actor policy and control refusals; mixed/encoded preservation; trailing names/opaque chunks; sentinel/identity/count/case/framing refusals; exclusive locked backup/stage/publication, interrupted/failed publication and unchanged originals.\n";
+        std::cout << "PASS: legacy-policy fix evidence, both supported co-save runtimes, process guard seam, wrong runtime/owner/STRV refusals; exact conversion/name preservation/control and temporary-identity refusals; global/expert conversion; locked backups/staging/no-replace publication including retained incomplete pair and unchanged originals.\n";
         return 0;
     } catch (const std::exception& error) {
         std::cerr << "FAIL: " << error.what() << '\n'; return 1;
