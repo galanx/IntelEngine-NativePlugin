@@ -144,6 +144,23 @@ int main(int argc, char** argv) {
             && actorParsed.fields[4].key=="rne_name"
             && view(actorExpected,actorParsed.fields[4].start,actorParsed.fields[4].end)=="preserved",
             "actor identity/key/rne_name BEL preservation changed");
+        auto input17104=actorInput, expected17104=actorExpected;
+        for (auto* bytes : {&input17104,&expected17104}) {
+            put32(*bytes,8,Skse17104); put32(*bytes,12,Runtime17104);
+        }
+        auto proof17104=evidence(input17104,actorOriginals,{"legacy","legacy","legacy"},"actor-in-place");
+        proof17104["runtime"]="1.7.104.0"; proof17104["provider_sha256"]=Provider17104;
+        require(convert(input17104,parse(input17104),proof17104).bytes==expected17104,
+            "qualified 1.7.104 actor conversion differs");
+        for (const auto field : {"runtime","provider_sha256"}) {
+            auto mismatch=proof17104; mismatch[field]=actorManifest[field];
+            refuses([&] { convert(input17104,parse(input17104),mismatch); },
+                "runtime/provider relabeling accepted");
+        }
+        auto mismatchedHeader=input17104; put32(mismatchedHeader,8,Skse);
+        require(!parse(mismatchedHeader).refusals.empty(), "cross-runtime SKSE header accepted");
+        auto unknownRuntime=input17104; put32(unknownRuntime,12,Runtime17104+1);
+        require(!parse(unknownRuntime).refusals.empty(), "unknown runtime accepted");
         auto policyManifest=actorManifest;
         policyManifest["fields"][0]["representation"]="legacy-policy";
         policyManifest["fields"][0]["original_basis"]="owner-policy";
