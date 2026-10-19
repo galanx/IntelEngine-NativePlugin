@@ -806,25 +806,16 @@ namespace IntelEngine {
 
     RE::Actor* NPCIndex::ResolveStoryCandidate(const std::string& name) {
         std::shared_lock lock(m_mutex);
-        std::string lowerName = StringUtils::ToLowerStd(name);
-
-        // Check DM pool first (player-centric tick), then NPC pool (social tick)
-        for (const auto& pool : {std::cref(m_dmCandidatePool), std::cref(m_npcCandidatePool)}) {
-            auto it = pool.get().find(lowerName);
-            if (it != pool.get().end() && it->second != 0) {
-                auto* actor = GetActorFromFormId(it->second);
-                if (actor) {
-                    logger::debug("ResolveStoryCandidate('{}') -> exact pool match (0x{:08X})",
-                        name, it->second);
-                    return actor;
-                }
-            }
+        // ponytail: latest-tick pools cannot isolate overlapping requests;
+        // upgrade to request-bound resolution via the Papyrus contract.
+        const auto formId = ResolveStoryCandidateFormID(name, m_dmCandidatePool, m_npcCandidatePool);
+        // Candidate IDs are actor references, never base forms or global name aliases.
+        auto* actor = formId ? RE::TESForm::LookupByID<RE::Actor>(formId) : nullptr;
+        if (!actor || actor->IsDeleted() || actor->GetFormID() != formId) {
+            logger::warn("ResolveStoryCandidate('{}') -> rejected: unknown, ambiguous or unavailable candidate", name);
+            return nullptr;
         }
-
-        // Fallback to general name search if not in either pool (safety net)
-        logger::debug("ResolveStoryCandidate('{}') -> not in pool, falling back to FindByName", name);
-        lock.unlock();  // FindByName acquires its own lock
-        return FindByName(name);
+        return actor;
     }
 
     RE::Actor* NPCIndex::ResolveFromMemoryDB(RE::FormID formId, const std::string& name) {
@@ -1832,7 +1823,7 @@ namespace IntelEngine {
             m_npcCandidatePool.clear();
             for (const auto& group : groups) {
                 for (const auto& n : group.npcs) {
-                    m_npcCandidatePool[n.actor->nameLower] = n.actor->formId;
+                    m_npcCandidatePool.emplace(n.actor->nameLower, n.actor->formId);
                 }
             }
         }
@@ -2252,7 +2243,7 @@ namespace IntelEngine {
             std::unique_lock poolLock(m_mutex);
             m_dmCandidatePool.clear();
             for (const auto& s : finalPool) {
-                m_dmCandidatePool[s.a->nameLower] = s.a->formId;
+                m_dmCandidatePool.emplace(s.a->nameLower, s.a->formId);
             }
         }
 

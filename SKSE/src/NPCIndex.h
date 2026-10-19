@@ -16,6 +16,7 @@
 #include "StringUtils.h"
 #include "SlotTracker.h"
 #include "MemoryDB.h"  // RankedCandidate (used by StoryDMPhaseAPrefetch)
+#include "StoryCandidateResolution.h"
 
 #include <deque>
 #include <unordered_map>
@@ -269,10 +270,9 @@ namespace IntelEngine {
         static std::string GetNPCBioFallbackLine(RE::Actor* actor);
 
         /**
-         * Resolve a name from the DM response to the exact Actor from the last candidate pool.
-         * Uses stored FormIDs from BuildDungeonMasterContext/BuildNPCInteractionContext,
-         * ensuring we get the EXACT NPC that was in the pool (not a different NPC with the same name).
-         * Falls back to FindByName if the name isn't in the pool.
+         * Resolve uniquely within the latest DM/social pools, exact display name first,
+         * then case/whitespace-normalized name with a trailing role suffix removed.
+         * Unknown or ambiguous names are rejected; no global name search.
          */
         RE::Actor* ResolveStoryCandidate(const std::string& name);
 
@@ -614,12 +614,10 @@ namespace IntelEngine {
         // All indexed names for fuzzy search
         std::vector<std::string> m_allNames;
 
-        // Candidate pools for exact name->FormID resolution (no name ambiguity).
-        // Separate pools per tick — each tick clears and rebuilds its own pool,
-        // so an async LLM response always finds its candidates intact.
-        // ResolveStoryCandidate checks DM pool first, then NPC pool.
-        std::unordered_map<std::string, RE::FormID> m_dmCandidatePool;
-        std::unordered_map<std::string, RE::FormID> m_npcCandidatePool;
+        // Keep duplicate display names so response resolution can reject ambiguity.
+        // Each tick replaces only its own pool.
+        StoryCandidatePool m_dmCandidatePool;
+        StoryCandidatePool m_npcCandidatePool;
 
         // Story cooldown mirror: FormID -> game time when last picked
         // Volatile (empty on load), self-heals after first tick
