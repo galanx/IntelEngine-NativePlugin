@@ -17,6 +17,7 @@
 #include "SlotTracker.h"
 #include "MemoryDB.h"  // RankedCandidate (used by StoryDMPhaseAPrefetch)
 #include "StoryCandidateResolution.h"
+#include "NPCTickResult.h"
 
 #include <deque>
 #include <unordered_map>
@@ -438,6 +439,7 @@ namespace IntelEngine {
         /** Tick-level snapshot for the NPC interaction tick (NPC DM). */
         struct NPCTickSnapshot {
             int               maxPairs           = 4;
+            std::uint32_t     loadGeneration = 0;
             float             currentGameTime    = 0.f;
             RE::FormID        playerCellFormId   = 0;
             std::string       playerName;
@@ -457,9 +459,12 @@ namespace IntelEngine {
         /**
          * Phase B — worker thread. Build markdown context from the snapshot.
          * Performs SQL queries (GetSociallyActiveFormIDs, GetFormattedMemories) and
-         * formats the output. Updates m_npcCandidatePool under m_mutex.
+         * formats the output. Returns a value-only result; no pool publication.
          */
-        std::string BuildNPCInteractionContextFromSnapshot(const NPCTickSnapshot& snap);
+        NPCTickResult BuildNPCInteractionContextFromSnapshot(const NPCTickSnapshot& snap);
+
+        /** Main thread: publish the pool only if no load/revert has intervened. */
+        bool PublishNPCTickResult(NPCTickResult& result);
 
         /** Per-actor data for Story DM tick (richer than NPC tick — has position + dbFormId). */
         struct StoryDMActorSnapshot {

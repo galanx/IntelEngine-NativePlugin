@@ -1658,8 +1658,9 @@ namespace IntelEngine {
     }
 
     std::string NPCIndex::BuildNPCInteractionContext(int maxPairs) {
-        // Sync wrapper — delegates to async-path snapshot+phase-B for single source of truth.
-        return BuildNPCInteractionContextFromSnapshot(BuildNPCTickSnapshot(maxPairs));
+        // Legacy synchronous API: caller must provide a safe engine-read context.
+        auto result = BuildNPCInteractionContextFromSnapshot(BuildNPCTickSnapshot(maxPairs));
+        return PublishNPCTickResult(result) ? std::move(result.context) : std::string{};
     }
 
     // =========================================================================
@@ -1669,6 +1670,7 @@ namespace IntelEngine {
     NPCIndex::NPCTickSnapshot NPCIndex::BuildNPCTickSnapshot(int maxPairs) {
         NPCTickSnapshot snap;
         snap.maxPairs = maxPairs;
+        snap.loadGeneration = SlotTracker::GetSingleton()->loadGeneration.load(std::memory_order_relaxed);
 
         auto* player = RE::PlayerCharacter::GetSingleton();
         if (!player) return snap;
@@ -1749,8 +1751,15 @@ namespace IntelEngine {
     // Async NPC interaction tick — Phase B (markdown, worker thread)
     // =========================================================================
 
-    std::string NPCIndex::BuildNPCInteractionContextFromSnapshot(const NPCTickSnapshot& snap) {
-        if (snap.candidates.empty()) return "";
+    bool NPCIndex::PublishNPCTickResult(NPCTickResult& result) {
+        std::unique_lock poolLock(m_mutex);
+        return result.Publish(SlotTracker::GetSingleton()->loadGeneration, m_npcCandidatePool);
+    }
+
+    NPCTickResult NPCIndex::BuildNPCInteractionContextFromSnapshot(const NPCTickSnapshot& snap) {
+        NPCTickResult result;
+        result.loadGeneration = snap.loadGeneration;
+        if (snap.candidates.empty()) return result;
 
         auto* memDB = MemoryDB::GetSingleton();
 
@@ -1808,7 +1817,7 @@ namespace IntelEngine {
 
         if (groups.empty()) {
             logger::debug("[NPCTick] No location groups with 2+ NPCs");
-            return "";
+            return result;
         }
 
         std::sort(groups.begin(), groups.end(),
@@ -1817,14 +1826,10 @@ namespace IntelEngine {
             groups.resize(snap.maxPairs);
         }
 
-        // Update NPC candidate pool for name->FormID resolution from response.
-        {
-            std::unique_lock poolLock(m_mutex);
-            m_npcCandidatePool.clear();
-            for (const auto& group : groups) {
-                for (const auto& n : group.npcs) {
-                    m_npcCandidatePool.emplace(n.actor->nameLower, n.actor->formId);
-                }
+        // Keep the pool private to this result until main-thread generation validation.
+        for (const auto& group : groups) {
+            for (const auto& n : group.npcs) {
+                result.candidates.emplace(n.actor->nameLower, n.actor->formId);
             }
         }
 
@@ -1901,7 +1906,8 @@ namespace IntelEngine {
         }
 
         logger::info("[NPCTick] async context: {} groups, {} chars", groups.size(), md.size());
-        return MemoryDB::EscapeJsonString(md);
+        result.context = MemoryDB::EscapeJsonString(md);
+        return result;
     }
 
     // =========================================================================

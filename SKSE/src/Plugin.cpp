@@ -121,10 +121,12 @@ namespace IntelEngine {
     void RevertCallback(SKSE::SerializationInterface*) {
         g_currentSaveID.clear();
         g_hasReverted = true;
-        // Increment load generation to cancel any pending deferred Maintenance dispatch
-        // from a previous load (prevents double-dispatch on rapid save reload).
+        // Cancel deferred Maintenance and NPC tick snapshots/results from the previous load.
         auto* tracker = SlotTracker::GetSingleton();
         tracker->loadGeneration.fetch_add(1, std::memory_order_relaxed);
+        NPCTickResult emptyNPCTick;
+        emptyNPCTick.loadGeneration = tracker->loadGeneration.load(std::memory_order_relaxed);
+        NPCIndex::GetSingleton()->PublishNPCTickResult(emptyNPCTick);
         // Clear SlotTracker here (before LoadCallback repopulates from co-save).
         // Previously this was in kPostLoadGame, but that ran AFTER LoadCallback
         // and wiped the co-save data we just loaded.
