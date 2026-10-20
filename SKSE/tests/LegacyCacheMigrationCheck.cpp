@@ -74,6 +74,23 @@ void filesystemCheck(const fs::path& area, const Bytes& input, const Bytes& conv
     const Bytes ess{'T','E','S','V','_','S','A','V','E','G','A','M','E',0,9,255};
     write(source/"test.ess",ess); write(source/"test.skse",input);
     const auto essHash=sha256(ess), skseHash=sha256(input);
+    const auto vr=source/"vr";
+    fs::create_directory(vr);
+    auto vrInput=fixture("1 "+std::to_string((std::uint64_t{62}<<32)|0x123456)
+        +" 1 intel_factsrendered legacy");
+    put32(vrInput,12,0x010400f0); // Skyrim VR 1.4.15.0.
+    write(vr/"test.ess",ess); write(vr/"test.skse",vrInput);
+    const auto vrParsed=parse(vrInput);
+    require(!inspect(vrInput,vrParsed)["refusals"].empty(),
+        "VR inspect did not report the runtime refusal");
+    const auto vrEvidence=evidence(vrInput,{"legacy"},{"legacy"},"actor-in-place");
+    refuses([&] { convert(vrInput,vrParsed,vrEvidence); }, "VR expert conversion");
+    refuses([&] { fix(vr/"test.ess"); }, "VR fix");
+    require(std::distance(fs::directory_iterator(vr),fs::directory_iterator{})==2,
+        "VR refusal wrote a backup, staging or output file");
+    Source vrEss(vr/"test.ess"), vrSkse(vr/"test.skse");
+    require(vrEss.hash()==essHash && vrSkse.hash()==sha256(vrInput),
+        "VR refusal changed the original pair");
     {
         Source e(source/"test.ess"), s(source/"test.skse");
         require(e.hash()==essHash && s.hash()==skseHash, "source hash mismatch");
