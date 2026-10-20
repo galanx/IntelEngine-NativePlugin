@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <utility>
 #include <nlohmann/json.hpp>
 
 namespace IntelEngine {
@@ -52,7 +53,7 @@ namespace IntelEngine {
             return nullptr;
         }
 
-        return extraTeleport->teleportData->linkedDoor.get().get();
+        return std::as_const(extraTeleport->teleportData->linkedDoor).get().get();
     }
 
     RE::BSFixedString CellAnalyzer::GetDoorDestinationName(RE::TESObjectREFR* door) {

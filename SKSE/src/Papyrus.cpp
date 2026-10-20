@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <chrono>
 #include <mutex>
+#include <utility>
 #include "LocationResolver.h"
 #include "StringUtils.h"
 #include "RenderedCacheCodec.h"
@@ -1577,7 +1578,7 @@ namespace IntelEngine::Papyrus {
         }
 
         // Try this location's world marker
-        auto markerPtr = editorLoc->worldLocMarker.get();
+        auto markerPtr = std::as_const(editorLoc->worldLocMarker).get();
         if (markerPtr) {
             auto* marker = markerPtr.get();
             if (marker) {
@@ -1590,7 +1591,7 @@ namespace IntelEngine::Papyrus {
 
         // Try parent location's marker (e.g., interior shop → settlement)
         if (editorLoc->parentLoc) {
-            auto parentPtr = editorLoc->parentLoc->worldLocMarker.get();
+            auto parentPtr = std::as_const(editorLoc->parentLoc->worldLocMarker).get();
             if (parentPtr) {
                 auto* parentMarker = parentPtr.get();
                 if (parentMarker) {
@@ -1671,7 +1672,7 @@ namespace IntelEngine::Papyrus {
             if (!teleport || !teleport->teleportData)
                 return RE::BSContainer::ForEachResult::kContinue;
 
-            auto* linkedDoor = teleport->teleportData->linkedDoor.get().get();
+            auto* linkedDoor = std::as_const(teleport->teleportData->linkedDoor).get().get();
             if (!linkedDoor) return RE::BSContainer::ForEachResult::kContinue;
 
             auto* destCell = linkedDoor->GetSaveParentCell();
@@ -5212,7 +5213,7 @@ namespace IntelEngine::Papyrus {
         auto* processLists = RE::ProcessLists::GetSingleton();
         if (!processLists) return result;
 
-        for (auto& handle : processLists->highActorHandles) {
+        for (const auto& handle : processLists->highActorHandles) {
             auto actor = handle.get();
             if (!actor || !actor.get()) continue;
             auto* a = actor.get();
