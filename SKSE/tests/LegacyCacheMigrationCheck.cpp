@@ -192,16 +192,18 @@ int main(int argc, char** argv) {
         auto actorManifest=evidence(actorInput,actorOriginals,{"legacy","legacy","legacy"},"actor-in-place");
         require(convert(actorInput,parse(actorInput,true),fixEvidence(actorInput,parse(actorInput,true)),true).bytes==actorExpected,
             "owner-policy fix conversion bytes differ");
-        for (const auto runtime : {Runtime1170,Runtime17104}) {
+        for (const auto runtime : {Runtime,Runtime17104}) {
             auto runtimeInput=actorInput; put32(runtimeInput,12,runtime);
             auto runtimeExpected=actorExpected; put32(runtimeExpected,12,runtime);
+            const auto skse=runtime==Runtime ? Skse : Skse17104;
+            put32(runtimeInput,8,skse); put32(runtimeExpected,8,skse);
             require(convert(runtimeInput,parse(runtimeInput,true),fixEvidence(runtimeInput,parse(runtimeInput,true)),true).bytes==runtimeExpected,
                 "supported fix runtime rejected");
         }
         auto otherBuild=actorInput; put32(otherBuild,8,0x12345678);
-        auto otherBuildExpected=actorExpected; put32(otherBuildExpected,8,0x12345678);
-        require(convert(otherBuild,parse(otherBuild,true),fixEvidence(otherBuild,parse(otherBuild,true)),true).bytes==otherBuildExpected,
-            "fix must ignore executable-build header");
+        refuses([&] { parse(otherBuild,true); }, "unsupported fix SKSE header");
+        auto crossedBuild=actorInput; put32(crossedBuild,8,Skse17104);
+        refuses([&] { parse(crossedBuild,true); }, "cross-runtime fix SKSE header");
         const auto noTargets=fixture("1 0 1 unrelated x");
         refuses([&] { fixEvidence(noTargets,parse(noTargets,true)); }, "zero legacy targets");
         auto wrongStrv=actorInput; put32(wrongStrv,32,0x12345678);
@@ -229,6 +231,23 @@ int main(int argc, char** argv) {
             && actorParsed.fields[4].key=="rne_name"
             && view(actorExpected,actorParsed.fields[4].start,actorParsed.fields[4].end)=="preserved",
             "actor identity/key/rne_name BEL preservation changed");
+        auto input17104=actorInput, expected17104=actorExpected;
+        for (auto* bytes : {&input17104,&expected17104}) {
+            put32(*bytes,8,Skse17104); put32(*bytes,12,Runtime17104);
+        }
+        auto proof17104=evidence(input17104,actorOriginals,{"legacy","legacy","legacy"},"actor-in-place");
+        proof17104["runtime"]="1.7.104.0"; proof17104["provider_sha256"]=Provider17104;
+        require(convert(input17104,parse(input17104),proof17104).bytes==expected17104,
+            "qualified 1.7.104 actor conversion differs");
+        for (const auto field : {"runtime","provider_sha256"}) {
+            auto mismatch=proof17104; mismatch[field]=actorManifest[field];
+            refuses([&] { convert(input17104,parse(input17104),mismatch); },
+                "runtime/provider relabeling accepted");
+        }
+        auto mismatchedHeader=input17104; put32(mismatchedHeader,8,Skse);
+        require(!parse(mismatchedHeader).refusals.empty(), "cross-runtime SKSE header accepted");
+        auto unknownRuntime=input17104; put32(unknownRuntime,12,Runtime17104+1);
+        require(!parse(unknownRuntime).refusals.empty(), "unknown runtime accepted");
         auto policyManifest=actorManifest;
         policyManifest["fields"][0]["representation"]="legacy-policy";
         policyManifest["fields"][0]["original_basis"]="owner-policy";

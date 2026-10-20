@@ -29,7 +29,9 @@ using Json = nlohmann::json;
 namespace fs = std::filesystem;
 constexpr const char* Provider = "2fb155b8508e085616c5f72cb8fd2368275557dc56988300b92e540930d1f444";
 constexpr std::uint32_t Owner = 0x424510A2, Strv = 0x53545256;
-constexpr std::uint32_t Runtime = 0x01064920, Runtime1170 = 0x01064920, Runtime17104 = 0x01070680, Skse = 0x02020060;
+constexpr std::uint32_t Runtime = 0x01064920, Skse = 0x02020060;
+constexpr const char* Provider17104 = "69260a675186cf781a2105002505ab224fee12e84d004a3787670c9d6ce936be";
+constexpr std::uint32_t Runtime17104 = 0x01070680, Skse17104 = 0x02030010;
 void require(bool condition, const std::string& message) {
     if (!condition) throw std::runtime_error(message);
 }
@@ -62,6 +64,12 @@ std::uint32_t u32(const Bytes& bytes, std::size_t offset) {
     require(offset <= bytes.size() && bytes.size() - offset >= 4, "partial binary header");
     return std::uint32_t(bytes[offset]) | (std::uint32_t(bytes[offset+1]) << 8) |
            (std::uint32_t(bytes[offset+2]) << 16) | (std::uint32_t(bytes[offset+3]) << 24);
+}
+bool qualifiedRuntime(const Bytes& bytes, const Json& basis) {
+    return (u32(bytes,8) == Skse && u32(bytes,12) == Runtime &&
+            basis.at("runtime") == "1.6.1170.0" && basis.at("provider_sha256") == Provider) ||
+           (u32(bytes,8) == Skse17104 && u32(bytes,12) == Runtime17104 &&
+            basis.at("runtime") == "1.7.104.0" && basis.at("provider_sha256") == Provider17104);
 }
 void put32(Bytes& bytes, std::size_t offset, std::uint32_t value) {
     require(offset <= bytes.size() && bytes.size() - offset >= 4, "length patch outside header");
@@ -152,10 +160,11 @@ Parsed parse(const Bytes& bytes, bool fixMode = false) {
     }
     require(offset == bytes.size(), "trailing bytes/plugin count mismatch");
     require(candidates == 1, "qualified owner/STRV missing");
-    const auto runtime=u32(bytes,12);
-    if (fixMode) require(runtime == Runtime1170 || runtime == Runtime17104,
+    const bool qualifiedHeader=(u32(bytes,8) == Skse && u32(bytes,12) == Runtime) ||
+        (u32(bytes,8) == Skse17104 && u32(bytes,12) == Runtime17104);
+    if (fixMode) require(qualifiedHeader,
         "unsupported co-save runtime; fix supports Skyrim 1.6.1170 and 1.7.104");
-    else if (u32(bytes,8) != Skse || runtime != Runtime)
+    else if (!qualifiedHeader)
         result.refusals.push_back("unqualified SKSE/runtime header");
     auto cursor=result.begin;
     auto token=[&]() -> std::pair<std::size_t,std::size_t> {
@@ -244,7 +253,7 @@ Converted convert(const Bytes& input, const Parsed& parsed, const Json& manifest
     if (!fixMode) {
         require(manifest.at("schema") == 1, "unsupported evidence schema");
         require(manifest.at("skse_sha256") == inputHash, "SKSE evidence hash mismatch");
-        require(manifest.at("provider_sha256") == Provider && manifest.at("runtime") == "1.6.1170.0", "unqualified provider/runtime");
+        require(qualifiedRuntime(input, manifest), "unqualified provider/runtime");
     } else {
         require(manifest.at("schema") == "legacy-policy" && manifest.at("skse_sha256") == inputHash,
             "internal legacy-policy evidence mismatch");
@@ -487,7 +496,7 @@ int run(int argc, char** argv) {
     require(codec.hash() == LCM_CODEC_SHA256, "build/runtime production codec identity mismatch");
     require(manifest.at("ess_sha256") == ess.hash() && manifest.at("skse_sha256") == skse.hash(), "source pair hash mismatch");
     require(manifest.at("qualification_receipt_sha256") == qualification.hash(), "qualification receipt hash mismatch");
-    require(receipt.at("provider_sha256") == Provider && receipt.at("runtime") == "1.6.1170.0" &&
+    require(qualifiedRuntime(skse.bytes(), receipt) &&
         receipt.at("owner_authorized_offline") == true && actorBasis(receipt) == actorBasis(manifest), "qualification receipt lacks approved restricted basis");
     Json archiveInfo=nullptr;
     std::unique_ptr<Source> archive;
