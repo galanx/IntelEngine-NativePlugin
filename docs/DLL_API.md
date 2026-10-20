@@ -486,7 +486,7 @@ Offline production comparisons passed after safety corrections: run12 produced 2
 2. Put `LegacyCacheMigration.exe` beside `Convert-IE-Save.bat`, or run it directly from any working directory. Drag exactly one `.ess` onto the adjacent batch file, or run:
 
    ```powershell
-   & ".\IntelEngine Tools\LegacyCacheMigration.exe" fix --save ".\My Save.ess"
+   & ".\IntelEngineTools\LegacyCacheMigration.exe" fix --save ".\My Save.ess"
    ```
 
 3. Success creates `<stem>_IEbackup/` containing the original `.ess` and `.skse`, plus sibling `<stem>_IEconverted.ess` and `<stem>_IEconverted.skse`. The tool does not overwrite existing backup/output files. It leaves the original pair unchanged.
