@@ -17,6 +17,9 @@
 #include <set>
 #include <string_view>
 
+#include <TlHelp32.h>
+#include <functional>
+#include <shellapi.h>
 #ifndef LCM_CODEC_SHA256
 #error Define LCM_CODEC_SHA256 as the SHA256 string of the included production header
 #endif
@@ -121,9 +124,9 @@ struct Parsed {
     std::vector<Field> fields;
     Json framing=Json::array(), refusals=Json::array();
 };
-Parsed parse(const Bytes& bytes) {
+Parsed parse(const Bytes& bytes, bool fixMode = false) {
     require(bytes.size() >= 20 && view(bytes,0,4) == "SKSE", "not an SKSE co-save");
-    require(u32(bytes,4) == 1, "unsupported co-save version");
+    require(u32(bytes,4) == 1, fixMode ? "unsupported co-save format; expected format 1" : "unsupported co-save version");
     Parsed result;
     std::size_t offset=20;
     const auto plugins=u32(bytes,16);
@@ -157,8 +160,11 @@ Parsed parse(const Bytes& bytes) {
     }
     require(offset == bytes.size(), "trailing bytes/plugin count mismatch");
     require(candidates == 1, "qualified owner/STRV missing");
-    if (!((u32(bytes,8) == Skse && u32(bytes,12) == Runtime) ||
-          (u32(bytes,8) == Skse17104 && u32(bytes,12) == Runtime17104)))
+    const bool qualifiedHeader=(u32(bytes,8) == Skse && u32(bytes,12) == Runtime) ||
+        (u32(bytes,8) == Skse17104 && u32(bytes,12) == Runtime17104);
+    if (fixMode) require(qualifiedHeader,
+        "unsupported co-save runtime; fix supports Skyrim 1.6.1170 and 1.7.104");
+    else if (!qualifiedHeader)
         result.refusals.push_back("unqualified SKSE/runtime header");
     auto cursor=result.begin;
     auto token=[&]() -> std::pair<std::size_t,std::size_t> {
@@ -241,19 +247,34 @@ bool actorBasis(const Json& basis) {
         basis.at("preserve_rne_name_bel") == true, "missing approved actor transport policy");
     return true;
 }
-Converted convert(const Bytes& input, const Parsed& parsed, const Json& manifest) {
+Converted convert(const Bytes& input, const Parsed& parsed, const Json& manifest, bool fixMode = false) {
+    const auto inputHash=sha256(input);
     require(parsed.refusals.empty(), "whole-stream qualification refusal: "+parsed.refusals.dump());
-    require(manifest.at("schema") == 1, "unsupported evidence schema");
-    require(manifest.at("skse_sha256") == sha256(input), "SKSE evidence hash mismatch");
-    require(qualifiedRuntime(input, manifest), "unqualified provider/runtime");
-    const bool actor=actorBasis(manifest);
-    for (const auto& f : parsed.fields) {
-        require(actor ? f.object != 0 : f.object == 0, "identity outside qualified scope");
-        if (!actor && !target(f.key))
-            require(view(input,f.start,f.end).find('\a') == std::string_view::npos, "global non-cache BEL refused");
+    if (!fixMode) {
+        require(manifest.at("schema") == 1, "unsupported evidence schema");
+        require(manifest.at("skse_sha256") == inputHash, "SKSE evidence hash mismatch");
+        require(qualifiedRuntime(input, manifest), "unqualified provider/runtime");
+    } else {
+        require(manifest.at("schema") == "legacy-policy" && manifest.at("skse_sha256") == inputHash,
+            "internal legacy-policy evidence mismatch");
+        require(manifest.at("legacy_writer") == "IE-3.5.2" && manifest.at("actor_bel_policy") == "space" &&
+            manifest.at("preserve_rne_name_bel") == true, "missing approved legacy policy");
     }
-    require(manifest.at("codec_sha256") == LCM_CODEC_SHA256, "unqualified production codec generation");
-    require(!manifest.at("qualification_receipt_sha256").get<std::string>().empty(), "missing qualification receipt hash");
+    const bool actor=fixMode || actorBasis(manifest);
+    if (fixMode) {
+        for (const auto& f : parsed.fields) if (target(f.key))
+            require(f.object != 0, "global cache target is not eligible for actor fix policy");
+    } else {
+        for (const auto& f : parsed.fields) {
+            require(actor ? f.object != 0 : f.object == 0, "identity outside qualified scope");
+            if (!actor && !target(f.key))
+                require(view(input,f.start,f.end).find('\a') == std::string_view::npos, "global non-cache BEL refused");
+        }
+    }
+    if (!fixMode) {
+        require(manifest.at("codec_sha256") == LCM_CODEC_SHA256, "unqualified production codec generation");
+        require(!manifest.at("qualification_receipt_sha256").get<std::string>().empty(), "missing qualification receipt hash");
+    }
     const auto& evidence=manifest.at("fields");
     require(evidence.is_array(), "field manifest is not an array");
     std::size_t total=0;
@@ -274,7 +295,10 @@ Converted convert(const Bytes& input, const Parsed& parsed, const Json& manifest
         }
         require(proof != nullptr, "unknown target representation");
         require(proof->at("start") == f.start && proof->at("end") == f.end, "field evidence span mismatch");
-        require(!proof->at("evidence").get<std::string>().empty(), "missing independent field provenance");
+        if (fixMode) {
+            require(proof->at("representation") == "legacy-policy" && proof->at("original_basis") == "owner-policy" &&
+                proof->at("source_sha256") == inputHash, "invalid internal legacy-policy evidence");
+        } else require(!proof->at("evidence").get<std::string>().empty(), "missing independent field provenance");
         const auto raw=view(input,f.start,f.end);
         if (actor) for (unsigned char c : raw)
             require(c >= 32 ? c != 127 : c == 7 || c == 10, "actor raw ESC/other-control refused");
@@ -321,7 +345,7 @@ Converted convert(const Bytes& input, const Parsed& parsed, const Json& manifest
         require(delta <= std::numeric_limits<std::uint32_t>::max()-old, "enclosing length overflow");
         put32(output.bytes,header,old+static_cast<std::uint32_t>(delta));
     }
-    const auto check=parse(output.bytes);
+    const auto check=parse(output.bytes,fixMode);
     require(check.refusals.empty() && check.fields.size() == parsed.fields.size() && check.declared == parsed.declared && check.written == parsed.written, "output whole-stream verification failed");
     // Reverse each explicit value patch and the two necessary headers. Equality
     // proves every remaining byte, including opaque chunks and trailing names.
@@ -343,13 +367,105 @@ Converted convert(const Bytes& input, const Parsed& parsed, const Json& manifest
     return output;
 }
 
+struct GameSafetyRefusal : std::runtime_error { using std::runtime_error::runtime_error; };
+bool gameRunning(const std::function<bool()>& isGameRunning = {}) {
+    if (isGameRunning) {
+        if (isGameRunning()) throw GameSafetyRefusal("Skyrim is running; close the game before fixing the save");
+        return false;
+    }
+    HANDLE snapshot=CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS,0);
+    if (snapshot == INVALID_HANDLE_VALUE) throw GameSafetyRefusal("cannot enumerate processes; close other tools and retry");
+    PROCESSENTRY32W entry{}; entry.dwSize=sizeof(entry);
+    bool found=false;
+    if (Process32FirstW(snapshot,&entry)) do {
+        const std::wstring name(entry.szExeFile);
+        if (_wcsicmp(name.c_str(),L"SkyrimSE.exe")==0 || _wcsicmp(name.c_str(),L"Skyrim.exe")==0 ||
+            _wcsicmp(name.c_str(),L"SkyrimVR.exe")==0) { found=true; break; }
+    } while (Process32NextW(snapshot,&entry));
+    const auto error=GetLastError(); CloseHandle(snapshot);
+    if (!found && error != ERROR_NO_MORE_FILES) throw GameSafetyRefusal("process enumeration failed; close other tools and retry");
+    if (found) throw GameSafetyRefusal("Skyrim is running; close the game before fixing the save");
+    return false;
+}
+Json fixEvidence(const Bytes& bytes, const Parsed& parsed) {
+    Json fields=Json::array();
+    const auto hash=sha256(bytes);
+    for (const auto& f : parsed.fields) if (target(f.key)) {
+        const auto raw=view(bytes,f.start,f.end);
+        std::string original(raw);
+        for (char& c : original) if (c=='\a') c=' ';
+        fields.push_back({{"object",std::to_string(f.object)},{"key",f.key},{"start",f.start},{"end",f.end},
+            {"source_sha256",hash},{"representation","legacy-policy"},{"original_basis","owner-policy"},
+            {"original_hex",hex(original)}});
+    }
+    require(!fields.empty(), "no eligible legacy cache targets found; original save was not changed");
+    return {{"schema","legacy-policy"},{"skse_sha256",hash},{"legacy_writer","IE-3.5.2"},
+        {"actor_bel_policy","space"},{"preserve_rne_name_bel",true},{"fields",fields}};
+}
+void verifyBeforePublish() { gameRunning(); }
+int fix(const fs::path& essPath, void (*requireGameClosed)() = verifyBeforePublish) {
+    try {
+    requireGameClosed();
+    require(essPath.extension()==".ess", "fix requires one .ess save; select an ESS file");
+    const auto base=fs::absolute(essPath).parent_path()/essPath.stem();
+    const auto sksePath=fs::path(base.wstring()+L".skse");
+    require(fs::exists(essPath) && fs::exists(sksePath), "complete same-directory, same-stem .ess/.skse pair required");
+    require(!sameFile(essPath,sksePath), "ESS and co-save resolve to the same file; choose a valid pair");
+    Source ess(essPath), skse(sksePath);
+    require(ess.bytes().size()>=13 && view(ess.bytes(),0,13)=="TESV_SAVEGAME", "ESS is empty or lacks Skyrim save signature");
+    auto parsed=parse(skse.bytes(),true);
+    auto converted=convert(skse.bytes(),parsed,fixEvidence(skse.bytes(),parsed),true);
+    require(converted.legacy>0, "no eligible legacy cache targets found; original save was not changed");
+    const auto backup=fs::path(base.wstring()+L"_IEbackup");
+    const auto outputEss=fs::path(base.wstring()+L"_IEconverted.ess");
+    const auto outputSkse=fs::path(base.wstring()+L"_IEconverted.skse");
+    const auto staging=fs::path(base.wstring()+L"_IEconverted.staging");
+    require(!fs::exists(backup) && !fs::exists(outputEss) && !fs::exists(outputSkse) && !fs::exists(staging),
+        "backup/output/staging path already exists; move it aside and retry");
+    try { publishFixedPair(essPath,ess,skse,converted.bytes,requireGameClosed); }
+    catch (const GameSafetyRefusal& e) {
+        std::cerr << "Fix refused: " << e.what() << "\nBackup: " << backup.u8string()
+            << "\nStaging: " << staging.u8string() << "\nNo converted pair published; originals unchanged.\n";
+        return 2;
+    }
+    catch (const std::exception& e) {
+        std::cerr << "I/O/publication failed: " << e.what() << "\nBackup: " << backup.u8string()
+            << "\nStaging: " << staging.u8string() << "\nOutputs: " << outputEss.u8string() << " and "
+            << outputSkse.u8string() << "\nInspect retained files before retrying; originals were not changed.\n";
+        return 3;
+    }
+    std::size_t facts=0,gossip=0,history=0;
+    for (const auto& change : converted.changes) {
+        const auto key=change.at("key").get<std::string>();
+        if (key=="intel_factsrendered") ++facts;
+        else if (key=="intel_gossiprendered") ++gossip;
+        else if (key=="intel_taskhistoryrendered") ++history;
+    }
+    std::size_t names=0;
+    for (const auto& field : parsed.fields) if (field.key=="rne_name") ++names;
+    std::cout << "Fixed " << converted.legacy << " legacy cache value(s): facts " << facts << ", gossip " << gossip
+        << ", task history " << history << "; preserved " << names << " serialized name span(s).\n"
+        << "Output: " << outputEss.u8string() << " and " << outputSkse.u8string() << "\nBackup: " << backup.u8string()
+        << "\nOriginals unchanged. Use a coherent repaired IE DLL/PEX/prompts set; these repaired save components may not match existing IE data. Never load converted saves under IE 3.5.2.\n";
+    return 0;
+    } catch (const IOError& e) {
+        std::cerr << "Save I/O/verification failed: " << e.what()
+            << "\nCheck file permissions and storage, then retry. Originals unchanged.\n";
+        return 3;
+    } catch (const fs::filesystem_error& e) {
+        std::cerr << "Save filesystem access failed: " << e.what()
+            << "\nCheck paths and storage, then retry. Originals unchanged.\n";
+        return 3;
+    }
+}
+
 #ifndef LCM_NO_MAIN
 Json readJson(const Source& source) {
     return Json::parse(source.bytes().begin(),source.bytes().end());
 }
 int run(int argc, char** argv) {
     if (argc == 2 && std::string(argv[1]) == "--help") {
-        std::cout << "inspect --skse FILE\nconvert --ess FILE --skse FILE --evidence JSON --qualification JSON --codec HEADER --backup NEW_DIR --output NEW_DIR --protected-dir LIVE_SAVE_DIR [--protected-dir DIR ...] [--archive FILE]\n"
+        std::cout << "fix --save FILE.ess\ninspect --skse FILE\nconvert --ess FILE --skse FILE --evidence JSON --qualification JSON --codec HEADER --backup NEW_DIR --output NEW_DIR --protected-dir LIVE_SAVE_DIR [--protected-dir DIR ...] [--archive FILE]\n"
                   << "Offline only. Global independent evidence or explicitly qualified IE-3.5.2 actor-in-place transport policy. No force, installation, loading or runtime form resolution.\n";
         return 0;
     }
@@ -446,6 +562,21 @@ int run(int argc, char** argv) {
 } // namespace LCM
 #ifndef LCM_NO_MAIN
 int main(int argc, char** argv) {
+    if (argc > 1 && std::string(argv[1])=="fix") {
+        int wideCount=0;
+        wchar_t** wide=CommandLineToArgvW(GetCommandLineW(),&wideCount);
+        if (!wide) return 2;
+        int result=2;
+        try {
+            LCM::require(wideCount==4 && std::wstring(wide[1])==L"fix" && std::wstring(wide[2])==L"--save",
+                "usage: fix --save FILE.ess");
+            result=LCM::fix(std::filesystem::path(wide[3]));
+        } catch (const std::exception& error) {
+            std::cerr << "Fix refused: " << error.what() << ". Choose a supported, closed-game save pair; originals were not changed.\n";
+        }
+        LocalFree(wide);
+        return result;
+    }
     try { return LCM::run(argc,argv); }
     catch (const std::exception& error) {
         std::cerr << nlohmann::json{{"status","refused"},{"reason",error.what()}}.dump() << '\n';

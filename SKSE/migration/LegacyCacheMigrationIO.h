@@ -1,12 +1,15 @@
 #pragma once
 
 #include <filesystem>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
 namespace LCM {
 
 using Bytes = std::vector<unsigned char>;
+
+struct IOError : std::runtime_error { using std::runtime_error::runtime_error; };
 
 std::string sha256(const Bytes& bytes);
 
@@ -28,6 +31,12 @@ private:
 
 void safePath(const std::filesystem::path& path, bool mayNotExist = false);
 bool sameFile(const std::filesystem::path& left, const std::filesystem::path& right);
+
+// Fix-only sibling layout; expert Transaction destination policy is unchanged.
+void publishFixedPair(const std::filesystem::path& save, const Source& ess,
+                      const Source& skse, const Bytes& converted,
+                      void (*beforePublish)() = nullptr);
+
 class Transaction {
 public:
     Transaction(std::filesystem::path backupDir, std::filesystem::path outputDir,

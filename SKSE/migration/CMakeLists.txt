@@ -17,10 +17,14 @@ foreach(target IN ITEMS LegacyCacheMigration LegacyCacheMigrationCheck)
     add_executable(${target} ${entry} LegacyCacheMigrationIO.cpp)
     set_target_properties(${target} PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED YES CXX_EXTENSIONS NO)
     target_compile_definitions(${target} PRIVATE LCM_CODEC_SHA256="${CACHE_CODEC_SHA256}")
-    target_link_libraries(${target} PRIVATE nlohmann_json::nlohmann_json bcrypt)
+    target_link_libraries(${target} PRIVATE nlohmann_json::nlohmann_json bcrypt shell32)
     if(MSVC)
         target_compile_options(${target} PRIVATE /W4 /WX /EHsc)
     else()
         target_compile_options(${target} PRIVATE -Wall -Wextra -Werror)
     endif()
 endforeach()
+add_custom_command(TARGET LegacyCacheMigration POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${CMAKE_CURRENT_SOURCE_DIR}/Convert-IE-Save.bat"
+        "$<TARGET_FILE_DIR:LegacyCacheMigration>/Convert-IE-Save.bat")

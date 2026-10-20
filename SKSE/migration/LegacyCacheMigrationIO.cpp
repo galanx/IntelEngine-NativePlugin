@@ -132,7 +132,7 @@ HANDLE openHandle(const std::wstring& path, DWORD access, DWORD share, DWORD cre
                   DWORD flags = FILE_ATTRIBUTE_NORMAL)
 {
     HANDLE h = CreateFileW(path.c_str(), access, share, nullptr, creation, flags, nullptr);
-    if (h == INVALID_HANDLE_VALUE) fail("Cannot open path");
+    if (h == INVALID_HANDLE_VALUE) throw IOError("Cannot open path");
     return h;
 }
 
@@ -156,7 +156,7 @@ struct Handle {
 BY_HANDLE_FILE_INFORMATION info(HANDLE h)
 {
     BY_HANDLE_FILE_INFORMATION result{};
-    if (!GetFileInformationByHandle(h, &result)) fail("Cannot inspect open file");
+    if (!GetFileInformationByHandle(h, &result)) throw IOError("Cannot inspect open file");
     return result;
 }
 
@@ -174,7 +174,7 @@ std::uint64_t fileSize(const BY_HANDLE_FILE_INFORMATION& i)
 void seekStart(HANDLE h)
 {
     LARGE_INTEGER zero{};
-    if (!SetFilePointerEx(h, zero, nullptr, FILE_BEGIN)) fail("Cannot seek file");
+    if (!SetFilePointerEx(h, zero, nullptr, FILE_BEGIN)) throw IOError("Cannot seek file");
 }
 
 Bytes readAll(HANDLE h, std::uint64_t size)
@@ -186,12 +186,12 @@ Bytes readAll(HANDLE h, std::uint64_t size)
     while (offset < bytes.size()) {
         const DWORD ask = static_cast<DWORD>(std::min<std::size_t>(bytes.size() - offset, kChunkBytes));
         DWORD got = 0;
-        if (!ReadFile(h, bytes.data() + offset, ask, &got, nullptr) || got == 0) fail("Cannot read file");
+        if (!ReadFile(h, bytes.data() + offset, ask, &got, nullptr) || got == 0) throw IOError("Cannot read file");
         offset += got;
     }
     unsigned char extra = 0;
     DWORD got = 0;
-    if (!ReadFile(h, &extra, 1, &got, nullptr) || got != 0) fail("File changed while reading");
+    if (!ReadFile(h, &extra, 1, &got, nullptr) || got != 0) throw IOError("File changed while reading");
     return bytes;
 }
 
@@ -278,26 +278,26 @@ std::string sha256(const Bytes& bytes)
     DWORD objectSize = 0, resultSize = 0;
     std::vector<unsigned char> object, digest(32);
     if (BCryptOpenAlgorithmProvider(&algorithm, BCRYPT_SHA256_ALGORITHM, nullptr, 0) < 0)
-        fail("SHA-256 unavailable");
+        throw IOError("SHA-256 unavailable");
     auto closeAlgorithm = [&] { if (algorithm) BCryptCloseAlgorithmProvider(algorithm, 0); };
     if (BCryptGetProperty(algorithm, BCRYPT_OBJECT_LENGTH, reinterpret_cast<PUCHAR>(&objectSize),
                           sizeof(objectSize), &resultSize, 0) < 0 || resultSize != sizeof(objectSize)) {
-        closeAlgorithm(); fail("SHA-256 unavailable");
+        closeAlgorithm(); throw IOError("SHA-256 unavailable");
     }
     object.resize(objectSize);
     if (BCryptCreateHash(algorithm, &hash, object.data(), objectSize, nullptr, 0, 0) < 0) {
-        closeAlgorithm(); fail("SHA-256 unavailable");
+        closeAlgorithm(); throw IOError("SHA-256 unavailable");
     }
     std::size_t offset = 0;
     while (offset < bytes.size()) {
         const ULONG count = static_cast<ULONG>(std::min<std::size_t>(bytes.size() - offset, kChunkBytes));
         if (BCryptHashData(hash, const_cast<PUCHAR>(bytes.data() + offset), count, 0) < 0) {
-            BCryptDestroyHash(hash); closeAlgorithm(); fail("SHA-256 failed");
+            BCryptDestroyHash(hash); closeAlgorithm(); throw IOError("SHA-256 failed");
         }
         offset += count;
     }
     if (BCryptFinishHash(hash, digest.data(), static_cast<ULONG>(digest.size()), 0) < 0) {
-        BCryptDestroyHash(hash); closeAlgorithm(); fail("SHA-256 failed");
+        BCryptDestroyHash(hash); closeAlgorithm(); throw IOError("SHA-256 failed");
     }
     BCryptDestroyHash(hash);
     closeAlgorithm();
@@ -350,7 +350,7 @@ void Source::verify() const
     const auto current = info(impl_->handle.value);
     if (!sameIdentity(impl_->initial, current) || fileSize(impl_->initial) != fileSize(current) ||
         CompareFileTime(&impl_->initial.ftLastWriteTime, &current.ftLastWriteTime) != 0)
-        fail("Source changed");
+        throw IOError("Source changed");
     const auto path = fullPath(std::filesystem::path(impl_->path));
     safePathImpl(path, false);
     Handle reopened(openHandle(path, GENERIC_READ, FILE_SHARE_READ, OPEN_EXISTING));
@@ -358,9 +358,9 @@ void Source::verify() const
     const auto pathInfo = info(reopened.value);
     if (!sameIdentity(impl_->initial, pathInfo) || fileSize(impl_->initial) != fileSize(pathInfo) ||
         CompareFileTime(&impl_->initial.ftLastWriteTime, &pathInfo.ftLastWriteTime) != 0)
-        fail("Source identity changed");
+        throw IOError("Source identity changed");
     if (hashHandle(impl_->handle.value) != impl_->digest)
-        fail("Source content changed");
+        throw IOError("Source content changed");
 }
 
 void safePath(const std::filesystem::path& path, bool mayNotExist)
@@ -378,6 +378,75 @@ bool sameFile(const std::filesystem::path& left, const std::filesystem::path& ri
     Handle bh(openHandle(b, FILE_READ_ATTRIBUTES, FILE_SHARE_READ, OPEN_EXISTING));
     ensureRegular(ah.value); ensureRegular(bh.value);
     return sameIdentity(info(ah.value), info(bh.value));
+}
+
+void publishFixedPair(const std::filesystem::path& save, const Source& ess,
+                      const Source& skse, const Bytes& converted, void (*beforePublish)())
+{
+    namespace fs = std::filesystem;
+    const fs::path source(fullPath(save));
+    const auto parent = source.parent_path();
+    const auto stem = source.stem().native();
+    const auto backup = parent / (stem + L"_IEbackup");
+    const auto staging = parent / (stem + L"_IEconverted.staging");
+    const auto outEss = parent / (stem + L"_IEconverted.ess");
+    const auto outSkse = parent / (stem + L"_IEconverted.skse");
+    for (const auto& path : {backup, staging, outEss, outSkse}) {
+        safePath(path, true);
+        if (fs::exists(path)) fail("Backup, staging or converted output already exists");
+    }
+    const auto parentLock = lockDirectory(parent.native());
+    ess.verify(); skse.verify();
+    if (!CreateDirectoryW(backup.c_str(), nullptr)) fail("Cannot create exclusive backup directory");
+    const auto backupLock = lockDirectory(backup.native());
+    const auto backupEss = backup / L"original.ess", backupSkse = backup / L"original.skse";
+    writeNew(backupEss.native(), ess.bytes().data(), ess.bytes().size());
+    writeNew(backupSkse.native(), skse.bytes().data(), skse.bytes().size());
+    Handle backedEss(openHandle(backupEss.native(), GENERIC_READ, FILE_SHARE_READ, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT));
+    Handle backedSkse(openHandle(backupSkse.native(), GENERIC_READ, FILE_SHARE_READ, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT));
+    ensureRegular(backedEss.value); ensureRegular(backedSkse.value);
+    if (hashHandle(backedEss.value) != ess.hash() || hashHandle(backedSkse.value) != skse.hash())
+        fail("Backup pair verification failed");
+    if (!SetFileAttributesW(backupEss.c_str(), FILE_ATTRIBUTE_READONLY) ||
+        !SetFileAttributesW(backupSkse.c_str(), FILE_ATTRIBUTE_READONLY))
+        fail("Cannot protect verified backup");
+    if (!CreateDirectoryW(staging.c_str(), nullptr)) fail("Cannot create exclusive staging directory");
+    auto stagingLock = lockDirectory(staging.native());
+    const auto stagedEss = staging / L"converted.ess", stagedSkse = staging / L"converted.skse";
+    writeNew(stagedEss.native(), ess.bytes().data(), ess.bytes().size());
+    writeNew(stagedSkse.native(), converted.data(), converted.size());
+    const auto convertedHash = sha256(converted);
+    verifyWritten(stagedEss.native(), ess.hash());
+    verifyWritten(stagedSkse.native(), convertedHash);
+    Handle essHandle(openHandle(stagedEss.native(), GENERIC_READ | DELETE, FILE_SHARE_READ,
+                                OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT));
+    Handle skseHandle(openHandle(stagedSkse.native(), GENERIC_READ | DELETE, FILE_SHARE_READ,
+                                 OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT));
+    ensureRegular(essHandle.value); ensureRegular(skseHandle.value);
+    if (hashHandle(essHandle.value) != ess.hash() || hashHandle(skseHandle.value) != convertedHash)
+        fail("Staged pair changed");
+    ess.verify(); skse.verify();
+    if (beforePublish) beforePublish();
+    auto renameNew = [](HANDLE handle, const fs::path& destination) {
+        const auto name = destination.native();
+        const auto bytes = name.size() * sizeof(wchar_t);
+        std::vector<unsigned char> storage(sizeof(FILE_RENAME_INFO) + bytes);
+        auto* rename = reinterpret_cast<FILE_RENAME_INFO*>(storage.data());
+        rename->ReplaceIfExists = FALSE;
+        rename->RootDirectory = nullptr;
+        rename->FileNameLength = static_cast<DWORD>(bytes);
+        std::copy(name.begin(), name.end(), rename->FileName);
+        return SetFileInformationByHandle(handle, FileRenameInfo, rename,
+                                         static_cast<DWORD>(storage.size())) != 0;
+    };
+    if (!renameNew(essHandle.value, outEss)) fail("ESS publication failed; no complete converted pair was published");
+    if (!renameNew(skseHandle.value, outSkse))
+        fail("Incomplete publication: converted ESS exists but SKSE rename failed. Do not load it; originals are untouched");
+    if (hashHandle(essHandle.value) != ess.hash() || hashHandle(skseHandle.value) != convertedHash)
+        fail("Published pair verification failed; do not load it; originals are untouched");
+    ess.verify(); skse.verify();
+    stagingLock = Handle{};
+    if (!RemoveDirectoryW(staging.c_str())) fail("Converted pair published, but empty staging directory could not be removed");
 }
 
 struct Transaction::Impl {
