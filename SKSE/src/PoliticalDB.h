@@ -128,7 +128,7 @@ namespace IntelEngine {
                         int relationDelta, float gameTime,
                         const std::string& instigatorNpc = "");
 
-        /** Get recent events (most recent first). */
+        /** Get recent visible events (most recent first), excluding replay-only relation_adjustment rows. */
         std::vector<FactionEvent> GetRecentEvents(int maxCount);
 
         /** Get all events in chronological order (oldest first). Used for score recalculation. */
