@@ -1654,7 +1654,7 @@ namespace IntelEngine {
         // single source of truth shared with the async path.
         auto prefetch = FetchStoryDMPhaseAPrefetch(maxCandidates, absenceDays);
         return BuildDungeonMasterContextFromSnapshot(
-            BuildStoryDMTickSnapshot(maxCandidates, absenceDays, prefetch));
+            BuildStoryDMTickSnapshot(maxCandidates, absenceDays, prefetch), {});
     }
 
     std::string NPCIndex::BuildNPCInteractionContext(int maxPairs) {
@@ -2138,7 +2138,9 @@ namespace IntelEngine {
     // Async Story DM tick — Phase B (scoring + markdown, worker thread)
     // =========================================================================
 
-    std::string NPCIndex::BuildDungeonMasterContextFromSnapshot(const StoryDMTickSnapshot& snap) {
+    std::string NPCIndex::BuildDungeonMasterContextFromSnapshot(
+        const StoryDMTickSnapshot& snap,
+        const std::unordered_set<std::string>& excludedTypes) {
         if (snap.candidates.empty()) return "";
 
         auto* memDB = MemoryDB::GetSingleton();
@@ -2514,7 +2516,7 @@ namespace IntelEngine {
         static const std::unordered_set<std::string> dmTypes = {
             "seek_player", "informant", "road_encounter", "ambush", "stalker", "message", "quest"
         };
-        auto typeCounts = GetStoryTypeCountsMarkdown(dmTypes);
+        auto typeCounts = GetStoryTypeCountsMarkdown(dmTypes, excludedTypes);
         if (!typeCounts.empty()) {
             md += "## Story Type Picks This Session\n";
             md += typeCounts;
@@ -2711,14 +2713,17 @@ namespace IntelEngine {
         m_recentGossipContext = result;
     }
 
-    std::string NPCIndex::GetStoryTypeCountsMarkdown(const std::unordered_set<std::string>& relevantTypes) const {
+    std::string NPCIndex::GetStoryTypeCountsMarkdown(
+        const std::unordered_set<std::string>& relevantTypes,
+        const std::unordered_set<std::string>& excludedTypes) const {
         std::shared_lock lock(m_mutex);
         if (m_storyTypeCounts.empty()) return "";
 
         std::string result;
         bool first = true;
         for (const auto& [type, count] : m_storyTypeCounts) {
-            if (!relevantTypes.empty() && relevantTypes.find(type) == relevantTypes.end()) continue;
+            if (!relevantTypes.empty() && !relevantTypes.count(type)) continue;
+            if (excludedTypes.count(type)) continue;
             if (!first) result += ", ";
             result += type;
             result += ": ";

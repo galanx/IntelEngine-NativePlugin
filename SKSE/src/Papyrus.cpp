@@ -2491,32 +2491,34 @@ namespace IntelEngine::Papyrus {
         return RE::BSFixedString(json);
     }
 
+    static std::unordered_set<std::string> ParseStoryTypeExclusions(const std::string& excludedTypes) {
+        std::unordered_set<std::string> excludedSet;
+        size_t pos = 0;
+        while (pos < excludedTypes.size()) {
+            size_t comma = excludedTypes.find(',', pos);
+            if (comma == std::string::npos) comma = excludedTypes.size();
+            std::string token = excludedTypes.substr(pos, comma - pos);
+            size_t start = token.find_first_not_of(" \t");
+            size_t end = token.find_last_not_of(" \t");
+            if (start != std::string::npos) {
+                std::string trimmed = token.substr(start, end - start + 1);
+                std::transform(trimmed.begin(), trimmed.end(), trimmed.begin(), ::tolower);
+                excludedSet.insert(trimmed);
+            }
+            pos = comma + 1;
+        }
+        return excludedSet;
+    }
+
     // Worker-thread-safe core. Caller pre-resolves engine-touching values:
     //   playerAtInn:      FactionPolitics::IsPlayerAtInn()
     //   currentGameTime:  RE::Calendar::GetCurrentGameTime()
     // Everything else inside is DB/cache-only.
-    static std::string BuildStoryDMRequestJsonCore(const std::string& dmContext,
-                                                    const std::string& excludedTypes,
-                                                    bool playerAtInn,
-                                                    float currentGameTime) {
-        std::unordered_set<std::string> excludedSet;
-        {
-            const std::string& excl = excludedTypes;
-            size_t pos = 0;
-            while (pos < excl.size()) {
-                size_t comma = excl.find(',', pos);
-                if (comma == std::string::npos) comma = excl.size();
-                std::string token = excl.substr(pos, comma - pos);
-                size_t start = token.find_first_not_of(" \t");
-                size_t end = token.find_last_not_of(" \t");
-                if (start != std::string::npos) {
-                    std::string trimmed = token.substr(start, end - start + 1);
-                    std::transform(trimmed.begin(), trimmed.end(), trimmed.begin(), ::tolower);
-                    excludedSet.insert(trimmed);
-                }
-                pos = comma + 1;
-            }
-        }
+    static std::string BuildStoryDMRequestJsonCore(
+        const std::string& dmContext,
+        const std::unordered_set<std::string>& excludedSet,
+        bool playerAtInn,
+        float currentGameTime) {
 
         static const char* allTypes[] = {
             "seek_player", "informant", "road_encounter",
@@ -2647,8 +2649,9 @@ namespace IntelEngine::Papyrus {
         auto* cal = RE::Calendar::GetSingleton();
         float now = cal ? cal->GetCurrentGameTime() : 0.f;
         return RE::BSFixedString(
-            BuildStoryDMRequestJsonCore(dmContext.c_str(), excludedTypes.c_str(),
-                                         FactionPolitics::IsPlayerAtInn(), now));
+            BuildStoryDMRequestJsonCore(dmContext.c_str(),
+                ParseStoryTypeExclusions(excludedTypes.c_str()),
+                FactionPolitics::IsPlayerAtInn(), now));
     }
 
     // -------------------------------------------------------------------------
@@ -2674,14 +2677,14 @@ namespace IntelEngine::Papyrus {
         std::string questEditorId = qedit;
         std::string scriptName    = callbackScript.c_str();
         std::string functionName  = callbackFn.c_str();
-        std::string excludedStr   = excludedTypes.c_str();
+        auto excludedSet = ParseStoryTypeExclusions(excludedTypes.c_str());
 
         if (maxCandidates <= 0) maxCandidates = 7;
         int maxC = static_cast<int>(maxCandidates);
 
         // Phase 0 — worker thread: SQL prefetch (GetActorEngagement + GetPlayerContext).
         // Phase A then runs on main thread once prefetch is ready.
-        AsyncDispatch::Submit([maxC, absenceDays, excludedStr = std::move(excludedStr),
+        AsyncDispatch::Submit([maxC, absenceDays, excludedSet = std::move(excludedSet),
                                questEditorId = std::move(questEditorId),
                                scriptName = std::move(scriptName),
                                functionName = std::move(functionName)]() mutable {
@@ -2694,7 +2697,7 @@ namespace IntelEngine::Papyrus {
                 return;
             }
             task->AddTask([maxC, absenceDays, prefetch = std::move(prefetch),
-                           excludedStr = std::move(excludedStr),
+                           excludedSet = std::move(excludedSet),
                            questEditorId = std::move(questEditorId),
                            scriptName = std::move(scriptName),
                            functionName = std::move(functionName)]() mutable {
@@ -2709,14 +2712,14 @@ namespace IntelEngine::Papyrus {
 
                 // Phase B — worker thread: scoring + per-candidate SQL + markdown.
                 AsyncDispatch::Submit([snap = std::move(snap), playerAtInn, currentGameTime,
-                                       excludedStr = std::move(excludedStr),
+                                       excludedSet = std::move(excludedSet),
                                        questEditorId = std::move(questEditorId),
                                        scriptName = std::move(scriptName),
                                        functionName = std::move(functionName)]() mutable {
-                    std::string md = NPCIndex::GetSingleton()->BuildDungeonMasterContextFromSnapshot(snap);
+                    std::string md = NPCIndex::GetSingleton()->BuildDungeonMasterContextFromSnapshot(snap, excludedSet);
                     std::string requestJson;
                     if (!md.empty()) {
-                        requestJson = BuildStoryDMRequestJsonCore(md, excludedStr, playerAtInn, currentGameTime);
+                        requestJson = BuildStoryDMRequestJsonCore(md, excludedSet, playerAtInn, currentGameTime);
                     }
                     // Phase C — back to main thread for Papyrus VM dispatch.
                     auto* t2 = SKSE::GetTaskInterface();

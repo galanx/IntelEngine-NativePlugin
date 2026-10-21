@@ -476,6 +476,12 @@ Offline check: compile `SKSE/tests/NPCTickGenerationCheck.cpp` in a VS2022 amd64
 
 Live qualification remains unperformed. On 1.6.1170, use a symbolized build with independently verified loaded DLL identity; enable debug logging and compare debugger thread IDs at `[NPCTick] Phase A snapshot`, the existing `async context` worker log, and `Phase C callback`. Phase A/C and the empty callback must match the engine main thread, not the Papyrus VM job thread; Phase B must differ. Exercise nonempty/empty ticks, named/unnamed factions, non-ASCII names, cell transitions, and loads with Phase A queued, Phase B blocked and Phase C queued. Expect generation-change drop logs and no old pool/callback; verify pending recovery and fresh ticks. On 1.5.97, the reporter should repeat Aela/Jenassa/Torvar contexts with NPC interactions enabled, retain DLL/PDB identity and collect logs/minidumps if faction-name dispatch still faults. A finite crash-free run is not proof of the exact CTD's cause or cure.
 
+### Unreleased Story DM type filtering (#3)
+
+The async Story DM path parses exclusions once and shares that set between prompt visibility flags and the session-count formatter. Excluded types are omitted from "Story Type Picks This Session"; NPC Social DM counts are unchanged. This does not remove type names from dispatch history or general guidance, and response validation remains the dispatch gate.
+
+Offline check (requires `clang++`): `python SKSE/tests/RunStoryTypeCountFilterCheck.py`. It compiles the production formatter without the game ABI and checks allowed/excluded counts, empty/all exclusions, exact top-level matching and unchanged NPC counts. No in-game qualification is implied.
+
 
 ### Player fix mode: How to convert an old save
 
