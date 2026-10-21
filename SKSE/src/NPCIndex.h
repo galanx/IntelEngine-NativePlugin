@@ -396,7 +396,9 @@ namespace IntelEngine {
          * Build markdown snippet showing story type pick counts.
          * If relevantTypes is non-empty, only those types are included.
          */
-        std::string GetStoryTypeCountsMarkdown(const std::unordered_set<std::string>& relevantTypes = {}) const;
+        std::string GetStoryTypeCountsMarkdown(
+            const std::unordered_set<std::string>& relevantTypes = {},
+            const std::unordered_set<std::string>& excludedTypes = {}) const;
 
         /**
          * Build the complete Dungeon Master context for the Story Engine.
@@ -559,7 +561,9 @@ namespace IntelEngine {
          * All per-candidate SQL queries run here (memories, dialogue, events, related,
          * bio relationships). Updates m_dmCandidatePool under m_mutex.
          */
-        std::string BuildDungeonMasterContextFromSnapshot(const StoryDMTickSnapshot& snap);
+        std::string BuildDungeonMasterContextFromSnapshot(
+            const StoryDMTickSnapshot& snap,
+            const std::unordered_set<std::string>& excludedTypes);
 
         /**
          * Get FormIDs of all NPCs in the last DM candidate pool.
