@@ -1812,6 +1812,7 @@ default_relations:
         bool ok = db->EndWar(war->id, victor, gameTime);
         if (ok) {
             // Improve relations slightly on peace
+            db->RecordEvent(factionA, factionB, "relation_adjustment", "War ended", 10, gameTime);
             db->AdjustRelation(factionA, factionB, 10);
             WritePoliticalStateFile();
         }
@@ -1907,6 +1908,7 @@ default_relations:
         db->UpdateWarState(war->id, moraleA, moraleB, strengthA, strengthB, war->battlesFought + 1);
 
         // Worsen inter-faction relations after each battle
+        db->RecordEvent(factionA, factionB, "relation_adjustment", "Battle resolved", -10, gameTime);
         db->AdjustRelation(factionA, factionB, -10);
 
         WritePoliticalStateFile();

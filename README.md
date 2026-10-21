@@ -86,6 +86,10 @@ A living political system where 9 factions (configurable) scheme, trade, and wag
 
 **One political timeline per playthrough:** `IntelEngine-<id>.db` is one database shared by all saves in that playthrough, not a separate database per save. Loading an earlier save permanently removes later political events, wars, battles and standing history, and re-opens wars that ended after that save (`CleanupFutureEvents`). To keep a later timeline, back up the database and its `-wal`/`-shm` companions with the game closed before loading an earlier save; the `.ess`/`.skse` pair alone does not preserve it.
 
+Battle resolution (−10) and explicit war endings (+10) now log replay-only `relation_adjustment` events so their relation changes survive the load-time rebuild without duplicating NPC news. Existing saves are not migrated: unlogged past changes cannot be recovered. Replay still uses the oldest 10,000 political events; newer events beyond that limit are not rebuilt.
+
+Offline regression: from a VS developer shell, run `python SKSE/tests/RunBattleRelationPersistenceCheck.py <vcpkg-triplet-dir>` (the directory containing `include` and `lib`). It compiles production persistence code against SQLite with Clang `-Wall -Wextra -Werror`; game clock, logging and state-file output are isolated, and Skyrim is not used.
+
 No teleportation. No console commands. No hardcoded location lists. IntelEngine dynamically indexes every actor and location across every cell in the game — every inn, every home, every NPC is discoverable because the index is built from your actual load order.
 
 ---
