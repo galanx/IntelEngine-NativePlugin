@@ -16,8 +16,9 @@ The `IntelEngine.dll` SKSE plugin provides high-performance functions that would
 - Visual Studio 2022 (the supported script uses the VS 2022 Community developer shell), CMake, Ninja, and PowerShell on Windows.
 - MSVC Release builds use `/Od /Ob0 /DNDEBUG` and `/std:c++23preview` for the native plugin and source-built CommonLib. `/O2`, `/std:c++latest`, and `/d2ReducedOptimizeHugeFunctions` are not used. This profile was rebuilt with VS 2022 MSVC 19.44 / toolset 14.44; the language mode retains MinLL's required C++23 support. These build settings do not by themselves establish a runtime black-screen fix.
 - Dependencies are resolved through the repository's vcpkg manifest and baseline. CommonLibSSE is built from source at the enforced MinLL/CommonLibVR commit `550cc4fb9114649dcf526d1f3d73d710c5d7003b` (v4.39.5, MIT); the build verifies the Git revision, clean checkout, and license rather than accepting an imported prebuilt CommonLib target.
-- The build applies one audited SE/AE header correction without modifying that checkout: generated `commonlib-abi/include/RE/T/TESObjectREFR.h` omits the VR-only `Unk_8C` virtual declaration. CMake verifies the upstream header's LF-normalized SHA-256 and places the generated include ahead of the upstream header for both CommonLib and IntelEngine. This corrects the pinned fork's non-VR virtual-slot shift; it is not a general patch or alternate-dependency mechanism.
-- The native plugin is configured for Skyrim SE and AE with Address Library compatibility. The documented runtime targets are **1.5.97.0, 1.6.640.0, 1.6.1170.0, 1.7.99.0, and 1.7.104.0**. Address Library is the compatibility mechanism; this is not a fixed-version whitelist. VR is disabled and unsupported.
+- The shared SE/AE/VR build uses the pinned fork's cross-VR wrappers: `GetSaveParentCell` selects slot `0x97` on SE/AE and `0x98` on VR. CMake retains the upstream header fingerprint guard and the flat-only `Unk_8C` correction for non-VR configurations; the mixed configuration does not apply that virtual-table transformation. Both targets inherit the same declarations.
+- The source candidate enables SE, AE and VR with Address Library compatibility. The documented SE/AE targets remain **1.5.97.0, 1.6.640.0, 1.6.1170.0, 1.7.99.0, and 1.7.104.0**; Skyrim VR **1.4.15 / SKSEVR 2.0.12** is an unreleased qualification target, **not supported yet**. Offline synthetic-vtable checks and linked dispatch/import inspection passed on 2026-10-20; actual VR engine-layout proof, loader acceptance and candidate-specific gameplay regressions remain open. No package or installation is established by this build.
+- Offline getter regression: `cmake --build SKSE/build-vr-v2-20261020 --target ReferenceGetterDispatchCheck`, then run `ReferenceGetterDispatchCheck.exe` there. It invokes the production CommonLib getter on synthetic SE, AE and VR vtables, checks the returned cell and unchanged parent/setter count, and exits nonzero on failure. `--wrong-slot` deliberately moves the fixture getter onto the adjacent setter slot and must exit 1.
 
 ## Papyrus API
 
@@ -546,6 +547,52 @@ The 1.7.104 qualification covers **one bounded converted-copy acceptance**: a un
 #### Converter checks
 
 The Native source check `SKSE/tests/LegacyCacheMigrationCheck.cpp` uses the production codec and actual converter/transaction code. Run `LegacyCacheMigrationCheck.exe <new-unused-scratch-directory>` after building the standalone targets. It covers global/actor all-family bytes, policy/control/identity/count/framing refusals, mixed/encoded preservation, unchanged names/opaque bytes, exclusive backups and interrupted/failed publication. `SKSE/tests/RenderedCacheCodecCheck.cpp` covers the codec contract. Synthetic byte fixtures are not loadable saves; these checks do not replace the bounded runtime observations above.
+
+### Unreleased NPC bio Content Library lookup (#18)
+
+`MemoryDB::GetNPCBioSummary` and `GetNPCBioRelationships` read the same selected bio.
+SkyrimNet's public API returns the template name, not resolved content; the optional
+`PublicGetSaveUniqueID` export supplies the current playthrough ID. No new required
+export, dependency, game ABI, or save format is introduced.
+
+The reader makes a dynamic pass, then a static pass. Each pass checks the current
+save (only with a usable ID), overlay, sorted external directories, then sorted
+library directories with `skyrimnet.base` last. Missing save identity never triggers
+an all-save Content Library search. Legacy roots and fuzzy matching remain the
+last resort, retaining the existing legacy-only all-save fallback when identity is
+unavailable.
+
+This release-week resolver deliberately ignores registry priority, pins, provider
+enable/missing state, activation and semantic versions. When two bio packs define
+the same NPC, sorted-name order may differ from SkyrimNet's registry priority;
+disabled or superseded on-disk copies can also be selected. It is not SkyrimNet's
+content resolver. A future supported public content-reading API is the replacement
+path, not another local mirror of SkyrimNet internals.
+
+The existing new/load `ClearCaches` hooks sample the optional save-ID export on the
+main thread and atomically replace a mutex-guarded identity snapshot, clear both bio
+caches and advance their generation. Workers use only that snapshot (initially empty);
+in-flight lookups cannot publish positive or negative entries after a clear.
+File edits or newly generated bios are not promised visible until cache invalidation.
+This is a raw block reader, not a profile renderer: it does not evaluate Inja,
+decorators or submodules. Filesystem reads do not provide SkyrimNet's immutable
+in-memory snapshot or reproduce its package compatibility gate.
+
+Offline check, from Native in a VS2022 amd64 developer shell:
+
+```powershell
+New-Item -ItemType Directory -Path SKSE/build-bio-check -Force | Out-Null
+cl /nologo /std:c++20 /EHsc /W4 /WX /I SKSE/src SKSE/tests/BioContentCheck.cpp /Fo:SKSE/build-bio-check/ /Fe:SKSE/build-bio-check/BioContentCheck.exe
+if ($LASTEXITCODE -ne 0) { throw "Bio check compilation failed" }
+& ./SKSE/build-bio-check/BioContentCheck.exe
+if ($LASTEXITCODE -ne 0) { throw "Bio check failed" }
+```
+
+The check creates/removes a temporary tree and exercises both ordered passes,
+base-last behavior, current-save selection, legacy exact/fuzzy fallback and literal
+block extraction. Offline output is not a `Bio loaded` runtime observation. Release
+acceptance still requires STD/ADT/VR base-library and current-save dynamic bio
+checks, plus cache invalidation across save loads.
 
 ### Source-level checks
 

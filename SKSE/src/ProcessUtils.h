@@ -21,8 +21,8 @@ namespace IntelEngine::ProcessUtils {
         auto* processLists = RE::ProcessLists::GetSingleton();
         if (!processLists) return;
 
-        auto iterateTier = [&fn](auto& handles) -> bool {
-            for (auto& handle : handles) {
+        auto iterateTier = [&fn](const auto& handles) -> bool {
+            for (const auto& handle : handles) {
                 auto actorPtr = handle.get();
                 if (actorPtr) {
                     if (fn(actorPtr.get())) return true;
