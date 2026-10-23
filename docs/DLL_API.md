@@ -554,14 +554,19 @@ SkyrimNet's public API returns the template name, not resolved content; the opti
 `PublicGetSaveUniqueID` export supplies the current playthrough ID. No new required
 export, dependency, game ABI, or save format is introduced.
 
-The reader prefers the current save's dynamic bio, then static content in this order:
-current save, valid registry pin, overlay, enabled/nonmissing registry providers in
-priority order, and base. Duplicate provider copies use semantic version, then
-local/external/hub precedence. Suppressed items cannot fall through to legacy copies.
-Content Library dynamic bios are save-only; a missing save-ID export or empty ID
-skips that layer rather than borrowing another save. Legacy roots and their fuzzy
-matching remain last-resort compatibility fallback; only a legacy-only layout without
-a usable save ID retains the old all-save search.
+The reader makes a dynamic pass, then a static pass. Each pass checks the current
+save (only with a usable ID), overlay, sorted external directories, then sorted
+library directories with `skyrimnet.base` last. Missing save identity never triggers
+an all-save Content Library search. Legacy roots and fuzzy matching remain the
+last resort, retaining the existing legacy-only all-save fallback when identity is
+unavailable.
+
+This release-week resolver deliberately ignores registry priority, pins, provider
+enable/missing state, activation and semantic versions. When two bio packs define
+the same NPC, sorted-name order may differ from SkyrimNet's registry priority;
+disabled or superseded on-disk copies can also be selected. It is not SkyrimNet's
+content resolver. A future supported public content-reading API is the replacement
+path, not another local mirror of SkyrimNet internals.
 
 The existing summary/relationships caches (including negative results) and new/load
 `ClearCaches` calls are unchanged. File edits or newly generated bios are not promised
@@ -569,22 +574,21 @@ visible until cache invalidation. This is a raw block reader, not a profile rend
 it does not evaluate Inja, decorators or submodules. Filesystem reads do not provide
 SkyrimNet's immutable in-memory snapshot or reproduce its package compatibility gate.
 
-Offline check, from Native in a VS2022 amd64 developer shell (`$deps` is an existing
-vcpkg triplet's include directory):
+Offline check, from Native in a VS2022 amd64 developer shell:
 
 ```powershell
 New-Item -ItemType Directory -Path SKSE/build-bio-check -Force | Out-Null
-cl /nologo /std:c++20 /EHsc /W4 /WX /I SKSE/src /I $deps SKSE/tests/BioContentCheck.cpp /Fo:SKSE/build-bio-check/ /Fe:SKSE/build-bio-check/BioContentCheck.exe
+cl /nologo /std:c++20 /EHsc /W4 /WX /I SKSE/src SKSE/tests/BioContentCheck.cpp /Fo:SKSE/build-bio-check/ /Fe:SKSE/build-bio-check/BioContentCheck.exe
 if ($LASTEXITCODE -ne 0) { throw "Bio check compilation failed" }
 & ./SKSE/build-bio-check/BioContentCheck.exe
 if ($LASTEXITCODE -ne 0) { throw "Bio check failed" }
 ```
 
-The check creates/removes a temporary tree and exercises production resolution and
-block extraction, including malformed providers, Unicode directories, suppression
-through legacy fallback and save isolation. Offline output is not a `Bio loaded`
-runtime observation. Release acceptance still requires STD/ADT/VR base-library and
-current-save dynamic bio checks, plus cache invalidation across save loads.
+The check creates/removes a temporary tree and exercises both ordered passes,
+base-last behavior, current-save selection, legacy exact/fuzzy fallback and literal
+block extraction. Offline output is not a `Bio loaded` runtime observation. Release
+acceptance still requires STD/ADT/VR base-library and current-save dynamic bio
+checks, plus cache invalidation across save loads.
 
 ### Source-level checks
 
