@@ -55,7 +55,18 @@ namespace IntelEngine {
     }
 
     void MemoryDB::ClearCaches() {
+        // Only lifecycle/main-thread callers may sample SkyrimNet's mutable identity.
+        std::string saveId;
+        if (SkyrimNetAPI::GetSaveUniqueID) {
+            try {
+                saveId = SkyrimNetAPI::GetSaveUniqueID();
+            } catch (...) {
+                logger::warn("MemoryDB: GetSaveUniqueID exception");
+            }
+        }
         std::lock_guard lock(m_mutex);
+        ++m_bioCacheGeneration;
+        m_bioSaveId = std::move(saveId);
         m_bioSummaryCache.clear();
         m_bioRelationshipsCache.clear();
         m_cachedCurrentTime = 0.0f;
@@ -68,12 +79,16 @@ namespace IntelEngine {
 
     std::string MemoryDB::GetNPCBioSummary(RE::FormID formId) {
         // Check cache first (includes negative cache — empty string = no bio file)
+        std::string saveId;
+        std::uint64_t generation;
         {
             std::lock_guard lock(m_mutex);
             auto cacheIt = m_bioSummaryCache.find(formId);
             if (cacheIt != m_bioSummaryCache.end()) {
                 return cacheIt->second;
             }
+            saveId = m_bioSaveId;
+            generation = m_bioCacheGeneration;
         }
 
         // Get bio template name via SkyrimNet API
@@ -88,17 +103,8 @@ namespace IntelEngine {
 
         if (bioTemplate.empty()) {
             std::lock_guard lock(m_mutex);
-            m_bioSummaryCache[formId] = "";
+            if (generation == m_bioCacheGeneration) m_bioSummaryCache[formId] = "";
             return "";
-        }
-
-        std::string saveId;
-        if (SkyrimNetAPI::GetSaveUniqueID) {
-            try {
-                saveId = SkyrimNetAPI::GetSaveUniqueID();
-            } catch (...) {
-                logger::warn("MemoryDB: GetSaveUniqueID exception");
-            }
         }
 
         std::optional<BioContent::Bio> bio;
@@ -119,6 +125,7 @@ namespace IntelEngine {
 
         {
             std::lock_guard lock(m_mutex);
+            if (generation != m_bioCacheGeneration) return "";
             m_bioSummaryCache[formId] = summary;
             m_bioRelationshipsCache[formId] = relationships;
         }

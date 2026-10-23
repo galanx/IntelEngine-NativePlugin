@@ -16,6 +16,7 @@
 
 #include "Plugin.h"
 
+#include <cstdint>
 #include <mutex>
 #include <unordered_map>
 #include <unordered_set>
@@ -67,8 +68,8 @@ namespace IntelEngine {
         bool IsConnected() const;
 
         /**
-         * Clear cached data (bio summaries, DB time).
-         * Called on kNewGame/kPostLoadGame to reset session state.
+         * Clear cached data and snapshot SkyrimNet's save identity.
+         * Main thread only: called on kNewGame/kPostLoadGame.
          */
         void ClearCaches();
 
@@ -290,6 +291,8 @@ namespace IntelEngine {
 
         // Thread safety
         mutable std::mutex m_mutex;
+        std::string m_bioSaveId;
+        std::uint64_t m_bioCacheGeneration = 0;
 
         // Bio summary cache: FormID -> extracted {% block summary %} content
         std::unordered_map<RE::FormID, std::string> m_bioSummaryCache;

@@ -568,11 +568,14 @@ disabled or superseded on-disk copies can also be selected. It is not SkyrimNet'
 content resolver. A future supported public content-reading API is the replacement
 path, not another local mirror of SkyrimNet internals.
 
-The existing summary/relationships caches (including negative results) and new/load
-`ClearCaches` calls are unchanged. File edits or newly generated bios are not promised
-visible until cache invalidation. This is a raw block reader, not a profile renderer:
-it does not evaluate Inja, decorators or submodules. Filesystem reads do not provide
-SkyrimNet's immutable in-memory snapshot or reproduce its package compatibility gate.
+The existing new/load `ClearCaches` hooks sample the optional save-ID export on the
+main thread and atomically replace a mutex-guarded identity snapshot, clear both bio
+caches and advance their generation. Workers use only that snapshot (initially empty);
+in-flight lookups cannot publish positive or negative entries after a clear.
+File edits or newly generated bios are not promised visible until cache invalidation.
+This is a raw block reader, not a profile renderer: it does not evaluate Inja,
+decorators or submodules. Filesystem reads do not provide SkyrimNet's immutable
+in-memory snapshot or reproduce its package compatibility gate.
 
 Offline check, from Native in a VS2022 amd64 developer shell:
 
