@@ -13,6 +13,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <utility>
 
 namespace IntelEngine {
 
@@ -539,7 +540,7 @@ namespace IntelEngine {
             return -1;
         }
 
-        auto* markerRef = bgsLocation->worldLocMarker.get().get();
+        auto* markerRef = std::as_const(bgsLocation->worldLocMarker).get().get();
         if (!markerRef) {
             // Fallback: FindTravelTarget tries cell doors, exterior cells, etc.
             markerRef = resolver->FindTravelTarget(resolvedName);
