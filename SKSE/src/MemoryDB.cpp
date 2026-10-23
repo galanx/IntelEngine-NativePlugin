@@ -10,10 +10,10 @@
 #include "SkyrimNetAPI.h"
 #include "Settings.h"
 #include "StringUtils.h"
+#include "BioContent.h"
 
 #include <nlohmann/json.hpp>
 #include <filesystem>
-#include <fstream>
 #include <cmath>
 #include <algorithm>
 #include <sstream>
@@ -31,21 +31,6 @@ namespace IntelEngine {
         WideCharToMultiByte(CP_UTF8, 0, wide.c_str(), static_cast<int>(wide.size()),
                             result.data(), len, nullptr, nullptr);
         return result;
-    }
-
-    /** Convert a UTF-8 std::string to a filesystem path.
-     *  On Windows, path(std::string) interprets the string as the ANSI code page, not UTF-8.
-     *  Korean/CJK characters in UTF-8 strings crash during this ANSI→UTF-16 conversion.
-     *  This function properly converts UTF-8 → UTF-16 → path. */
-    static std::filesystem::path Utf8ToPath(const std::string& utf8) {
-        if (utf8.empty()) return {};
-        int wlen = MultiByteToWideChar(CP_UTF8, 0, utf8.c_str(), static_cast<int>(utf8.size()),
-                                       nullptr, 0);
-        if (wlen <= 0) return {};
-        std::wstring wide(wlen, L'\0');
-        MultiByteToWideChar(CP_UTF8, 0, utf8.c_str(), static_cast<int>(utf8.size()),
-                            wide.data(), wlen);
-        return std::filesystem::path(wide);
     }
 
     // SkyrimNet stores game_time as GameDaysPassed * 86400 (game-seconds since epoch).
@@ -78,7 +63,7 @@ namespace IntelEngine {
     }
 
     // =========================================================================
-    // GetNPCBioSummary (disk I/O — unchanged, uses SkyrimNet API for template name)
+    // GetNPCBioSummary (Content Library, then legacy files; cached until ClearCaches)
     // =========================================================================
 
     std::string MemoryDB::GetNPCBioSummary(RE::FormID formId) {
@@ -107,197 +92,29 @@ namespace IntelEngine {
             return "";
         }
 
-        // Read the bio file — prefer dynamic bio (evolved through gameplay), fall back to static.
-        // NOTE: On Windows, std::filesystem::path(std::string) interprets the string as the
-        // ANSI code page, NOT UTF-8. If bioTemplate contains Korean/CJK characters (returned
-        // as UTF-8 from SkyrimNet), constructing a path from it crashes with error 1113.
-        // We use Utf8ToPath() for all path segments derived from bioTemplate.
-        const auto promptFileName = Utf8ToPath(bioTemplate + ".prompt");
-        const auto dynamicBioFileName = Utf8ToPath(bioTemplate + ".dynamic.prompt");
-        std::filesystem::path filePath;
-        std::error_code ec;
-
-        // Sort comparator for save directories — uses path objects directly (no ANSI conversion)
-        auto savePathDescending = [](const std::filesystem::directory_entry& a,
-                                     const std::filesystem::directory_entry& b) {
-            return a.path().filename() > b.path().filename();
-        };
-
-        // Collect and sort save directories (reused across lookups)
-        auto getSortedSaveDirs = [&](const std::filesystem::path& savesRoot)
-            -> std::vector<std::filesystem::directory_entry> {
-            std::vector<std::filesystem::directory_entry> dirs;
-            if (!std::filesystem::exists(savesRoot, ec) || !std::filesystem::is_directory(savesRoot, ec))
-                return dirs;
+        std::string saveId;
+        if (SkyrimNetAPI::GetSaveUniqueID) {
             try {
-                for (auto& entry : std::filesystem::directory_iterator(savesRoot, ec)) {
-                    if (entry.is_directory(ec)) dirs.push_back(entry);
-                }
-            } catch (const std::exception& e) {
-                logger::warn("MemoryDB: Failed to iterate saves directory: {}", e.what());
-            }
-            std::sort(dirs.begin(), dirs.end(), savePathDescending);
-            return dirs;
-        };
-
-        // 1. Dynamic bio (LLM-generated evolution of the character)
-        std::filesystem::path dynamicBioPath = std::filesystem::path(L"Data/SKSE/Plugins/SkyrimNet/prompts/characters/dynamic") / dynamicBioFileName;
-        // 2. Static bio (authored character prompt)
-        std::filesystem::path staticPath = std::filesystem::path(L"Data/SKSE/Plugins/SkyrimNet/prompts/characters") / promptFileName;
-        std::filesystem::path originalPath = std::filesystem::path(L"Data/SKSE/Plugins/SkyrimNet/original_prompts/characters") / promptFileName;
-
-        // Also check save-specific dynamic bios
-        std::filesystem::path savesDir = L"Data/SKSE/Plugins/SkyrimNet/prompts/_saves";
-        auto saveDirs = getSortedSaveDirs(savesDir);
-        for (auto& saveDir : saveDirs) {
-            auto saveDynPath = saveDir.path() / L"characters" / L"dynamic" / dynamicBioFileName;
-            if (std::filesystem::exists(saveDynPath, ec)) {
-                filePath = saveDynPath;
-                break;
+                saveId = SkyrimNetAPI::GetSaveUniqueID();
+            } catch (...) {
+                logger::warn("MemoryDB: GetSaveUniqueID exception");
             }
         }
 
-        if (filePath.empty() && std::filesystem::exists(dynamicBioPath, ec)) {
-            filePath = dynamicBioPath;
-        } else if (filePath.empty() && std::filesystem::exists(staticPath, ec)) {
-            filePath = staticPath;
-        } else if (filePath.empty() && std::filesystem::exists(originalPath, ec)) {
-            filePath = originalPath;
+        std::optional<BioContent::Bio> bio;
+        try {
+            bio = BioContent::Resolve(L"Data/SKSE/Plugins/SkyrimNet", bioTemplate, saveId);
+        } catch (const std::exception& e) {
+            logger::warn("MemoryDB: Bio lookup failed for 0x{:08X}: {}", formId, e.what());
         }
-
-        // Last resort: save-specific static bio
-        if (filePath.empty()) {
-            for (auto& saveDir : saveDirs) {
-                auto saveBioPath = saveDir.path() / L"characters" / promptFileName;
-                if (std::filesystem::exists(saveBioPath, ec)) {
-                    filePath = saveBioPath;
-                    break;
-                }
-            }
-        }
-
-        // Fuzzy file fallback: template name includes a FormID suffix (e.g., "ulfric_stormcloak_584")
-        // that changes with load order. Bio files may also have title prefixes (e.g., "jarl_ulfric_stormcloak_131").
-        // Strip the FormID suffix to get the base name, then scan existing files for any match.
-        if (filePath.empty() && !bioTemplate.empty()) {
-            // Extract base name by removing the trailing _XXX FormID suffix
-            std::string baseName = bioTemplate;
-            auto lastUnderscore = baseName.rfind('_');
-            if (lastUnderscore != std::string::npos && lastUnderscore > 0) {
-                // Verify the suffix is hex digits (FormID)
-                bool isHexSuffix = true;
-                for (size_t i = lastUnderscore + 1; i < baseName.size(); i++) {
-                    char c = baseName[i];
-                    if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F'))) {
-                        isHexSuffix = false;
-                        break;
-                    }
-                }
-                if (isHexSuffix) {
-                    baseName = baseName.substr(0, lastUnderscore);
-                }
-            }
-
-            // Widen baseName for matching against wstring filenames using proper UTF-8 conversion
-            auto wBasePath = Utf8ToPath(baseName);
-            std::wstring wBaseName = wBasePath.wstring();
-            std::wstring wPromptSuffix = L".prompt";
-            std::wstring wDynPromptSuffix = L".dynamic.prompt";
-
-            // Scan character directories for files containing the base name
-            // Uses wstring() to avoid ANSI code page conversion crashes on non-English Windows
-            auto scanDir = [&](const std::filesystem::path& dir) -> std::filesystem::path {
-                if (!std::filesystem::exists(dir, ec) || !std::filesystem::is_directory(dir, ec))
-                    return {};
-                try {
-                    for (auto& entry : std::filesystem::directory_iterator(dir, ec)) {
-                        if (!entry.is_regular_file(ec)) continue;
-                        auto wfname = entry.path().filename().wstring();
-                        if (wfname.find(wBaseName) != std::wstring::npos &&
-                            (wfname.ends_with(wPromptSuffix) || wfname.ends_with(wDynPromptSuffix))) {
-                            return entry.path();
-                        }
-                    }
-                } catch (const std::exception& e) {
-                    logger::warn("MemoryDB: Failed to scan directory: {}", e.what());
-                }
-                return {};
-            };
-
-            // Priority: dynamic → static → original (same as primary lookup)
-            std::filesystem::path match = scanDir("Data/SKSE/Plugins/SkyrimNet/prompts/characters/dynamic");
-            if (match.empty()) match = scanDir("Data/SKSE/Plugins/SkyrimNet/prompts/characters");
-            if (match.empty()) match = scanDir("Data/SKSE/Plugins/SkyrimNet/original_prompts/characters");
-
-            // Also check save-specific directories
-            if (match.empty()) {
-                for (auto& saveDir : saveDirs) {
-                    match = scanDir(saveDir.path() / "characters" / "dynamic");
-                    if (match.empty()) match = scanDir(saveDir.path() / "characters");
-                    if (!match.empty()) break;
-                }
-            }
-
-            if (!match.empty()) {
-                filePath = match;
-                logger::info("MemoryDB: Fuzzy file fallback matched '{}' -> '{}' for FormID 0x{:08X}",
-                    bioTemplate, PathToUtf8(filePath.filename()), formId);
-            }
-        }
-
-        std::string summary;
-        std::string relationships;
-        if (!filePath.empty()) {
-            std::ifstream file(filePath);
-            if (file.is_open()) {
-                std::string content((std::istreambuf_iterator<char>(file)),
-                                     std::istreambuf_iterator<char>());
-                file.close();
-
-                const std::string endTag = "{% endblock %}";
-
-                // Extract {% block summary %}...{% endblock %}
-                {
-                    const std::string startTag = "{% block summary %}";
-                    auto startPos = content.find(startTag);
-                    if (startPos != std::string::npos) {
-                        startPos += startTag.size();
-                        auto endPos = content.find(endTag, startPos);
-                        if (endPos != std::string::npos) {
-                            summary = content.substr(startPos, endPos - startPos);
-                            while (!summary.empty() && (summary.front() == ' ' || summary.front() == '\n' || summary.front() == '\r'))
-                                summary.erase(summary.begin());
-                            while (!summary.empty() && (summary.back() == ' ' || summary.back() == '\n' || summary.back() == '\r'))
-                                summary.pop_back();
-                        }
-                    }
-                }
-
-                // Extract {% block relationships %}...{% endblock %}
-                {
-                    const std::string startTag = "{% block relationships %}";
-                    auto startPos = content.find(startTag);
-                    if (startPos != std::string::npos) {
-                        startPos += startTag.size();
-                        auto endPos = content.find(endTag, startPos);
-                        if (endPos != std::string::npos) {
-                            relationships = content.substr(startPos, endPos - startPos);
-                            while (!relationships.empty() && (relationships.front() == ' ' || relationships.front() == '\n' || relationships.front() == '\r'))
-                                relationships.erase(relationships.begin());
-                            while (!relationships.empty() && (relationships.back() == ' ' || relationships.back() == '\n' || relationships.back() == '\r'))
-                                relationships.pop_back();
-                        }
-                    }
-                }
-            }
-        }
-
+        const auto summary = bio ? BioContent::ExtractBlock(bio->content, "summary") : "";
+        const auto relationships = bio ? BioContent::ExtractBlock(bio->content, "relationships") : "";
         if (summary.empty()) {
-            logger::warn("MemoryDB: No bio summary for FormID 0x{:08X} (template: '{}', tried: '{}', '{}', and _saves/*/characters/)",
-                formId, bioTemplate, PathToUtf8(dynamicBioPath), PathToUtf8(originalPath));
+            logger::warn("MemoryDB: No bio summary for FormID 0x{:08X} (template: '{}', Content Library and legacy roots)",
+                formId, bioTemplate);
         } else {
             logger::info("MemoryDB: Bio loaded for 0x{:08X} ({}) from {}: {}...",
-                formId, bioTemplate, PathToUtf8(filePath), summary.substr(0, 60));
+                formId, bioTemplate, PathToUtf8(bio->path), summary.substr(0, 60));
         }
 
         {

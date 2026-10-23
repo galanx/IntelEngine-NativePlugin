@@ -44,6 +44,9 @@ namespace IntelEngine::SkyrimNetAPI {
     /** Get the bio template name for an actor (used for bio prompt file lookup). */
     inline std::string (*GetBioTemplateName)(uint32_t formId) = nullptr;
 
+    /** Current SkyrimNet playthrough ID; optional export (API v7+). */
+    inline std::string (*GetSaveUniqueID)() = nullptr;
+
     // ---- Data API (v3+) ----
 
     /** Retrieve memories for an actor. contextQuery enables semantic search if non-empty. */
@@ -157,6 +160,8 @@ namespace IntelEngine::SkyrimNetAPI {
         // v3+ function pointers — Bio Template
         GetBioTemplateName = reinterpret_cast<std::string(*)(uint32_t)>(
             GetProcAddress(hDLL, "PublicGetBioTemplateName"));
+        GetSaveUniqueID = reinterpret_cast<std::string(*)()>(
+            GetProcAddress(hDLL, "PublicGetSaveUniqueID"));
 
         // v3+ function pointers — Data API
         GetMemoriesForActor = reinterpret_cast<std::string(*)(uint32_t, int, const char*)>(

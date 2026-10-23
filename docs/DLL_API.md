@@ -547,6 +547,45 @@ The 1.7.104 qualification covers **one bounded converted-copy acceptance**: a un
 
 The Native source check `SKSE/tests/LegacyCacheMigrationCheck.cpp` uses the production codec and actual converter/transaction code. Run `LegacyCacheMigrationCheck.exe <new-unused-scratch-directory>` after building the standalone targets. It covers global/actor all-family bytes, policy/control/identity/count/framing refusals, mixed/encoded preservation, unchanged names/opaque bytes, exclusive backups and interrupted/failed publication. `SKSE/tests/RenderedCacheCodecCheck.cpp` covers the codec contract. Synthetic byte fixtures are not loadable saves; these checks do not replace the bounded runtime observations above.
 
+### Unreleased NPC bio Content Library lookup (#18)
+
+`MemoryDB::GetNPCBioSummary` and `GetNPCBioRelationships` read the same selected bio.
+SkyrimNet's public API returns the template name, not resolved content; the optional
+`PublicGetSaveUniqueID` export supplies the current playthrough ID. No new required
+export, dependency, game ABI, or save format is introduced.
+
+The reader prefers the current save's dynamic bio, then static content in this order:
+current save, valid registry pin, overlay, enabled/nonmissing registry providers in
+priority order, and base. Duplicate provider copies use semantic version, then
+local/external/hub precedence. Suppressed items cannot fall through to legacy copies.
+Content Library dynamic bios are save-only; a missing save-ID export or empty ID
+skips that layer rather than borrowing another save. Legacy roots and their fuzzy
+matching remain last-resort compatibility fallback; only a legacy-only layout without
+a usable save ID retains the old all-save search.
+
+The existing summary/relationships caches (including negative results) and new/load
+`ClearCaches` calls are unchanged. File edits or newly generated bios are not promised
+visible until cache invalidation. This is a raw block reader, not a profile renderer:
+it does not evaluate Inja, decorators or submodules. Filesystem reads do not provide
+SkyrimNet's immutable in-memory snapshot or reproduce its package compatibility gate.
+
+Offline check, from Native in a VS2022 amd64 developer shell (`$deps` is an existing
+vcpkg triplet's include directory):
+
+```powershell
+New-Item -ItemType Directory -Path SKSE/build-bio-check -Force | Out-Null
+cl /nologo /std:c++20 /EHsc /W4 /WX /I SKSE/src /I $deps SKSE/tests/BioContentCheck.cpp /Fo:SKSE/build-bio-check/ /Fe:SKSE/build-bio-check/BioContentCheck.exe
+if ($LASTEXITCODE -ne 0) { throw "Bio check compilation failed" }
+& ./SKSE/build-bio-check/BioContentCheck.exe
+if ($LASTEXITCODE -ne 0) { throw "Bio check failed" }
+```
+
+The check creates/removes a temporary tree and exercises production resolution and
+block extraction, including malformed providers, Unicode directories, suppression
+through legacy fallback and save isolation. Offline output is not a `Bio loaded`
+runtime observation. Release acceptance still requires STD/ADT/VR base-library and
+current-save dynamic bio checks, plus cache invalidation across save loads.
+
 ### Source-level checks
 
 From Native in a VS2022 amd64 developer shell, create the detached check directory and run:
