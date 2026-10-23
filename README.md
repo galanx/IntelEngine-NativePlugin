@@ -5,6 +5,7 @@
 > The native plugin targets Skyrim runtimes **1.5.97.0, 1.6.640.0, 1.6.1170.0, 1.7.99.0, and 1.7.104.0** through Address Library compatibility. These are documented targets, not in-game test results; VR is not supported.
 >
 > This repository carries a compatibility update for current SkyrimNet releases. IntelEngine was originally created by [Galanx](https://github.com/galanx).
+> Players: report bugs at [IntelEngine issues](https://github.com/Gerkinfeltser/IntelEngine-GamePlugin/issues). This repository holds the SKSE DLL source.
 
 *"Meet me at the Western Watchtower at sunset."*
 *She agrees. Hours pass. The sun dips. You arrive — and she's already there.*
