@@ -66,6 +66,66 @@ unsigned gameChecks=0;
 void gameStartsBeforePublication() {
     gameRunning([] { return ++gameChecks==2; });
 }
+void vrCheck(const fs::path& area) {
+    fs::create_directory(area);
+    const auto actor=std::to_string((std::uint64_t{62}<<32)|0x123456);
+    const auto payload="1 "+actor+" 4 intel_factsrendered facts\a\xC3\xA9\n%0A%25"
+        " intel_gossiprendered heard\nshared intel_taskhistoryrendered task\nline rne_name Stored\aName";
+    auto input=fixture(payload);
+    put32(input,8,SkseVR); put32(input,12,RuntimeVR);
+    auto expected=fixture("1 "+actor+" 4 intel_factsrendered facts\a\xC3\xA9%0A%250A%2525"
+        " intel_gossiprendered heard%0Ashared intel_taskhistoryrendered task%0Aline rne_name Stored\aName");
+    put32(expected,8,SkseVR); put32(expected,12,RuntimeVR);
+    require(inspect(input,parse(input))["refusals"].empty(),"real VR tuple refused inspection");
+    // Expert mode must not borrow either flat provider's qualification.
+    for (const auto* provider : {Provider,Provider17104}) {
+        auto proof=evidence(input,{"facts \xC3\xA9\n%0A%25","heard\nshared","task\nline"},
+            {"legacy","legacy","legacy"},"actor-in-place");
+        proof["runtime"]="1.4.15.0"; proof["provider_sha256"]=provider;
+        refuses([&] { convert(input,parse(input),proof); },"unqualified VR expert provider");
+    }
+    Bytes ess{'T','E','S','V','_','S','A','V','E','G','A','M','E'};
+    word(ess,84); word(ess,12); // Synthetic version-12 header; not a loadable save.
+    ess.resize(17+84);
+    auto reject=[&](const Bytes& badEss, const Bytes& badSkse) {
+        write(area/"test.ess",badEss); write(area/"test.skse",badSkse);
+        refuses([&] { fix(area/"test.ess"); },"VR unsafe pair");
+        require(std::distance(fs::directory_iterator(area),fs::directory_iterator{})==2,
+            "VR refusal created artifacts");
+        Source e(area/"test.ess"), s(area/"test.skse");
+        require(e.bytes()==badEss && s.bytes()==badSkse,"VR refusal changed originals");
+    };
+    for (const auto tuple : {std::pair{SkseVR,0x010400F0u},std::pair{Skse,RuntimeVR},
+                            std::pair{SkseVR,Runtime},std::pair{SkseVR,RuntimeVR+1}}) {
+        auto bad=input; put32(bad,8,tuple.first); put32(bad,12,tuple.second);
+        require(!parse(bad).refusals.empty(),"mixed/unknown VR tuple accepted");
+        reject(ess,bad);
+    }
+    for (const auto offset : {4u,36u,40u}) {
+        auto bad=input; put32(bad,offset,0xffffffff);
+        reject(ess,bad);
+    }
+    for (const auto& payload : {
+        "2 "+actor+" 1 intel_factsrendered gap",
+        "1 "+actor+" 2 intel_factsrendered x Intel_FactsRendered y",
+        "1 "+actor+" 1 intel_factsrendered bad\tcontrol",
+        "1 "+std::to_string((std::uint64_t{62}<<32)|0xff000001)+" 1 intel_factsrendered temporary"}) {
+        auto bad=fixture(payload); put32(bad,8,SkseVR); put32(bad,12,RuntimeVR);
+        reject(ess,bad);
+    }
+    auto badEss=ess; put32(badEss,17,11); reject(badEss,input);
+    badEss=ess; put32(badEss,13,85); reject(badEss,input);
+    badEss=ess; badEss.resize(20); reject(badEss,input);
+    badEss=ess; badEss[0]='X'; reject(badEss,input);
+    write(area/"test.ess",ess); write(area/"test.skse",input);
+    require(fix(area/"test.ess")==0,"VR fix failed");
+    Source e(area/"test.ess"), s(area/"test.skse");
+    Source oe(area/"test_IEconverted.ess"), os(area/"test_IEconverted.skse");
+    Source be(area/"test_IEbackup/original.ess"), bs(area/"test_IEbackup/original.skse");
+    require(e.bytes()==ess && oe.bytes()==ess && be.bytes()==ess &&
+        s.bytes()==input && bs.bytes()==input && os.bytes()==expected,
+        "VR fix changed ESS, source, backup, names, opaque bytes or expected cache bytes");
+}
 void filesystemCheck(const fs::path& area, const Bytes& input, const Bytes& converted) {
     require(!fs::exists(area), "self-check area must not exist");
     require(fs::create_directory(area), "cannot create exclusive self-check area");
@@ -78,7 +138,7 @@ void filesystemCheck(const fs::path& area, const Bytes& input, const Bytes& conv
     fs::create_directory(vr);
     auto vrInput=fixture("1 "+std::to_string((std::uint64_t{62}<<32)|0x123456)
         +" 1 intel_factsrendered legacy");
-    put32(vrInput,12,0x010400f0); // Skyrim VR 1.4.15.0.
+    put32(vrInput,12,0x010400f0); // Incorrect/mixed tuple, not the real SKSEVR identity.
     write(vr/"test.ess",ess); write(vr/"test.skse",vrInput);
     const auto vrParsed=parse(vrInput);
     require(!inspect(vrInput,vrParsed)["refusals"].empty(),
@@ -91,6 +151,7 @@ void filesystemCheck(const fs::path& area, const Bytes& input, const Bytes& conv
     Source vrEss(vr/"test.ess"), vrSkse(vr/"test.skse");
     require(vrEss.hash()==essHash && vrSkse.hash()==sha256(vrInput),
         "VR refusal changed the original pair");
+    vrCheck(source/"vr-supported");
     {
         Source e(source/"test.ess"), s(source/"test.skse");
         require(e.hash()==essHash && s.hash()==skseHash, "source hash mismatch");
@@ -192,10 +253,10 @@ int main(int argc, char** argv) {
         auto actorManifest=evidence(actorInput,actorOriginals,{"legacy","legacy","legacy"},"actor-in-place");
         require(convert(actorInput,parse(actorInput,true),fixEvidence(actorInput,parse(actorInput,true)),true).bytes==actorExpected,
             "owner-policy fix conversion bytes differ");
-        for (const auto runtime : {Runtime,Runtime17104}) {
+        for (const auto runtime : {Runtime,Runtime17104,RuntimeVR}) {
             auto runtimeInput=actorInput; put32(runtimeInput,12,runtime);
             auto runtimeExpected=actorExpected; put32(runtimeExpected,12,runtime);
-            const auto skse=runtime==Runtime ? Skse : Skse17104;
+            const auto skse=runtime==Runtime ? Skse : runtime==Runtime17104 ? Skse17104 : SkseVR;
             put32(runtimeInput,8,skse); put32(runtimeExpected,8,skse);
             require(convert(runtimeInput,parse(runtimeInput,true),fixEvidence(runtimeInput,parse(runtimeInput,true)),true).bytes==runtimeExpected,
                 "supported fix runtime rejected");
@@ -359,7 +420,7 @@ int main(int argc, char** argv) {
         auto trailing=input; trailing.push_back(0);
         refuses([&] { parse(trailing); },"trailing binary bytes");
         filesystemCheck(fs::u8path(argv[1]),input,expected);
-        std::cout << "PASS: legacy-policy fix evidence, both supported co-save runtimes, process guard seam, wrong runtime/owner/STRV refusals; exact conversion/name preservation/control and temporary-identity refusals; global/expert conversion; locked backups/staging/no-replace publication including retained incomplete pair and unchanged originals.\n";
+        std::cout << "PASS: legacy-policy fix evidence, SE/AE/VR co-save tuples and VR ESS v12; process guard seam, wrong runtime/owner/STRV refusals; exact conversion/name preservation/control and temporary-identity refusals; global/expert conversion; locked backups/staging/no-replace publication including retained incomplete pair and unchanged originals.\n";
         return 0;
     } catch (const std::exception& error) {
         std::cerr << "FAIL: " << error.what() << '\n'; return 1;

@@ -32,6 +32,7 @@ constexpr std::uint32_t Owner = 0x424510A2, Strv = 0x53545256;
 constexpr std::uint32_t Runtime = 0x01064920, Skse = 0x02020060;
 constexpr const char* Provider17104 = "69260a675186cf781a2105002505ab224fee12e84d004a3787670c9d6ce936be";
 constexpr std::uint32_t Runtime17104 = 0x01070680, Skse17104 = 0x02030010;
+constexpr std::uint32_t RuntimeVR = 0x010400F1, SkseVR = 0x020000C0;
 void require(bool condition, const std::string& message) {
     if (!condition) throw std::runtime_error(message);
 }
@@ -161,9 +162,10 @@ Parsed parse(const Bytes& bytes, bool fixMode = false) {
     require(offset == bytes.size(), "trailing bytes/plugin count mismatch");
     require(candidates == 1, "qualified owner/STRV missing");
     const bool qualifiedHeader=(u32(bytes,8) == Skse && u32(bytes,12) == Runtime) ||
-        (u32(bytes,8) == Skse17104 && u32(bytes,12) == Runtime17104);
+        (u32(bytes,8) == Skse17104 && u32(bytes,12) == Runtime17104) ||
+        (u32(bytes,8) == SkseVR && u32(bytes,12) == RuntimeVR);
     if (fixMode) require(qualifiedHeader,
-        "unsupported co-save runtime; fix supports Skyrim 1.6.1170 and 1.7.104");
+        "unsupported co-save runtime; fix supports Skyrim 1.6.1170, 1.7.104 and VR 1.4.15 / SKSEVR 2.0.12");
     else if (!qualifiedHeader)
         result.refusals.push_back("unqualified SKSE/runtime header");
     auto cursor=result.begin;
@@ -414,6 +416,11 @@ int fix(const fs::path& essPath, void (*requireGameClosed)() = verifyBeforePubli
     Source ess(essPath), skse(sksePath);
     require(ess.bytes().size()>=13 && view(ess.bytes(),0,13)=="TESV_SAVEGAME", "ESS is empty or lacks Skyrim save signature");
     auto parsed=parse(skse.bytes(),true);
+    if (u32(skse.bytes(),12) == RuntimeVR) {
+        require(ess.bytes().size() >= 21 && u32(ess.bytes(),13) >= 4 &&
+            u32(ess.bytes(),13) <= ess.bytes().size()-17 && u32(ess.bytes(),17) == 12,
+            "unsupported VR ESS header; expected TESV_SAVEGAME version 12");
+    }
     auto converted=convert(skse.bytes(),parsed,fixEvidence(skse.bytes(),parsed),true);
     require(converted.legacy>0, "no eligible legacy cache targets found; original save was not changed");
     const auto backup=fs::path(base.wstring()+L"_IEbackup");
