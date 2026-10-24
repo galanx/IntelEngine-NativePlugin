@@ -127,6 +127,33 @@ void vrCheck(const fs::path& area) {
     require(e.bytes()==ess && oe.bytes()==ess && be.bytes()==ess &&
         s.bytes()==input && bs.bytes()==input && os.bytes()==expected,
         "VR fix changed ESS, source, backup, names, opaque bytes or expected cache bytes");
+    const auto seArea=area/"se-1597";
+    fs::create_directory(seArea);
+    auto seInput=input, seExpected=expected;
+    // Independent header words from SKSE64 v2.0.20, not the production constants.
+    for (auto* bytes : {&seInput,&seExpected}) {
+        put32(*bytes,8,0x02000140); put32(*bytes,12,0x01050610);
+    }
+    require(parse(seInput).refusals.empty(),"1.5.97 tuple refused inspection");
+    for (const auto* provider : {Provider,Provider17104}) {
+        auto proof=evidence(seInput,{"facts \xC3\xA9\n%0A%25","heard\nshared","task\nline"},
+            {"legacy","legacy","legacy"},"actor-in-place");
+        proof["runtime"]="1.5.97.0"; proof["provider_sha256"]=provider;
+        refuses([&] { convert(seInput,parse(seInput),proof); },"unqualified 1.5.97 expert provider");
+    }
+    for (const auto tuple : {std::pair{SkseVR,0x01050610u},std::pair{0x02000140u,Runtime},
+                            std::pair{0x02000140u,0x01050600u}}) {
+        auto bad=seInput; put32(bad,8,tuple.first); put32(bad,12,tuple.second);
+        refuses([&] { parse(bad,true); },"mixed/unknown 1.5.97 tuple");
+    }
+    write(seArea/"test.ess",ess); write(seArea/"test.skse",seInput);
+    require(fix(seArea/"test.ess")==0,"synthetic 1.5.97 fix failed");
+    Source seEss(seArea/"test.ess"), seSkse(seArea/"test.skse");
+    Source seOutputEss(seArea/"test_IEconverted.ess"), seOutputSkse(seArea/"test_IEconverted.skse");
+    Source seBackupEss(seArea/"test_IEbackup/original.ess"), seBackupSkse(seArea/"test_IEbackup/original.skse");
+    require(seEss.bytes()==ess && seOutputEss.bytes()==ess && seBackupEss.bytes()==ess &&
+        seSkse.bytes()==seInput && seBackupSkse.bytes()==seInput && seOutputSkse.bytes()==seExpected,
+        "1.5.97 repair changed source, backup, ESS, opaque bytes, names or non-cache destinations");
     const auto emptyArea=area/"cache-free";
     fs::create_directory(emptyArea);
     Bytes empty{'S','K','S','E'};
@@ -277,11 +304,12 @@ int main(int argc, char** argv) {
         auto actorManifest=evidence(actorInput,actorOriginals,{"legacy","legacy","legacy"},"actor-in-place");
         require(convert(actorInput,parse(actorInput,true),fixEvidence(actorInput,parse(actorInput,true)),true).bytes==actorExpected,
             "owner-policy fix conversion bytes differ");
-        for (const auto runtime : {Runtime,Runtime17104,RuntimeVR}) {
-            auto runtimeInput=actorInput; put32(runtimeInput,12,runtime);
-            auto runtimeExpected=actorExpected; put32(runtimeExpected,12,runtime);
-            const auto skse=runtime==Runtime ? Skse : runtime==Runtime17104 ? Skse17104 : SkseVR;
-            put32(runtimeInput,8,skse); put32(runtimeExpected,8,skse);
+        for (const auto tuple : {std::pair{Skse,Runtime},std::pair{Skse17104,Runtime17104},
+                                std::pair{SkseVR,RuntimeVR},std::pair{Skse1597,Runtime1597}}) {
+            auto runtimeInput=actorInput, runtimeExpected=actorExpected;
+            for (auto* bytes : {&runtimeInput,&runtimeExpected}) {
+                put32(*bytes,8,tuple.first); put32(*bytes,12,tuple.second);
+            }
             require(convert(runtimeInput,parse(runtimeInput,true),fixEvidence(runtimeInput,parse(runtimeInput,true)),true).bytes==runtimeExpected,
                 "supported fix runtime rejected");
         }
@@ -439,7 +467,7 @@ int main(int argc, char** argv) {
         auto trailing=input; trailing.push_back(0);
         refuses([&] { parse(trailing); },"trailing binary bytes");
         filesystemCheck(fs::u8path(argv[1]),input,expected);
-        std::cout << "PASS: legacy-policy fix evidence, SE/AE/VR co-save tuples and VR ESS v12; process guard seam, wrong runtime/owner/STRV refusals; exact conversion/name preservation/control and temporary-identity refusals; global/expert conversion; locked backups/staging/no-replace publication including retained incomplete pair and unchanged originals.\n";
+        std::cout << "PASS: legacy-policy fix evidence, synthetic 1.5.97 / SKSE64 2.0.20 and SE/AE/VR co-save tuples, VR ESS v12; process guard seam, wrong runtime/owner/STRV refusals; exact conversion/name preservation/control and temporary-identity refusals; global/expert conversion; locked backups/staging/no-replace publication including retained incomplete pair and unchanged originals.\n";
         return 0;
     } catch (const std::exception& error) {
         std::cerr << "FAIL: " << error.what() << '\n'; return 1;

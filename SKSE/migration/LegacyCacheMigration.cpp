@@ -33,6 +33,8 @@ constexpr std::uint32_t Runtime = 0x01064920, Skse = 0x02020060;
 constexpr const char* Provider17104 = "69260a675186cf781a2105002505ab224fee12e84d004a3787670c9d6ce936be";
 constexpr std::uint32_t Runtime17104 = 0x01070680, Skse17104 = 0x02030010;
 constexpr std::uint32_t RuntimeVR = 0x010400F1, SkseVR = 0x020000C0;
+// SKSE64 v2.0.20 skse_version.h MAKE_EXE_VERSION: (major<<24)|(minor<<16)|(build<<4).
+constexpr std::uint32_t Runtime1597 = 0x01050610, Skse1597 = 0x02000140;
 void require(bool condition, const std::string& message) {
     if (!condition) throw std::runtime_error(message);
 }
@@ -162,9 +164,10 @@ Parsed parse(const Bytes& bytes, bool fixMode = false) {
     require(offset == bytes.size(), "trailing bytes/plugin count mismatch");
     const bool qualifiedHeader=(u32(bytes,8) == Skse && u32(bytes,12) == Runtime) ||
         (u32(bytes,8) == Skse17104 && u32(bytes,12) == Runtime17104) ||
-        (u32(bytes,8) == SkseVR && u32(bytes,12) == RuntimeVR);
+        (u32(bytes,8) == SkseVR && u32(bytes,12) == RuntimeVR) ||
+        (u32(bytes,8) == Skse1597 && u32(bytes,12) == Runtime1597);
     if (fixMode) require(qualifiedHeader,
-        "unsupported co-save runtime; fix supports Skyrim 1.6.1170, 1.7.104 and VR 1.4.15 / SKSEVR 2.0.12");
+        "unsupported co-save runtime; fix accepts Skyrim 1.5.97 / SKSE64 2.0.20 (untested), 1.6.1170, 1.7.104 and VR 1.4.15 / SKSEVR 2.0.12");
     else if (!qualifiedHeader)
         result.refusals.push_back("unqualified SKSE/runtime header");
     if (fixMode && candidates == 0) {
