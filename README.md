@@ -1,8 +1,8 @@
 # IntelEngine
 ### NPC Autonomy, Faction Politics & Player-Driven Task Framework for SkyrimNet
 
-> **Compatibility:** IntelEngine 3.5.1 and later requires **SkyrimNet Beta 25 or newer**. It is not compatible with SkyrimNet Beta 24 or earlier.
-> The native plugin targets Skyrim runtimes **1.5.97.0, 1.6.640.0, 1.6.1170.0, 1.7.99.0, and 1.7.104.0** through Address Library compatibility. These are documented targets, not in-game test results; VR is not supported.
+> **Compatibility:** IntelEngine 3.5.1 and later declares **SkyrimNet Beta 25** as its minimum; 3.6.0 was tested with official **Beta 28**. Beta 25–27 were not qualified for 3.6.0; Beta 24 and earlier are incompatible.
+> The 3.6.0 native build includes SE/AE/VR. Tested runtimes: Skyrim **1.6.1170.0** and **1.7.104.0**. Skyrim VR **1.4.15** should work and was partly tested. Skyrim SE **1.5.97.0** was built but not runtime-tested; **1.6.640.0** and **1.7.99.0** are also untested targets.
 >
 > This repository carries a compatibility update for current SkyrimNet releases. IntelEngine was originally created by [Galanx](https://github.com/galanx).
 > Players: report bugs at [IntelEngine issues](https://github.com/Gerkinfeltser/IntelEngine-GamePlugin/issues). This repository holds the SKSE DLL source.
@@ -322,7 +322,7 @@ View all pending scheduled tasks with times and targets. Cancel individually or 
 
 ## In-Game Dashboard (PrismaUI)
 
-When the optional [PrismaUI](https://github.com/psc-87/PrismaUI) SKSE plugin is installed, IntelEngine provides a real-time overlay dashboard accessible via hotkey (default: Shift+7). The dashboard is a React web UI rendered in-game with full mouse/keyboard interaction.
+When the optional [PrismaUI](https://www.prismaui.dev/) SKSE plugin is installed, IntelEngine provides a real-time overlay dashboard accessible via hotkey (default: Shift+7). The dashboard is a React web UI rendered in-game with full mouse/keyboard interaction.
 
 ### Tabs
 
@@ -414,7 +414,7 @@ IntelEngine is under active development. The following features are planned for 
 
 > **SkyrimNet Beta 25 / IntelEngine 3.5.1 migration:** IntelEngine content now loads from external plugin id `galanx.intelengine`. After upgrading, review its enablement and priority in SkyrimNet. Existing action names are unchanged, so per-action settings retain their keys, but should still be reviewed after the content-layer migration. Do not move or delete `config/plugins/IntelEngine`; it continues to own IntelEngine settings and faction configuration.
 
-> **Unreleased rendered-cache repair:** rendered facts, gossip and task-history caches are now stored encoded, so saved text can no longer corrupt later co-save values such as stored NPC names. Fresh-new-game repair verified on Skyrim 1.6.1170 and 1.7.104, including warm and independent cold reloads (on-screen names can take a moment to reappear). A bounded offline converter now exists for eligible saves **from IntelEngine 3.5.2 or earlier**: one real 3.5.2 save on each runtime passed bounded converted-copy acceptance. The 1.7.104 check retained **11 independently sampled caches plus two explicit policy-derived fields and 24 qualified live names** through warm and independent cold reloads, including natural UTF-8 and production prompt checks. Four other name holders remain unverified and were omitted from the new checkpoint; their original/converted bytes were preserved. An initial attempt crashed with cause unresolved; successful recovery is not a general stability claim. The converter refuses ambiguous/truncated streams, unknown provenance or sentinel meanings, unsupported identities and unqualified controls; it cannot restore already-lost values. Use the complete repaired DLL, both affected PEX files and all three prompts; never mix components. **Never load a converted save with 3.5.2 or earlier.** See [converter eligibility, procedure, tests and limits](docs/DLL_API.md#offline-legacy-save-conversion).
+> **3.6.0 rendered-cache repair:** rendered facts, gossip and task-history caches are now stored encoded, so saved text can no longer corrupt later co-save values such as stored NPC names. Fresh-new-game repair verified on Skyrim 1.6.1170 and 1.7.104, including warm and independent cold reloads (on-screen names can take a moment to reappear). A bounded offline converter now exists for eligible saves **from IntelEngine 3.5.2 or earlier**: one real 3.5.2 save on each runtime passed bounded converted-copy acceptance. The 1.7.104 check retained **11 independently sampled caches plus two explicit policy-derived fields and 24 qualified live names** through warm and independent cold reloads, including natural UTF-8 and production prompt checks. Four other name holders remain unverified and were omitted from the new checkpoint; their original/converted bytes were preserved. An initial attempt crashed with cause unresolved; successful recovery is not a general stability claim. The converter refuses ambiguous/truncated streams, unknown provenance or sentinel meanings, unsupported identities and unqualified controls; it cannot restore already-lost values. Use the complete repaired DLL, both affected PEX files and all three prompts; never mix components. **Never load a converted save with 3.5.2 or earlier.** See [converter eligibility, procedure, tests and limits](docs/DLL_API.md#offline-legacy-save-conversion).
 >
 ### How to convert an old save
 
@@ -436,11 +436,13 @@ Both preserved legacy pairs reproduced their verified converted bytes through th
 
 > **Papyrus API and array guards:** seven existing native functions are now declared in `IntelEngine.psc`, and three array-null checks use boolean guards. Maintenance, recovery and schedule retention were exercised across save/reload.
 
-> **Unreleased Story DM actor-resolution fix:** model-selected NPC names now resolve only within the latest Story DM/social candidate pools, using exact display names or a unique case/whitespace-normalized name with a trailing bracketed role removed. Unknown and ambiguous names reject instead of falling back to worldwide fuzzy search. Duplicate display names remain ambiguous. Overlapping requests are not request-isolated; the existing Courier/Messenger substitution path is unchanged. Offline regression checked; live verification pending.
+> **3.6.0 Story DM actor resolution:** model-selected NPC names now resolve only within the latest Story DM/social candidate pools, using exact display names or a unique case/whitespace-normalized name with a trailing bracketed role removed. Unknown and ambiguous names reject instead of falling back to worldwide fuzzy search. Duplicate display names remain ambiguous. Overlapping requests are not request-isolated; the existing Courier/Messenger substitution path is unchanged. Live selection and unknown-name rejection were verified; duplicate-name rejection remains unverified live.
 
-> **Unreleased NPC Social DM threading fix (#15):** the async tick now queues game-state snapshotting through SKSE's main-thread task interface, including callback-quest inspection. Results and candidate pools from before a save load/revert are discarded. Offline generation checks and a DLL build do not confirm the reported 1.5.97 CTD is cured; live non-regression on 1.6.1170 and reporter confirmation on 1.5.97 remain required. The faction-name expression and legacy synchronous APIs are unchanged.
+> **3.6.0 NPC Social DM threading repair (#15):** the async tick now queues game-state snapshotting through SKSE's main-thread task interface, including callback-quest inspection. Results and candidate pools from before a save load/revert are discarded. SE/AE soaks passed; stale-result drop and Phase B thread identity remain unverified. The reported 1.5.97 CTD is not confirmed fixed. The faction-name expression and legacy synchronous APIs are unchanged.
 
-The **v3.5.2 compatibility release** uses pinned MinLL/CommonLibVR with the audited non-VR header correction. A user run established Skyrim **1.6.1170** startup, save loading, dashboard use, and action dispatch; Epicrob also confirmed success on his affected **1.7.x** setup. Use matching SKSE and Address Library. VR is disabled, and these observations do not establish every supported runtime or task scenario. The historical `v3.5.2-rc1` DLL has a demonstrated ABI defect and must not be used. See [native build and verification evidence](docs/DLL_API.md#verification-evidence).
+### Historical 3.5.2 compatibility results
+
+The **v3.5.2 compatibility release** uses pinned MinLL/CommonLibVR with the audited non-VR header correction. A user run established Skyrim **1.6.1170** startup, save loading, dashboard use, and action dispatch; Epicrob also confirmed success on his affected **1.7.x** setup. Use matching SKSE and Address Library. VR was disabled in 3.5.2, and these observations do not establish every supported runtime or task scenario. The historical `v3.5.2-rc1` DLL has a demonstrated ABI defect and must not be used. See [native build and verification evidence](docs/DLL_API.md#verification-evidence).
 
 The native MSVC Release profile disables optimization with `/Od /Ob0`, retains C++23 through `/std:c++23preview`, and removes `/d2ReducedOptimizeHugeFunctions`. The full package includes the rebuilt DLL, all 11 rebuilt Papyrus scripts, and the rebuilt dashboard alongside the existing ESP and configuration assets. **3.5.2 is the release/package version; the byte-identical tested DLL retains native version 3.5.1.** The compatibility fix does not claim to resolve Issue #15 or the deferred Papyrus/translation bugs.
 
@@ -448,9 +450,9 @@ The native MSVC Release profile disables optimization with `/Od /Ob0`, retains C
 
 ## Requirements
 
-- Skyrim Special Edition / Anniversary Edition; the current native build does not support VR
+- The 3.6.0 native build includes Skyrim SE, AE and VR. Tested: Skyrim **1.6.1170.0** and **1.7.104.0**; Skyrim VR **1.4.15** should work and was partly tested; Skyrim SE **1.5.97.0** was built but not runtime-tested. Other listed targets are untested.
 - [SKSE](https://skse.silverlock.org/)
-- [SkyrimNet Beta 25 or newer](https://github.com/MinLL/SkyrimNet-GamePlugin)
+- [SkyrimNet Beta 25 or newer](https://github.com/MinLL/SkyrimNet-GamePlugin) (declared minimum; 3.6.0 tested with official Beta 28, not qualified on Beta 25–27)
 - [SkyUI](https://www.nexusmods.com/skyrimspecialedition/mods/12604) (MCM)
 - [PapyrusUtil](https://www.nexusmods.com/skyrimspecialedition/mods/13048) (persistent storage)
 - [powerofthree's Papyrus Extender](https://www.nexusmods.com/skyrimspecialedition/mods/22854) (package management, linked refs)
@@ -458,7 +460,7 @@ The native MSVC Release profile disables optimization with `/Od /Ob0`, retains C
 
 ### Optional
 
-- [PrismaUI](https://github.com/psc-87/PrismaUI) — in-game overlay framework. Enables the real-time dashboard with task monitoring, story engine controls, director mode, and full settings management. IntelEngine works without it — you just won't have the overlay.
+- [PrismaUI](https://www.prismaui.dev/) — in-game overlay framework. Enables the real-time dashboard with task monitoring, story engine controls, director mode, and full settings management. IntelEngine works without it — you just won't have the overlay.
 
 ---
 

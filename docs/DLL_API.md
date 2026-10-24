@@ -17,8 +17,9 @@ The `IntelEngine.dll` SKSE plugin provides high-performance functions that would
 - MSVC Release builds use `/Od /Ob0 /DNDEBUG` and `/std:c++23preview` for the native plugin and source-built CommonLib. `/O2`, `/std:c++latest`, and `/d2ReducedOptimizeHugeFunctions` are not used. This profile was rebuilt with VS 2022 MSVC 19.44 / toolset 14.44; the language mode retains MinLL's required C++23 support. These build settings do not by themselves establish a runtime black-screen fix.
 - Dependencies are resolved through the repository's vcpkg manifest and baseline. CommonLibSSE is built from source at the enforced MinLL/CommonLibVR commit `550cc4fb9114649dcf526d1f3d73d710c5d7003b` (v4.39.5, MIT); the build verifies the Git revision, clean checkout, and license rather than accepting an imported prebuilt CommonLib target.
 - The shared SE/AE/VR build uses the pinned fork's cross-VR wrappers: `GetSaveParentCell` selects slot `0x97` on SE/AE and `0x98` on VR. CMake retains the upstream header fingerprint guard and the flat-only `Unk_8C` correction for non-VR configurations; the mixed configuration does not apply that virtual-table transformation. Both targets inherit the same declarations.
-- The source candidate enables SE, AE and VR with Address Library compatibility. The documented SE/AE targets remain **1.5.97.0, 1.6.640.0, 1.6.1170.0, 1.7.99.0, and 1.7.104.0**; Skyrim VR **1.4.15 / SKSEVR 2.0.12** is an unreleased qualification target, **not supported yet**. Offline synthetic-vtable checks and linked dispatch/import inspection passed on 2026-10-20; actual VR engine-layout proof, loader acceptance and candidate-specific gameplay regressions remain open. No package or installation is established by this build.
-- Offline getter regression: `cmake --build SKSE/build-vr-v2-20261020 --target ReferenceGetterDispatchCheck`, then run `ReferenceGetterDispatchCheck.exe` there. It invokes the production CommonLib getter on synthetic SE, AE and VR vtables, checks the returned cell and unchanged parent/setter count, and exits nonzero on failure. `--wrong-slot` deliberately moves the fixture getter onto the adjacent setter slot and must exit 1.
+- The 3.6.0 shared build includes Skyrim SE, AE and VR with Address Library compatibility. The documented SE/AE targets are **1.5.97.0, 1.6.640.0, 1.6.1170.0, 1.7.99.0, and 1.7.104.0**; Skyrim VR **1.4.15 / SKSEVR 2.0.12** should work and was partly tested. Tested runtimes: **1.6.1170.0 and 1.7.104.0**; SE **1.5.97.0** was built but not runtime-tested; other listed targets are untested. Partial testing does not establish full VR qualification or every gameplay scenario.
+- Offline synthetic-vtable checks and linked dispatch/import inspection passed. Packaged startup and fresh/converted-save smoke passed on 1.6.1170 and 1.7.104; VR coverage remains partial.
+- Offline getter regression: build and run `ReferenceGetterDispatchCheck` from your configured build directory. It invokes the production CommonLib getter on synthetic SE, AE and VR vtables, checks the returned cell and unchanged parent/setter count, and exits nonzero on failure. `--wrong-slot` deliberately moves the fixture getter onto the adjacent setter slot and must exit 1.
 
 ## Papyrus API
 
@@ -466,7 +467,7 @@ Native owns C++/PSC/templates; Game is the Data-layout mirror. Keep both PSC fil
 
 Rollback requires the complete old DLL/PEX/template set and its separately preserved pre-cutover save lineage. Do not load repaired saves under old components or rewrite evidence saves.
 
-### Unreleased NPC Social DM scheduling repair (#15)
+### 3.6.0 NPC Social DM scheduling repair (#15)
 
 `BeginAsyncNPCDMTick` queues Phase A through SKSE tasks; Papyrus invocation is not a main-thread guarantee. Quest editor-ID inspection, actor/player/cell/race/faction reads, cooldown/calendar reads, inn detection and the empty callback run in that task. Only owned strings/scalars/IDs cross to Phase B. Phase C publishes the result's candidate pool and dispatches the callback on the main thread after validating `SlotTracker::loadGeneration`; revert invalidates queued snapshots/results and clears the social pool. The worker no longer publishes that pool.
 
@@ -474,9 +475,9 @@ Phase B still calls SkyrimNet's FormID/value APIs and reads bio files; this chan
 
 Offline check: compile `SKSE/tests/NPCTickGenerationCheck.cpp` in a VS2022 amd64 developer shell with `/std:c++20 /EHsc /W4 /WX /I SKSE/src`, then run the executable. It exercises production result publication: current/empty pools, duplicate names, revert clearing and stale results after subsequent loads. It does not exercise SKSE task dispatch or prove engine thread safety.
 
-Live qualification remains unperformed. On 1.6.1170, use a symbolized build with independently verified loaded DLL identity; enable debug logging and compare debugger thread IDs at `[NPCTick] Phase A snapshot`, the existing `async context` worker log, and `Phase C callback`. Phase A/C and the empty callback must match the engine main thread, not the Papyrus VM job thread; Phase B must differ. Exercise nonempty/empty ticks, named/unnamed factions, non-ASCII names, cell transitions, and loads with Phase A queued, Phase B blocked and Phase C queued. Expect generation-change drop logs and no old pool/callback; verify pending recovery and fresh ticks. On 1.5.97, the reporter should repeat Aela/Jenassa/Torvar contexts with NPC interactions enabled, retain DLL/PDB identity and collect logs/minidumps if faction-name dispatch still faults. A finite crash-free run is not proof of the exact CTD's cause or cure.
+SE/AE soaks passed. Instrumented thread identity and stale-result drop on reload remain unverified; 1.5.97 remains untested. To verify on 1.6.1170, use a symbolized build with independently verified loaded DLL identity; enable debug logging and compare debugger thread IDs at `[NPCTick] Phase A snapshot`, the existing `async context` worker log, and `Phase C callback`. Phase A/C and the empty callback must match the engine main thread, not the Papyrus VM job thread; Phase B must differ. Exercise nonempty/empty ticks, named/unnamed factions, non-ASCII names, cell transitions, and loads with Phase A queued, Phase B blocked and Phase C queued. Expect generation-change drop logs and no old pool/callback; verify pending recovery and fresh ticks. On 1.5.97, the reporter should repeat Aela/Jenassa/Torvar contexts with NPC interactions enabled, retain DLL/PDB identity and collect logs/minidumps if faction-name dispatch still faults. A finite crash-free run is not proof of the exact CTD's cause or cure.
 
-### Unreleased Story DM type filtering (#3)
+### 3.6.0 Story DM type filtering (#3)
 
 The async Story DM path parses exclusions once and shares that set between prompt visibility flags and the session-count formatter. Excluded types are omitted from "Story Type Picks This Session"; NPC Social DM counts are unchanged. This does not remove type names from dispatch history or general guidance, and response validation remains the dispatch gate.
 
@@ -487,7 +488,7 @@ Offline check (requires `clang++`): `python SKSE/tests/RunStoryTypeCountFilterCh
 
 The standalone Windows tool includes a one-save `fix` command for eligible saves from IntelEngine 3.5.2 or earlier. Tested on 3.5.2 saves; saves from older versions convert if their format matches and are refused otherwise. Fix mode does not read the IntelEngine version; qualification is based on co-save format and runtime. Run it from anywhere: no installed PapyrusUtil hash, VFS or game-root placement is required. Qualification uses SKSE co-save format 1, owner `0x424510A2`, exactly one STRV v1 block with complete unique framing, and exact SKSE/runtime header pairs **0x02020060 / 1.6.1170.0** or **0x02030010 / 1.7.104.0** only. Other formats/header pairs refuse. Existing expert `convert`/`inspect` behavior is unchanged.
 
-Offline production comparisons passed after safety corrections: run12 produced 29 caches / 44 name spans and SKSE SHA-256 `645dd18910bac6c3f43f613cf2b16e700b36f235fb76eb40bc6dc49a70a3ea0b`; run15 produced 13 caches / 28 name spans and `224340e1407404d0a4c93f29dbae5a3cfb31654a355a884bcb7c589ef28b9441`. Both ESS outputs were unchanged and preserved-source hashes matched. The unmodified shipped batch and production CLI succeeded with Skyrim closed on ASCII and Unicode/space scratch paths; the actual CLI also correctly refused while Skyrim was running. Migration/codec checks and refusal/partial-publication regressions passed. Offline byte reproduction is distinct from the bounded historical converted-copy runtime acceptance below.
+Offline production byte comparisons passed after safety corrections on two preserved save pairs: one produced 29 caches / 44 name spans, the other 13 caches / 28 name spans. Both ESS outputs were unchanged and preserved-source hashes matched. The unmodified shipped batch and production CLI succeeded with Skyrim closed on ASCII and Unicode/space scratch paths; the actual CLI also correctly refused while Skyrim was running. Migration/codec checks and refusal/partial-publication regressions passed. Offline byte reproduction is distinct from the bounded historical converted-copy runtime acceptance below; detailed evidence is maintained privately.
 
 1. Close Skyrim. Keep the same-directory, same-stem `.ess` and `.skse` pair together. Make sure you have a backup of IntelEngine and SkyrimNet external data as well if you may need timeline rollback.
 2. Put `LegacyCacheMigration.exe` beside `Convert-IE-Save.bat`, or run it directly from any working directory. Drag exactly one `.ess` onto the adjacent batch file, or run:
@@ -548,7 +549,7 @@ The 1.7.104 qualification covers **one bounded converted-copy acceptance**: a un
 
 The Native source check `SKSE/tests/LegacyCacheMigrationCheck.cpp` uses the production codec and actual converter/transaction code. Run `LegacyCacheMigrationCheck.exe <new-unused-scratch-directory>` after building the standalone targets. It covers global/actor all-family bytes, policy/control/identity/count/framing refusals, mixed/encoded preservation, unchanged names/opaque bytes, exclusive backups and interrupted/failed publication. `SKSE/tests/RenderedCacheCodecCheck.cpp` covers the codec contract. Synthetic byte fixtures are not loadable saves; these checks do not replace the bounded runtime observations above.
 
-### Unreleased NPC bio Content Library lookup (#18)
+### 3.6.0 NPC bio Content Library lookup (#18)
 
 `MemoryDB::GetNPCBioSummary` and `GetNPCBioRelationships` read the same selected bio.
 SkyrimNet's public API returns the template name, not resolved content; the optional
@@ -590,9 +591,11 @@ if ($LASTEXITCODE -ne 0) { throw "Bio check failed" }
 
 The check creates/removes a temporary tree and exercises both ordered passes,
 base-last behavior, current-save selection, legacy exact/fuzzy fallback and literal
-block extraction. Offline output is not a `Bio loaded` runtime observation. Release
-acceptance still requires STD/ADT/VR base-library and current-save dynamic bio
-checks, plus cache invalidation across save loads.
+block extraction. Offline output is not a `Bio loaded` runtime observation. Base bios
+were verified on SE/AE and VR; overlay precedence was verified on SE/AE only.
+Dynamic save-layer bios remain offline-only. File edits or newly generated bios are
+not promised visible until cache invalidation.
+Cache invalidation across save loads remains to be qualified.
 
 ### Source-level checks
 
