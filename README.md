@@ -2,7 +2,7 @@
 ### NPC Autonomy, Faction Politics & Player-Driven Task Framework for SkyrimNet
 
 > **Compatibility:** IntelEngine 3.5.1 and later declares **SkyrimNet Beta 25** as its minimum; 3.6.0 was tested with official **Beta 28**. Beta 25–27 were not qualified for 3.6.0; Beta 24 and earlier are incompatible.
-> The 3.6.0 native build includes SE/AE/VR. Tested runtimes: Skyrim **1.6.1170.0** and **1.7.104.0**. Skyrim VR **1.4.15** should work and was partly tested. Skyrim SE **1.5.97.0** was built but not runtime-tested; **1.6.640.0** and **1.7.99.0** are also untested targets.
+> The 3.6.0 native build includes SE/AE/VR. Tested runtimes: Skyrim **1.6.1170.0** and **1.7.104.0**. Skyrim VR **1.4.15** should work and was partly tested. Skyrim SE **1.5.x**: untested; **1.6.640.0** and **1.7.99.0** are also untested targets. Save conversion is not supported for 1.5.x saves.
 >
 > This repository carries a compatibility update for current SkyrimNet releases. IntelEngine was originally created by [Galanx](https://github.com/galanx).
 > Players: report bugs at [IntelEngine issues](https://github.com/Gerkinfeltser/IntelEngine-GamePlugin/issues). This repository holds the SKSE DLL source.
@@ -418,11 +418,15 @@ IntelEngine is under active development. The following features are planned for 
 >
 ### How to convert an old save
 
-For saves from IntelEngine 3.5.2 or earlier. Tested on 3.5.2 saves; saves from older versions convert if their format matches and are refused otherwise. Fix mode does not read the IntelEngine version; qualification is based on co-save format and runtime.
+For eligible SE/AE saves from IntelEngine 3.5.2 or earlier, or VR 1.4.15 saves from VR-capable IntelEngine 3.5.1 or earlier. Tested on one real 3.5.2 save per qualified SE/AE runtime and one real 3.5.1 VR fixture; older versions are format-gated, not separately tested. Fix mode does not read the IntelEngine version.
 
 Rendered caches were first stored in IntelEngine 2.0.0; this history does not establish conversion testing on older versions.
 
-Close Skyrim and keep the matching same-directory `.ess` / `.skse` pair together. Run the standalone tool from anywhere with `LegacyCacheMigration.exe fix --save "<path-to-save.ess>"`, or drag one ESS onto the adjacent `Convert-IE-Save.bat`. Fix mode only accepts SKSE co-save format version 1 with IntelEngine owner `0x424510A2`, one STRV v1 block with complete unique framing, and the exact SKSE/runtime header pairs **0x02020060 / 1.6.1170.0** or **0x02030010 / 1.7.104.0**; eligibility does not guarantee every legacy save qualifies.
+**Convert before loading an old save with 3.6.0.** The Game installer includes the converter and launcher for everyone; fresh games do not need conversion. Close Skyrim and keep the matching same-directory `.ess` / `.skse` pair together. Run `LegacyCacheMigration.exe fix --save "<path-to-save.ess>"`, or drag one ESS onto the adjacent `Convert-IE-Save.bat`. Fix mode accepts SKSE co-save format 1 with PapyrusUtil owner `0x424510A2`, complete unique framing and, when present, exactly one STRV v1 block. Exact SKSE/runtime pairs: **0x02020060 / 1.6.1170.0**, **0x02030010 / 1.7.104.0**, or **0x020000C0 / VR 1.4.15** (runtime DWORD `0x010400F1`, SKSEVR 2.0.12). VR also requires a bounded `TESV_SAVEGAME` version-12 ESS header. Eligibility does not guarantee every legacy save qualifies.
+
+One real VR fixture passed bounded converted-copy acceptance: six repaired facts/task-history caches, recovered task progression, a roughly 39-minute sampled soak and one cold reload. It contained no gossip caches or stored names, so those migration cases remain untested on a real VR fixture. Cold comparisons matched all 66 cache comparisons and 76/77 state fields; a small scalar deadline difference and SkyrimNet timeline differences remain unexplained, three actor mappings were absent both before and after, and the original SkyrimNet database baseline and native name index were not established. This is not full VR, historical database restoration or general old-save qualification. Expert VR `convert` still refuses because no historical VR PapyrusUtil provider hash is qualified; `inspect` alone grants no eligibility.
+
+Only rendered-cache values are rewritten. Non-cache fields, including BEL-bearing task destinations and stored names, pass through byte-for-byte without normalization. If STRV is absent and the PapyrusUtil owner contains only recognized record types/versions, `fix` can publish a verified byte-identical cache-free pair; this is a copy, not a repair. Unknown records in that path or a present STRV with no eligible targets refuse.
 
 If the converter says the save path is not allowed (Reparse path rejected), your save folder is a link or junction (for example My Games moved to another drive, or OneDrive): copy the .ess and .skse pair to a normal folder such as Desktop\IE-convert and drag the .ess from there.
 
@@ -431,6 +435,8 @@ It preserves the originals in `<stem>_IEbackup/` and creates sibling `<stem>_IEc
 Do not repeat conversion or mix original and converted companions. Writer provenance cannot be proved from the save; BEL-to-space is owner policy. Rollback requires the original pair, matching old components and corresponding IntelEngine/SkyrimNet external-data backups; the converter backs up only the pair.
 
 **If you skip conversion:** fixed templates interpret recognized literal percent escapes as controls (for example, `%0A` becomes a newline); `%250A` becomes literal `%0A` without recursion. This does not make native restoration of raw legacy saves safe. See the [API conversion record](docs/DLL_API.md#player-fix-mode-how-to-convert-an-old-save) for exact decoder results and offline byte comparisons.
+
+In the unconverted VR observation, the Travel task restored and progressed, but three of four original populated facts caches read back empty, the fourth only as a header, and both original rendered histories read back empty despite some raw history remaining. One earlier process crashed; its cause is unproven, and the evidence does not establish that it read the unconverted pair. A restored task is not evidence that skipping conversion is safe.
 
 Both preserved legacy pairs reproduced their verified converted bytes through the unmodified shipped batch and production CLI with Skyrim closed, on ASCII and Unicode/space scratch paths. The production CLI also correctly refused while Skyrim was running. These offline results do not establish general existing-save safety.
 
@@ -450,7 +456,7 @@ The native MSVC Release profile disables optimization with `/Od /Ob0`, retains C
 
 ## Requirements
 
-- The 3.6.0 native build includes Skyrim SE, AE and VR. Tested: Skyrim **1.6.1170.0** and **1.7.104.0**; Skyrim VR **1.4.15** should work and was partly tested; Skyrim SE **1.5.97.0** was built but not runtime-tested. Other listed targets are untested.
+- The 3.6.0 native build includes Skyrim SE, AE and VR. Tested: Skyrim **1.6.1170.0** and **1.7.104.0**; Skyrim VR **1.4.15** should work and was partly tested. Skyrim SE **1.5.x**: untested. Other listed targets are untested. Save conversion is not supported for 1.5.x saves.
 - [SKSE](https://skse.silverlock.org/)
 - [SkyrimNet Beta 25 or newer](https://github.com/MinLL/SkyrimNet-GamePlugin) (declared minimum; 3.6.0 tested with official Beta 28, not qualified on Beta 25–27)
 - [SkyUI](https://www.nexusmods.com/skyrimspecialedition/mods/12604) (MCM)
