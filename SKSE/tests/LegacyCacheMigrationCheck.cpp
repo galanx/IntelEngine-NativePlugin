@@ -69,12 +69,14 @@ void gameStartsBeforePublication() {
 void vrCheck(const fs::path& area) {
     fs::create_directory(area);
     const auto actor=std::to_string((std::uint64_t{62}<<32)|0x123456);
-    const auto payload="1 "+actor+" 4 intel_factsrendered facts\a\xC3\xA9\n%0A%25"
-        " intel_gossiprendered heard\nshared intel_taskhistoryrendered task\nline rne_name Stored\aName";
+    const auto payload="1 "+actor+" 6 intel_factsrendered facts\a\xC3\xA9\n%0A%25"
+        " intel_gossiprendered heard\nshared intel_taskhistoryrendered task\nline rne_name Stored\aName"
+        " intel_target The\aBannered\aMare%0A intel_lingerdestname Destination\a%25";
     auto input=fixture(payload);
     put32(input,8,SkseVR); put32(input,12,RuntimeVR);
-    auto expected=fixture("1 "+actor+" 4 intel_factsrendered facts\a\xC3\xA9%0A%250A%2525"
-        " intel_gossiprendered heard%0Ashared intel_taskhistoryrendered task%0Aline rne_name Stored\aName");
+    auto expected=fixture("1 "+actor+" 6 intel_factsrendered facts\a\xC3\xA9%0A%250A%2525"
+        " intel_gossiprendered heard%0Ashared intel_taskhistoryrendered task%0Aline rne_name Stored\aName"
+        " intel_target The\aBannered\aMare%0A intel_lingerdestname Destination\a%25");
     put32(expected,8,SkseVR); put32(expected,12,RuntimeVR);
     require(inspect(input,parse(input))["refusals"].empty(),"real VR tuple refused inspection");
     // Expert mode must not borrow either flat provider's qualification.
@@ -125,6 +127,23 @@ void vrCheck(const fs::path& area) {
     require(e.bytes()==ess && oe.bytes()==ess && be.bytes()==ess &&
         s.bytes()==input && bs.bytes()==input && os.bytes()==expected,
         "VR fix changed ESS, source, backup, names, opaque bytes or expected cache bytes");
+    const auto emptyArea=area/"cache-free";
+    fs::create_directory(emptyArea);
+    Bytes empty{'S','K','S','E'};
+    for (auto v : {1u,SkseVR,RuntimeVR,1u,Owner,1u,13u,0x494E5456u,1u,1u}) word(empty,v);
+    empty.push_back('0'); // Recognized INTV v1, no scalar strings.
+    auto badEmpty=empty; put32(badEmpty,36,2);
+    refuses([&] { parse(badEmpty,true); },"unknown cache-free provider record version");
+    badEmpty=empty; put32(badEmpty,32,0x12345678);
+    refuses([&] { parse(badEmpty,true); },"unknown cache-free provider record");
+    badEmpty=empty; put32(badEmpty,20,0x12345678);
+    refuses([&] { parse(badEmpty,true); },"cache-free missing provider");
+    write(emptyArea/"test.ess",ess); write(emptyArea/"test.skse",empty);
+    require(fix(emptyArea/"test.ess")==0,"cache-free fix failed");
+    Source emptyEss(emptyArea/"test_IEconverted.ess"), emptySkse(emptyArea/"test_IEconverted.skse");
+    Source emptyBackup(emptyArea/"test_IEbackup/original.skse");
+    require(emptyEss.bytes()==ess && emptySkse.bytes()==empty && emptyBackup.bytes()==empty,
+        "cache-free pair was not copied unchanged");
 }
 void filesystemCheck(const fs::path& area, const Bytes& input, const Bytes& converted) {
     require(!fs::exists(area), "self-check area must not exist");
@@ -238,12 +257,17 @@ int main(int argc, char** argv) {
         const auto input=fixture(payload(originals)), expected=fixture(payload(encoded));
         auto manifest=evidence(input,originals);
         const auto result=convert(input,parse(input),manifest);
+        const auto nonCache=fixture("1 0 3 intel_factsrendered a\nb intel_target The\aBannered\aMare%0A rne_name Stored\aName");
+        const auto nonCacheExpected=fixture("1 0 3 intel_factsrendered a%0Ab intel_target The\aBannered\aMare%0A rne_name Stored\aName");
+        require(convert(nonCache,parse(nonCache),evidence(nonCache,{"a\nb"},{"legacy"})).bytes==nonCacheExpected,
+            "global non-cache BEL/percent bytes were interpreted");
         const auto actor1=(std::uint64_t{62}<<32)|0x00123456, actor2=(std::uint64_t{62}<<32)|0x00765432;
         const std::vector<std::string> actorOriginals{"facts with space\nline","gossip with space\nline","task history\nline"};
         const std::vector<std::string> actorEncoded{"facts\awith\aspace%0Aline","gossip\awith\aspace%0Aline","task\ahistory%0Aline"};
         auto actorPayload=[&](std::uint64_t first, std::uint64_t second, const std::vector<std::string>& values) {
             return "3 "+std::to_string(first)+" 2 intel_factsrendered "+values[0]+" intel_gossiprendered "+values[1]
-                +" "+std::to_string(second)+" 2 intel_taskhistoryrendered "+values[2]+" rne_name qz\aName9"
+                +" "+std::to_string(second)+" 4 intel_taskhistoryrendered "+values[2]+" rne_name qz\aName9"
+                +" intel_target The\aBannered\aMare%0A intel_lingerdestname Destination\a%25"
                 +" "+std::to_string((std::uint64_t{62}<<32)|0xff000dc9)+" 1 rne_name preserved";
         };
         std::vector<std::string> actorRaw;
@@ -283,14 +307,16 @@ int main(int argc, char** argv) {
             require(actorConverted.changes[i]["original_hex"]==hex(actorOriginals[i]),
                 "actor production conversion did not preserve exact original bytes");
         const auto actorParsed=parse(actorExpected);
-        require(actorParsed.fields.size()==5 && actorParsed.fields[0].object==actor1 && actorParsed.fields[1].object==actor1
+        require(actorParsed.fields.size()==7 && actorParsed.fields[0].object==actor1 && actorParsed.fields[1].object==actor1
             && actorParsed.fields[2].object==actor2 && actorParsed.fields[3].object==actor2
             && actorParsed.fields[0].key=="intel_factsrendered" && actorParsed.fields[1].key=="intel_gossiprendered"
             && actorParsed.fields[2].key=="intel_taskhistoryrendered" && actorParsed.fields[3].key=="rne_name"
             && view(actorExpected,actorParsed.fields[3].start,actorParsed.fields[3].end)=="qz\aName9"
-            && actorParsed.fields[4].object==((std::uint64_t{62}<<32)|0xff000dc9)
-            && actorParsed.fields[4].key=="rne_name"
-            && view(actorExpected,actorParsed.fields[4].start,actorParsed.fields[4].end)=="preserved",
+            && view(actorExpected,actorParsed.fields[4].start,actorParsed.fields[4].end)=="The\aBannered\aMare%0A"
+            && view(actorExpected,actorParsed.fields[5].start,actorParsed.fields[5].end)=="Destination\a%25"
+            && actorParsed.fields[6].object==((std::uint64_t{62}<<32)|0xff000dc9)
+            && actorParsed.fields[6].key=="rne_name"
+            && view(actorExpected,actorParsed.fields[6].start,actorParsed.fields[6].end)=="preserved",
             "actor identity/key/rne_name BEL preservation changed");
         auto input17104=actorInput, expected17104=actorExpected;
         for (auto* bytes : {&input17104,&expected17104}) {
@@ -386,18 +412,11 @@ int main(int argc, char** argv) {
             std::string("1 18446744073709551615 1 intel_factsrendered qz9"),
             std::string("1 0 1 Intel_FactsRendered qz9"),
             std::string("1 0 2 intel_factsrendered qz9 \x1b value"),
-            std::string("1 0 2 intel_factsrendered qz9 rne_name bad\nvalue"),
-            std::string("1 0 2 intel_factsrendered qz9 rne_name bad\avalue")}) {
+            std::string("1 0 2 intel_factsrendered qz9 rne_name bad\nvalue")}) {
             const auto blob=fixture(unsafe);
             const auto p=parse(blob);
-            if (unsafe.find("rne_name bad\a")!=std::string::npos) {
-                require(p.refusals.empty(), "rne_name BEL was rejected before actor policy evaluation");
-                const auto proof=evidence(blob,{"qz9"});
-                refuses([&] { convert(blob,p,proof); }, "global rne_name BEL refusal");
-            } else {
-                require(!p.refusals.empty(), "unqualified whole-stream case missed");
-                refuses([&] { convert(blob,p,Json::object()); },"unqualified whole-stream case");
-            }
+            require(!p.refusals.empty(), "unqualified whole-stream case missed");
+            refuses([&] { convert(blob,p,Json::object()); },"unqualified whole-stream case");
         }
         for (const auto& malformed : {
             "1 0 1 key", "1 0 2 key value", "1 0 2 key value KEY other", "2 0 1 k v 0 1 q z",

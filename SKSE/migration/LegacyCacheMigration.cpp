@@ -160,7 +160,6 @@ Parsed parse(const Bytes& bytes, bool fixMode = false) {
         offset=end;
     }
     require(offset == bytes.size(), "trailing bytes/plugin count mismatch");
-    require(candidates == 1, "qualified owner/STRV missing");
     const bool qualifiedHeader=(u32(bytes,8) == Skse && u32(bytes,12) == Runtime) ||
         (u32(bytes,8) == Skse17104 && u32(bytes,12) == Runtime17104) ||
         (u32(bytes,8) == SkseVR && u32(bytes,12) == RuntimeVR);
@@ -168,6 +167,23 @@ Parsed parse(const Bytes& bytes, bool fixMode = false) {
         "unsupported co-save runtime; fix supports Skyrim 1.6.1170, 1.7.104 and VR 1.4.15 / SKSEVR 2.0.12");
     else if (!qualifiedHeader)
         result.refusals.push_back("unqualified SKSE/runtime header");
+    if (fixMode && candidates == 0) {
+        require(owners.count(Owner) != 0, "qualified PapyrusUtil owner missing");
+        // A cache-free copy must not disguise an unknown/mistyped STRV record.
+        constexpr std::uint32_t nonScalarStrings[] = {
+            0x494E5456, 0x464C4F56, 0x464F5256, // INTV, FLOV, FORV
+            0x494E544C, 0x464C4F4C, 0x5354524C, 0x464F524C, 0x504B474F // lists, PKGO
+        };
+        for (const auto& record : result.framing) if (record.at("owner") == Owner) {
+            const auto kind=record.at("type").get<std::uint32_t>();
+            const auto version=record.at("version").get<std::uint32_t>();
+            require(((kind == 0x4D4F4453 || kind == 0x504C474E) && version == 0) ||
+                (version == 1 && std::find(std::begin(nonScalarStrings),std::end(nonScalarStrings),kind) != std::end(nonScalarStrings)),
+                "unqualified PapyrusUtil record in cache-free copy");
+        }
+        return result;
+    }
+    require(candidates == 1, "qualified owner/STRV missing");
     auto cursor=result.begin;
     auto token=[&]() -> std::pair<std::size_t,std::size_t> {
         require(cursor < result.end && bytes[cursor] != ' ', "empty/partial ASCII-space token");
@@ -212,7 +228,7 @@ Parsed parse(const Bytes& bytes, bool fixMode = false) {
                 result.refusals.push_back("unqualified temporary cache identity: "+std::to_string(object));
             if (!target(key)) {
                 for (unsigned char c : value)
-                    if (rawDelimiter(c) || c == 27 || (c == 7 && key != "rne_name")) {
+                    if (rawDelimiter(c) || c == 27) {
                         result.refusals.push_back("unqualified non-cache control at "+std::to_string(v.first));
                         break;
                     }
@@ -269,8 +285,6 @@ Converted convert(const Bytes& input, const Parsed& parsed, const Json& manifest
     } else {
         for (const auto& f : parsed.fields) {
             require(actor ? f.object != 0 : f.object == 0, "identity outside qualified scope");
-            if (!actor && !target(f.key))
-                require(view(input,f.start,f.end).find('\a') == std::string_view::npos, "global non-cache BEL refused");
         }
     }
     if (!fixMode) {
@@ -421,8 +435,8 @@ int fix(const fs::path& essPath, void (*requireGameClosed)() = verifyBeforePubli
             u32(ess.bytes(),13) <= ess.bytes().size()-17 && u32(ess.bytes(),17) == 12,
             "unsupported VR ESS header; expected TESV_SAVEGAME version 12");
     }
-    auto converted=convert(skse.bytes(),parsed,fixEvidence(skse.bytes(),parsed),true);
-    require(converted.legacy>0, "no eligible legacy cache targets found; original save was not changed");
+    auto converted=parsed.chunk == 0 ? Converted{skse.bytes(),Json::array(),0} :
+        convert(skse.bytes(),parsed,fixEvidence(skse.bytes(),parsed),true);
     const auto backup=fs::path(base.wstring()+L"_IEbackup");
     const auto outputEss=fs::path(base.wstring()+L"_IEconverted.ess");
     const auto outputSkse=fs::path(base.wstring()+L"_IEconverted.skse");
@@ -450,9 +464,11 @@ int fix(const fs::path& essPath, void (*requireGameClosed)() = verifyBeforePubli
     }
     std::size_t names=0;
     for (const auto& field : parsed.fields) if (field.key=="rne_name") ++names;
-    std::cout << "Fixed " << converted.legacy << " legacy cache value(s): facts " << facts << ", gossip " << gossip
-        << ", task history " << history << "; preserved " << names << " serialized name span(s).\n"
-        << "Output: " << outputEss.u8string() << " and " << outputSkse.u8string() << "\nBackup: " << backup.u8string()
+    if (converted.legacy)
+        std::cout << "Fixed " << converted.legacy << " legacy cache value(s): facts " << facts << ", gossip " << gossip
+            << ", task history " << history << "; preserved " << names << " serialized name span(s).\n";
+    else std::cout << "Copied cache-free pair unchanged; no scalar string record to repair.\n";
+    std::cout << "Output: " << outputEss.u8string() << " and " << outputSkse.u8string() << "\nBackup: " << backup.u8string()
         << "\nOriginals unchanged. Use a coherent repaired IE DLL/PEX/prompts set; these repaired save components may not match existing IE data. Never load converted saves under IE 3.5.2.\n";
     return 0;
     } catch (const IOError& e) {
