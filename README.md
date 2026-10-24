@@ -2,7 +2,8 @@
 ### NPC Autonomy, Faction Politics & Player-Driven Task Framework for SkyrimNet
 
 > **Compatibility:** IntelEngine 3.5.1 and later declares **SkyrimNet Beta 25** as its minimum; 3.6.0 was tested with official **Beta 28**. Beta 25–27 were not qualified for 3.6.0; Beta 24 and earlier are incompatible.
-> The 3.6.0 native build includes SE/AE/VR. Tested runtimes: Skyrim **1.6.1170.0** and **1.7.104.0**. Skyrim VR **1.4.15** should work and was partly tested. Skyrim SE **1.5.x**: untested; **1.6.640.0** and **1.7.99.0** are also untested targets. Save conversion is not supported for 1.5.x saves.
+> The 3.6.0 native build includes SE/AE/VR. Tested runtimes: Skyrim **1.6.1170.0** and **1.7.104.0**. Skyrim VR **1.4.15** should work and was partly tested. Skyrim SE **1.5.x**: untested; **1.6.640.0** and **1.7.99.0** are also untested targets.
+> Skyrim 1.5.97 / SKSE64 2.0.20 saves should convert, untested; your original save is never changed.
 >
 > This repository carries a compatibility update for current SkyrimNet releases. IntelEngine was originally created by [Galanx](https://github.com/galanx).
 > Players: report bugs at [IntelEngine issues](https://github.com/Gerkinfeltser/IntelEngine-GamePlugin/issues). This repository holds the SKSE DLL source.
@@ -456,7 +457,7 @@ The native MSVC Release profile disables optimization with `/Od /Ob0`, retains C
 
 ## Requirements
 
-- The 3.6.0 native build includes Skyrim SE, AE and VR. Tested: Skyrim **1.6.1170.0** and **1.7.104.0**; Skyrim VR **1.4.15** should work and was partly tested. Skyrim SE **1.5.x**: untested. Other listed targets are untested. Save conversion is not supported for 1.5.x saves.
+- The 3.6.0 native build includes Skyrim SE, AE and VR. Tested: Skyrim **1.6.1170.0** and **1.7.104.0**; Skyrim VR **1.4.15** should work and was partly tested. Skyrim SE **1.5.x**: untested. Other listed targets are untested.
 - [SKSE](https://skse.silverlock.org/)
 - [SkyrimNet Beta 25 or newer](https://github.com/MinLL/SkyrimNet-GamePlugin) (declared minimum; 3.6.0 tested with official Beta 28, not qualified on Beta 25–27)
 - [SkyUI](https://www.nexusmods.com/skyrimspecialedition/mods/12604) (MCM)
