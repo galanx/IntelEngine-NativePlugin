@@ -1,7 +1,7 @@
 # IntelEngine
 ### NPC Autonomy, Faction Politics & Player-Driven Task Framework for SkyrimNet
 
-> **Compatibility:** IntelEngine 3.5.1 and later declares **SkyrimNet Beta 25** as its minimum; 3.6.0 was tested with official **Beta 28**. Beta 25–27 were not qualified for 3.6.0; Beta 24 and earlier are incompatible.
+> **Compatibility:** IntelEngine 3.5.1 and later declares **SkyrimNet Beta 25** as its minimum; 3.6.0 was tested with official **Beta 28**. Beta 24 and earlier are incompatible.
 > The 3.6.0 native build includes SE/AE/VR. Tested runtimes: Skyrim **1.6.1170.0** and **1.7.104.0**. Skyrim VR **1.4.15** should work and was partly tested. Skyrim SE **1.5.x**: untested; **1.6.640.0** and **1.7.99.0** are also untested targets.
 >
 > This repository carries a compatibility update for current SkyrimNet releases. IntelEngine was originally created by [Galanx](https://github.com/galanx).
@@ -420,11 +420,9 @@ IntelEngine is under active development. The following features are planned for 
 
 For eligible SE/AE saves from IntelEngine 3.5.2 or earlier, or VR 1.4.15 saves from VR-capable IntelEngine 3.5.1 or earlier. Tested on one real 3.5.2 save per qualified SE/AE runtime and one real 3.5.1 VR fixture; older versions are format-gated, not separately tested. Fix mode does not read the IntelEngine version.
 
-Skyrim 1.5.97 / SKSE64 2.0.20 saves should convert, untested; your original save is never changed.
-
 Rendered caches were first stored in IntelEngine 2.0.0; this history does not establish conversion testing on older versions.
 
-**Convert before loading an old save with 3.6.0.** The Game installer includes the converter and launcher for everyone; fresh games do not need conversion. Close Skyrim and keep the matching same-directory `.ess` / `.skse` pair together. Run `LegacyCacheMigration.exe fix --save "<path-to-save.ess>"`, or drag one ESS onto the adjacent `Convert-IE-Save.bat`. Fix mode accepts SKSE co-save format 1 with PapyrusUtil data, complete unique framing and, when present, exactly one STRV v1 block. Supported conversion runtimes: **Skyrim 1.5.97 / SKSE64 2.0.20**, **1.6.1170**, **1.7.104**, or **VR 1.4.15 / SKSEVR 2.0.12**. VR also requires a bounded `TESV_SAVEGAME` version-12 ESS header. Eligibility does not guarantee every legacy save qualifies.
+**Convert before loading an old save with 3.6.0.** The Game installer includes the converter and launcher for everyone; fresh games do not need conversion. Close Skyrim and keep the matching same-directory `.ess` / `.skse` pair together. Run `LegacyCacheMigration.exe fix --save "<path-to-save.ess>"`, or drag one ESS onto the adjacent `Convert-IE-Save.bat`. Fix mode accepts SKSE co-save format 1 with PapyrusUtil data, complete unique framing and, when present, exactly one STRV v1 block. Tested conversion runtimes: **1.6.1170**, **1.7.104**, or **VR 1.4.15 / SKSEVR 2.0.12**. Skyrim 1.5.97 / SKSE64 2.0.20 conversion: untested. VR also requires a bounded `TESV_SAVEGAME` version-12 ESS header. Eligibility does not guarantee every legacy save qualifies.
 
 One real VR fixture passed bounded converted-copy acceptance: six repaired facts/task-history caches, recovered task progression, a roughly 39-minute sampled soak and one cold reload. It contained no gossip caches or stored names, so those migration cases remain untested on a real VR fixture. Cold comparisons matched all 66 cache comparisons and 76/77 state fields; a small scalar deadline difference and SkyrimNet timeline differences remain unexplained, three actor mappings were absent both before and after, and the original SkyrimNet database baseline and native name index were not established. This is not full VR, historical database restoration or general old-save qualification. Expert VR `convert` still refuses because no historical VR PapyrusUtil provider hash is qualified; `inspect` alone grants no eligibility.
 
@@ -446,13 +444,13 @@ Both preserved legacy pairs reproduced their verified converted bytes through th
 
 > **3.6.0 Story DM actor resolution:** model-selected NPC names now resolve only within the latest Story DM/social candidate pools, using exact display names or a unique case/whitespace-normalized name with a trailing bracketed role removed. Unknown and ambiguous names reject instead of falling back to worldwide fuzzy search. Duplicate display names remain ambiguous. Overlapping requests are not request-isolated; the existing Courier/Messenger substitution path is unchanged. Live selection and unknown-name rejection were verified; duplicate-name rejection remains unverified live.
 
-> **3.6.0 NPC Social DM threading repair (#15):** the async tick now queues game-state snapshotting through SKSE's main-thread task interface, including callback-quest inspection. Results and candidate pools from before a save load/revert are discarded. SE/AE soaks passed; stale-result drop and Phase B thread identity remain unverified. The reported 1.5.97 CTD is not confirmed fixed. The faction-name expression and legacy synchronous APIs are unchanged.
+> **3.6.0 NPC Social DM threading repair:** the async tick now queues game-state snapshotting through SKSE's main-thread task interface, including callback-quest inspection. Results and candidate pools from before a save load/revert are discarded. SE/AE soaks passed; stale-result drop and Phase B thread identity remain unverified. The 1.5.97 crash report on the original IntelEngine repo is not confirmed fixed. The faction-name expression and legacy synchronous APIs are unchanged.
 
 ### Historical 3.5.2 compatibility results
 
 The **v3.5.2 compatibility release** uses pinned MinLL/CommonLibVR with the audited non-VR header correction. A user run established Skyrim **1.6.1170** startup, save loading, dashboard use, and action dispatch; Epicrob also confirmed success on his affected **1.7.x** setup. Use matching SKSE and Address Library. VR was disabled in 3.5.2, and these observations do not establish every supported runtime or task scenario. The historical `v3.5.2-rc1` DLL has a demonstrated ABI defect and must not be used. See [native build and verification evidence](docs/DLL_API.md#verification-evidence).
 
-The native MSVC Release profile disables optimization with `/Od /Ob0`, retains C++23 through `/std:c++23preview`, and removes `/d2ReducedOptimizeHugeFunctions`. The full package includes the rebuilt DLL, all 11 rebuilt Papyrus scripts, and the rebuilt dashboard alongside the existing ESP and configuration assets. **3.5.2 is the release/package version; the byte-identical tested DLL retains native version 3.5.1.** The compatibility fix does not claim to resolve Issue #15 or the deferred Papyrus/translation bugs.
+The native MSVC Release profile disables optimization with `/Od /Ob0`, retains C++23 through `/std:c++23preview`, and removes `/d2ReducedOptimizeHugeFunctions`. The full package includes the rebuilt DLL, all 11 rebuilt Papyrus scripts, and the rebuilt dashboard alongside the existing ESP and configuration assets. **3.5.2 is the release/package version; the byte-identical tested DLL retains native version 3.5.1.** The compatibility fix does not claim to resolve the 1.5.97 crash report on the original IntelEngine repo or the deferred Papyrus/translation bugs.
 
 ---
 
@@ -460,7 +458,7 @@ The native MSVC Release profile disables optimization with `/Od /Ob0`, retains C
 
 - The 3.6.0 native build includes Skyrim SE, AE and VR. Tested: Skyrim **1.6.1170.0** and **1.7.104.0**; Skyrim VR **1.4.15** should work and was partly tested. Skyrim SE **1.5.x**: untested. Other listed targets are untested.
 - [SKSE](https://skse.silverlock.org/)
-- [SkyrimNet Beta 25 or newer](https://github.com/MinLL/SkyrimNet-GamePlugin) (declared minimum; 3.6.0 tested with official Beta 28, not qualified on Beta 25–27)
+- [SkyrimNet Beta 25 or newer](https://github.com/MinLL/SkyrimNet-GamePlugin) (declared minimum; 3.6.0 tested with official Beta 28)
 - [SkyUI](https://www.nexusmods.com/skyrimspecialedition/mods/12604) (MCM)
 - [PapyrusUtil](https://www.nexusmods.com/skyrimspecialedition/mods/13048) (persistent storage)
 - [powerofthree's Papyrus Extender](https://www.nexusmods.com/skyrimspecialedition/mods/22854) (package management, linked refs)
