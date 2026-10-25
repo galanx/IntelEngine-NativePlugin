@@ -276,6 +276,7 @@ void verifyNativeTargets(const Bytes& bytes, const Parsed& parsed) {
         for (int n=0; native && n<entries; ++n) {
             const auto key=buffer.token(), value=buffer.token();
             if (key.first == key.second || value.first == value.second) {
+                require(!target(view(bytes,key.first,key.second)), "native target missing value");
                 native.setstate(std::ios::failbit);
                 break;
             }

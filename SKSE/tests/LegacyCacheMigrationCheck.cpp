@@ -526,6 +526,17 @@ int main(int argc, char** argv) {
                     convert(blob,parsed,fixEvidence(blob,parsed),true);
                 },"native target shifted across opaque spans");
             }
+            for (const auto& missingValue : {
+                "1 "+std::to_string(actor1)+" 2 intel_factsrendered first "+delimiter
+                    +"intel_factsrendered"+std::string("\0junk",5)+" z",
+                "1 "+std::to_string(actor1)+" 2 intel_factsrendered first "+delimiter
+                    +"intel_factsrendered "+std::string("\0junk",5)}) {
+                const auto blob=fixture(missingValue);
+                refuses([&] {
+                    const auto parsed=parse(blob,true);
+                    convert(blob,parsed,fixEvidence(blob,parsed),true);
+                },"native target with missing value after NUL");
+            }
             const auto opaque=fixture("1 "+std::to_string(actor1)+" 2 intel_factsrendered first\nline opaque_key a"+delimiter+"b");
             const auto preserved=fixture("1 "+std::to_string(actor1)+" 2 intel_factsrendered first%0Aline opaque_key a"+delimiter+"b");
             const auto parsed=parse(opaque,true);
