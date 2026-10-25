@@ -305,6 +305,7 @@ int main(int argc, char** argv) {
         require(convert(actorInput,parse(actorInput,true),fixEvidence(actorInput,parse(actorInput,true)),true).bytes==actorExpected,
             "owner-policy fix conversion bytes differ");
         for (const auto tuple : {std::pair{Skse,Runtime},std::pair{Skse17104,Runtime17104},
+                                std::pair{Skse227,Runtime},std::pair{Skse228,Runtime},
                                 std::pair{SkseVR,RuntimeVR},std::pair{Skse1597,Runtime1597}}) {
             auto runtimeInput=actorInput, runtimeExpected=actorExpected;
             for (auto* bytes : {&runtimeInput,&runtimeExpected}) {
@@ -438,16 +439,14 @@ int main(int argc, char** argv) {
             std::string("1 1 1 intel_factsrendered qz9"), // Unqualified fixed form.
             std::string("1 4278190081 1 intel_factsrendered qz9"), // Temporary-like.
             std::string("1 18446744073709551615 1 intel_factsrendered qz9"),
-            std::string("1 0 1 Intel_FactsRendered qz9"),
-            std::string("1 0 2 intel_factsrendered qz9 \x1b value"),
-            std::string("1 0 2 intel_factsrendered qz9 rne_name bad\nvalue")}) {
+            std::string("1 0 1 Intel_FactsRendered qz9")}) {
             const auto blob=fixture(unsafe);
             const auto p=parse(blob);
             require(!p.refusals.empty(), "unqualified whole-stream case missed");
             refuses([&] { convert(blob,p,Json::object()); },"unqualified whole-stream case");
         }
         for (const auto& malformed : {
-            "1 0 1 key", "1 0 2 key value", "1 0 2 key value KEY other", "2 0 1 k v 0 1 q z",
+            "1 0 1 key", "1 0 2 key value",
             "0 0 1 k v", "1 18446744073709551616 1 k v", "1 0 1 k v ", "1  0 1 k v", "01 0 1 k v"}) {
             refuses([&] { parse(fixture(malformed)); },malformed);
         }
@@ -455,6 +454,110 @@ int main(int argc, char** argv) {
         for (const auto& invalid : {std::string("x\0y",3),std::string("\xc0\xaf",2),std::string("\xed\xa0\x80",3)}) {
             auto values=originals; values[0]=invalid;
             refuses([&] { parse(fixture(payload(values))); },"unsupported text");
+        }
+        auto opaquePayload=std::string("1 0 4 intel_factsrendered ")+encoded[0]
+            +" WeirdKey "+std::string("x\xc0",2)+" opaque\x01value "+std::string("n\0z",3)+" rne_name bad\a";
+        const auto opaqueInput=fixture(opaquePayload);
+        const auto opaqueExpected=fixture(std::string("1 0 4 intel_factsrendered ")+encoded[0]
+            +" WeirdKey "+std::string("x\xc0",2)+" opaque\x01value "+std::string("n\0z",3)+" rne_name bad\a");
+        auto opaqueProof=evidence(opaqueInput,{originals[0]},{"encoded"});
+        require(parse(opaqueInput).refusals.empty(),"non-target key/value bytes were refused");
+        require(convert(opaqueInput,parse(opaqueInput),opaqueProof).bytes==opaqueExpected,
+            "non-target key/control/invalid UTF-8/NUL bytes changed");
+        const auto unrelatedIdentity=fixture(std::string("3 0 1 intel_factsrendered ")+encoded[0]
+            +" 4294967297 1 opaque_key opaque_value 4294967297 1 another_key preserved");
+        require(parse(unrelatedIdentity).refusals.empty(),"non-target repeated identity outside type rule was refused");
+        const auto unrelatedIdentityExpected=fixture(std::string("3 0 1 intel_factsrendered ")+encoded[0]
+            +" 4294967297 1 opaque_key opaque_value 4294967297 1 another_key preserved");
+        require(convert(unrelatedIdentity,parse(unrelatedIdentity),
+            evidence(unrelatedIdentity,{originals[0]},{"encoded"})).bytes==unrelatedIdentityExpected,
+            "non-target repeated identity bytes changed");
+        auto duplicateUnrelated=fixture(payload(encoded));
+        put32(duplicateUnrelated,16,3);
+        for (auto value : {0x12345678u,1u,12u,0x01020304u,0u,0u}) word(duplicateUnrelated,value);
+        auto duplicateExpected=fixture(payload(encoded));
+        put32(duplicateExpected,16,3);
+        for (auto value : {0x12345678u,1u,12u,0x01020304u,0u,0u}) word(duplicateExpected,value);
+        require(convert(duplicateUnrelated,parse(duplicateUnrelated),
+            evidence(duplicateUnrelated,originals,{"encoded","encoded","encoded"})).bytes==duplicateExpected,
+            "duplicate unrelated plugin owner or its bytes changed");
+        auto duplicateTargetOwner=input;
+        put32(duplicateTargetOwner,61+static_cast<std::uint32_t>(payload(originals).size()),Owner);
+        refuses([&] { parse(duplicateTargetOwner); },"duplicate PapyrusUtil owners");
+        auto duplicateStrv=input;
+        const auto secondRecord=44+payload(originals).size();
+        put32(duplicateStrv,secondRecord,Strv);
+        put32(duplicateStrv,secondRecord+4,1);
+        put32(duplicateStrv,secondRecord+8,1);
+        duplicateStrv.erase(duplicateStrv.begin()+secondRecord+12,duplicateStrv.begin()+secondRecord+17);
+        duplicateStrv.insert(duplicateStrv.begin()+secondRecord+12,'0');
+        put32(duplicateStrv,28,u32(duplicateStrv,28)-4);
+        refuses([&] { parse(duplicateStrv); },"duplicate STRV records");
+        auto truncatedTarget=input; put32(truncatedTarget,40,0xffffffff);
+        refuses([&] { parse(truncatedTarget); },"truncated target");
+        auto badTarget=fixture(std::string("1 0 1 intel_factsrendered bad\x01value"));
+        refuses([&] { parse(badTarget); },"target bad control");
+        badTarget=fixture("1 4278190081 1 intel_factsrendered value");
+        require(!parse(badTarget).refusals.empty(),"target bad identity was not refused");
+        for (const auto& ambiguous : {"1 0 2 intel_factsrendered x Intel_FactsRendered y",
+                                      "1 0 2 intel_factsrendered x intel_factsrendered y"}) {
+            refuses([&] { parse(fixture(ambiguous)); },"canonical/folded target ambiguity");
+        }
+        for (const char delimiter : std::string("\t\n\v\f\r")) {
+            const auto alias=fixture("1 "+std::to_string(actor1)+" 2 intel_factsrendered first "
+                +delimiter+"intel_factsrendered stale%0A");
+            refuses([&] {
+                const auto parsed=parse(alias,true);
+                convert(alias,parsed,fixEvidence(alias,parsed),true);
+            },"native whitespace target alias");
+            const auto hidden=fixture("1 "+std::to_string(actor1)+" 3 intel_factsrendered first opaque_key opaque"
+                +delimiter+"intel_factsrendered"+delimiter+"stale%0A filler_key filler_value");
+            refuses([&] {
+                const auto parsed=parse(hidden,true);
+                convert(hidden,parsed,fixEvidence(hidden,parsed),true);
+            },"native whitespace target hidden in opaque value");
+            for (const auto& shifted : {
+                "1 "+std::to_string(actor1)+" 3 intel_factsrendered first opaque_key"+delimiter
+                    +"other intel_factsrendered stale%0A filler_value",
+                "1 "+std::to_string(actor1)+" 2 opaque_key opaque"+delimiter+"value intel_factsrendered first"}) {
+                const auto blob=fixture(shifted);
+                refuses([&] {
+                    const auto parsed=parse(blob,true);
+                    convert(blob,parsed,fixEvidence(blob,parsed),true);
+                },"native target shifted across opaque spans");
+            }
+            for (const auto& missingValue : {
+                "1 "+std::to_string(actor1)+" 2 intel_factsrendered first "+delimiter
+                    +"intel_factsrendered"+std::string("\0junk",5)+" z",
+                "1 "+std::to_string(actor1)+" 2 intel_factsrendered first "+delimiter
+                    +"intel_factsrendered "+std::string("\0junk",5)}) {
+                const auto blob=fixture(missingValue);
+                refuses([&] {
+                    const auto parsed=parse(blob,true);
+                    convert(blob,parsed,fixEvidence(blob,parsed),true);
+                },"native target with missing value after NUL");
+            }
+            const auto opaque=fixture("1 "+std::to_string(actor1)+" 2 intel_factsrendered first\nline opaque_key a"+delimiter+"b");
+            const auto preserved=fixture("1 "+std::to_string(actor1)+" 2 intel_factsrendered first%0Aline opaque_key a"+delimiter+"b");
+            const auto parsed=parse(opaque,true);
+            require(convert(opaque,parsed,fixEvidence(opaque,parsed),true).bytes==preserved,
+                "unrelated native whitespace changed or was refused despite intact target assignment");
+        }
+        const auto hiddenByNul=fixture("1 "+std::to_string(actor1)+" 2 opaque_key "+std::string("a\0b",3)+" intel_factsrendered first");
+        refuses([&] {
+            const auto parsed=parse(hiddenByNul,true);
+            convert(hiddenByNul,parsed,fixEvidence(hiddenByNul,parsed),true);
+        },"native target hidden beyond NUL");
+        for (const auto& invalid : {std::string("x\0y",3),std::string("\xc0\xaf",2),std::string("\xed\xa0\x80",3)}) {
+            const auto opaque=fixture(std::string("1 0 2 intel_factsrendered ")+encoded[0]+" opaque_key "+invalid);
+            const auto expectedOpaque=fixture(std::string("1 0 2 intel_factsrendered ")+encoded[0]+" opaque_key "+invalid);
+            require(parse(opaque).refusals.empty(),"non-target NUL/invalid UTF-8 rejected");
+            require(convert(opaque,parse(opaque),evidence(opaque,{originals[0]},{"encoded"})).bytes==expectedOpaque,
+                "non-target NUL/invalid UTF-8 bytes changed");
+        }
+        for (const auto& repeated : {"2 0 1 opaque_key x 0 1 intel_factsrendered y",
+                                     "2 0 1 intel_factsrendered x 0 1 opaque_key y"}) {
+            refuses([&] { parse(fixture(repeated)); },"repeated serialized identity containing target");
         }
         for (std::size_t size=0; size<input.size(); ++size) {
             Bytes truncated(input.begin(),input.begin()+size);
@@ -467,7 +570,7 @@ int main(int argc, char** argv) {
         auto trailing=input; trailing.push_back(0);
         refuses([&] { parse(trailing); },"trailing binary bytes");
         filesystemCheck(fs::u8path(argv[1]),input,expected);
-        std::cout << "PASS: legacy-policy fix evidence, synthetic 1.5.97 / SKSE64 2.0.20 and SE/AE/VR co-save tuples, VR ESS v12; process guard seam, wrong runtime/owner/STRV refusals; exact conversion/name preservation/control and temporary-identity refusals; global/expert conversion; locked backups/staging/no-replace publication including retained incomplete pair and unchanged originals.\n";
+        std::cout << "PASS: legacy-policy fix evidence and runtime tuples including SKSE 2.2.7/2.2.8; target ambiguity/identity/control/framing refusals; unrelated owners, repeated non-target identities and opaque bytes preserved; repeated identities containing targets refused; exact conversions and publication safeguards.\n";
         return 0;
     } catch (const std::exception& error) {
         std::cerr << "FAIL: " << error.what() << '\n'; return 1;
