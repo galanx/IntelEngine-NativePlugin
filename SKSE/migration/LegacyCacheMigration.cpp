@@ -30,6 +30,8 @@ namespace fs = std::filesystem;
 constexpr const char* Provider = "2fb155b8508e085616c5f72cb8fd2368275557dc56988300b92e540930d1f444";
 constexpr std::uint32_t Owner = 0x424510A2, Strv = 0x53545256;
 constexpr std::uint32_t Runtime = 0x01064920, Skse = 0x02020060;
+// Released 2.2.7/2.2.8 still target 1.6.1170; see upstream skse64_whatsnew.txt.
+constexpr std::uint32_t Skse227 = 0x02020070, Skse228 = 0x02020080;
 constexpr const char* Provider17104 = "69260a675186cf781a2105002505ab224fee12e84d004a3787670c9d6ce936be";
 constexpr std::uint32_t Runtime17104 = 0x01070680, Skse17104 = 0x02030010;
 constexpr std::uint32_t RuntimeVR = 0x010400F1, SkseVR = 0x020000C0;
@@ -69,7 +71,7 @@ std::uint32_t u32(const Bytes& bytes, std::size_t offset) {
            (std::uint32_t(bytes[offset+2]) << 16) | (std::uint32_t(bytes[offset+3]) << 24);
 }
 bool qualifiedRuntime(const Bytes& bytes, const Json& basis) {
-    return (u32(bytes,8) == Skse && u32(bytes,12) == Runtime &&
+    return ((u32(bytes,8) == Skse || u32(bytes,8) == Skse227 || u32(bytes,8) == Skse228) && u32(bytes,12) == Runtime &&
             basis.at("runtime") == "1.6.1170.0" && basis.at("provider_sha256") == Provider) ||
            (u32(bytes,8) == Skse17104 && u32(bytes,12) == Runtime17104 &&
             basis.at("runtime") == "1.7.104.0" && basis.at("provider_sha256") == Provider17104);
@@ -134,12 +136,12 @@ Parsed parse(const Bytes& bytes, bool fixMode = false) {
     std::size_t offset=20;
     const auto plugins=u32(bytes,16);
     require(plugins <= (bytes.size()-20)/12, "impossible plugin count");
-    std::set<std::uint32_t> owners;
+    unsigned ownerCount=0;
     unsigned candidates=0;
     for (std::uint32_t i=0; i<plugins; ++i) {
         require(offset <= bytes.size() && bytes.size()-offset >= 12, "partial plugin header");
         const auto owner=u32(bytes,offset), chunks=u32(bytes,offset+4), length=u32(bytes,offset+8);
-        require(owners.insert(owner).second, "duplicate plugin owner");
+        if (owner == Owner) require(++ownerCount == 1, "duplicate PapyrusUtil owner");
         std::size_t begin=offset+12;
         require(length <= bytes.size()-begin, "plugin length exceeds file");
         const auto end=begin+length;
@@ -162,16 +164,16 @@ Parsed parse(const Bytes& bytes, bool fixMode = false) {
         offset=end;
     }
     require(offset == bytes.size(), "trailing bytes/plugin count mismatch");
-    const bool qualifiedHeader=(u32(bytes,8) == Skse && u32(bytes,12) == Runtime) ||
+    require(ownerCount == 1, "PapyrusUtil owner missing");
+    const bool qualifiedHeader=((u32(bytes,8) == Skse || u32(bytes,8) == Skse227 || u32(bytes,8) == Skse228) && u32(bytes,12) == Runtime) ||
         (u32(bytes,8) == Skse17104 && u32(bytes,12) == Runtime17104) ||
         (u32(bytes,8) == SkseVR && u32(bytes,12) == RuntimeVR) ||
         (u32(bytes,8) == Skse1597 && u32(bytes,12) == Runtime1597);
     if (fixMode) require(qualifiedHeader,
-        "unsupported co-save runtime; fix accepts Skyrim 1.5.97 / SKSE64 2.0.20 (untested), 1.6.1170, 1.7.104 and VR 1.4.15 / SKSEVR 2.0.12");
+        "unsupported co-save runtime; fix accepts Skyrim 1.5.97 / SKSE64 2.0.20 (untested), 1.6.1170 / SKSE64 2.2.6-2.2.8, 1.7.104 and VR 1.4.15 / SKSEVR 2.0.12");
     else if (!qualifiedHeader)
         result.refusals.push_back("unqualified SKSE/runtime header");
     if (fixMode && candidates == 0) {
-        require(owners.count(Owner) != 0, "qualified PapyrusUtil owner missing");
         // A cache-free copy must not disguise an unknown/mistyped STRV record.
         constexpr std::uint32_t nonScalarStrings[] = {
             0x494E5456, 0x464C4F56, 0x464F5256, // INTV, FLOV, FORV
@@ -202,42 +204,40 @@ Parsed parse(const Bytes& bytes, bool fixMode = false) {
     auto number=[&]() { const auto span=token(); return decimal(view(bytes,span.first,span.second)); };
     result.declared=number();
     require(result.declared <= std::numeric_limits<std::uint32_t>::max(), "object count overflow");
-    std::set<std::uint64_t> objects;
+    std::map<std::uint64_t,bool> objects;
     while (cursor < result.end) {
         const auto object=number(), entries=number();
-        require(objects.insert(object).second, "duplicate serialized object");
+        auto [objectState,firstObject]=objects.try_emplace(object,false);
         require(entries > 0 && entries <= (result.end-cursor+1)/4, "invalid entry count");
         const auto form=static_cast<std::uint32_t>(object);
-        if (object != 0 && (object >> 32 != 62 || form == 0))
-            result.refusals.push_back("unqualified non-global identity: "+std::to_string(object));
         std::set<std::string> keys;
+        bool carriesTarget=false;
         for (std::uint64_t n=0; n<entries; ++n) {
             const auto k=token(), v=token();
             std::string key(view(bytes,k.first,k.second));
-            text(key);
-            bool canonical = true;
-            for (unsigned char c : key)
-                if (!((c>='a'&&c<='z') || (c>='0'&&c<='9') || c=='_' || c=='.' || c==':' || c=='-'))
-                    canonical = false;
             auto folded=lower(key);
             if (folded == "\x1b") folded.clear();
             for (char& c : folded) if (c == '\a') c=' ';
-            require(keys.insert(folded).second, "duplicate/restored/case-ambiguous key");
-            if (!canonical) result.refusals.push_back("unqualified key text/transport/casing at "+std::to_string(k.first));
+            const bool targetAlias=target(folded);
+            if (targetAlias) {
+                text(key);
+                if (key != folded) result.refusals.push_back("unqualified key text/transport/casing at "+std::to_string(k.first));
+                require(keys.insert(folded).second, "duplicate/restored/case-ambiguous key");
+            }
             const auto value=view(bytes,v.first,v.second);
-            text(value);
-            // No resolution for untouched names; temporary cache targets remain unqualified.
-            if (target(key) && (form >> 24) == 0xff)
-                result.refusals.push_back("unqualified temporary cache identity: "+std::to_string(object));
-            if (!target(key)) {
-                for (unsigned char c : value)
-                    if (rawDelimiter(c) || c == 27) {
-                        result.refusals.push_back("unqualified non-cache control at "+std::to_string(v.first));
-                        break;
-                    }
+            if (targetAlias) {
+                text(value);
+                carriesTarget=true;
+                // No resolution for untouched names; temporary cache targets remain unqualified.
+                if (target(key) && (form >> 24) == 0xff)
+                    result.refusals.push_back("unqualified temporary cache identity: "+std::to_string(object));
             }
             result.fields.push_back({object,std::move(key),v.first,v.second});
         }
+        require(firstObject || (!objectState->second && !carriesTarget), "duplicate serialized object");
+        if (carriesTarget) objectState->second=true;
+        if (carriesTarget && object != 0 && (object >> 32 != 62 || form == 0))
+            result.refusals.push_back("unqualified non-global identity: "+std::to_string(object));
         ++result.written;
         require(result.written <= result.declared, "written count exceeds declaration");
     }
@@ -245,10 +245,64 @@ Parsed parse(const Bytes& bytes, bool fixMode = false) {
     if (result.written != result.declared) result.refusals.push_back("unqualified empty-map count gap");
     return result;
 }
+void verifyNativeTargets(const Bytes& bytes, const Parsed& parsed) {
+    // Mirror PapyrusUtil's native extraction without copying opaque string values.
+    struct NativeView : std::streambuf {
+        NativeView(const Bytes& input, std::size_t start, std::size_t end) {
+            auto* data=reinterpret_cast<char*>(const_cast<unsigned char*>(input.data()));
+            const auto nul=std::find(input.begin()+start,input.begin()+end,0);
+            setg(data,data+start,data+(nul-input.begin()));
+        }
+        std::pair<std::size_t,std::size_t> token() {
+            while (gptr() != egptr() && (*gptr() == ' ' || rawDelimiter(*gptr()))) gbump(1);
+            const auto start=static_cast<std::size_t>(gptr()-eback());
+            while (gptr() != egptr() && *gptr() != ' ' && !rawDelimiter(*gptr())) gbump(1);
+            return {start,static_cast<std::size_t>(gptr()-eback())};
+        }
+    } buffer(bytes,parsed.begin,parsed.end);
+    std::istream native(&buffer);
+    auto expected=parsed.fields.begin();
+    auto nextTarget=[&]() {
+        while (expected != parsed.fields.end() && !target(expected->key)) ++expected;
+    };
+    nextTarget();
+    if (expected == parsed.fields.end()) return;
+    int objects=0;
+    native >> objects;
+    for (int i=0; native && i<objects; ++i) {
+        std::uint64_t object=0;
+        int entries=0;
+        native >> object >> entries;
+        for (int n=0; native && n<entries; ++n) {
+            const auto key=buffer.token(), value=buffer.token();
+            if (key.first == key.second || value.first == value.second) {
+                native.setstate(std::ios::failbit);
+                break;
+            }
+            if (!target(view(bytes,key.first,key.second))) continue;
+            require(expected != parsed.fields.end() && expected->object == object &&
+                expected->key == view(bytes,key.first,key.second) &&
+                expected->start == value.first && expected->end == value.second,
+                "ambiguous native target assignment");
+            ++expected;
+            nextTarget();
+        }
+    }
+    require(expected == parsed.fields.end(), "rendered cache lost under native tokenization");
+}
 Json inspect(const Bytes& bytes, const Parsed& parsed) {
     Json fields=Json::array();
-    for (const auto& f : parsed.fields) fields.push_back({{"object",std::to_string(f.object)},{"key",f.key},
-        {"start",f.start},{"end",f.end},{"target",target(f.key)},{"value_hex",hex(view(bytes,f.start,f.end))}});
+    for (const auto& f : parsed.fields) {
+        Json field={{"object",std::to_string(f.object)},{"start",f.start},{"end",f.end},
+            {"target",target(f.key)},{"value_hex",hex(view(bytes,f.start,f.end))}};
+        try {
+            text(f.key);
+            field["key"]=f.key;
+        } catch (const std::exception&) {
+            field["key_hex"]=hex(f.key);
+        }
+        fields.push_back(std::move(field));
+    }
     return {{"status","inspected_only"},{"source_sha256",sha256(bytes)},{"runtime_header",u32(bytes,12)},
         {"declared",parsed.declared},{"written",parsed.written},{"strv_start",parsed.begin},{"strv_end",parsed.end},
         {"framing",parsed.framing},{"fields",fields},{"refusals",parsed.refusals},
@@ -286,9 +340,8 @@ Converted convert(const Bytes& input, const Parsed& parsed, const Json& manifest
         for (const auto& f : parsed.fields) if (target(f.key))
             require(f.object != 0, "global cache target is not eligible for actor fix policy");
     } else {
-        for (const auto& f : parsed.fields) {
+        for (const auto& f : parsed.fields) if (target(f.key))
             require(actor ? f.object != 0 : f.object == 0, "identity outside qualified scope");
-        }
     }
     if (!fixMode) {
         require(manifest.at("codec_sha256") == LCM_CODEC_SHA256, "unqualified production codec generation");
@@ -366,6 +419,7 @@ Converted convert(const Bytes& input, const Parsed& parsed, const Json& manifest
     }
     const auto check=parse(output.bytes,fixMode);
     require(check.refusals.empty() && check.fields.size() == parsed.fields.size() && check.declared == parsed.declared && check.written == parsed.written, "output whole-stream verification failed");
+    verifyNativeTargets(output.bytes,check);
     // Reverse each explicit value patch and the two necessary headers. Equality
     // proves every remaining byte, including opaque chunks and trailing names.
     Bytes restored;
