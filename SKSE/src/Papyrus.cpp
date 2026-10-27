@@ -11,8 +11,10 @@
 #include <algorithm>
 #include <chrono>
 #include <mutex>
+#include <utility>
 #include "LocationResolver.h"
 #include "StringUtils.h"
+#include "RenderedCacheCodec.h"
 #include "CellAnalyzer.h"
 #include "ActionValidator.h"
 #include "DepartureDetector.h"
@@ -60,6 +62,7 @@ namespace IntelEngine::Papyrus {
     RE::BSFixedString RenderGossipHeardSection(RE::StaticFunctionTag*, std::vector<RE::BSFixedString>, std::vector<RE::BSFixedString>, std::vector<float>, float);
     RE::BSFixedString RenderGossipToldSection(RE::StaticFunctionTag*, std::vector<RE::BSFixedString>, std::vector<RE::BSFixedString>, std::vector<float>, float);
     RE::BSFixedString RenderTaskHistorySection(RE::StaticFunctionTag*, std::vector<RE::BSFixedString>, std::vector<float>, float);
+    RE::BSFixedString EncodeRenderedCache(RE::StaticFunctionTag*, RE::BSFixedString);
     void SetDangerZonePolicy(RE::StaticFunctionTag*, int);
     void SetPlayerHomePolicy(RE::StaticFunctionTag*, int);
     void SetHoldRestrictionPolicy(RE::StaticFunctionTag*, RE::BSFixedString, int);
@@ -422,6 +425,7 @@ namespace IntelEngine::Papyrus {
         a_vm->RegisterFunction("RenderGossipHeardSection", SCRIPT_NAME, RenderGossipHeardSection); ++count;
         a_vm->RegisterFunction("RenderGossipToldSection", SCRIPT_NAME, RenderGossipToldSection); ++count;
         a_vm->RegisterFunction("RenderTaskHistorySection", SCRIPT_NAME, RenderTaskHistorySection); ++count;
+        a_vm->RegisterFunction("EncodeRenderedCache", SCRIPT_NAME, EncodeRenderedCache); ++count;
 
         // Dashboard Config Functions
         a_vm->RegisterFunction("NotifyDashboardSlotChanged", SCRIPT_NAME, NotifyDashboardSlotChanged); ++count;
@@ -954,14 +958,13 @@ namespace IntelEngine::Papyrus {
         int bestNameScore = 999;
 
         // Iterate through cell references
-        // Note: CommonLibSSE-NG ForEachReference takes TESObjectREFR& (reference), not pointer
-        cell->ForEachReference([&](RE::TESObjectREFR& ref) -> RE::BSContainer::ForEachResult {
-            if (&ref == akActor) {
+        cell->ForEachReference([&](RE::TESObjectREFR* ref) -> RE::BSContainer::ForEachResult {
+            if (!ref || ref == akActor) {
                 return RE::BSContainer::ForEachResult::kContinue;
             }
 
             // Skip non-item references (actors, doors, etc.)
-            auto* baseObj = ref.GetBaseObject();
+            auto* baseObj = ref->GetBaseObject();
             if (!baseObj) {
                 return RE::BSContainer::ForEachResult::kContinue;
             }
@@ -981,7 +984,7 @@ namespace IntelEngine::Papyrus {
             }
 
             // Check distance
-            float dist = ref.GetPosition().GetDistance(actorPos);
+            float dist = ref->GetPosition().GetDistance(actorPos);
             if (dist > radius) {
                 return RE::BSContainer::ForEachResult::kContinue;
             }
@@ -1013,7 +1016,7 @@ namespace IntelEngine::Papyrus {
 
             // Update best match (prefer better name match, then closer distance)
             if (nameScore < bestNameScore || (nameScore == bestNameScore && dist < bestDistance)) {
-                bestMatch = &ref;  // Take address of reference
+                bestMatch = ref;
                 bestDistance = dist;
                 bestNameScore = nameScore;
             }
@@ -1551,9 +1554,9 @@ namespace IntelEngine::Papyrus {
             if (!pkg) continue;
             auto type = pkg->packData.packType.get();
             // Anything other than sandbox/wander/doNothing counts as "schedule" AI
-            if (type != RE::PACKAGE_PROCEDURE_TYPE::kSandbox &&
-                type != RE::PACKAGE_PROCEDURE_TYPE::kWander &&
-                type != RE::PACKAGE_PROCEDURE_TYPE::kDoNothing) {
+            if (type != RE::PACKAGE_TYPE::kSandbox &&
+                type != RE::PACKAGE_TYPE::kWander &&
+                type != RE::PACKAGE_TYPE::kDoNothing) {
                 logger::info("HasNonSandboxAI({}): TRUE — found package type {}",
                             akActor->GetDisplayFullName(), static_cast<int>(type));
                 return true;
@@ -1575,7 +1578,7 @@ namespace IntelEngine::Papyrus {
         }
 
         // Try this location's world marker
-        auto markerPtr = editorLoc->worldLocMarker.get();
+        auto markerPtr = std::as_const(editorLoc->worldLocMarker).get();
         if (markerPtr) {
             auto* marker = markerPtr.get();
             if (marker) {
@@ -1588,7 +1591,7 @@ namespace IntelEngine::Papyrus {
 
         // Try parent location's marker (e.g., interior shop → settlement)
         if (editorLoc->parentLoc) {
-            auto parentPtr = editorLoc->parentLoc->worldLocMarker.get();
+            auto parentPtr = std::as_const(editorLoc->parentLoc->worldLocMarker).get();
             if (parentPtr) {
                 auto* parentMarker = parentPtr.get();
                 if (parentMarker) {
@@ -1654,22 +1657,22 @@ namespace IntelEngine::Papyrus {
         auto markerPos = questLocation->GetPosition();
         bool found = false;
 
-        cell->ForEachReference([&](RE::TESObjectREFR& doorRef) {
+        cell->ForEachReference([&](RE::TESObjectREFR* doorRef) {
             if (found) return RE::BSContainer::ForEachResult::kStop;
-            if (doorRef.IsDisabled()) return RE::BSContainer::ForEachResult::kContinue;
+            if (!doorRef || doorRef->IsDisabled()) return RE::BSContainer::ForEachResult::kContinue;
 
-            auto* base = doorRef.GetBaseObject();
+            auto* base = doorRef->GetBaseObject();
             if (!base || base->GetFormType() != RE::FormType::Door)
                 return RE::BSContainer::ForEachResult::kContinue;
 
-            if (markerPos.GetDistance(doorRef.GetPosition()) > 3000.0f)
+            if (markerPos.GetDistance(doorRef->GetPosition()) > 3000.0f)
                 return RE::BSContainer::ForEachResult::kContinue;
 
-            auto* teleport = doorRef.extraList.GetByType<RE::ExtraTeleport>();
+            auto* teleport = doorRef->extraList.GetByType<RE::ExtraTeleport>();
             if (!teleport || !teleport->teleportData)
                 return RE::BSContainer::ForEachResult::kContinue;
 
-            auto* linkedDoor = teleport->teleportData->linkedDoor.get().get();
+            auto* linkedDoor = std::as_const(teleport->teleportData->linkedDoor).get().get();
             if (!linkedDoor) return RE::BSContainer::ForEachResult::kContinue;
 
             auto* destCell = linkedDoor->GetSaveParentCell();
@@ -2069,48 +2072,68 @@ namespace IntelEngine::Papyrus {
             logger::error("BeginAsyncNPCDMTick: null callback quest");
             return;
         }
-        const char* qedit = callbackQuest->GetFormEditorID();
-        if (!qedit || !qedit[0]) {
-            logger::error("BeginAsyncNPCDMTick: callback quest has no editor ID");
-            return;
-        }
-        std::string questEditorId = qedit;
-        std::string scriptName    = callbackScript.c_str();
-        std::string functionName  = callbackFn.c_str();
-
+        // Papyrus natives may run on VM jobs. Copy only owned argument values here;
+        // do not dereference the quest until the generation-checked main-thread task.
+        const auto generation = SlotTracker::GetSingleton()->loadGeneration.load(std::memory_order_relaxed);
+        std::string scriptName = callbackScript.c_str();
+        std::string functionName = callbackFn.c_str();
         if (maxPairs <= 0) maxPairs = 4;
-
-        // Phase A — main thread: snapshot engine state.
-        auto snap = NPCIndex::GetSingleton()->BuildNPCTickSnapshot(static_cast<int>(maxPairs));
-        bool playerAtInn = FactionPolitics::IsPlayerAtInn();
-
-        // If snapshot has nothing, fire empty callback inline (already main thread).
-        if (snap.candidates.empty()) {
-            AsyncDispatch::ExecuteQuestFunctionString(questEditorId, scriptName, functionName, "");
+        auto* phaseATask = SKSE::GetTaskInterface();
+        if (!phaseATask) {
+            logger::error("BeginAsyncNPCDMTick: TaskInterface unavailable, snapshot dropped");
             return;
         }
-
-        // Phase B — worker thread: build context + JSON, then marshal back for callback.
-        AsyncDispatch::Submit([snap = std::move(snap), playerAtInn,
-                               questEditorId = std::move(questEditorId),
-                               scriptName = std::move(scriptName),
-                               functionName = std::move(functionName)]() mutable {
-            std::string md = NPCIndex::GetSingleton()->BuildNPCInteractionContextFromSnapshot(snap);
-            std::string requestJson;
-            if (!md.empty()) {
-                requestJson = BuildNPCInteractionRequestJsonCore(md, playerAtInn, snap.currentGameTime);
-            }
-            // Phase C — back to main thread for VM dispatch.
-            auto* task = SKSE::GetTaskInterface();
-            if (!task) {
-                logger::error("BeginAsyncNPCDMTick: TaskInterface unavailable, callback dropped");
+        phaseATask->AddTask([callbackQuest, generation, maxPairs,
+                             scriptName = std::move(scriptName),
+                             functionName = std::move(functionName)]() mutable {
+            if (generation != SlotTracker::GetSingleton()->loadGeneration.load(std::memory_order_relaxed)) {
+                logger::debug("[NPCTick] Snapshot dropped: load generation changed");
                 return;
             }
-            task->AddTask([questEditorId = std::move(questEditorId),
-                           scriptName = std::move(scriptName),
-                           functionName = std::move(functionName),
-                           requestJson = std::move(requestJson)]() mutable {
-                AsyncDispatch::ExecuteQuestFunctionString(questEditorId, scriptName, functionName, requestJson);
+            const char* qedit = callbackQuest->GetFormEditorID();
+            if (!qedit || !qedit[0]) {
+                logger::error("BeginAsyncNPCDMTick: callback quest has no editor ID");
+                return;
+            }
+            std::string questEditorId = qedit;
+            logger::debug("[NPCTick] Phase A snapshot (gen={})", generation);
+            auto snap = NPCIndex::GetSingleton()->BuildNPCTickSnapshot(static_cast<int>(maxPairs));
+            const bool playerAtInn = FactionPolitics::IsPlayerAtInn();
+            if (snap.candidates.empty()) {
+                NPCTickResult result;
+                result.loadGeneration = generation;
+                if (NPCIndex::GetSingleton()->PublishNPCTickResult(result)) {
+                    AsyncDispatch::ExecuteQuestFunctionString(questEditorId, scriptName, functionName, "");
+                }
+                return;
+            }
+            // Phase B: owned values only; defer pool publication and VM access to Phase C.
+            AsyncDispatch::Submit([snap = std::move(snap), playerAtInn,
+                                   questEditorId = std::move(questEditorId),
+                                   scriptName = std::move(scriptName),
+                                   functionName = std::move(functionName)]() mutable {
+                auto result = NPCIndex::GetSingleton()->BuildNPCInteractionContextFromSnapshot(snap);
+                std::string requestJson;
+                if (!result.context.empty()) {
+                    requestJson = BuildNPCInteractionRequestJsonCore(result.context, playerAtInn, snap.currentGameTime);
+                }
+                auto* task = SKSE::GetTaskInterface();
+                if (!task) {
+                    logger::error("BeginAsyncNPCDMTick: TaskInterface unavailable, callback dropped");
+                    return;
+                }
+                task->AddTask([result = std::move(result),
+                               questEditorId = std::move(questEditorId),
+                               scriptName = std::move(scriptName),
+                               functionName = std::move(functionName),
+                               requestJson = std::move(requestJson)]() mutable {
+                    if (!NPCIndex::GetSingleton()->PublishNPCTickResult(result)) {
+                        logger::debug("[NPCTick] Result dropped: load generation changed");
+                        return;
+                    }
+                    logger::debug("[NPCTick] Phase C callback (gen={})", result.loadGeneration);
+                    AsyncDispatch::ExecuteQuestFunctionString(questEditorId, scriptName, functionName, requestJson);
+                });
             });
         });
     }
@@ -2468,32 +2491,34 @@ namespace IntelEngine::Papyrus {
         return RE::BSFixedString(json);
     }
 
+    static std::unordered_set<std::string> ParseStoryTypeExclusions(const std::string& excludedTypes) {
+        std::unordered_set<std::string> excludedSet;
+        size_t pos = 0;
+        while (pos < excludedTypes.size()) {
+            size_t comma = excludedTypes.find(',', pos);
+            if (comma == std::string::npos) comma = excludedTypes.size();
+            std::string token = excludedTypes.substr(pos, comma - pos);
+            size_t start = token.find_first_not_of(" \t");
+            size_t end = token.find_last_not_of(" \t");
+            if (start != std::string::npos) {
+                std::string trimmed = token.substr(start, end - start + 1);
+                std::transform(trimmed.begin(), trimmed.end(), trimmed.begin(), ::tolower);
+                excludedSet.insert(trimmed);
+            }
+            pos = comma + 1;
+        }
+        return excludedSet;
+    }
+
     // Worker-thread-safe core. Caller pre-resolves engine-touching values:
     //   playerAtInn:      FactionPolitics::IsPlayerAtInn()
     //   currentGameTime:  RE::Calendar::GetCurrentGameTime()
     // Everything else inside is DB/cache-only.
-    static std::string BuildStoryDMRequestJsonCore(const std::string& dmContext,
-                                                    const std::string& excludedTypes,
-                                                    bool playerAtInn,
-                                                    float currentGameTime) {
-        std::unordered_set<std::string> excludedSet;
-        {
-            const std::string& excl = excludedTypes;
-            size_t pos = 0;
-            while (pos < excl.size()) {
-                size_t comma = excl.find(',', pos);
-                if (comma == std::string::npos) comma = excl.size();
-                std::string token = excl.substr(pos, comma - pos);
-                size_t start = token.find_first_not_of(" \t");
-                size_t end = token.find_last_not_of(" \t");
-                if (start != std::string::npos) {
-                    std::string trimmed = token.substr(start, end - start + 1);
-                    std::transform(trimmed.begin(), trimmed.end(), trimmed.begin(), ::tolower);
-                    excludedSet.insert(trimmed);
-                }
-                pos = comma + 1;
-            }
-        }
+    static std::string BuildStoryDMRequestJsonCore(
+        const std::string& dmContext,
+        const std::unordered_set<std::string>& excludedSet,
+        bool playerAtInn,
+        float currentGameTime) {
 
         static const char* allTypes[] = {
             "seek_player", "informant", "road_encounter",
@@ -2624,8 +2649,9 @@ namespace IntelEngine::Papyrus {
         auto* cal = RE::Calendar::GetSingleton();
         float now = cal ? cal->GetCurrentGameTime() : 0.f;
         return RE::BSFixedString(
-            BuildStoryDMRequestJsonCore(dmContext.c_str(), excludedTypes.c_str(),
-                                         FactionPolitics::IsPlayerAtInn(), now));
+            BuildStoryDMRequestJsonCore(dmContext.c_str(),
+                ParseStoryTypeExclusions(excludedTypes.c_str()),
+                FactionPolitics::IsPlayerAtInn(), now));
     }
 
     // -------------------------------------------------------------------------
@@ -2651,14 +2677,14 @@ namespace IntelEngine::Papyrus {
         std::string questEditorId = qedit;
         std::string scriptName    = callbackScript.c_str();
         std::string functionName  = callbackFn.c_str();
-        std::string excludedStr   = excludedTypes.c_str();
+        auto excludedSet = ParseStoryTypeExclusions(excludedTypes.c_str());
 
         if (maxCandidates <= 0) maxCandidates = 7;
         int maxC = static_cast<int>(maxCandidates);
 
         // Phase 0 — worker thread: SQL prefetch (GetActorEngagement + GetPlayerContext).
         // Phase A then runs on main thread once prefetch is ready.
-        AsyncDispatch::Submit([maxC, absenceDays, excludedStr = std::move(excludedStr),
+        AsyncDispatch::Submit([maxC, absenceDays, excludedSet = std::move(excludedSet),
                                questEditorId = std::move(questEditorId),
                                scriptName = std::move(scriptName),
                                functionName = std::move(functionName)]() mutable {
@@ -2671,7 +2697,7 @@ namespace IntelEngine::Papyrus {
                 return;
             }
             task->AddTask([maxC, absenceDays, prefetch = std::move(prefetch),
-                           excludedStr = std::move(excludedStr),
+                           excludedSet = std::move(excludedSet),
                            questEditorId = std::move(questEditorId),
                            scriptName = std::move(scriptName),
                            functionName = std::move(functionName)]() mutable {
@@ -2686,14 +2712,14 @@ namespace IntelEngine::Papyrus {
 
                 // Phase B — worker thread: scoring + per-candidate SQL + markdown.
                 AsyncDispatch::Submit([snap = std::move(snap), playerAtInn, currentGameTime,
-                                       excludedStr = std::move(excludedStr),
+                                       excludedSet = std::move(excludedSet),
                                        questEditorId = std::move(questEditorId),
                                        scriptName = std::move(scriptName),
                                        functionName = std::move(functionName)]() mutable {
-                    std::string md = NPCIndex::GetSingleton()->BuildDungeonMasterContextFromSnapshot(snap);
+                    std::string md = NPCIndex::GetSingleton()->BuildDungeonMasterContextFromSnapshot(snap, excludedSet);
                     std::string requestJson;
                     if (!md.empty()) {
-                        requestJson = BuildStoryDMRequestJsonCore(md, excludedStr, playerAtInn, currentGameTime);
+                        requestJson = BuildStoryDMRequestJsonCore(md, excludedSet, playerAtInn, currentGameTime);
                     }
                     // Phase C — back to main thread for Papyrus VM dispatch.
                     auto* t2 = SKSE::GetTaskInterface();
@@ -2720,6 +2746,10 @@ namespace IntelEngine::Papyrus {
     // list-based bio sections as single strings, stored via SetStringValue which
     // IS visible to papyrus_util("GetStringValue") immediately.
     // Only first-person rendering — templates fall back to list-based for 3P.
+
+    RE::BSFixedString EncodeRenderedCache(RE::StaticFunctionTag*, RE::BSFixedString text) {
+        return RE::BSFixedString(IntelEngine::EncodeRenderedCache(static_cast<std::string_view>(text)));
+    }
 
     static std::string FormatRelativeTimeFromDays(float currentGameDays, float eventGameDays) {
         float hoursPassed = (currentGameDays - eventGameDays) * 24.0f;
@@ -3521,15 +3551,15 @@ namespace IntelEngine::Papyrus {
         RE::TESObjectREFR* coffin = nullptr;
         RE::TESObjectREFR* shrine = nullptr;
 
-        cell->ForEachReference([&](RE::TESObjectREFR& ref) {
-            if (ref.IsDisabled()) return RE::BSContainer::ForEachResult::kContinue;
+        cell->ForEachReference([&](RE::TESObjectREFR* ref) {
+            if (!ref || ref->IsDisabled()) return RE::BSContainer::ForEachResult::kContinue;
 
-            auto* baseObj = ref.GetBaseObject();
+            auto* baseObj = ref->GetBaseObject();
             if (!baseObj) return RE::BSContainer::ForEachResult::kContinue;
 
             auto editorId = baseObj->GetFormEditorID();
             std::string editorIdStr = editorId ? StringUtils::ToLowerStd(editorId) : "";
-            auto refName = ref.GetName();
+            auto refName = ref->GetName();
             std::string nameStr = refName ? StringUtils::ToLowerStd(refName) : "";
 
             auto formType = baseObj->GetFormType();
@@ -3538,7 +3568,7 @@ namespace IntelEngine::Papyrus {
             if (!wordWall && formType == RE::FormType::Static) {
                 if (editorIdStr.find("wordwall") != std::string::npos ||
                     editorIdStr.find("word_wall") != std::string::npos) {
-                    wordWall = &ref;
+                    wordWall = ref;
                     logger::info("[IntelEngine] FindDeeperSpawnPoint: word wall '{}'", editorIdStr);
                 }
             }
@@ -3546,7 +3576,7 @@ namespace IntelEngine::Papyrus {
             // Boss Chests — TESObjectCONT with "boss" in editor ID
             if (!bossChest && formType == RE::FormType::Container) {
                 if (editorIdStr.find("boss") != std::string::npos) {
-                    bossChest = &ref;
+                    bossChest = ref;
                     logger::info("[IntelEngine] FindDeeperSpawnPoint: boss chest '{}'", editorIdStr);
                 }
             }
@@ -3555,7 +3585,7 @@ namespace IntelEngine::Papyrus {
             if (!chest && !bossChest && formType == RE::FormType::Container) {
                 if (editorIdStr.find("chest") != std::string::npos ||
                     editorIdStr.find("treas") != std::string::npos) {
-                    chest = &ref;
+                    chest = ref;
                     logger::info("[IntelEngine] FindDeeperSpawnPoint: chest '{}'", editorIdStr);
                 }
             }
@@ -3564,7 +3594,7 @@ namespace IntelEngine::Papyrus {
             if (!coffin && (formType == RE::FormType::Static || formType == RE::FormType::Furniture)) {
                 if (StringUtils::ContainsAny(editorIdStr, {"coffin", "sarcophag"}) ||
                     StringUtils::ContainsAny(nameStr, {"coffin", "sarcophag"})) {
-                    coffin = &ref;
+                    coffin = ref;
                     logger::info("[IntelEngine] FindDeeperSpawnPoint: coffin '{}'", editorIdStr);
                 }
             }
@@ -3573,7 +3603,7 @@ namespace IntelEngine::Papyrus {
             if (!shrine && (formType == RE::FormType::Activator || formType == RE::FormType::Static)) {
                 if (StringUtils::ContainsAny(editorIdStr, {"shrine", "altar"}) ||
                     StringUtils::ContainsAny(nameStr, {"shrine", "altar"})) {
-                    shrine = &ref;
+                    shrine = ref;
                     logger::info("[IntelEngine] FindDeeperSpawnPoint: shrine/altar '{}'", editorIdStr);
                 }
             }
@@ -3634,10 +3664,10 @@ namespace IntelEngine::Papyrus {
 
         const char* tag = furnitureOnly ? "UsablePrisonerScan" : "PrisonerScan";
 
-        cell->ForEachReference([&](RE::TESObjectREFR& ref) {
-            if (ref.IsDisabled()) return RE::BSContainer::ForEachResult::kContinue;
+        cell->ForEachReference([&](RE::TESObjectREFR* ref) {
+            if (!ref || ref->IsDisabled()) return RE::BSContainer::ForEachResult::kContinue;
 
-            auto* baseObj = ref.GetBaseObject();
+            auto* baseObj = ref->GetBaseObject();
             if (!baseObj) return RE::BSContainer::ForEachResult::kContinue;
 
             auto formType = baseObj->GetFormType();
@@ -3659,21 +3689,21 @@ namespace IntelEngine::Papyrus {
             if (editorIdStr.empty()) return RE::BSContainer::ForEachResult::kContinue;
 
             if (!shackle && StringUtils::ContainsAny(editorIdStr, {"shackle", "manacle"})) {
-                shackle = &ref;
+                shackle = ref;
                 logger::info("[IntelEngine] {}: shackle '{}' in '{}'", tag, editorIdStr, cell->GetName());
             }
             if (!cage && StringUtils::ContainsAny(editorIdStr, {"cage", "gibbet"})) {
-                cage = &ref;
+                cage = ref;
                 logger::info("[IntelEngine] {}: cage '{}' in '{}'", tag, editorIdStr, cell->GetName());
             }
             if (!stocks && StringUtils::ContainsAny(editorIdStr, {"stock", "pillory"})) {
                 if (editorIdStr.find("livestock") == std::string::npos) {
-                    stocks = &ref;
+                    stocks = ref;
                     logger::info("[IntelEngine] {}: stocks '{}' in '{}'", tag, editorIdStr, cell->GetName());
                 }
             }
             if (!prison && StringUtils::ContainsAny(editorIdStr, {"prison", "captive", "torture"})) {
-                prison = &ref;
+                prison = ref;
                 logger::info("[IntelEngine] {}: prison furniture '{}' in '{}'", tag, editorIdStr, cell->GetName());
             }
 
@@ -3702,44 +3732,44 @@ namespace IntelEngine::Papyrus {
         RE::TESObjectREFR* coffin = nullptr;
         RE::TESObjectREFR* shrine = nullptr;
 
-        cell->ForEachReference([&](RE::TESObjectREFR& ref) {
-            if (ref.IsDisabled()) return RE::BSContainer::ForEachResult::kContinue;
-            auto* baseObj = ref.GetBaseObject();
+        cell->ForEachReference([&](RE::TESObjectREFR* ref) {
+            if (!ref || ref->IsDisabled()) return RE::BSContainer::ForEachResult::kContinue;
+            auto* baseObj = ref->GetBaseObject();
             if (!baseObj) return RE::BSContainer::ForEachResult::kContinue;
 
             auto editorId = baseObj->GetFormEditorID();
             std::string editorIdStr = editorId ? StringUtils::ToLowerStd(editorId) : "";
-            auto refName = ref.GetName();
+            auto refName = ref->GetName();
             std::string nameStr = refName ? StringUtils::ToLowerStd(refName) : "";
             auto formType = baseObj->GetFormType();
 
             if (!wordWall && formType == RE::FormType::Static) {
                 if (editorIdStr.find("wordwall") != std::string::npos ||
                     editorIdStr.find("word_wall") != std::string::npos) {
-                    wordWall = &ref;
+                    wordWall = ref;
                 }
             }
             if (!bossChest && formType == RE::FormType::Container) {
                 if (editorIdStr.find("boss") != std::string::npos) {
-                    bossChest = &ref;
+                    bossChest = ref;
                 }
             }
             if (!chest && !bossChest && formType == RE::FormType::Container) {
                 if (editorIdStr.find("chest") != std::string::npos ||
                     editorIdStr.find("treas") != std::string::npos) {
-                    chest = &ref;
+                    chest = ref;
                 }
             }
             if (!coffin && (formType == RE::FormType::Static || formType == RE::FormType::Furniture)) {
                 if (StringUtils::ContainsAny(editorIdStr, {"coffin", "sarcophag"}) ||
                     StringUtils::ContainsAny(nameStr, {"coffin", "sarcophag"})) {
-                    coffin = &ref;
+                    coffin = ref;
                 }
             }
             if (!shrine && (formType == RE::FormType::Activator || formType == RE::FormType::Static)) {
                 if (StringUtils::ContainsAny(editorIdStr, {"shrine", "altar"}) ||
                     StringUtils::ContainsAny(nameStr, {"shrine", "altar"})) {
-                    shrine = &ref;
+                    shrine = ref;
                 }
             }
             if (wordWall) return RE::BSContainer::ForEachResult::kStop;
@@ -5186,7 +5216,7 @@ namespace IntelEngine::Papyrus {
         auto* processLists = RE::ProcessLists::GetSingleton();
         if (!processLists) return result;
 
-        for (auto& handle : processLists->highActorHandles) {
+        for (const auto& handle : processLists->highActorHandles) {
             auto actor = handle.get();
             if (!actor || !actor.get()) continue;
             auto* a = actor.get();

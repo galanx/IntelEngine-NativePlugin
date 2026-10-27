@@ -55,7 +55,7 @@ namespace PRISMA_UI_API
 
     [[nodiscard]] inline void* RequestPluginAPI(const InterfaceVersion a_interfaceVersion = InterfaceVersion::V1)
     {
-        auto pluginHandle = GetModuleHandle(L"PrismaUI.dll");
+        auto pluginHandle = GetModuleHandleW(L"PrismaUI.dll");
         if (!pluginHandle) {
             return nullptr;
         }

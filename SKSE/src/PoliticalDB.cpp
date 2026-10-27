@@ -369,7 +369,7 @@ namespace IntelEngine {
 
         const char* sql = R"SQL(
             SELECT id, faction_a, faction_b, event_type, description, relation_delta, game_time, instigator_npc
-            FROM faction_events ORDER BY game_time DESC LIMIT ?
+            FROM faction_events WHERE event_type != 'relation_adjustment' ORDER BY game_time DESC LIMIT ?
         )SQL";
 
         sqlite3_stmt* stmt = nullptr;

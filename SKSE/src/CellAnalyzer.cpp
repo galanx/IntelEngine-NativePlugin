@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <utility>
 #include <nlohmann/json.hpp>
 
 namespace IntelEngine {
@@ -23,16 +24,17 @@ namespace IntelEngine {
         if (!cell) return doors;
 
         // Iterate through all references in the cell
-        // Note: CommonLibSSE-NG ForEachReference takes TESObjectREFR& (reference), not pointer
-        cell->ForEachReference([&doors](RE::TESObjectREFR& ref) {
+        cell->ForEachReference([&doors](RE::TESObjectREFR* ref) {
+            if (!ref) return RE::BSContainer::ForEachResult::kContinue;
+
             // Check if it's a door
-            auto* baseObj = ref.GetBaseObject();
+            auto* baseObj = ref->GetBaseObject();
             if (!baseObj) return RE::BSContainer::ForEachResult::kContinue;
 
             if (baseObj->Is(RE::FormType::Door)) {
                 // Skip if disabled
-                if (!ref.IsDisabled()) {
-                    doors.push_back(&ref);
+                if (!ref->IsDisabled()) {
+                    doors.push_back(ref);
                 }
             }
 
@@ -51,7 +53,7 @@ namespace IntelEngine {
             return nullptr;
         }
 
-        return extraTeleport->teleportData->linkedDoor.get().get();
+        return std::as_const(extraTeleport->teleportData->linkedDoor).get().get();
     }
 
     RE::BSFixedString CellAnalyzer::GetDoorDestinationName(RE::TESObjectREFR* door) {
@@ -326,11 +328,11 @@ namespace IntelEngine {
         auto* cell = actor->GetParentCell();
         if (!cell) return results;
 
-        cell->ForEachReference([&results, this](RE::TESObjectREFR& ref) {
-            if (ref.IsDisabled()) return RE::BSContainer::ForEachResult::kContinue;
+        cell->ForEachReference([&results, this](RE::TESObjectREFR* ref) {
+            if (!ref || ref->IsDisabled()) return RE::BSContainer::ForEachResult::kContinue;
 
-            if (IsCookingStation(&ref)) {
-                results.push_back(&ref);
+            if (IsCookingStation(ref)) {
+                results.push_back(ref);
             }
 
             return RE::BSContainer::ForEachResult::kContinue;
@@ -351,16 +353,16 @@ namespace IntelEngine {
         float actorY = actor->GetPositionY();
         float actorZ = actor->GetPositionZ();
 
-        cell->ForEachReference([&results, actorZ, minZDiff](RE::TESObjectREFR& ref) {
-            if (ref.IsDisabled()) return RE::BSContainer::ForEachResult::kContinue;
+        cell->ForEachReference([&results, actorZ, minZDiff](RE::TESObjectREFR* ref) {
+            if (!ref || ref->IsDisabled()) return RE::BSContainer::ForEachResult::kContinue;
 
-            auto* baseObj = ref.GetBaseObject();
+            auto* baseObj = ref->GetBaseObject();
             if (!baseObj || !baseObj->Is(RE::FormType::Furniture))
                 return RE::BSContainer::ForEachResult::kContinue;
 
-            float refZ = ref.GetPositionZ();
+            float refZ = ref->GetPositionZ();
             if ((refZ - actorZ) >= minZDiff) {
-                results.push_back(&ref);
+                results.push_back(ref);
             }
 
             return RE::BSContainer::ForEachResult::kContinue;
@@ -393,16 +395,16 @@ namespace IntelEngine {
         float actorY = actor->GetPositionY();
         float actorZ = actor->GetPositionZ();
 
-        cell->ForEachReference([&results, actorZ, minZDiff](RE::TESObjectREFR& ref) {
-            if (ref.IsDisabled()) return RE::BSContainer::ForEachResult::kContinue;
+        cell->ForEachReference([&results, actorZ, minZDiff](RE::TESObjectREFR* ref) {
+            if (!ref || ref->IsDisabled()) return RE::BSContainer::ForEachResult::kContinue;
 
-            auto* baseObj = ref.GetBaseObject();
+            auto* baseObj = ref->GetBaseObject();
             if (!baseObj || !baseObj->Is(RE::FormType::Furniture))
                 return RE::BSContainer::ForEachResult::kContinue;
 
-            float refZ = ref.GetPositionZ();
+            float refZ = ref->GetPositionZ();
             if ((actorZ - refZ) >= minZDiff) {
-                results.push_back(&ref);
+                results.push_back(ref);
             }
 
             return RE::BSContainer::ForEachResult::kContinue;

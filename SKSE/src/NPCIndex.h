@@ -16,6 +16,8 @@
 #include "StringUtils.h"
 #include "SlotTracker.h"
 #include "MemoryDB.h"  // RankedCandidate (used by StoryDMPhaseAPrefetch)
+#include "StoryCandidateResolution.h"
+#include "NPCTickResult.h"
 
 #include <deque>
 #include <unordered_map>
@@ -269,10 +271,9 @@ namespace IntelEngine {
         static std::string GetNPCBioFallbackLine(RE::Actor* actor);
 
         /**
-         * Resolve a name from the DM response to the exact Actor from the last candidate pool.
-         * Uses stored FormIDs from BuildDungeonMasterContext/BuildNPCInteractionContext,
-         * ensuring we get the EXACT NPC that was in the pool (not a different NPC with the same name).
-         * Falls back to FindByName if the name isn't in the pool.
+         * Resolve uniquely within the latest DM/social pools, exact display name first,
+         * then case/whitespace-normalized name with a trailing role suffix removed.
+         * Unknown or ambiguous names are rejected; no global name search.
          */
         RE::Actor* ResolveStoryCandidate(const std::string& name);
 
@@ -395,7 +396,9 @@ namespace IntelEngine {
          * Build markdown snippet showing story type pick counts.
          * If relevantTypes is non-empty, only those types are included.
          */
-        std::string GetStoryTypeCountsMarkdown(const std::unordered_set<std::string>& relevantTypes = {}) const;
+        std::string GetStoryTypeCountsMarkdown(
+            const std::unordered_set<std::string>& relevantTypes = {},
+            const std::unordered_set<std::string>& excludedTypes = {}) const;
 
         /**
          * Build the complete Dungeon Master context for the Story Engine.
@@ -438,6 +441,7 @@ namespace IntelEngine {
         /** Tick-level snapshot for the NPC interaction tick (NPC DM). */
         struct NPCTickSnapshot {
             int               maxPairs           = 4;
+            std::uint32_t     loadGeneration = 0;
             float             currentGameTime    = 0.f;
             RE::FormID        playerCellFormId   = 0;
             std::string       playerName;
@@ -457,9 +461,12 @@ namespace IntelEngine {
         /**
          * Phase B — worker thread. Build markdown context from the snapshot.
          * Performs SQL queries (GetSociallyActiveFormIDs, GetFormattedMemories) and
-         * formats the output. Updates m_npcCandidatePool under m_mutex.
+         * formats the output. Returns a value-only result; no pool publication.
          */
-        std::string BuildNPCInteractionContextFromSnapshot(const NPCTickSnapshot& snap);
+        NPCTickResult BuildNPCInteractionContextFromSnapshot(const NPCTickSnapshot& snap);
+
+        /** Main thread: publish the pool only if no load/revert has intervened. */
+        bool PublishNPCTickResult(NPCTickResult& result);
 
         /** Per-actor data for Story DM tick (richer than NPC tick — has position + dbFormId). */
         struct StoryDMActorSnapshot {
@@ -554,7 +561,9 @@ namespace IntelEngine {
          * All per-candidate SQL queries run here (memories, dialogue, events, related,
          * bio relationships). Updates m_dmCandidatePool under m_mutex.
          */
-        std::string BuildDungeonMasterContextFromSnapshot(const StoryDMTickSnapshot& snap);
+        std::string BuildDungeonMasterContextFromSnapshot(
+            const StoryDMTickSnapshot& snap,
+            const std::unordered_set<std::string>& excludedTypes);
 
         /**
          * Get FormIDs of all NPCs in the last DM candidate pool.
@@ -614,12 +623,10 @@ namespace IntelEngine {
         // All indexed names for fuzzy search
         std::vector<std::string> m_allNames;
 
-        // Candidate pools for exact name->FormID resolution (no name ambiguity).
-        // Separate pools per tick — each tick clears and rebuilds its own pool,
-        // so an async LLM response always finds its candidates intact.
-        // ResolveStoryCandidate checks DM pool first, then NPC pool.
-        std::unordered_map<std::string, RE::FormID> m_dmCandidatePool;
-        std::unordered_map<std::string, RE::FormID> m_npcCandidatePool;
+        // Keep duplicate display names so response resolution can reject ambiguity.
+        // Each tick replaces only its own pool.
+        StoryCandidatePool m_dmCandidatePool;
+        StoryCandidatePool m_npcCandidatePool;
 
         // Story cooldown mirror: FormID -> game time when last picked
         // Volatile (empty on load), self-heals after first tick

@@ -51,6 +51,8 @@ namespace IntelEngine {
     static constexpr int kViewRenderOrder = 90;
     static constexpr auto kPollIntervalMs = std::chrono::milliseconds(50);
     static constexpr auto kKeyPressCooldownMs = std::chrono::milliseconds(300);
+    static constexpr const char* kActionYamlDirectory =
+        "Data/SKSE/Plugins/SkyrimNet/external/galanx.intelengine/actions";
 
     // =========================================================================
     // Lifecycle
@@ -815,7 +817,7 @@ namespace IntelEngine {
                 if (fileName.empty()) return;
 
                 // Modify the YAML file on disk
-                std::string yamlPath = "Data/SKSE/Plugins/SkyrimNet/config/actions/" + fileName + ".yaml";
+                std::string yamlPath = std::string(kActionYamlDirectory) + "/" + fileName + ".yaml";
                 std::ifstream inFile(yamlPath);
                 if (!inFile.is_open()) {
                     logger::warn("[Dashboard] Cannot open action YAML: {}", yamlPath);
@@ -862,7 +864,7 @@ namespace IntelEngine {
         actionCache_.clear();
         actionCacheLoaded_ = true;
 
-        std::string dir = "Data/SKSE/Plugins/SkyrimNet/config/actions";
+        std::string dir = kActionYamlDirectory;
         if (!std::filesystem::exists(dir)) {
             logger::warn("[Dashboard] Action YAML directory not found: {}", dir);
             return;
