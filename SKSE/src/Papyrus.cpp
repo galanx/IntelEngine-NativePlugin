@@ -11,8 +11,10 @@
 #include <algorithm>
 #include <chrono>
 #include <mutex>
+#include <utility>
 #include "LocationResolver.h"
 #include "StringUtils.h"
+#include "RenderedCacheCodec.h"
 #include "CellAnalyzer.h"
 #include "ActionValidator.h"
 #include "DepartureDetector.h"
@@ -60,6 +62,7 @@ namespace IntelEngine::Papyrus {
     RE::BSFixedString RenderGossipHeardSection(RE::StaticFunctionTag*, std::vector<RE::BSFixedString>, std::vector<RE::BSFixedString>, std::vector<float>, float);
     RE::BSFixedString RenderGossipToldSection(RE::StaticFunctionTag*, std::vector<RE::BSFixedString>, std::vector<RE::BSFixedString>, std::vector<float>, float);
     RE::BSFixedString RenderTaskHistorySection(RE::StaticFunctionTag*, std::vector<RE::BSFixedString>, std::vector<float>, float);
+    RE::BSFixedString EncodeRenderedCache(RE::StaticFunctionTag*, RE::BSFixedString);
     void SetDangerZonePolicy(RE::StaticFunctionTag*, int);
     void SetPlayerHomePolicy(RE::StaticFunctionTag*, int);
     void SetHoldRestrictionPolicy(RE::StaticFunctionTag*, RE::BSFixedString, int);
@@ -422,6 +425,7 @@ namespace IntelEngine::Papyrus {
         a_vm->RegisterFunction("RenderGossipHeardSection", SCRIPT_NAME, RenderGossipHeardSection); ++count;
         a_vm->RegisterFunction("RenderGossipToldSection", SCRIPT_NAME, RenderGossipToldSection); ++count;
         a_vm->RegisterFunction("RenderTaskHistorySection", SCRIPT_NAME, RenderTaskHistorySection); ++count;
+        a_vm->RegisterFunction("EncodeRenderedCache", SCRIPT_NAME, EncodeRenderedCache); ++count;
 
         // Dashboard Config Functions
         a_vm->RegisterFunction("NotifyDashboardSlotChanged", SCRIPT_NAME, NotifyDashboardSlotChanged); ++count;
@@ -1574,7 +1578,7 @@ namespace IntelEngine::Papyrus {
         }
 
         // Try this location's world marker
-        auto markerPtr = editorLoc->worldLocMarker.get();
+        auto markerPtr = std::as_const(editorLoc->worldLocMarker).get();
         if (markerPtr) {
             auto* marker = markerPtr.get();
             if (marker) {
@@ -1587,7 +1591,7 @@ namespace IntelEngine::Papyrus {
 
         // Try parent location's marker (e.g., interior shop → settlement)
         if (editorLoc->parentLoc) {
-            auto parentPtr = editorLoc->parentLoc->worldLocMarker.get();
+            auto parentPtr = std::as_const(editorLoc->parentLoc->worldLocMarker).get();
             if (parentPtr) {
                 auto* parentMarker = parentPtr.get();
                 if (parentMarker) {
@@ -1668,7 +1672,7 @@ namespace IntelEngine::Papyrus {
             if (!teleport || !teleport->teleportData)
                 return RE::BSContainer::ForEachResult::kContinue;
 
-            auto* linkedDoor = teleport->teleportData->linkedDoor.get().get();
+            auto* linkedDoor = std::as_const(teleport->teleportData->linkedDoor).get().get();
             if (!linkedDoor) return RE::BSContainer::ForEachResult::kContinue;
 
             auto* destCell = linkedDoor->GetSaveParentCell();
@@ -2068,48 +2072,68 @@ namespace IntelEngine::Papyrus {
             logger::error("BeginAsyncNPCDMTick: null callback quest");
             return;
         }
-        const char* qedit = callbackQuest->GetFormEditorID();
-        if (!qedit || !qedit[0]) {
-            logger::error("BeginAsyncNPCDMTick: callback quest has no editor ID");
-            return;
-        }
-        std::string questEditorId = qedit;
-        std::string scriptName    = callbackScript.c_str();
-        std::string functionName  = callbackFn.c_str();
-
+        // Papyrus natives may run on VM jobs. Copy only owned argument values here;
+        // do not dereference the quest until the generation-checked main-thread task.
+        const auto generation = SlotTracker::GetSingleton()->loadGeneration.load(std::memory_order_relaxed);
+        std::string scriptName = callbackScript.c_str();
+        std::string functionName = callbackFn.c_str();
         if (maxPairs <= 0) maxPairs = 4;
-
-        // Phase A — main thread: snapshot engine state.
-        auto snap = NPCIndex::GetSingleton()->BuildNPCTickSnapshot(static_cast<int>(maxPairs));
-        bool playerAtInn = FactionPolitics::IsPlayerAtInn();
-
-        // If snapshot has nothing, fire empty callback inline (already main thread).
-        if (snap.candidates.empty()) {
-            AsyncDispatch::ExecuteQuestFunctionString(questEditorId, scriptName, functionName, "");
+        auto* phaseATask = SKSE::GetTaskInterface();
+        if (!phaseATask) {
+            logger::error("BeginAsyncNPCDMTick: TaskInterface unavailable, snapshot dropped");
             return;
         }
-
-        // Phase B — worker thread: build context + JSON, then marshal back for callback.
-        AsyncDispatch::Submit([snap = std::move(snap), playerAtInn,
-                               questEditorId = std::move(questEditorId),
-                               scriptName = std::move(scriptName),
-                               functionName = std::move(functionName)]() mutable {
-            std::string md = NPCIndex::GetSingleton()->BuildNPCInteractionContextFromSnapshot(snap);
-            std::string requestJson;
-            if (!md.empty()) {
-                requestJson = BuildNPCInteractionRequestJsonCore(md, playerAtInn, snap.currentGameTime);
-            }
-            // Phase C — back to main thread for VM dispatch.
-            auto* task = SKSE::GetTaskInterface();
-            if (!task) {
-                logger::error("BeginAsyncNPCDMTick: TaskInterface unavailable, callback dropped");
+        phaseATask->AddTask([callbackQuest, generation, maxPairs,
+                             scriptName = std::move(scriptName),
+                             functionName = std::move(functionName)]() mutable {
+            if (generation != SlotTracker::GetSingleton()->loadGeneration.load(std::memory_order_relaxed)) {
+                logger::debug("[NPCTick] Snapshot dropped: load generation changed");
                 return;
             }
-            task->AddTask([questEditorId = std::move(questEditorId),
-                           scriptName = std::move(scriptName),
-                           functionName = std::move(functionName),
-                           requestJson = std::move(requestJson)]() mutable {
-                AsyncDispatch::ExecuteQuestFunctionString(questEditorId, scriptName, functionName, requestJson);
+            const char* qedit = callbackQuest->GetFormEditorID();
+            if (!qedit || !qedit[0]) {
+                logger::error("BeginAsyncNPCDMTick: callback quest has no editor ID");
+                return;
+            }
+            std::string questEditorId = qedit;
+            logger::debug("[NPCTick] Phase A snapshot (gen={})", generation);
+            auto snap = NPCIndex::GetSingleton()->BuildNPCTickSnapshot(static_cast<int>(maxPairs));
+            const bool playerAtInn = FactionPolitics::IsPlayerAtInn();
+            if (snap.candidates.empty()) {
+                NPCTickResult result;
+                result.loadGeneration = generation;
+                if (NPCIndex::GetSingleton()->PublishNPCTickResult(result)) {
+                    AsyncDispatch::ExecuteQuestFunctionString(questEditorId, scriptName, functionName, "");
+                }
+                return;
+            }
+            // Phase B: owned values only; defer pool publication and VM access to Phase C.
+            AsyncDispatch::Submit([snap = std::move(snap), playerAtInn,
+                                   questEditorId = std::move(questEditorId),
+                                   scriptName = std::move(scriptName),
+                                   functionName = std::move(functionName)]() mutable {
+                auto result = NPCIndex::GetSingleton()->BuildNPCInteractionContextFromSnapshot(snap);
+                std::string requestJson;
+                if (!result.context.empty()) {
+                    requestJson = BuildNPCInteractionRequestJsonCore(result.context, playerAtInn, snap.currentGameTime);
+                }
+                auto* task = SKSE::GetTaskInterface();
+                if (!task) {
+                    logger::error("BeginAsyncNPCDMTick: TaskInterface unavailable, callback dropped");
+                    return;
+                }
+                task->AddTask([result = std::move(result),
+                               questEditorId = std::move(questEditorId),
+                               scriptName = std::move(scriptName),
+                               functionName = std::move(functionName),
+                               requestJson = std::move(requestJson)]() mutable {
+                    if (!NPCIndex::GetSingleton()->PublishNPCTickResult(result)) {
+                        logger::debug("[NPCTick] Result dropped: load generation changed");
+                        return;
+                    }
+                    logger::debug("[NPCTick] Phase C callback (gen={})", result.loadGeneration);
+                    AsyncDispatch::ExecuteQuestFunctionString(questEditorId, scriptName, functionName, requestJson);
+                });
             });
         });
     }
@@ -2467,32 +2491,34 @@ namespace IntelEngine::Papyrus {
         return RE::BSFixedString(json);
     }
 
+    static std::unordered_set<std::string> ParseStoryTypeExclusions(const std::string& excludedTypes) {
+        std::unordered_set<std::string> excludedSet;
+        size_t pos = 0;
+        while (pos < excludedTypes.size()) {
+            size_t comma = excludedTypes.find(',', pos);
+            if (comma == std::string::npos) comma = excludedTypes.size();
+            std::string token = excludedTypes.substr(pos, comma - pos);
+            size_t start = token.find_first_not_of(" \t");
+            size_t end = token.find_last_not_of(" \t");
+            if (start != std::string::npos) {
+                std::string trimmed = token.substr(start, end - start + 1);
+                std::transform(trimmed.begin(), trimmed.end(), trimmed.begin(), ::tolower);
+                excludedSet.insert(trimmed);
+            }
+            pos = comma + 1;
+        }
+        return excludedSet;
+    }
+
     // Worker-thread-safe core. Caller pre-resolves engine-touching values:
     //   playerAtInn:      FactionPolitics::IsPlayerAtInn()
     //   currentGameTime:  RE::Calendar::GetCurrentGameTime()
     // Everything else inside is DB/cache-only.
-    static std::string BuildStoryDMRequestJsonCore(const std::string& dmContext,
-                                                    const std::string& excludedTypes,
-                                                    bool playerAtInn,
-                                                    float currentGameTime) {
-        std::unordered_set<std::string> excludedSet;
-        {
-            const std::string& excl = excludedTypes;
-            size_t pos = 0;
-            while (pos < excl.size()) {
-                size_t comma = excl.find(',', pos);
-                if (comma == std::string::npos) comma = excl.size();
-                std::string token = excl.substr(pos, comma - pos);
-                size_t start = token.find_first_not_of(" \t");
-                size_t end = token.find_last_not_of(" \t");
-                if (start != std::string::npos) {
-                    std::string trimmed = token.substr(start, end - start + 1);
-                    std::transform(trimmed.begin(), trimmed.end(), trimmed.begin(), ::tolower);
-                    excludedSet.insert(trimmed);
-                }
-                pos = comma + 1;
-            }
-        }
+    static std::string BuildStoryDMRequestJsonCore(
+        const std::string& dmContext,
+        const std::unordered_set<std::string>& excludedSet,
+        bool playerAtInn,
+        float currentGameTime) {
 
         static const char* allTypes[] = {
             "seek_player", "informant", "road_encounter",
@@ -2623,8 +2649,9 @@ namespace IntelEngine::Papyrus {
         auto* cal = RE::Calendar::GetSingleton();
         float now = cal ? cal->GetCurrentGameTime() : 0.f;
         return RE::BSFixedString(
-            BuildStoryDMRequestJsonCore(dmContext.c_str(), excludedTypes.c_str(),
-                                         FactionPolitics::IsPlayerAtInn(), now));
+            BuildStoryDMRequestJsonCore(dmContext.c_str(),
+                ParseStoryTypeExclusions(excludedTypes.c_str()),
+                FactionPolitics::IsPlayerAtInn(), now));
     }
 
     // -------------------------------------------------------------------------
@@ -2650,14 +2677,14 @@ namespace IntelEngine::Papyrus {
         std::string questEditorId = qedit;
         std::string scriptName    = callbackScript.c_str();
         std::string functionName  = callbackFn.c_str();
-        std::string excludedStr   = excludedTypes.c_str();
+        auto excludedSet = ParseStoryTypeExclusions(excludedTypes.c_str());
 
         if (maxCandidates <= 0) maxCandidates = 7;
         int maxC = static_cast<int>(maxCandidates);
 
         // Phase 0 — worker thread: SQL prefetch (GetActorEngagement + GetPlayerContext).
         // Phase A then runs on main thread once prefetch is ready.
-        AsyncDispatch::Submit([maxC, absenceDays, excludedStr = std::move(excludedStr),
+        AsyncDispatch::Submit([maxC, absenceDays, excludedSet = std::move(excludedSet),
                                questEditorId = std::move(questEditorId),
                                scriptName = std::move(scriptName),
                                functionName = std::move(functionName)]() mutable {
@@ -2670,7 +2697,7 @@ namespace IntelEngine::Papyrus {
                 return;
             }
             task->AddTask([maxC, absenceDays, prefetch = std::move(prefetch),
-                           excludedStr = std::move(excludedStr),
+                           excludedSet = std::move(excludedSet),
                            questEditorId = std::move(questEditorId),
                            scriptName = std::move(scriptName),
                            functionName = std::move(functionName)]() mutable {
@@ -2685,14 +2712,14 @@ namespace IntelEngine::Papyrus {
 
                 // Phase B — worker thread: scoring + per-candidate SQL + markdown.
                 AsyncDispatch::Submit([snap = std::move(snap), playerAtInn, currentGameTime,
-                                       excludedStr = std::move(excludedStr),
+                                       excludedSet = std::move(excludedSet),
                                        questEditorId = std::move(questEditorId),
                                        scriptName = std::move(scriptName),
                                        functionName = std::move(functionName)]() mutable {
-                    std::string md = NPCIndex::GetSingleton()->BuildDungeonMasterContextFromSnapshot(snap);
+                    std::string md = NPCIndex::GetSingleton()->BuildDungeonMasterContextFromSnapshot(snap, excludedSet);
                     std::string requestJson;
                     if (!md.empty()) {
-                        requestJson = BuildStoryDMRequestJsonCore(md, excludedStr, playerAtInn, currentGameTime);
+                        requestJson = BuildStoryDMRequestJsonCore(md, excludedSet, playerAtInn, currentGameTime);
                     }
                     // Phase C — back to main thread for Papyrus VM dispatch.
                     auto* t2 = SKSE::GetTaskInterface();
@@ -2719,6 +2746,10 @@ namespace IntelEngine::Papyrus {
     // list-based bio sections as single strings, stored via SetStringValue which
     // IS visible to papyrus_util("GetStringValue") immediately.
     // Only first-person rendering — templates fall back to list-based for 3P.
+
+    RE::BSFixedString EncodeRenderedCache(RE::StaticFunctionTag*, RE::BSFixedString text) {
+        return RE::BSFixedString(IntelEngine::EncodeRenderedCache(static_cast<std::string_view>(text)));
+    }
 
     static std::string FormatRelativeTimeFromDays(float currentGameDays, float eventGameDays) {
         float hoursPassed = (currentGameDays - eventGameDays) * 24.0f;
@@ -5185,7 +5216,7 @@ namespace IntelEngine::Papyrus {
         auto* processLists = RE::ProcessLists::GetSingleton();
         if (!processLists) return result;
 
-        for (auto& handle : processLists->highActorHandles) {
+        for (const auto& handle : processLists->highActorHandles) {
             auto actor = handle.get();
             if (!actor || !actor.get()) continue;
             auto* a = actor.get();

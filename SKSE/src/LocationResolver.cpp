@@ -13,6 +13,7 @@
 #include "Settings.h"
 
 #include <cfloat>
+#include <utility>
 #include <nlohmann/json.hpp>
 
 namespace IntelEngine {
@@ -211,7 +212,7 @@ namespace IntelEngine {
                 return RE::BSContainer::ForEachResult::kContinue;
             }
 
-            auto linkedDoor = extraTeleport->teleportData->linkedDoor.get();
+            auto linkedDoor = std::as_const(extraTeleport->teleportData->linkedDoor).get();
             if (!linkedDoor) {
                 return RE::BSContainer::ForEachResult::kContinue;
             }
@@ -309,7 +310,7 @@ namespace IntelEngine {
             logger::info("  BGSLocation matched: '{}' (FormID {:08X})",
                         locName ? locName : "unnamed", bgsLocation->GetFormID());
 
-            auto worldMarkerPtr = bgsLocation->worldLocMarker.get();
+            auto worldMarkerPtr = std::as_const(bgsLocation->worldLocMarker).get();
             if (worldMarkerPtr) {
                 auto* markerRef = worldMarkerPtr.get();
                 if (markerRef) {
@@ -354,7 +355,7 @@ namespace IntelEngine {
                 logger::info("  Parent location: '{}' (FormID {:08X})",
                             parentName ? parentName : "unnamed", parentLoc->GetFormID());
 
-                auto parentMarkerPtr = parentLoc->worldLocMarker.get();
+                auto parentMarkerPtr = std::as_const(parentLoc->worldLocMarker).get();
                 if (parentMarkerPtr) {
                     auto* parentRef = parentMarkerPtr.get();
                     if (parentRef) {
@@ -374,7 +375,7 @@ namespace IntelEngine {
                     logger::info("  Grandparent location: '{}' (FormID {:08X})",
                                 gpName ? gpName : "unnamed", grandparentLoc->GetFormID());
 
-                    auto gpMarkerPtr = grandparentLoc->worldLocMarker.get();
+                    auto gpMarkerPtr = std::as_const(grandparentLoc->worldLocMarker).get();
                     if (gpMarkerPtr) {
                         auto* gpRef = gpMarkerPtr.get();
                         if (gpRef) {
@@ -414,7 +415,7 @@ namespace IntelEngine {
                         }
                         if (!isChild) continue;
 
-                        auto markerPtr = loc->worldLocMarker.get();
+                        auto markerPtr = std::as_const(loc->worldLocMarker).get();
                         if (markerPtr) {
                             auto* ref = markerPtr.get();
                             if (ref) {
@@ -1355,7 +1356,7 @@ namespace IntelEngine {
                 return RE::BSContainer::ForEachResult::kContinue;
             }
 
-            auto linkedDoor = teleport->teleportData->linkedDoor.get();
+            auto linkedDoor = std::as_const(teleport->teleportData->linkedDoor).get();
             if (!linkedDoor) {
                 noLinked++;
                 return RE::BSContainer::ForEachResult::kContinue;
@@ -1403,7 +1404,7 @@ namespace IntelEngine {
         if (!interiorDoor) return nullptr;
         auto* teleport = interiorDoor->extraList.GetByType<RE::ExtraTeleport>();
         if (!teleport || !teleport->teleportData) return nullptr;
-        auto linked = teleport->teleportData->linkedDoor.get();
+        auto linked = std::as_const(teleport->teleportData->linkedDoor).get();
         return linked ? linked.get() : nullptr;
     }
 
@@ -1440,7 +1441,7 @@ namespace IntelEngine {
             if (!teleport || !teleport->teleportData)
                 return RE::BSContainer::ForEachResult::kContinue;
 
-            auto linkedDoor = teleport->teleportData->linkedDoor.get();
+            auto linkedDoor = std::as_const(teleport->teleportData->linkedDoor).get();
             if (!linkedDoor)
                 return RE::BSContainer::ForEachResult::kContinue;
 
@@ -1479,7 +1480,7 @@ namespace IntelEngine {
         auto* location = homeCell->GetLocation();
         if (location) {
             // Try this location's marker
-            auto markerPtr = location->worldLocMarker.get();
+            auto markerPtr = std::as_const(location->worldLocMarker).get();
             if (markerPtr) {
                 auto* marker = markerPtr.get();
                 if (marker) return marker;
@@ -1487,7 +1488,7 @@ namespace IntelEngine {
 
             // Try parent location's marker (e.g., house → settlement)
             if (location->parentLoc) {
-                auto parentPtr = location->parentLoc->worldLocMarker.get();
+                auto parentPtr = std::as_const(location->parentLoc->worldLocMarker).get();
                 if (parentPtr) {
                     auto* parentMarker = parentPtr.get();
                     if (parentMarker) return parentMarker;
@@ -1550,7 +1551,7 @@ namespace IntelEngine {
         for (auto* loc : dataHandler->GetFormArray<RE::BGSLocation>()) {
             if (!loc || !loc->HasKeyword(m_locTypePlayerHouse)) continue;
 
-            auto markerPtr = loc->worldLocMarker.get();
+            auto markerPtr = std::as_const(loc->worldLocMarker).get();
             if (!markerPtr) continue;
             auto* marker = markerPtr.get();
             if (!marker) continue;
@@ -2178,7 +2179,7 @@ namespace IntelEngine {
         for (auto* loc : dataHandler->GetFormArray<RE::BGSLocation>()) {
             if (!loc) continue;
 
-            auto markerPtr = loc->worldLocMarker.get();
+            auto markerPtr = std::as_const(loc->worldLocMarker).get();
             if (!markerPtr) continue;
 
             auto* marker = markerPtr.get();

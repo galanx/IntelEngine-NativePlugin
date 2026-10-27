@@ -6,8 +6,8 @@
 # Usage:
 #   .\verify.ps1
 #   .\verify.ps1 -Quiet
-#   .\verify.ps1 -TestDest D:\Modlists\Example\mods\IntelEngine
-#   .\verify.ps1 -DataDir D:\git\IntelEngine-GamePlugin -SkipDeployTargets
+#   .\verify.ps1 -TestDest "<MO2 instance>\mods\<IntelEngine mod>"
+#   .\verify.ps1 -DataDir "<IntelEngine-GamePlugin checkout>" -SkipDeployTargets
 
 param(
     [switch]$Quiet,

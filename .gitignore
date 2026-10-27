@@ -18,6 +18,7 @@ Output/
 # Temp decompile directories
 temp_decompile/
 temp_decompiled/
+_tmp/
 
 # Windows NUL device artifact
 nul
@@ -27,7 +28,7 @@ README-discord*.md
 RELEASE_PITCH.md
 
 # Internal plans & specs
-openspec/
+openspec
 
 # Deprecated/backup verify scripts
 _verify.ps1
@@ -50,3 +51,6 @@ check_header.ps1
 check_backslash.ps1
 SkyrimNet_API_Issues.log
 CHANGELOG.md
+
+# Private machine-specific build defaults
+build.local.psd1

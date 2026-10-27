@@ -806,25 +806,16 @@ namespace IntelEngine {
 
     RE::Actor* NPCIndex::ResolveStoryCandidate(const std::string& name) {
         std::shared_lock lock(m_mutex);
-        std::string lowerName = StringUtils::ToLowerStd(name);
-
-        // Check DM pool first (player-centric tick), then NPC pool (social tick)
-        for (const auto& pool : {std::cref(m_dmCandidatePool), std::cref(m_npcCandidatePool)}) {
-            auto it = pool.get().find(lowerName);
-            if (it != pool.get().end() && it->second != 0) {
-                auto* actor = GetActorFromFormId(it->second);
-                if (actor) {
-                    logger::debug("ResolveStoryCandidate('{}') -> exact pool match (0x{:08X})",
-                        name, it->second);
-                    return actor;
-                }
-            }
+        // ponytail: latest-tick pools cannot isolate overlapping requests;
+        // upgrade to request-bound resolution via the Papyrus contract.
+        const auto formId = ResolveStoryCandidateFormID(name, m_dmCandidatePool, m_npcCandidatePool);
+        // Candidate IDs are actor references, never base forms or global name aliases.
+        auto* actor = formId ? RE::TESForm::LookupByID<RE::Actor>(formId) : nullptr;
+        if (!actor || actor->IsDeleted() || actor->GetFormID() != formId) {
+            logger::warn("ResolveStoryCandidate('{}') -> rejected: unknown, ambiguous or unavailable candidate", name);
+            return nullptr;
         }
-
-        // Fallback to general name search if not in either pool (safety net)
-        logger::debug("ResolveStoryCandidate('{}') -> not in pool, falling back to FindByName", name);
-        lock.unlock();  // FindByName acquires its own lock
-        return FindByName(name);
+        return actor;
     }
 
     RE::Actor* NPCIndex::ResolveFromMemoryDB(RE::FormID formId, const std::string& name) {
@@ -1663,12 +1654,13 @@ namespace IntelEngine {
         // single source of truth shared with the async path.
         auto prefetch = FetchStoryDMPhaseAPrefetch(maxCandidates, absenceDays);
         return BuildDungeonMasterContextFromSnapshot(
-            BuildStoryDMTickSnapshot(maxCandidates, absenceDays, prefetch));
+            BuildStoryDMTickSnapshot(maxCandidates, absenceDays, prefetch), {});
     }
 
     std::string NPCIndex::BuildNPCInteractionContext(int maxPairs) {
-        // Sync wrapper — delegates to async-path snapshot+phase-B for single source of truth.
-        return BuildNPCInteractionContextFromSnapshot(BuildNPCTickSnapshot(maxPairs));
+        // Legacy synchronous API: caller must provide a safe engine-read context.
+        auto result = BuildNPCInteractionContextFromSnapshot(BuildNPCTickSnapshot(maxPairs));
+        return PublishNPCTickResult(result) ? std::move(result.context) : std::string{};
     }
 
     // =========================================================================
@@ -1678,6 +1670,7 @@ namespace IntelEngine {
     NPCIndex::NPCTickSnapshot NPCIndex::BuildNPCTickSnapshot(int maxPairs) {
         NPCTickSnapshot snap;
         snap.maxPairs = maxPairs;
+        snap.loadGeneration = SlotTracker::GetSingleton()->loadGeneration.load(std::memory_order_relaxed);
 
         auto* player = RE::PlayerCharacter::GetSingleton();
         if (!player) return snap;
@@ -1758,8 +1751,15 @@ namespace IntelEngine {
     // Async NPC interaction tick — Phase B (markdown, worker thread)
     // =========================================================================
 
-    std::string NPCIndex::BuildNPCInteractionContextFromSnapshot(const NPCTickSnapshot& snap) {
-        if (snap.candidates.empty()) return "";
+    bool NPCIndex::PublishNPCTickResult(NPCTickResult& result) {
+        std::unique_lock poolLock(m_mutex);
+        return result.Publish(SlotTracker::GetSingleton()->loadGeneration, m_npcCandidatePool);
+    }
+
+    NPCTickResult NPCIndex::BuildNPCInteractionContextFromSnapshot(const NPCTickSnapshot& snap) {
+        NPCTickResult result;
+        result.loadGeneration = snap.loadGeneration;
+        if (snap.candidates.empty()) return result;
 
         auto* memDB = MemoryDB::GetSingleton();
 
@@ -1817,7 +1817,7 @@ namespace IntelEngine {
 
         if (groups.empty()) {
             logger::debug("[NPCTick] No location groups with 2+ NPCs");
-            return "";
+            return result;
         }
 
         std::sort(groups.begin(), groups.end(),
@@ -1826,14 +1826,10 @@ namespace IntelEngine {
             groups.resize(snap.maxPairs);
         }
 
-        // Update NPC candidate pool for name->FormID resolution from response.
-        {
-            std::unique_lock poolLock(m_mutex);
-            m_npcCandidatePool.clear();
-            for (const auto& group : groups) {
-                for (const auto& n : group.npcs) {
-                    m_npcCandidatePool[n.actor->nameLower] = n.actor->formId;
-                }
+        // Keep the pool private to this result until main-thread generation validation.
+        for (const auto& group : groups) {
+            for (const auto& n : group.npcs) {
+                result.candidates.emplace(n.actor->nameLower, n.actor->formId);
             }
         }
 
@@ -1910,7 +1906,8 @@ namespace IntelEngine {
         }
 
         logger::info("[NPCTick] async context: {} groups, {} chars", groups.size(), md.size());
-        return MemoryDB::EscapeJsonString(md);
+        result.context = MemoryDB::EscapeJsonString(md);
+        return result;
     }
 
     // =========================================================================
@@ -2141,7 +2138,9 @@ namespace IntelEngine {
     // Async Story DM tick — Phase B (scoring + markdown, worker thread)
     // =========================================================================
 
-    std::string NPCIndex::BuildDungeonMasterContextFromSnapshot(const StoryDMTickSnapshot& snap) {
+    std::string NPCIndex::BuildDungeonMasterContextFromSnapshot(
+        const StoryDMTickSnapshot& snap,
+        const std::unordered_set<std::string>& excludedTypes) {
         if (snap.candidates.empty()) return "";
 
         auto* memDB = MemoryDB::GetSingleton();
@@ -2252,7 +2251,7 @@ namespace IntelEngine {
             std::unique_lock poolLock(m_mutex);
             m_dmCandidatePool.clear();
             for (const auto& s : finalPool) {
-                m_dmCandidatePool[s.a->nameLower] = s.a->formId;
+                m_dmCandidatePool.emplace(s.a->nameLower, s.a->formId);
             }
         }
 
@@ -2517,7 +2516,7 @@ namespace IntelEngine {
         static const std::unordered_set<std::string> dmTypes = {
             "seek_player", "informant", "road_encounter", "ambush", "stalker", "message", "quest"
         };
-        auto typeCounts = GetStoryTypeCountsMarkdown(dmTypes);
+        auto typeCounts = GetStoryTypeCountsMarkdown(dmTypes, excludedTypes);
         if (!typeCounts.empty()) {
             md += "## Story Type Picks This Session\n";
             md += typeCounts;
@@ -2714,14 +2713,17 @@ namespace IntelEngine {
         m_recentGossipContext = result;
     }
 
-    std::string NPCIndex::GetStoryTypeCountsMarkdown(const std::unordered_set<std::string>& relevantTypes) const {
+    std::string NPCIndex::GetStoryTypeCountsMarkdown(
+        const std::unordered_set<std::string>& relevantTypes,
+        const std::unordered_set<std::string>& excludedTypes) const {
         std::shared_lock lock(m_mutex);
         if (m_storyTypeCounts.empty()) return "";
 
         std::string result;
         bool first = true;
         for (const auto& [type, count] : m_storyTypeCounts) {
-            if (!relevantTypes.empty() && relevantTypes.find(type) == relevantTypes.end()) continue;
+            if (!relevantTypes.empty() && !relevantTypes.count(type)) continue;
+            if (excludedTypes.count(type)) continue;
             if (!first) result += ", ";
             result += type;
             result += ": ";

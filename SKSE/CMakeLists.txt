@@ -6,7 +6,7 @@ cmake_minimum_required(VERSION 3.21)
 
 project(
     IntelEngine
-    VERSION 3.5.1
+    VERSION 3.6.0
     DESCRIPTION "Intelligent NPC Task Execution for SkyrimNet"
     LANGUAGES CXX
 )
@@ -36,7 +36,7 @@ set(
 set(BUILD_TESTS OFF CACHE BOOL "Build CommonLibSSE tests" FORCE)
 set(ENABLE_SKYRIM_SE ON CACHE BOOL "Build Skyrim SE support" FORCE)
 set(ENABLE_SKYRIM_AE ON CACHE BOOL "Build Skyrim AE support" FORCE)
-set(ENABLE_SKYRIM_VR OFF CACHE BOOL "Build Skyrim VR support" FORCE)
+set(ENABLE_SKYRIM_VR ON CACHE BOOL "Build Skyrim VR support" FORCE)
 set(COMMONLIB_PREBUILT OFF CACHE BOOL "Use prebuilt CommonLib" FORCE)
 set(COMMONLIB_PREBUILT_DIR "" CACHE PATH "Prebuilt CommonLib directory" FORCE)
 set(_intelengine_commonlibsse_revision "550cc4fb9114649dcf526d1f3d73d710c5d7003b")
@@ -88,29 +88,33 @@ if(_commonlib_imported)
 endif()
 message(STATUS "CommonLib provenance: MinLL/CommonLibVR ${_commonlib_revision}, MIT, source-built")
 
-# The pinned header adds VR's Unk_8C to the SE/AE vtable. Without this correction,
-# GetSaveParentCell dispatches to SetParentCell and can corrupt the reference.
-# Generate the audited non-VR header for both targets; leave the checkout clean.
-set(_commonlib_abi_include "${CMAKE_CURRENT_BINARY_DIR}/commonlib-abi/include")
+# Cross-VR uses non-virtual runtime wrappers (getter slots 0x97 flat / 0x98 VR).
+# Only flat-only builds need the extra Unk_8C virtual removed. Keep the
+# fingerprint guard in every mode; both targets must use the same header view.
 file(READ "${_intelengine_commonlibsse_source_dir}/include/RE/T/TESObjectREFR.h" _commonlib_refr_header)
 string(REPLACE "\r\n" "\n" _commonlib_refr_header "${_commonlib_refr_header}")
 string(SHA256 _commonlib_refr_sha "${_commonlib_refr_header}")
 if(NOT _commonlib_refr_sha STREQUAL "98a8a1cb24f51b893b4343c4c552e363d9bc90ee7a611c05f7719c2479bec2b6")
     message(FATAL_ERROR "The audited CommonLib TESObjectREFR header changed; re-evaluate the non-VR ABI correction")
 endif()
-string(REGEX REPLACE
-    "\n[ \t]*SKYRIM_REL_VR_VIRTUAL void[ \t]+Unk_8C\\(void\\);[^\n]*"
-    ""
-    _commonlib_refr_fixed
-    "${_commonlib_refr_header}"
-)
-if(_commonlib_refr_fixed STREQUAL _commonlib_refr_header)
-    message(FATAL_ERROR "The CommonLib non-VR ABI correction did not remove the extra virtual slot")
+if(NOT ENABLE_SKYRIM_VR)
+    set(_commonlib_abi_include "${CMAKE_CURRENT_BINARY_DIR}/commonlib-abi/include")
+    string(REGEX REPLACE
+        "\n[ \t]*SKYRIM_REL_VR_VIRTUAL void[ \t]+Unk_8C\\(void\\);[^\n]*"
+        ""
+        _commonlib_refr_fixed
+        "${_commonlib_refr_header}"
+    )
+    if(_commonlib_refr_fixed STREQUAL _commonlib_refr_header)
+        message(FATAL_ERROR "The CommonLib non-VR ABI correction did not remove the extra virtual slot")
+    endif()
+    file(MAKE_DIRECTORY "${_commonlib_abi_include}/RE/T")
+    file(GENERATE OUTPUT "${_commonlib_abi_include}/RE/T/TESObjectREFR.h" CONTENT "${_commonlib_refr_fixed}")
+    target_include_directories(CommonLibSSE BEFORE PUBLIC "$<BUILD_INTERFACE:${_commonlib_abi_include}>")
+    message(STATUS "CommonLib ABI correction: omit VR-only TESObjectREFR::Unk_8C from SE/AE vtables")
+else()
+    message(STATUS "CommonLib ABI: pinned cross-VR runtime wrappers; no flat-only header override")
 endif()
-file(MAKE_DIRECTORY "${_commonlib_abi_include}/RE/T")
-file(GENERATE OUTPUT "${_commonlib_abi_include}/RE/T/TESObjectREFR.h" CONTENT "${_commonlib_refr_fixed}")
-target_include_directories(CommonLibSSE BEFORE PUBLIC "$<BUILD_INTERFACE:${_commonlib_abi_include}>")
-message(STATUS "CommonLib ABI correction: omit VR-only TESObjectREFR::Unk_8C from SE/AE vtables")
 
 include("${_intelengine_commonlibsse_source_dir}/cmake/CommonLibSSE.cmake")
 
@@ -183,6 +187,11 @@ target_precompile_headers(
     PRIVATE
         src/Plugin.h
 )
+
+# Offline synthetic engine vtables exercise the production CommonLib getter.
+add_executable(ReferenceGetterDispatchCheck EXCLUDE_FROM_ALL tests/ReferenceGetterDispatchCheck.cpp)
+target_compile_definitions(ReferenceGetterDispatchCheck PRIVATE ENABLE_COMMONLIBSSE_TESTING=1)
+target_link_libraries(ReferenceGetterDispatchCheck PRIVATE CommonLibSSE::CommonLibSSE)
 
 
 # =============================================================================

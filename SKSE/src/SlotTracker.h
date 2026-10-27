@@ -136,7 +136,7 @@ namespace IntelEngine {
 
     public:
         // Load generation counter — incremented on each RevertCallback to cancel
-        // stale deferred Maintenance dispatches from previous loads.
+        // stale deferred Maintenance and NPC tick snapshots/results from previous loads.
         std::atomic<uint32_t> loadGeneration{0};
     };
 
