@@ -109,8 +109,7 @@ void vrCheck(const fs::path& area) {
     }
     for (const auto& invalidPayload : {
         "2 "+actor+" 1 intel_factsrendered gap",
-        "1 "+actor+" 2 intel_factsrendered x Intel_FactsRendered y",
-        "1 "+actor+" 1 intel_factsrendered bad\tcontrol",
+        "1 "+actor+" 1 intel_factsrendered bad\bcontrol",
         "1 "+std::to_string((std::uint64_t{61}<<32)|0xff000001)+" 1 intel_factsrendered temporary"}) {
         auto bad=fixture(invalidPayload); put32(bad,8,SkseVR); put32(bad,12,RuntimeVR);
         reject(ess,bad);
@@ -194,12 +193,29 @@ void globalCheck(const fs::path& area) {
     refuses([&] {
         convert(plainGlobal,parse(plainGlobal),evidence(plainGlobal,{"plain"},{"legacy"},"actor-in-place"));
     },"evidence actor scope accepted global identity");
-    for (const char control : std::string("\x1b\x01\x7f\t\r\v\f")) {
+    for (const char control : std::string("\x01\x7f")) {
         const auto unsafe=fixture(std::string("1 0 1 intel_factsrendered before")+control+"after");
         refuses([&] {
             const auto p=parse(unsafe,true);
             convert(unsafe,p,fixEvidence(unsafe,p),true);
-        },"global fix raw ESC/C0/DEL");
+        },"global fix unsupported C0/DEL");
+    }
+    for (const char control : std::string("\t\r\v\f\x1b")) {
+        const auto raw=std::string("before")+control+"after";
+        const auto unsafe=fixture("1 0 1 intel_factsrendered "+raw);
+        const auto expected=fixture(std::string("1 0 1 intel_factsrendered before") +
+            (control=='\t' ? "%09" : control=='\r' ? "%0D" : control=='\v' ? "%0B" :
+             control=='\f' ? "%0C" : "%1B") + "after");
+        const auto controlParsed=parse(unsafe,true);
+        require(convert(unsafe,controlParsed,fixEvidence(unsafe,controlParsed),true).bytes==expected,
+            "global fix did not encode supported control byte");
+    }
+    for (const auto& unsafeValue : {std::string("\x1b",1),std::string("before\0after",12),std::string("before\x7f" "after")}) {
+        const auto unsafe=fixture("1 0 1 intel_factsrendered "+unsafeValue);
+        refuses([&] {
+            const auto p=parse(unsafe,true);
+            convert(unsafe,p,fixEvidence(unsafe,p),true);
+        }, "fix accepted lone ESC/NUL/DEL");
     }
     const auto temporary=(std::uint64_t{62}<<32)|0xff0012c7;
     const auto actor=(std::uint64_t{62}<<32)|0x00123456;
@@ -327,6 +343,28 @@ void filesystemCheck(const fs::path& area, const Bytes& input, const Bytes& conv
     const auto status=fix(guarded,[] {});
     CloseHandle(locked);
     require(status==3,"source I/O failure has wrong exit code");
+    const auto pathCases=area/"path-cases";
+    fs::create_directory(pathCases);
+    const auto uppercase=pathCases/"uppercase";
+    fs::create_directory(uppercase);
+    write(uppercase/"name.ESS",ess); write(uppercase/"name.skse",input);
+    require(fix(uppercase/"name.ESS")==0,"case-insensitive .ESS fix failed");
+    require(Source(uppercase/"name_IEconverted.skse").bytes()==converted,
+        "uppercase ESS conversion bytes differ");
+    refuses([&] { fix(uppercase/"name_ieconverted.ESS"); }, "case-insensitive already-converted stem guard missed");
+    refuses([&] { fix(uppercase/"name_IEconverted.ess"); }, "already-converted stem accepted");
+    const auto relative=pathCases/"relative";
+    fs::create_directory(relative);
+    write(relative/"name.ess",ess); write(relative/"name.skse",input);
+    const auto previous=fs::current_path();
+    try {
+        fs::current_path(relative);
+        require(fix(fs::path(L".\\name.ess"))==0,"explicit dot-relative ESS path failed");
+        fs::current_path(previous);
+    } catch (...) {
+        fs::current_path(previous);
+        throw;
+    }
 }
 }
 int main(int argc, char** argv) {
@@ -444,9 +482,14 @@ int main(int argc, char** argv) {
                 const auto proof=evidence(blob,{"facts"+control+"line",actorOriginals[1],actorOriginals[2]},
                     {"legacy","legacy","legacy"},"actor-in-place");
                 convert(blob,parse(blob),proof);
-            }, "actor raw ESC/C0/DEL");
+            }, "evidence actor raw control policy");
+        }
+        for (const auto& control : {std::string("\x01",1),std::string("\x7f",1)}) {
+            auto unsafeActor=actorRaw;
+            unsafeActor[0]="facts"+control+"line";
+            const auto blob=fixture(actorPayload(actor1,actor2,unsafeActor));
             refuses([&] { convert(blob,parse(blob,true),fixEvidence(blob,parse(blob,true)),true); },
-                "fix raw ESC/C0/DEL");
+                "fix unsupported control/DEL/lone ESC");
         }
         for (const auto invalid : {std::uint64_t{62}<<32, (std::uint64_t{61}<<32)|0xff000001}) {
             const auto blob=fixture(actorPayload(invalid,actor2,actorRaw));
@@ -535,6 +578,17 @@ int main(int argc, char** argv) {
             auto values=originals; values[0]=invalid;
             refuses([&] { parse(fixture(payload(values))); },"unsupported text");
         }
+        const std::string truncatedUtf8=std::string(79,'a')+"\xf0...";
+        const auto malformedValue=fixture("1 0 1 intel_factsrendered "+truncatedUtf8);
+        const auto malformedParsed=parse(malformedValue,true);
+        const auto malformedConverted=convert(malformedValue,malformedParsed,
+            fixEvidence(malformedValue,malformedParsed),true);
+        const auto malformedExpected=fixture("1 0 1 intel_factsrendered "+
+            IntelEngine::EncodeRenderedCache(truncatedUtf8));
+        require(malformedConverted.bytes==malformedExpected &&
+            malformedConverted.changes[0]["original_hex"]==hex(truncatedUtf8),
+            "fix did not preserve malformed UTF-8 target bytes exactly");
+        refuses([&] { parse(malformedValue); }, "evidence mode accepted malformed UTF-8 target");
         auto opaquePayload=std::string("1 0 4 intel_factsrendered ")+encoded[0]
             +" WeirdKey "+std::string("x\xc0",2)+" opaque\x01value "+std::string("n\0z",3)+" rne_name bad\a";
         const auto opaqueInput=fixture(opaquePayload);

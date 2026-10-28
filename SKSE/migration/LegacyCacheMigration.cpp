@@ -44,6 +44,17 @@ constexpr std::uint32_t Runtime17104 = 0x01070680, Skse17104 = 0x02030010;
 constexpr std::uint32_t RuntimeVR = 0x010400F1, SkseVR = 0x020000C0;
 // SKSE64 v2.0.20 skse_version.h MAKE_EXE_VERSION: (major<<24)|(minor<<16)|(build<<4).
 constexpr std::uint32_t Runtime1597 = 0x01050610, Skse1597 = 0x02000140;
+std::uint32_t u32(const Bytes& bytes, std::size_t offset);
+std::string version(std::uint32_t value) {
+    return std::to_string(value >> 24) + "." + std::to_string((value >> 16) & 0xff) + "." +
+        std::to_string((value >> 4) & 0xfff) + "." + std::to_string(value & 0xf);
+}
+std::string runtimeRefusal(const Bytes& bytes) {
+    return "unsupported co-save runtime; detected Skyrim " + version(u32(bytes,12)) + " / SKSE " +
+        version(u32(bytes,8)) + ". Supported exact tuples: Skyrim 1.5.97 / SKSE64 2.0.20; " +
+        "Skyrim 1.6.1170 / SKSE64 2.2.6, 2.2.7, or 2.2.8; Skyrim 1.7.104 / SKSE64 2.3.1; " +
+        "Skyrim VR 1.4.15 / SKSEVR 2.0.12";
+}
 void require(bool condition, const std::string& message) {
     if (!condition) throw std::runtime_error(message);
 }
@@ -95,8 +106,8 @@ std::uint64_t decimal(std::string_view text) {
     return result;
 }
 bool rawDelimiter(unsigned char c) { return c >= 9 && c <= 13; }
-void text(std::string_view value) {
-    // Strict UTF-8, excluding unqualified C0/DEL bytes. No locale-dependent lexer.
+void text(std::string_view value, bool validateUtf8 = true) {
+    // Always enforce the byte policy; only fix target values may be malformed UTF-8.
     for (std::size_t i = 0; i < value.size();) {
         unsigned char c = value[i++];
         if (c < 0x80) {
@@ -104,6 +115,7 @@ void text(std::string_view value) {
             require(c != 127, "unsupported DEL");
             continue;
         }
+        if (!validateUtf8) continue;
         unsigned count; std::uint32_t point, minimum;
         if (c >= 0xc2 && c <= 0xdf) { count=1; point=c & 31; minimum=0x80; }
         else if (c >= 0xe0 && c <= 0xef) { count=2; point=c & 15; minimum=0x800; }
@@ -124,6 +136,11 @@ std::string lower(std::string key) {
 }
 bool target(std::string_view key) {
     return key == "intel_factsrendered" || key == "intel_gossiprendered" || key == "intel_taskhistoryrendered";
+}
+bool endsWithInsensitive(std::wstring_view value, std::wstring_view suffix) {
+    return value.size() >= suffix.size() &&
+        CompareStringOrdinal(value.data() + value.size() - suffix.size(), static_cast<int>(suffix.size()),
+            suffix.data(), static_cast<int>(suffix.size()), TRUE) == CSTR_EQUAL;
 }
 struct Field {
     std::uint64_t object;
@@ -171,13 +188,14 @@ Parsed parse(const Bytes& bytes, bool fixMode = false) {
         offset=end;
     }
     require(offset == bytes.size(), "trailing bytes/plugin count mismatch");
-    require(ownerCount == 1, "PapyrusUtil owner missing");
+    require(ownerCount == 1, fixMode ?
+        "PapyrusUtil data not found; choose a matching co-save made with PapyrusUtil present" :
+        "PapyrusUtil owner missing");
     const bool qualifiedHeader=((u32(bytes,8) == Skse || u32(bytes,8) == Skse227 || u32(bytes,8) == Skse228) && u32(bytes,12) == Runtime) ||
         (u32(bytes,8) == Skse17104 && u32(bytes,12) == Runtime17104) ||
         (u32(bytes,8) == SkseVR && u32(bytes,12) == RuntimeVR) ||
         (u32(bytes,8) == Skse1597 && u32(bytes,12) == Runtime1597);
-    if (fixMode) require(qualifiedHeader,
-        "unsupported co-save runtime; fix accepts Skyrim 1.5.97 / SKSE64 2.0.20 (untested), 1.6.1170 / SKSE64 2.2.6-2.2.8, 1.7.104 and VR 1.4.15 / SKSEVR 2.0.12");
+    if (fixMode) require(qualifiedHeader, runtimeRefusal(bytes));
     else if (!qualifiedHeader)
         result.refusals.push_back("unqualified SKSE/runtime header");
     if (fixMode && candidates == 0) {
@@ -189,9 +207,14 @@ Parsed parse(const Bytes& bytes, bool fixMode = false) {
         for (const auto& record : result.framing) if (record.at("owner") == Owner) {
             const auto kind=record.at("type").get<std::uint32_t>();
             const auto version=record.at("version").get<std::uint32_t>();
-            require(((kind == 0x4D4F4453 || kind == 0x504C474E) && version == 0) ||
-                (version == 1 && std::find(std::begin(nonScalarStrings),std::end(nonScalarStrings),kind) != std::end(nonScalarStrings)),
-                "unqualified PapyrusUtil record in cache-free copy");
+            const bool known=((kind == 0x4D4F4453 || kind == 0x504C474E) && version == 0) ||
+                (version == 1 && std::find(std::begin(nonScalarStrings),std::end(nonScalarStrings),kind) != std::end(nonScalarStrings));
+            if (!known) {
+                std::ostringstream label;
+                label << "unqualified PapyrusUtil record in cache-free copy: type 0x" << std::uppercase <<
+                    std::hex << kind << std::dec << " version " << version;
+                throw std::runtime_error(label.str());
+            }
         }
         return result;
     }
@@ -233,7 +256,19 @@ Parsed parse(const Bytes& bytes, bool fixMode = false) {
             }
             const auto value=view(bytes,v.first,v.second);
             if (targetAlias) {
-                text(value);
+                try { text(value, !fixMode); }
+                catch (const std::exception& error) {
+                    if (!fixMode) throw;
+                    for (std::size_t i=0; i<value.size(); ++i) {
+                        const auto c=static_cast<unsigned char>(value[i]);
+                        if ((c < 32 && c != 7 && !rawDelimiter(c) && c != 27) || c == 127)
+                            throw std::runtime_error("unsupported target byte 0x" + hex(value.substr(i,1)) +
+                                " in object " + std::to_string(object) + " / key " + key +
+                                " at offset " + std::to_string(v.first+i));
+                    }
+                    throw std::runtime_error("invalid target value for object " + std::to_string(object) +
+                        " / key " + key + " at offset " + std::to_string(v.first) + ": " + error.what());
+                }
                 carriesTarget=true;
                 // Fix re-encodes in place; evidence mode still requires qualified identities.
                 if (!fixMode && target(key) && (form >> 24) == 0xff)
@@ -249,7 +284,11 @@ Parsed parse(const Bytes& bytes, bool fixMode = false) {
         require(result.written <= result.declared, "written count exceeds declaration");
     }
     require(cursor == result.end, "STRV not fully consumed");
-    if (result.written != result.declared) result.refusals.push_back("unqualified empty-map count gap");
+    if (result.written != result.declared)
+        result.refusals.push_back(fixMode ?
+            "PapyrusUtil object-count gap: declared " + std::to_string(result.declared) + ", complete physical rows " +
+                std::to_string(result.written) + "; possible omitted empty holders or incomplete/truncated stream; refused without reconstruction" :
+            "unqualified empty-map count gap");
     return result;
 }
 void verifyNativeTargets(const Bytes& bytes, const Parsed& parsed) {
@@ -283,7 +322,9 @@ void verifyNativeTargets(const Bytes& bytes, const Parsed& parsed) {
         for (int n=0; native && n<entries; ++n) {
             const auto key=buffer.token(), value=buffer.token();
             if (key.first == key.second || value.first == value.second) {
-                require(!target(view(bytes,key.first,key.second)), "native target missing value");
+                const auto keyText=view(bytes,key.first,key.second);
+                require(!target(keyText), "native PapyrusUtil target has no assigned value; key " +
+                    std::string(keyText) + " at offset " + std::to_string(key.first));
                 native.setstate(std::ios::failbit);
                 break;
             }
@@ -291,12 +332,17 @@ void verifyNativeTargets(const Bytes& bytes, const Parsed& parsed) {
             require(expected != parsed.fields.end() && expected->object == object &&
                 expected->key == view(bytes,key.first,key.second) &&
                 expected->start == value.first && expected->end == value.second,
-                "ambiguous native target assignment");
+                "ambiguous native PapyrusUtil target assignment for object " + std::to_string(object) +
+                " / key " + std::string(view(bytes,key.first,key.second)) + " at offset " +
+                std::to_string(key.first));
             ++expected;
             nextTarget();
         }
     }
-    require(expected == parsed.fields.end(), "rendered cache lost under native tokenization");
+    if (expected != parsed.fields.end())
+        throw std::runtime_error("rendered cache lost under native tokenization for object " +
+            std::to_string(expected->object) + " / key " + expected->key + " at offset " +
+            std::to_string(expected->start));
 }
 Json inspect(const Bytes& bytes, const Parsed& parsed) {
     Json fields=Json::array();
@@ -384,10 +430,15 @@ Converted convert(const Bytes& input, const Parsed& parsed, const Json& manifest
                 proof->at("source_sha256") == inputHash, "invalid internal legacy-policy evidence");
         } else require(!proof->at("evidence").get<std::string>().empty(), "missing independent field provenance");
         const auto raw=view(input,f.start,f.end);
-        if (actor) for (unsigned char c : raw)
+        if (actor && fixMode) {
+            require(raw != "\x1b", "lone ESC empty sentinel refused");
+            for (unsigned char c : raw)
+                require(c >= 32 ? c != 127 : c == 7 || rawDelimiter(c) || c == 27,
+                    "actor raw unsupported control/DEL refused");
+        } else if (actor) for (unsigned char c : raw)
             require(c >= 32 ? c != 127 : c == 7 || c == 10, "actor raw ESC/other-control refused");
         const std::string original=unhex(proof->at("original_hex").get<std::string>());
-        text(original);
+        text(original, !fixMode);
         const auto representation=proof->at("representation").get<std::string>();
         std::string replacement;
         if (representation == "legacy" || representation == "legacy-policy") {
@@ -395,7 +446,8 @@ Converted convert(const Bytes& input, const Parsed& parsed, const Json& manifest
                 if (representation == "legacy-policy")
                     require(proof->at("original_basis") == "owner-policy", "missing policy-derived original basis");
                 for (unsigned char c : original)
-                    require(c >= 32 ? c != 127 : c == 10, "actor original BEL/ESC/other-control refused");
+                    require(c >= 32 ? c != 127 : (fixMode ? c == 7 || rawDelimiter(c) || c == 27 : c == 10),
+                        fixMode ? "actor original unsupported control/DEL refused" : "actor original BEL/ESC/other-control refused");
                 std::string restored(raw);
                 for (char& c : restored) if (c == '\a') c=' ';
                 require(restored == original, "actor original bytes disagree with restored span");
@@ -463,17 +515,22 @@ bool gameRunning(const std::function<bool()>& isGameRunning = {}) {
         return false;
     }
     HANDLE snapshot=CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS,0);
-    if (snapshot == INVALID_HANDLE_VALUE) throw GameSafetyRefusal("cannot enumerate processes; close other tools and retry");
+    if (snapshot == INVALID_HANDLE_VALUE) throw GameSafetyRefusal("cannot enumerate processes; Windows error " +
+        std::to_string(GetLastError()));
     PROCESSENTRY32W entry{}; entry.dwSize=sizeof(entry);
-    bool found=false;
+    const char* foundName=nullptr;
+    DWORD foundPid=0;
     if (Process32FirstW(snapshot,&entry)) do {
-        const std::wstring name(entry.szExeFile);
-        if (_wcsicmp(name.c_str(),L"SkyrimSE.exe")==0 || _wcsicmp(name.c_str(),L"Skyrim.exe")==0 ||
-            _wcsicmp(name.c_str(),L"SkyrimVR.exe")==0) { found=true; break; }
+        if (_wcsicmp(entry.szExeFile,L"SkyrimSE.exe")==0) foundName="SkyrimSE.exe";
+        else if (_wcsicmp(entry.szExeFile,L"Skyrim.exe")==0) foundName="Skyrim.exe";
+        else if (_wcsicmp(entry.szExeFile,L"SkyrimVR.exe")==0) foundName="SkyrimVR.exe";
+        if (foundName) { foundPid=entry.th32ProcessID; break; }
     } while (Process32NextW(snapshot,&entry));
     const auto error=GetLastError(); CloseHandle(snapshot);
-    if (!found && error != ERROR_NO_MORE_FILES) throw GameSafetyRefusal("process enumeration failed; close other tools and retry");
-    if (found) throw GameSafetyRefusal("Skyrim is running; close the game before fixing the save");
+    if (foundPid == 0 && error != ERROR_NO_MORE_FILES)
+        throw GameSafetyRefusal("process enumeration failed; Windows error " + std::to_string(error));
+    if (foundPid != 0) throw GameSafetyRefusal("game process " + std::string(foundName) +
+        " (PID " + std::to_string(foundPid) + ") is running; close it before fixing the save");
     return false;
 }
 Json fixEvidence(const Bytes& bytes, const Parsed& parsed) {
@@ -518,12 +575,38 @@ void printFixRefusal(const std::exception& error) {
 int fix(const fs::path& essPath, void (*requireGameClosed)() = verifyBeforePublish) {
     try {
     requireGameClosed();
-    require(essPath.extension()==".ess", "fix requires one .ess save; select an ESS file");
-    const auto base=fs::absolute(essPath).parent_path()/essPath.stem();
+    require(_wcsicmp(essPath.extension().c_str(), L".ess") == 0,
+        "fix requires one .ess save; select an ESS file");
+    const auto stem=essPath.stem().wstring();
+    require(!endsWithInsensitive(stem, L"_IEconverted"),
+        "input already has the _IEconverted stem; use the original ESS/SKSE pair, not converted output");
+    std::error_code ec;
+    const auto resolvedEss=fs::absolute(essPath,ec);
+    require(!ec, "cannot resolve ESS path " + essPath.u8string() + "; OS error: " + ec.message());
+    const auto base=resolvedEss.parent_path()/resolvedEss.stem();
     const auto sksePath=fs::path(base.wstring()+L".skse");
-    require(fs::exists(essPath) && fs::exists(sksePath), "complete same-directory, same-stem .ess/.skse pair required");
-    require(!sameFile(essPath,sksePath), "ESS and co-save resolve to the same file; choose a valid pair");
-    Source ess(essPath), skse(sksePath);
+    const auto resolvedSkse=fs::absolute(sksePath,ec);
+    require(!ec, "cannot resolve SKSE path " + sksePath.u8string() + "; OS error: " + ec.message());
+    auto accessible=[](const fs::path& path, DWORD& error) {
+        SetLastError(ERROR_SUCCESS);
+        const auto attributes=GetFileAttributesW(path.c_str());
+        error=attributes == INVALID_FILE_ATTRIBUTES ? GetLastError() : ERROR_SUCCESS;
+        return attributes != INVALID_FILE_ATTRIBUTES;
+    };
+    DWORD essError=ERROR_SUCCESS, skseError=ERROR_SUCCESS;
+    const bool essExists=accessible(resolvedEss,essError);
+    const bool skseExists=accessible(resolvedSkse,skseError);
+    auto osError=[](DWORD code) {
+        return "Windows error " + std::to_string(code) + ": " + std::system_category().message(static_cast<int>(code));
+    };
+    require(essExists && skseExists,
+        "required same-stem pair could not be accessed:\n    ESS: " + resolvedEss.u8string() +
+        (essExists ? " (present)" : " (" + osError(essError) + ")") +
+        "\n    SKSE: " + resolvedSkse.u8string() +
+        (skseExists ? " (present)" : " (" + osError(skseError) + ")") +
+        "\nCheck path length and permissions; copy both files to a short normal folder if needed.");
+    require(!sameFile(resolvedEss,resolvedSkse), "ESS and co-save resolve to the same file; choose a valid pair");
+    Source ess(resolvedEss), skse(resolvedSkse);
     require(ess.bytes().size()>=13 && view(ess.bytes(),0,13)=="TESV_SAVEGAME", "ESS is empty or lacks Skyrim save signature");
     auto parsed=parse(skse.bytes(),true);
     if (u32(skse.bytes(),12) == RuntimeVR) {
@@ -537,9 +620,19 @@ int fix(const fs::path& essPath, void (*requireGameClosed)() = verifyBeforePubli
     const auto outputEss=fs::path(base.wstring()+L"_IEconverted.ess");
     const auto outputSkse=fs::path(base.wstring()+L"_IEconverted.skse");
     const auto staging=fs::path(base.wstring()+L"_IEconverted.staging");
-    require(!fs::exists(backup) && !fs::exists(outputEss) && !fs::exists(outputSkse) && !fs::exists(staging),
-        "backup/output/staging path already exists; move it aside and retry");
-    try { publishFixedPair(essPath,ess,skse,converted.bytes,requireGameClosed); }
+    std::vector<fs::path> collisions;
+    for (const auto& path : {backup,outputEss,outputSkse,staging}) {
+        const bool exists=fs::exists(path,ec);
+        require(!ec, "cannot check output collision path " + path.u8string() + "; OS error: " + ec.message());
+        if (exists) collisions.push_back(path);
+    }
+    if (!collisions.empty()) {
+        std::string message="backup/output/staging collision on retry; do not overwrite retained artifacts:";
+        for (const auto& path : collisions) message += "\n    " + path.u8string();
+        message += "\nInspect them and retry the original pair in a fresh physical folder.";
+        throw std::runtime_error(message);
+    }
+    try { publishFixedPair(resolvedEss,ess,skse,converted.bytes,requireGameClosed); }
     catch (const GameSafetyRefusal& e) {
         std::cerr << "Fix refused:\n  - " << e.what() << "\nBackup: " << backup.u8string()
             << "\nStaging: " << staging.u8string()
