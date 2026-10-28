@@ -326,6 +326,7 @@ struct Converted {
     Json changes;
     std::size_t legacy=0;
     Json temporary_identities=Json::array();
+    Json global_entries=Json::array();
 };
 bool actorBasis(const Json& basis) {
     const auto scope=basis.at("scope").get<std::string>();
@@ -349,10 +350,7 @@ Converted convert(const Bytes& input, const Parsed& parsed, const Json& manifest
             manifest.at("preserve_rne_name_bel") == true, "missing approved legacy policy");
     }
     const bool actor=fixMode || actorBasis(manifest);
-    if (fixMode) {
-        for (const auto& f : parsed.fields) if (target(f.key))
-            require(f.object != 0, "global cache target is not eligible for actor fix policy");
-    } else {
+    if (!fixMode) {
         for (const auto& f : parsed.fields) if (target(f.key))
             require(actor ? f.object != 0 : f.object == 0, "identity outside qualified scope");
     }
@@ -408,6 +406,7 @@ Converted convert(const Bytes& input, const Parsed& parsed, const Json& manifest
             }
             replacement=transport(IntelEngine::EncodeRenderedCache(original));
             ++output.legacy;
+            if (fixMode && f.object == 0) output.global_entries.push_back(f.key);
             if ((static_cast<std::uint32_t>(f.object) >> 24) == 0xff &&
                 temporaryIdentities.insert(f.object).second)
                 output.temporary_identities.push_back(std::to_string(f.object));
@@ -573,6 +572,9 @@ int fix(const fs::path& essPath, void (*requireGameClosed)() = verifyBeforePubli
         for (const auto& object : converted.temporary_identities)
             std::cout << "  Temporary identity converted in place: "
                 << objectLabel(decimal(object.get<std::string>())) << '\n';
+        for (const auto& key : converted.global_entries)
+            std::cout << "  Global (orphaned) cache converted in place: "
+                << key.get<std::string>() << '\n';
     } else std::cout << "Copied cache-free pair unchanged; no scalar string record to repair.\n";
     std::cout << "Output ESS: " << outputEss.u8string() << "\nOutput SKSE: " << outputSkse.u8string()
         << "\nBackup: " << backup.u8string()

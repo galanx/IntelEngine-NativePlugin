@@ -172,6 +172,62 @@ void vrCheck(const fs::path& area) {
     require(emptyEss.bytes()==ess && emptySkse.bytes()==empty && emptyBackup.bytes()==empty,
         "cache-free pair was not copied unchanged");
 }
+void globalCheck(const fs::path& area) {
+    const std::vector<std::string> originals{"facts with space\n%0A","gossip with space\n%25","task history\nline"};
+    const auto globalInput=fixture("1 0 5 intel_factsrendered facts\awith\aspace\n%0A"
+        " intel_gossiprendered gossip\awith\aspace\n%25 intel_taskhistoryrendered task\ahistory\nline"
+        " rne_name Kept\aName intel_target The\aBannered\aMare%0A");
+    const auto globalExpected=fixture("1 0 5 intel_factsrendered facts\awith\aspace%0A%250A"
+        " intel_gossiprendered gossip\awith\aspace%0A%2525 intel_taskhistoryrendered task\ahistory%0Aline"
+        " rne_name Kept\aName intel_target The\aBannered\aMare%0A");
+    const auto parsed=parse(globalInput,true);
+    const auto proof=fixEvidence(globalInput,parsed);
+    const auto converted=convert(globalInput,parsed,proof,true);
+    const auto keys=Json::array({"intel_factsrendered","intel_gossiprendered","intel_taskhistoryrendered"});
+    require(converted.bytes==globalExpected && converted.legacy==3 && converted.global_entries==keys &&
+        converted.temporary_identities.empty(),"global fix bytes, keys or identity reporting differ");
+    auto mismatch=proof; mismatch["fields"][0]["original_hex"]=hex("different original");
+    refuses([&] { convert(globalInput,parsed,mismatch,true); },"global restored-original mismatch");
+    refuses([&] { convert(globalInput,parse(globalInput),evidence(globalInput,originals)); },
+        "evidence global legacy BEL collision");
+    const auto plainGlobal=fixture("1 0 1 intel_factsrendered plain");
+    refuses([&] {
+        convert(plainGlobal,parse(plainGlobal),evidence(plainGlobal,{"plain"},{"legacy"},"actor-in-place"));
+    },"evidence actor scope accepted global identity");
+    for (const char control : std::string("\x1b\x01\x7f\t\r\v\f")) {
+        const auto unsafe=fixture(std::string("1 0 1 intel_factsrendered before")+control+"after");
+        refuses([&] {
+            const auto p=parse(unsafe,true);
+            convert(unsafe,p,fixEvidence(unsafe,p),true);
+        },"global fix raw ESC/C0/DEL");
+    }
+    const auto temporary=(std::uint64_t{62}<<32)|0xff0012c7;
+    const auto actor=(std::uint64_t{62}<<32)|0x00123456;
+    const auto suffix=" "+std::to_string(temporary)+" 2 intel_gossiprendered temporary\a%25\nline"
+        " rne_name Temporary\aName "+std::to_string(actor)
+        +" 2 intel_taskhistoryrendered actor\a%0A\nline intel_target The\aBannered\aMare%0A";
+    const auto mixed=fixture("3 0 2 intel_factsrendered global\a%0A\nline rne_name Global\aName"+suffix);
+    const auto expected=fixture("3 0 2 intel_factsrendered global\a%250A%0Aline rne_name Global\aName "
+        +std::to_string(temporary)+" 2 intel_gossiprendered temporary\a%2525%0Aline"
+        " rne_name Temporary\aName "+std::to_string(actor)
+        +" 2 intel_taskhistoryrendered actor\a%250A%0Aline intel_target The\aBannered\aMare%0A");
+    const auto mixedParsed=parse(mixed,true);
+    const auto mixedConverted=convert(mixed,mixedParsed,fixEvidence(mixed,mixedParsed),true);
+    require(mixedConverted.bytes==expected && mixedConverted.legacy==3 &&
+        mixedConverted.global_entries==Json::array({"intel_factsrendered"}) &&
+        mixedConverted.temporary_identities==Json::array({std::to_string(temporary)}),
+        "mixed global/FF/normal actor conversion or reporting differs");
+    fs::create_directory(area);
+    const Bytes ess{'T','E','S','V','_','S','A','V','E','G','A','M','E',0,9,255};
+    write(area/"test.ess",ess); write(area/"test.skse",mixed);
+    require(fix(area/"test.ess")==0,"mixed global/FF/normal actor fix failed");
+    Source sourceEss(area/"test.ess"), sourceSkse(area/"test.skse");
+    Source outputEss(area/"test_IEconverted.ess"), outputSkse(area/"test_IEconverted.skse");
+    Source backupEss(area/"test_IEbackup/original.ess"), backupSkse(area/"test_IEbackup/original.skse");
+    require(sourceEss.bytes()==ess && outputEss.bytes()==ess && backupEss.bytes()==ess &&
+        sourceSkse.bytes()==mixed && backupSkse.bytes()==mixed && outputSkse.bytes()==expected,
+        "mixed global fix changed source, backup, ESS, opaque bytes or expected output");
+}
 void filesystemCheck(const fs::path& area, const Bytes& input, const Bytes& converted) {
     require(!fs::exists(area), "self-check area must not exist");
     require(fs::create_directory(area), "cannot create exclusive self-check area");
@@ -198,6 +254,7 @@ void filesystemCheck(const fs::path& area, const Bytes& input, const Bytes& conv
     require(vrEss.hash()==essHash && vrSkse.hash()==sha256(vrInput),
         "VR refusal changed the original pair");
     vrCheck(source/"vr-supported");
+    globalCheck(source/"global-mixed");
     {
         Source e(source/"test.ess"), s(source/"test.skse");
         require(e.hash()==essHash && s.hash()==skseHash, "source hash mismatch");
