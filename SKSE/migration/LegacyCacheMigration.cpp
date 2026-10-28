@@ -572,7 +572,7 @@ void printFixRefusal(const std::exception& error) {
     } else std::cerr << "  - " << error.what() << '\n';
     std::cerr << "Choose a supported, closed-game save pair; originals were not changed.\n";
 }
-int fix(const fs::path& essPath, void (*requireGameClosed)() = verifyBeforePublish) {
+int fix(const fs::path& essPath, void (*requireGameClosed)() = verifyBeforePublish, bool force = false) {
     try {
     requireGameClosed();
     require(_wcsicmp(essPath.extension().c_str(), L".ess") == 0,
@@ -613,6 +613,24 @@ int fix(const fs::path& essPath, void (*requireGameClosed)() = verifyBeforePubli
         require(ess.bytes().size() >= 21 && u32(ess.bytes(),13) >= 4 &&
             u32(ess.bytes(),13) <= ess.bytes().size()-17 && u32(ess.bytes(),17) == 12,
             "unsupported VR ESS header; expected TESV_SAVEGAME version 12");
+    }
+    if (!force) {
+        const Field* encoded=nullptr;
+        bool legacy=false;
+        for (const auto& field : parsed.fields) if (target(field.key)) {
+            const auto raw=view(skse.bytes(),field.start,field.end);
+            if (raw.find('\n') != std::string_view::npos) legacy=true;
+            else if (!encoded && raw.find("%0A") != std::string_view::npos) encoded=&field;
+        }
+        if (encoded) {
+            std::cerr << "Fix refused:\n  - IntelEngine caches in this save "
+                << (legacy ? "are mixed legacy and 3.6 format" : "are already in the 3.6 format")
+                << " (object " << objectLabel(encoded->object) << " / " << encoded->key << "); "
+                << (legacy ? "no partial conversion permitted." : "no conversion needed.")
+                << (legacy ? "\nUse a coherent save pair or contact support. Originals unchanged.\n" :
+                    "\nLoad this save directly with IntelEngine 3.6.x. Originals unchanged.\n");
+            return 2;
+        }
     }
     auto converted=parsed.chunk == 0 ? Converted{skse.bytes(),Json::array(),0} :
         convert(skse.bytes(),parsed,fixEvidence(skse.bytes(),parsed),true);
@@ -793,9 +811,21 @@ int main(int argc, char** argv) {
         if (!wide) return 2;
         int result=2;
         try {
-            LCM::require(wideCount==4 && std::wstring(wide[1])==L"fix" && std::wstring(wide[2])==L"--save",
-                "usage: fix --save FILE.ess");
-            result=LCM::fix(std::filesystem::path(wide[3]));
+            std::filesystem::path save;
+            bool force=false;
+            for (int i=2; i<wideCount; ++i) {
+                const std::wstring argument=wide[i];
+                if (argument==L"--force") {
+                    LCM::require(!force,"duplicate CLI argument");
+                    force=true;
+                } else {
+                    LCM::require(argument==L"--save" && save.empty() && i+1<wideCount,
+                        "usage: fix --save FILE.ess");
+                    save=wide[++i];
+                }
+            }
+            LCM::require(!save.empty(),"usage: fix --save FILE.ess");
+            result=LCM::fix(save,LCM::verifyBeforePublish,force);
         } catch (const std::exception& error) {
             LCM::printFixRefusal(error);
         }
