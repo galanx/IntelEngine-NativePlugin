@@ -285,6 +285,15 @@ namespace IntelEngine {
         while (!stopPolling_.load()) {
             std::this_thread::sleep_for(kPollIntervalMs);
 
+            HWND foregroundWindow = GetForegroundWindow();
+            DWORD foregroundProcessId = 0;
+            if (!foregroundWindow ||
+                GetWindowThreadProcessId(foregroundWindow, &foregroundProcessId) == 0 ||
+                foregroundProcessId != GetCurrentProcessId()) {
+                wasComboPressed = true;
+                continue;
+            }
+
             auto* config = DashboardConfig::GetSingleton();
             int vk = config->GetHotkey();
             int mods = config->GetModifiers();
@@ -293,10 +302,13 @@ namespace IntelEngine {
             auto* ui = RE::UI::GetSingleton();
             if (ui && ui->GameIsPaused() && !isOpen_.load()) continue;
 
-            bool modifiersOk = true;
-            if (mods & kModCtrl)  modifiersOk = modifiersOk && (GetAsyncKeyState(VK_CONTROL) & 0x8000);
-            if (mods & kModShift) modifiersOk = modifiersOk && (GetAsyncKeyState(VK_SHIFT) & 0x8000);
-            if (mods & kModAlt)   modifiersOk = modifiersOk && (GetAsyncKeyState(VK_MENU) & 0x8000);
+            const bool ctrlDown = (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0;
+            const bool shiftDown = (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0;
+            const bool altDown = (GetAsyncKeyState(VK_MENU) & 0x8000) != 0;
+            const bool modifiersOk =
+                ctrlDown == ((mods & kModCtrl) != 0) &&
+                shiftDown == ((mods & kModShift) != 0) &&
+                altDown == ((mods & kModAlt) != 0);
 
             bool mainKeyDown = (GetAsyncKeyState(vk) & 0x8000) != 0;
             bool comboPressed = modifiersOk && mainKeyDown;
