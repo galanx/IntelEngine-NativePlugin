@@ -576,7 +576,7 @@ int fix(const fs::path& essPath, void (*requireGameClosed)() = verifyBeforePubli
     } else std::cout << "Copied cache-free pair unchanged; no scalar string record to repair.\n";
     std::cout << "Output ESS: " << outputEss.u8string() << "\nOutput SKSE: " << outputSkse.u8string()
         << "\nBackup: " << backup.u8string()
-        << "\nOriginals unchanged. Use a coherent repaired IE DLL/PEX/prompts set; these repaired save components may not match existing IE data. Never load converted saves under IE 3.5.2.\n";
+        << "\nOriginals unchanged. Use a coherent repaired IE DLL/PEX/prompts set; these repaired save components may not match existing IE data. Never load converted saves under IE 3.5.x.\n";
     return 0;
     } catch (const IOError& e) {
         std::cerr << "Save I/O/verification failed:\n  - " << e.what()
