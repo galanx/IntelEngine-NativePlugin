@@ -5,6 +5,7 @@
  */
 
 #include "Papyrus.h"
+#include "Utf8Truncate.h"
 #include "NPCIndex.h"
 #include "ItemIndex.h"
 #include <random>
@@ -4971,7 +4972,7 @@ namespace IntelEngine::Papyrus {
             if (res == "delivered") {
                 desc = "Delivered a message to " + tgt;
                 if (!msg.empty()) {
-                    if (msg.size() > 80) msg = msg.substr(0, 80) + "...";
+                    if (msg.size() > 80) msg = TruncateUtf8Bytes(msg, 80, "...");
                     desc += ": '" + msg + "'";
                 }
                 if (!loc.empty()) desc += " (meeting at " + loc + ")";
