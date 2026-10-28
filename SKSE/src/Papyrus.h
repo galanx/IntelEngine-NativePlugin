@@ -354,27 +354,10 @@ namespace IntelEngine::Papyrus {
     int GetPlayerInteractionCount(RE::StaticFunctionTag*, RE::Actor* actor);
 
     // ==========================================================================
-    // Dialogue Safety Net Functions
+    // Dialogue Functions
     // ==========================================================================
 
-    // Tick-based check: queries MemoryDB for new dialogue, runs keyword matching.
-    // Returns keyword hint (0=nothing, 1=meeting, 2=fetch, 3=delivery).
-    // Stores the NPC internally — retrieve with GetSafetyNetNPC().
-    int RunSafetyNetCheck(RE::StaticFunctionTag*);
-
-    // Signal that new dialogue occurred — re-enables safety net polling.
-    void NotifyNewDialogue(RE::StaticFunctionTag*);
-
-    // Returns the NPC from the last positive RunSafetyNetCheck() call.
-    RE::Actor* GetSafetyNetNPC(RE::StaticFunctionTag*);
-
-    RE::Actor* GetLastConversationPartner(RE::StaticFunctionTag*);
     RE::BSFixedString GetRecentDialogue(RE::StaticFunctionTag*, RE::Actor* npc, int maxExchanges);
-    int HasScheduleKeywords(RE::StaticFunctionTag*, RE::Actor* npc);
-
-    // Build JSON context for safety net LLM prompt (all values properly escaped).
-    RE::BSFixedString BuildSafetyNetContextJson(RE::StaticFunctionTag*,
-                                                 RE::Actor* npc, int keywordHint);
 
     // Build JSON request for Story DM prompt. dmContext is pre-escaped from BuildDungeonMasterContext;
     // excludedTypes is escaped here.

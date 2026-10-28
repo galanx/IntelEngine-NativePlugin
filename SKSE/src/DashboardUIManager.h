@@ -20,7 +20,6 @@
 #include <thread>
 #include <string>
 #include <vector>
-#include <unordered_map>
 
 namespace IntelEngine {
 
@@ -113,17 +112,6 @@ namespace IntelEngine {
         std::mutex actionCacheMutex_;
         void LoadActionYAMLs();
 
-        // Pending director params (thread-safe storage for Papyrus retrieval)
-        static std::unordered_map<std::string, std::string> pendingParams_;
-        static std::mutex pendingParamsMutex_;
-
-    public:
-        // Called from Papyrus native functions
-        static std::string GetPendingParam(const std::string& key);
-        static void ClearPendingParams();
-        // Atomic claim: reads all params as JSON and clears in one lock.
-        // Returns "" if already claimed (prevents double-handler race).
-        static std::string ClaimPendingParams();
     };
 
 }  // namespace IntelEngine

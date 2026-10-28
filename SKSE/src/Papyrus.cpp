@@ -83,9 +83,6 @@ namespace IntelEngine::Papyrus {
     void ReloadDashboardConfig(RE::StaticFunctionTag*);
     void PushDashboardFullState(RE::StaticFunctionTag*, RE::BSFixedString);
     bool IsDashboardOpen(RE::StaticFunctionTag*);
-    RE::BSFixedString GetPendingDirectorParam(RE::StaticFunctionTag*, RE::BSFixedString);
-    void ClearPendingDirectorParams(RE::StaticFunctionTag*);
-    RE::BSFixedString ClaimPendingDirectorParams(RE::StaticFunctionTag*);
 
     // Political system forward declarations
     int GetFactionRelation(RE::StaticFunctionTag*, RE::BSFixedString, RE::BSFixedString);
@@ -410,14 +407,7 @@ namespace IntelEngine::Papyrus {
         a_vm->RegisterFunction("IsMemoryDBConnected", SCRIPT_NAME, IsMemoryDBConnected); ++count;
         a_vm->RegisterFunction("GetPlayerInteractionCount", SCRIPT_NAME, GetPlayerInteractionCount); ++count;
 
-        // Dialogue Safety Net Functions
-        a_vm->RegisterFunction("RunSafetyNetCheck", SCRIPT_NAME, RunSafetyNetCheck); ++count;
-        a_vm->RegisterFunction("NotifyNewDialogue", SCRIPT_NAME, NotifyNewDialogue); ++count;
-        a_vm->RegisterFunction("GetSafetyNetNPC", SCRIPT_NAME, GetSafetyNetNPC); ++count;
-        a_vm->RegisterFunction("GetLastConversationPartner", SCRIPT_NAME, GetLastConversationPartner); ++count;
         a_vm->RegisterFunction("GetRecentDialogue", SCRIPT_NAME, GetRecentDialogue); ++count;
-        a_vm->RegisterFunction("HasScheduleKeywords", SCRIPT_NAME, HasScheduleKeywords); ++count;
-        a_vm->RegisterFunction("BuildSafetyNetContextJson", SCRIPT_NAME, BuildSafetyNetContextJson); ++count;
         a_vm->RegisterFunction("BuildStoryDMRequestJson", SCRIPT_NAME, BuildStoryDMRequestJson); ++count;
 
         // Bio Section Pre-Rendering Functions
@@ -435,9 +425,6 @@ namespace IntelEngine::Papyrus {
         a_vm->RegisterFunction("ReloadDashboardConfig", SCRIPT_NAME, ReloadDashboardConfig); ++count;
         a_vm->RegisterFunction("PushDashboardFullState", SCRIPT_NAME, PushDashboardFullState); ++count;
         a_vm->RegisterFunction("IsDashboardOpen", SCRIPT_NAME, IsDashboardOpen); ++count;
-        a_vm->RegisterFunction("GetPendingDirectorParam", SCRIPT_NAME, GetPendingDirectorParam); ++count;
-        a_vm->RegisterFunction("ClearPendingDirectorParams", SCRIPT_NAME, ClearPendingDirectorParams); ++count;
-        a_vm->RegisterFunction("ClaimPendingDirectorParams", SCRIPT_NAME, ClaimPendingDirectorParams); ++count;
 
         // Faction Politics Functions
         a_vm->RegisterFunction("GetFactionRelation", SCRIPT_NAME, GetFactionRelation); ++count;
@@ -2349,89 +2336,6 @@ namespace IntelEngine::Papyrus {
         return 0;
     }
 
-    // ==========================================================================
-    // Dialogue Safety Net Functions
-    // ==========================================================================
-
-    // Static state for tick-based safety net (transient — does not survive save/load)
-    static float s_lastCheckedDialogueTime = 0.0f;
-    static RE::FormID s_safetyNetNPCFormId = 0;
-    static std::chrono::steady_clock::time_point s_lastApiCallTime{};
-    // Consecutive unchanged results — used for adaptive backoff
-    static int s_unchangedCount = 0;
-
-    void NotifyNewDialogue(RE::StaticFunctionTag*) {
-        // Reset backoff so the next tick checks immediately
-        s_unchangedCount = 0;
-    }
-
-    int RunSafetyNetCheck(RE::StaticFunctionTag*) {
-        // Adaptive backoff: if recent checks found nothing new, slow down.
-        //  0 misses → check every 5s  (active conversation)
-        //  1 miss   → check every 15s (just finished talking)
-        //  2+ misses → check every 60s (idle — no dialogue in a while)
-        auto now = std::chrono::steady_clock::now();
-        int cooldownSec = (s_unchangedCount == 0) ? 5 : (s_unchangedCount == 1) ? 15 : 60;
-        if (std::chrono::duration_cast<std::chrono::seconds>(now - s_lastApiCallTime).count() < cooldownSec) {
-            return 0;
-        }
-        s_lastApiCallTime = now;
-
-        auto* db = MemoryDB::GetSingleton();
-        auto info = db->GetLatestDialogueInfo();
-
-        // No dialogue found, or same conversation already checked
-        if (info.npcFormId == 0 || info.gameTimeHours == s_lastCheckedDialogueTime) {
-            if (s_unchangedCount < 3) s_unchangedCount++;
-            return 0;
-        }
-
-        // New dialogue detected — reset backoff
-        s_unchangedCount = 0;
-
-        // Mark as checked regardless of outcome
-        s_lastCheckedDialogueTime = info.gameTimeHours;
-
-        // Get dialogue text and run keyword matching
-        auto dialogue = db->GetRecentDialogueForActor(info.npcFormId, 4);
-        if (dialogue.empty()) return 0;
-
-        int keywordHint = MemoryDB::CheckScheduleKeywords(dialogue);
-        if (keywordHint == 0) return 0;
-
-        // Validate NPC is alive and reachable
-        auto* form = RE::TESForm::LookupByID(info.npcFormId);
-        if (!form) return 0;
-        auto* actor = form->As<RE::Actor>();
-        if (!actor || actor->IsDead()) return 0;
-
-        // NOTE: Schedule slot check happens in Papyrus (Schedule.FindScheduleSlotByAgent)
-        // because schedule slots are not mirrored in C++ SlotTracker.
-        // Task slots (HasActiveTask) are intentionally NOT checked here — an NPC with
-        // an active task can still receive a schedule that fires later.
-
-        // All C++ gates passed — store NPC and return hint for Papyrus
-        s_safetyNetNPCFormId = info.npcFormId;
-        logger::info("[IntelEngine] SafetyNet: keywords={} for FormID {:X}",
-            keywordHint, info.npcFormId);
-        return keywordHint;
-    }
-
-    RE::Actor* GetSafetyNetNPC(RE::StaticFunctionTag*) {
-        if (s_safetyNetNPCFormId == 0) return nullptr;
-        auto* form = RE::TESForm::LookupByID(s_safetyNetNPCFormId);
-        if (!form) return nullptr;
-        return form->As<RE::Actor>();
-    }
-
-    RE::Actor* GetLastConversationPartner(RE::StaticFunctionTag*) {
-        auto info = MemoryDB::GetSingleton()->GetLatestDialogueInfo();
-        if (info.npcFormId == 0) return nullptr;
-        auto* form = RE::TESForm::LookupByID(info.npcFormId);
-        if (!form) return nullptr;
-        return form->As<RE::Actor>();
-    }
-
     RE::BSFixedString GetRecentDialogue(RE::StaticFunctionTag*, RE::Actor* npc, int maxExchanges) {
         if (!npc) {
             logger::warn("[IntelEngine] GetRecentDialogue: actor is null");
@@ -2445,51 +2349,6 @@ namespace IntelEngine::Papyrus {
         return RE::BSFixedString(MemoryDB::EscapeJsonString(result));
     }
 
-    int HasScheduleKeywords(RE::StaticFunctionTag*, RE::Actor* npc) {
-        if (!npc) return 0;
-
-        auto* db = MemoryDB::GetSingleton();
-        auto dialogue = db->GetRecentDialogueForActor(npc->GetFormID(), 4);
-        if (dialogue.empty()) return 0;
-
-        return MemoryDB::CheckScheduleKeywords(dialogue);
-    }
-
-    RE::BSFixedString BuildSafetyNetContextJson(RE::StaticFunctionTag*,
-                                                 RE::Actor* npc, int keywordHint) {
-        if (!npc) return "";
-
-        auto* db = MemoryDB::GetSingleton();
-        auto dialogue = db->GetRecentDialogueForActor(npc->GetFormID(), 4);
-        if (dialogue.empty()) return "";
-
-        // Get location name (same logic as GetActorParentLocationName)
-        std::string locName;
-        if (auto* loc = npc->GetCurrentLocation()) {
-            auto* parent = loc->parentLoc;
-            if (parent && parent->GetFullName() && strlen(parent->GetFullName()) > 0) {
-                locName = parent->GetFullName();
-            } else if (loc->GetFullName()) {
-                locName = loc->GetFullName();
-            }
-        }
-
-        const char* keywordType = "meeting";
-        if (keywordHint == 2) keywordType = "fetch";
-        else if (keywordHint == 3) keywordType = "delivery";
-
-        auto* player = RE::PlayerCharacter::GetSingleton();
-
-        // Build JSON with proper escaping on all string values
-        std::string json = "{";
-        json += "\"npcName\":\"" + MemoryDB::EscapeJsonString(npc->GetDisplayFullName()) + "\",";
-        json += "\"playerName\":\"" + MemoryDB::EscapeJsonString(player ? player->GetDisplayFullName() : "Player") + "\",";
-        json += "\"location\":\"" + MemoryDB::EscapeJsonString(locName) + "\",";
-        json += "\"dialogue\":\"" + MemoryDB::EscapeJsonString(dialogue) + "\",";
-        json += "\"keywordHint\":\"" + std::string(keywordType) + "\"}";
-
-        return RE::BSFixedString(json);
-    }
 
     static std::unordered_set<std::string> ParseStoryTypeExclusions(const std::string& excludedTypes) {
         std::unordered_set<std::string> excludedSet;
@@ -2918,17 +2777,6 @@ namespace IntelEngine::Papyrus {
         return DashboardUIManager::GetSingleton()->IsOpen();
     }
 
-    RE::BSFixedString GetPendingDirectorParam(RE::StaticFunctionTag*, RE::BSFixedString key) {
-        return DashboardUIManager::GetPendingParam(key.c_str());
-    }
-
-    void ClearPendingDirectorParams(RE::StaticFunctionTag*) {
-        DashboardUIManager::ClearPendingParams();
-    }
-
-    RE::BSFixedString ClaimPendingDirectorParams(RE::StaticFunctionTag*) {
-        return DashboardUIManager::ClaimPendingParams();
-    }
 
     // ==========================================================================
     // Debug Functions
