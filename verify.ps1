@@ -184,6 +184,35 @@ function Compare-SourceTree {
         }
     }
 }
+# =============================================================================
+# Native PSC sources must mirror the Game Data-layout tree byte-for-byte.
+# =============================================================================
+Write-Host "`n=== Papyrus Script Sources ===" -ForegroundColor Cyan
+$sourceScripts = Join-Path $RepoRoot "Source\Scripts"
+$dataScripts = Join-Path $DataDir "Source\Scripts"
+$sourcePsc = @(Get-ChildItem -LiteralPath $sourceScripts -Filter "*.psc" -File -ErrorAction SilentlyContinue)
+$dataPsc = @(Get-ChildItem -LiteralPath $dataScripts -Filter "*.psc" -File -ErrorAction SilentlyContinue)
+if (-not (Test-Path -LiteralPath $sourceScripts -PathType Container)) {
+    $checked++
+    Add-Failure -Label "Papyrus scripts" -Message "MISSING SOURCE TREE: Papyrus scripts ($sourceScripts)"
+} elseif (-not (Test-Path -LiteralPath $dataScripts -PathType Container)) {
+    $checked++
+    Add-Failure -Label "Papyrus scripts" -Message "MISSING DATA TREE: Papyrus scripts ($dataScripts)"
+} else {
+    foreach ($file in $sourcePsc) {
+        Compare-File "Papyrus source -> Data: $($file.Name)" $file.FullName (Join-Path $dataScripts $file.Name) -UseHash
+    }
+    foreach ($file in $dataPsc) {
+        if (-not (Test-Path -LiteralPath (Join-Path $sourceScripts $file.Name) -PathType Leaf)) {
+            $checked++
+            Add-Failure -Label $file.Name -Message "MISSING SOURCE: Papyrus script ($($file.FullName))"
+        }
+    }
+    if ($sourcePsc.Count -eq 0 -and $dataPsc.Count -eq 0) {
+        $checked++
+        Add-Failure -Label "Papyrus scripts" -Message "EMPTY SCRIPT TREES"
+    }
+}
 
 # =============================================================================
 # External bundle: repository source -> Data -> configured targets
