@@ -7,6 +7,7 @@
 
 #include "PoliticalDB.h"
 #include "FactionPolitics.h"  // for MAX_EVENT_DESCRIPTION_LENGTH, MAX_EVENT_REPLAY_LIMIT
+#include "Utf8Truncate.h"
 
 #include <algorithm>
 #include <filesystem>
@@ -311,11 +312,7 @@ namespace IntelEngine {
         if (!db_) return -1;
 
         // Truncate LLM-generated descriptions to prevent unbounded DB growth
-        std::string safeDescription = description;
-        if (safeDescription.size() > MAX_EVENT_DESCRIPTION_LENGTH) {
-            safeDescription.resize(MAX_EVENT_DESCRIPTION_LENGTH);
-            safeDescription += "...";
-        }
+        std::string safeDescription = TruncateUtf8Bytes(description, MAX_EVENT_DESCRIPTION_LENGTH, "...");
 
         const char* sql = R"SQL(
             INSERT INTO faction_events (faction_a, faction_b, event_type, description, relation_delta, game_time, instigator_npc)
@@ -965,11 +962,7 @@ namespace IntelEngine {
         std::lock_guard<std::mutex> lock(mutex_);
         if (!db_) return -1;
 
-        std::string safeNarrative = narrative;
-        if (safeNarrative.size() > MAX_EVENT_DESCRIPTION_LENGTH) {
-            safeNarrative.resize(MAX_EVENT_DESCRIPTION_LENGTH);
-            safeNarrative += "...";
-        }
+        std::string safeNarrative = TruncateUtf8Bytes(narrative, MAX_EVENT_DESCRIPTION_LENGTH, "...");
 
         const char* sql = R"SQL(
             INSERT INTO war_battles (war_id, location_name, game_time, attacker, defender,
