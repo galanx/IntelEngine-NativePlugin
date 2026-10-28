@@ -671,6 +671,12 @@ Function TickScheduler()
     If !IsActive
         Actor player = Game.GetPlayer()
         If !player.IsInCombat()
+            String excludeList = BuildExcludeList(player)
+            If AllStoryTypesExcluded(excludeList)
+                Core.DebugMsg("Story: TickScheduler — all player-facing types excluded, skipping DM call")
+                return
+            EndIf
+
             ; Populate recent gossip for DM context (read from StorageUtil, pass to C++)
             Int gossipCount = StorageUtil.StringListCount(player, "Intel_SocialLog_Type")
             If gossipCount > 0
@@ -699,7 +705,6 @@ Function TickScheduler()
             ; worker thread. OnStoryDMContextReady fires the LLM call on completion.
             ; Eliminates ~30-60ms main-thread stutter from synchronous SQL + actor scans.
             PendingStoryType = "dm_analysis"
-            String excludeList = BuildExcludeList(player)
             IntelEngine.BeginAsyncStoryDMTick(7, LongAbsenceDaysConfig, excludeList, \
                 Self, "IntelEngine_StoryEngine", "OnStoryDMContextReady")
         EndIf
@@ -782,6 +787,19 @@ String Function BuildExcludeList(Actor player)
     String result = IntelEngine.BuildExcludeList(toggles, envFlags)
     Core.DebugMsg("BuildExcludeList: [" + result + "] (ambush=" + TypeAmbushEnabled + " message=" + TypeMessageEnabled + " quest=" + TypeQuestEnabled + ")")
     return result
+EndFunction
+
+Bool Function AllStoryTypesExcluded(String excludeList)
+    ; Match whole tokens in the native ", "-separated list, not quest sub-types.
+    String types = ", " + excludeList + ", "
+    return StringUtil.Find(types, ", seek_player, ") >= 0 && \
+        StringUtil.Find(types, ", informant, ") >= 0 && \
+        StringUtil.Find(types, ", road_encounter, ") >= 0 && \
+        StringUtil.Find(types, ", ambush, ") >= 0 && \
+        StringUtil.Find(types, ", stalker, ") >= 0 && \
+        StringUtil.Find(types, ", message, ") >= 0 && \
+        StringUtil.Find(types, ", quest, ") >= 0 && \
+        StringUtil.Find(types, ", faction_ambush, ") >= 0
 EndFunction
 
 ; =============================================================================
@@ -1672,6 +1690,7 @@ EndFunction
 ; =============================================================================
 ; DISPATCH (unified -- handles both player-targeted and NPC-targeted)
 ; =============================================================================
+
 Bool Function DispatchToTarget(Actor npc, Actor target, String narration, String slotTaskType)
     Actor player = Game.GetPlayer()
 
@@ -3294,7 +3313,6 @@ Function HandleQuestDispatch(Actor npc, String narration, String response, Bool 
 
     ActiveStoryType = "quest"
     If !DispatchToTarget(npc, Game.GetPlayer(), narration, "story")
-        QuestVictimNPC = None
         CleanupQuest()
         return
     EndIf
@@ -3356,25 +3374,6 @@ Function OnQuestNPCArrived()
         CleanupStoryDispatch()
         return
     EndIf
-    ; Remove the pinning sandbox before showing dialog (travel/linger packages get applied after)
-    ActorUtil.RemovePackageOverride(ActiveStoryNPC, Core.SandboxNearPlayerPackage)
-    ; Build sub-type-specific prompt text
-    String questPromptText = ""
-    If QuestSubType == "rescue"
-        questPromptText = ActiveStoryNPC.GetDisplayName() + " pleads for help rescuing " + QuestVictimName + " near " + questLoc + "."
-    ElseIf QuestSubType == "find_item"
-        questPromptText = ActiveStoryNPC.GetDisplayName() + " tells you about " + QuestItemDesc + " near " + questLoc + "."
-    ElseIf QuestSubType == "faction_battle" || (QuestAlliedFaction != "" && QuestSubType == "combat")
-        String allyName = IntelEngine.GetFactionDisplayName(QuestAlliedFaction)
-        questPromptText = ActiveStoryNPC.GetDisplayName() + " rallies you to fight alongside the " + allyName + " near " + questLoc + "."
-    ElseIf QuestAlliedFaction != "" && QuestSubType == "rescue"
-        String allyName2 = IntelEngine.GetFactionDisplayName(QuestAlliedFaction)
-        questPromptText = ActiveStoryNPC.GetDisplayName() + " urges you to rescue " + QuestVictimName + " for the " + allyName2 + " near " + questLoc + "."
-    Else
-        questPromptText = ActiveStoryNPC.GetDisplayName() + " tells you about trouble near " + questLoc + "."
-    EndIf
-
-    String choice = ""
     ; The courier arrived and passed the remaining abort checks; record the quest.
     If QuestDepartureNPC != None && QuestDepartureMemory != ""
         Core.SendPersistentMemory(QuestDepartureNPC, Game.GetPlayer(), QuestDepartureMemory)
@@ -3395,6 +3394,25 @@ Function OnQuestNPCArrived()
         Core.InjectFact(QuestVictimNPC, "was captured by " + QuestEnemyType + " near " + questLoc + " and held against my will")
     EndIf
     QuestCourierPending = false
+    ; Remove the pinning sandbox before showing dialog (travel/linger packages get applied after)
+    ActorUtil.RemovePackageOverride(ActiveStoryNPC, Core.SandboxNearPlayerPackage)
+    ; Build sub-type-specific prompt text
+    String questPromptText = ""
+    If QuestSubType == "rescue"
+        questPromptText = ActiveStoryNPC.GetDisplayName() + " pleads for help rescuing " + QuestVictimName + " near " + questLoc + "."
+    ElseIf QuestSubType == "find_item"
+        questPromptText = ActiveStoryNPC.GetDisplayName() + " tells you about " + QuestItemDesc + " near " + questLoc + "."
+    ElseIf QuestSubType == "faction_battle" || (QuestAlliedFaction != "" && QuestSubType == "combat")
+        String allyName = IntelEngine.GetFactionDisplayName(QuestAlliedFaction)
+        questPromptText = ActiveStoryNPC.GetDisplayName() + " rallies you to fight alongside the " + allyName + " near " + questLoc + "."
+    ElseIf QuestAlliedFaction != "" && QuestSubType == "rescue"
+        String allyName2 = IntelEngine.GetFactionDisplayName(QuestAlliedFaction)
+        questPromptText = ActiveStoryNPC.GetDisplayName() + " urges you to rescue " + QuestVictimName + " for the " + allyName2 + " near " + questLoc + "."
+    Else
+        questPromptText = ActiveStoryNPC.GetDisplayName() + " tells you about trouble near " + questLoc + "."
+    EndIf
+
+    String choice = ""
     ; Couriers, followers, and faction quest couriers can't guide.
     ; Faction couriers are local guards/soldiers — already at the location.
     Bool canGuide = isDirect && !ActiveStoryNPC.IsPlayerTeammate() && QuestAlliedFaction == ""
