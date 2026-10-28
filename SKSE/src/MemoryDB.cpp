@@ -837,8 +837,9 @@ namespace IntelEngine {
     }
 
     // =========================================================================
-    // Dialogue Safety Net Functions
+    // Dialogue Functions
     // =========================================================================
+
 
     std::string MemoryDB::GetRecentDialogueForActor(RE::FormID formId, int maxExchanges) {
         if (!SkyrimNetAPI::GetRecentDialogue) return "";
@@ -883,23 +884,6 @@ namespace IntelEngine {
         }
     }
 
-    LatestDialogueInfo MemoryDB::GetLatestDialogueInfo() {
-        if (!SkyrimNetAPI::GetLatestDialogueInfo) return {};
-        try {
-            auto jsonStr = SkyrimNetAPI::GetLatestDialogueInfo();
-            auto obj = nlohmann::json::parse(jsonStr);
-
-            uint32_t npcFormId = obj.value("npcFormId", 0u);
-            float gameTime = static_cast<float>(obj.value("gameTime", 0.0));
-
-            if (npcFormId == 0) return {};
-
-            return {static_cast<RE::FormID>(npcFormId), gameTime};
-        } catch (...) {
-            logger::warn("MemoryDB: GetLatestDialogueInfo exception");
-            return {};
-        }
-    }
 
     // =========================================================================
     // GetCurrentDBHours
@@ -1102,58 +1086,5 @@ namespace IntelEngine {
         return result;
     }
 
-    int MemoryDB::CheckScheduleKeywords(const std::string& text) {
-        std::string lower;
-        lower.reserve(text.size());
-        for (char c : text) {
-            lower += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-        }
-
-        auto contains = [&](const char* phrase) {
-            return lower.find(phrase) != std::string::npos;
-        };
-
-        // Fetch/bring keywords (check first — more specific)
-        if (contains("bring him") || contains("bring her") || contains("bring them") ||
-            contains("fetch") || contains("go get") || contains("find and bring")) {
-            return 2;
-        }
-
-        // Delivery keywords
-        if (contains("tell him") || contains("tell her") || contains("tell them") ||
-            contains("let him know") || contains("let her know") ||
-            contains("send word") || contains("deliver a message") ||
-            contains("message to") || contains("inform")) {
-            return 3;
-        }
-
-        // Meeting keywords
-        bool hasStrongCommitment =
-            contains("see you tonight") || contains("see you tomorrow") ||
-            contains("see you at") || contains("i'll be there") ||
-            contains("until then") || contains("don't be late") ||
-            contains("don't keep me waiting") || contains("expect you");
-
-        if (hasStrongCommitment) return 1;
-
-        bool hasTimeWord =
-            contains("tonight") || contains("tomorrow") || contains("morning") ||
-            contains("evening") || contains("afternoon") || contains("dawn") ||
-            contains("dusk") || contains("sunset") || contains("sunrise") ||
-            contains("noon") || contains("midnight") || contains("later") ||
-            contains("soon") || contains("hour") || contains("nightfall") ||
-            contains("first light") || contains("after dark") || contains("before dark");
-
-        bool hasMeetingWord =
-            contains("meet") || contains("see you") || contains("be there") ||
-            contains("wait for") || contains("join") || contains("come by") ||
-            contains("come to") || contains("i'll come") ||
-            contains("find me") || contains("look for me") ||
-            contains("rendezvous") || contains("gather");
-
-        if (hasTimeWord && hasMeetingWord) return 1;
-
-        return 0;
-    }
 
 }  // namespace IntelEngine

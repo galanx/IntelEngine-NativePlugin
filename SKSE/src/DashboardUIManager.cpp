@@ -23,31 +23,6 @@
 
 namespace IntelEngine {
 
-    // Static member definitions
-    std::unordered_map<std::string, std::string> DashboardUIManager::pendingParams_;
-    std::mutex DashboardUIManager::pendingParamsMutex_;
-
-    std::string DashboardUIManager::GetPendingParam(const std::string& key) {
-        std::lock_guard<std::mutex> lock(pendingParamsMutex_);
-        auto it = pendingParams_.find(key);
-        return it != pendingParams_.end() ? it->second : "";
-    }
-
-    void DashboardUIManager::ClearPendingParams() {
-        std::lock_guard<std::mutex> lock(pendingParamsMutex_);
-        pendingParams_.clear();
-    }
-
-    std::string DashboardUIManager::ClaimPendingParams() {
-        std::lock_guard<std::mutex> lock(pendingParamsMutex_);
-        if (pendingParams_.empty()) return "";
-        nlohmann::json j;
-        for (auto& [key, val] : pendingParams_) {
-            j[key] = val;
-        }
-        pendingParams_.clear();
-        return j.dump();
-    }
 
     static constexpr int kViewRenderOrder = 90;
     static constexpr auto kPollIntervalMs = std::chrono::milliseconds(50);
@@ -794,26 +769,15 @@ namespace IntelEngine {
                 std::string actionName = j.value("actionName", "");
                 if (formId <= 0 || actionName.empty()) return;
 
-                // Store all action params for Papyrus retrieval
-                {
-                    std::lock_guard<std::mutex> lock(pendingParamsMutex_);
-                    pendingParams_.clear();
-                    pendingParams_["actionName"] = actionName;
-                    if (j.contains("params") && j["params"].is_object()) {
-                        for (auto& [key, val] : j["params"].items()) {
-                            pendingParams_[key] = val.is_string() ? val.get<std::string>() : val.dump();
-                        }
+                // Pass action params directly in the ModEvent payload.
+                nlohmann::json eventPayload;
+                eventPayload["actionName"] = actionName;
+                if (j.contains("params") && j["params"].is_object()) {
+                    for (auto& [key, val] : j["params"].items()) {
+                        eventPayload[key] = val.is_string() ? val.get<std::string>() : val.dump();
                     }
                 }
 
-                // Pass ALL params as JSON in strArg (same race fix)
-                nlohmann::json eventPayload;
-                {
-                    std::lock_guard<std::mutex> lock(pendingParamsMutex_);
-                    for (auto& [k, v] : pendingParams_) {
-                        eventPayload[k] = v;
-                    }
-                }
                 DashboardUIManager::GetSingleton()->SendModEvent(
                     "IntelEngine_DashboardExecuteAction", eventPayload.dump(), static_cast<float>(formId));
                 logger::info("[Dashboard] Director: execute action={} npc=0x{:X}", actionName, formId);
