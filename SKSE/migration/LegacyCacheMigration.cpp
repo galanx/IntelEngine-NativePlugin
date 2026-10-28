@@ -12,6 +12,8 @@
 #include <cstdint>
 #include <iostream>
 #include <memory>
+#include <iomanip>
+#include <sstream>
 #include <limits>
 #include <map>
 #include <set>
@@ -30,6 +32,11 @@ namespace fs = std::filesystem;
 constexpr const char* Provider = "2fb155b8508e085616c5f72cb8fd2368275557dc56988300b92e540930d1f444";
 constexpr std::uint32_t Owner = 0x424510A2, Strv = 0x53545256;
 constexpr std::uint32_t Runtime = 0x01064920, Skse = 0x02020060;
+struct QualificationRefusal : std::runtime_error {
+    Json reasons;
+    explicit QualificationRefusal(const Json& items) :
+        std::runtime_error("whole-stream qualification refusal: "+items.dump()), reasons(items) {}
+};
 // Released 2.2.7/2.2.8 still target 1.6.1170; see upstream skse64_whatsnew.txt.
 constexpr std::uint32_t Skse227 = 0x02020070, Skse228 = 0x02020080;
 constexpr const char* Provider17104 = "69260a675186cf781a2105002505ab224fee12e84d004a3787670c9d6ce936be";
@@ -228,8 +235,8 @@ Parsed parse(const Bytes& bytes, bool fixMode = false) {
             if (targetAlias) {
                 text(value);
                 carriesTarget=true;
-                // No resolution for untouched names; temporary cache targets remain unqualified.
-                if (target(key) && (form >> 24) == 0xff)
+                // Fix re-encodes in place; evidence mode still requires qualified identities.
+                if (!fixMode && target(key) && (form >> 24) == 0xff)
                     result.refusals.push_back("unqualified temporary cache identity: "+std::to_string(object));
             }
             result.fields.push_back({object,std::move(key),v.first,v.second});
@@ -314,7 +321,12 @@ std::string transport(std::string value) {
     for (char& c : value) if (c == ' ') c='\a';
     return value;
 }
-struct Converted { Bytes bytes; Json changes; std::size_t legacy=0; };
+struct Converted {
+    Bytes bytes;
+    Json changes;
+    std::size_t legacy=0;
+    Json temporary_identities=Json::array();
+};
 bool actorBasis(const Json& basis) {
     const auto scope=basis.at("scope").get<std::string>();
     require(scope == "global" || scope == "actor-in-place", "unqualified scope");
@@ -325,7 +337,7 @@ bool actorBasis(const Json& basis) {
 }
 Converted convert(const Bytes& input, const Parsed& parsed, const Json& manifest, bool fixMode = false) {
     const auto inputHash=sha256(input);
-    require(parsed.refusals.empty(), "whole-stream qualification refusal: "+parsed.refusals.dump());
+    if (!parsed.refusals.empty()) throw QualificationRefusal(parsed.refusals);
     if (!fixMode) {
         require(manifest.at("schema") == 1, "unsupported evidence schema");
         require(manifest.at("skse_sha256") == inputHash, "SKSE evidence hash mismatch");
@@ -356,6 +368,7 @@ Converted convert(const Bytes& input, const Parsed& parsed, const Json& manifest
     std::set<std::size_t> used;
     Converted output{Bytes{},Json::array(),0};
     std::size_t copied=0;
+    std::set<std::uint64_t> temporaryIdentities;
     for (const auto& f : parsed.fields) {
         if (!target(f.key)) continue;
         const Json* proof=nullptr;
@@ -395,6 +408,9 @@ Converted convert(const Bytes& input, const Parsed& parsed, const Json& manifest
             }
             replacement=transport(IntelEngine::EncodeRenderedCache(original));
             ++output.legacy;
+            if ((static_cast<std::uint32_t>(f.object) >> 24) == 0xff &&
+                temporaryIdentities.insert(f.object).second)
+                output.temporary_identities.push_back(std::to_string(f.object));
         } else if (representation == "encoded") {
             require(proof->at("writer_codec_sha256") == LCM_CODEC_SHA256, "encoded writer generation unpinned");
             require(raw == transport(IntelEngine::EncodeRenderedCache(original)), "encoded value disagrees with independently expected original");
@@ -477,6 +493,29 @@ Json fixEvidence(const Bytes& bytes, const Parsed& parsed) {
         {"actor_bel_policy","space"},{"preserve_rne_name_bel",true},{"fields",fields}};
 }
 void verifyBeforePublish() { gameRunning(); }
+std::string objectLabel(std::uint64_t object) {
+    std::ostringstream label;
+    label << object << " (form 0x" << std::uppercase << std::hex << std::setw(8)
+        << std::setfill('0') << static_cast<std::uint32_t>(object) << ')';
+    return label.str();
+}
+void printFixRefusal(const std::exception& error) {
+    std::cerr << "Fix refused:\n";
+    if (const auto* qualification=dynamic_cast<const QualificationRefusal*>(&error)) {
+        for (const auto& item : qualification->reasons) {
+            auto reason=item.get<std::string>();
+            for (const auto* prefix : {"unqualified temporary cache identity: ", "unqualified non-global identity: "}) {
+                const std::string_view start(prefix);
+                if (reason.compare(0,start.size(),start)==0) {
+                    reason=std::string(start)+objectLabel(decimal(std::string_view(reason).substr(start.size())));
+                    break;
+                }
+            }
+            std::cerr << "  - " << reason << '\n';
+        }
+    } else std::cerr << "  - " << error.what() << '\n';
+    std::cerr << "Choose a supported, closed-game save pair; originals were not changed.\n";
+}
 int fix(const fs::path& essPath, void (*requireGameClosed)() = verifyBeforePublish) {
     try {
     requireGameClosed();
@@ -503,14 +542,16 @@ int fix(const fs::path& essPath, void (*requireGameClosed)() = verifyBeforePubli
         "backup/output/staging path already exists; move it aside and retry");
     try { publishFixedPair(essPath,ess,skse,converted.bytes,requireGameClosed); }
     catch (const GameSafetyRefusal& e) {
-        std::cerr << "Fix refused: " << e.what() << "\nBackup: " << backup.u8string()
-            << "\nStaging: " << staging.u8string() << "\nNo converted pair published; originals unchanged.\n";
+        std::cerr << "Fix refused:\n  - " << e.what() << "\nBackup: " << backup.u8string()
+            << "\nStaging: " << staging.u8string()
+            << "\nNo converted pair published; close the game before retrying. Originals unchanged.\n";
         return 2;
     }
     catch (const std::exception& e) {
-        std::cerr << "I/O/publication failed: " << e.what() << "\nBackup: " << backup.u8string()
-            << "\nStaging: " << staging.u8string() << "\nOutputs: " << outputEss.u8string() << " and "
-            << outputSkse.u8string() << "\nInspect retained files before retrying; originals were not changed.\n";
+        std::cerr << "I/O/publication failed:\n  - " << e.what() << "\nBackup: " << backup.u8string()
+            << "\nStaging: " << staging.u8string() << "\nOutput ESS: " << outputEss.u8string()
+            << "\nOutput SKSE: " << outputSkse.u8string()
+            << "\nInspect retained files before retrying; originals were not changed.\n";
         return 3;
     }
     std::size_t facts=0,gossip=0,history=0;
@@ -522,19 +563,27 @@ int fix(const fs::path& essPath, void (*requireGameClosed)() = verifyBeforePubli
     }
     std::size_t names=0;
     for (const auto& field : parsed.fields) if (field.key=="rne_name") ++names;
-    if (converted.legacy)
-        std::cout << "Fixed " << converted.legacy << " legacy cache value(s): facts " << facts << ", gossip " << gossip
-            << ", task history " << history << "; preserved " << names << " serialized name span(s).\n";
-    else std::cout << "Copied cache-free pair unchanged; no scalar string record to repair.\n";
-    std::cout << "Output: " << outputEss.u8string() << " and " << outputSkse.u8string() << "\nBackup: " << backup.u8string()
+    if (converted.legacy) {
+        std::cout << "Fixed " << converted.legacy << " legacy cache value(s).\n"
+            << "  Facts: " << facts << "\n  Gossip: " << gossip << "\n  Task history: " << history
+            << "\n  Preserved serialized name spans: " << names << '\n';
+        for (const auto& change : converted.changes)
+            std::cout << "  Converted: " << objectLabel(decimal(change.at("object").get<std::string>()))
+                << " / " << change.at("key").get<std::string>() << '\n';
+        for (const auto& object : converted.temporary_identities)
+            std::cout << "  Temporary identity converted in place: "
+                << objectLabel(decimal(object.get<std::string>())) << '\n';
+    } else std::cout << "Copied cache-free pair unchanged; no scalar string record to repair.\n";
+    std::cout << "Output ESS: " << outputEss.u8string() << "\nOutput SKSE: " << outputSkse.u8string()
+        << "\nBackup: " << backup.u8string()
         << "\nOriginals unchanged. Use a coherent repaired IE DLL/PEX/prompts set; these repaired save components may not match existing IE data. Never load converted saves under IE 3.5.2.\n";
     return 0;
     } catch (const IOError& e) {
-        std::cerr << "Save I/O/verification failed: " << e.what()
+        std::cerr << "Save I/O/verification failed:\n  - " << e.what()
             << "\nCheck file permissions and storage, then retry. Originals unchanged.\n";
         return 3;
     } catch (const fs::filesystem_error& e) {
-        std::cerr << "Save filesystem access failed: " << e.what()
+        std::cerr << "Save filesystem access failed:\n  - " << e.what()
             << "\nCheck paths and storage, then retry. Originals unchanged.\n";
         return 3;
     }
@@ -653,7 +702,7 @@ int main(int argc, char** argv) {
                 "usage: fix --save FILE.ess");
             result=LCM::fix(std::filesystem::path(wide[3]));
         } catch (const std::exception& error) {
-            std::cerr << "Fix refused: " << error.what() << ". Choose a supported, closed-game save pair; originals were not changed.\n";
+            LCM::printFixRefusal(error);
         }
         LocalFree(wide);
         return result;
