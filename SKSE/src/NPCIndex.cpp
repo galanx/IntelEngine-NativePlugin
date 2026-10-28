@@ -33,6 +33,28 @@
 
 namespace IntelEngine {
 
+    static std::vector<std::string> ExtractSharedKnowledge(std::vector<std::vector<std::string>>& candidateKnowledge) {
+        std::vector<std::string> sharedKnowledge;
+        if (candidateKnowledge.size() > 1) {
+            for (const auto& fact : candidateKnowledge.front()) {
+                if (std::all_of(candidateKnowledge.begin() + 1, candidateKnowledge.end(),
+                                [&fact](const auto& knowledge) {
+                                    return std::find(knowledge.begin(), knowledge.end(), fact) != knowledge.end();
+                                })) {
+                    sharedKnowledge.push_back(fact);
+                }
+            }
+        }
+        for (auto& knowledge : candidateKnowledge) {
+            knowledge.erase(std::remove_if(knowledge.begin(), knowledge.end(),
+                                           [&sharedKnowledge](const auto& fact) {
+                                               return std::find(sharedKnowledge.begin(), sharedKnowledge.end(), fact) != sharedKnowledge.end();
+                                           }),
+                            knowledge.end());
+        }
+        return sharedKnowledge;
+    }
+
     // ── Faction Blocklist (populated from plugin config) ──
     // Format: "FactionEditorID" blocks all ranks, "FactionEditorID:N" blocks rank <= N
     struct BlockedFaction {
@@ -2366,16 +2388,30 @@ namespace IntelEngine {
 
         // Reverse so most-important candidates appear last (LLM attention bias)
         std::reverse(finalPool.begin(), finalPool.end());
-        md += "## Candidate Pool\n\n";
         int memPerCandidate = snap.memoriesPerCandidate;
+        std::vector<std::vector<std::string>> candidateKnowledge;
+        candidateKnowledge.reserve(finalPool.size());
+        for (const auto& candidate : finalPool) {
+            candidateKnowledge.push_back(memDB->GetWorldKnowledgeForActor(candidate.a->dbFormId, 3));
+        }
 
+        // A lone candidate keeps all knowledge in its own block.
+        auto sharedKnowledge = ExtractSharedKnowledge(candidateKnowledge);
+        if (!sharedKnowledge.empty()) {
+            md += "## Everyone here knows:\n";
+            for (const auto& fact : sharedKnowledge) {
+                md += "- ";  md += fact;  md += "\n";
+            }
+            md += "\n";
+        }
+
+        md += "## Candidate Pool\n\n";
         for (int i = 0; i < static_cast<int>(finalPool.size()); ++i) {
             const auto* a = finalPool[i].a;
             const char* gender = a->isFemale ? "Female" : "Male";
 
             char uuid[16];
             snprintf(uuid, sizeof(uuid), "0x%08X", a->formId);
-
             // Distance string
             std::string distStr;
             if (a->is3DLoaded) {
@@ -2487,15 +2523,14 @@ namespace IntelEngine {
                 md += "Recent:\n";  md += recentEvents;  md += "\n";
             }
 
-            // World knowledge — facts about this NPC's world that the author
-            // flagged always_inject. Cheap path, ~5-8 candidates per build.
-            auto knowledge = memDB->GetWorldKnowledgeForActor(a->dbFormId, 3);
+            const auto& knowledge = candidateKnowledge[static_cast<size_t>(i)];
             if (!knowledge.empty()) {
                 md += "Knows:\n";
-                for (const auto& k : knowledge) {
-                    md += "- ";  md += k;  md += "\n";
+                for (const auto& fact : knowledge) {
+                    md += "- ";  md += fact;  md += "\n";
                 }
             }
+
 
             auto relatedNPCs = memDB->GetRelatedCandidateFormIDs(a->dbFormId, 5);
             if (!relatedNPCs.empty()) {
