@@ -111,7 +111,7 @@ void vrCheck(const fs::path& area) {
         "2 "+actor+" 1 intel_factsrendered gap",
         "1 "+actor+" 2 intel_factsrendered x Intel_FactsRendered y",
         "1 "+actor+" 1 intel_factsrendered bad\tcontrol",
-        "1 "+std::to_string((std::uint64_t{62}<<32)|0xff000001)+" 1 intel_factsrendered temporary"}) {
+        "1 "+std::to_string((std::uint64_t{61}<<32)|0xff000001)+" 1 intel_factsrendered temporary"}) {
         auto bad=fixture(invalidPayload); put32(bad,8,SkseVR); put32(bad,12,RuntimeVR);
         reject(ess,bad);
     }
@@ -391,15 +391,38 @@ int main(int argc, char** argv) {
             refuses([&] { convert(blob,parse(blob,true),fixEvidence(blob,parse(blob,true)),true); },
                 "fix raw ESC/C0/DEL");
         }
-        for (const auto invalid : {std::uint64_t{62}<<32, (std::uint64_t{62}<<32)|0xff000001}) {
+        for (const auto invalid : {std::uint64_t{62}<<32, (std::uint64_t{61}<<32)|0xff000001}) {
             const auto blob=fixture(actorPayload(invalid,actor2,actorRaw));
             const auto parsed=parse(blob);
-            require(!parsed.refusals.empty(), "actor zero/temporary typed identity was not classified");
+            require(!parsed.refusals.empty(), "actor zero/non-62 temporary identity was not classified");
             const auto proof=evidence(blob,actorOriginals,{"legacy","legacy","legacy"},"actor-in-place");
-            refuses([&] { convert(blob,parsed,proof); }, "actor zero/temporary typed identity");
+            refuses([&] { convert(blob,parsed,proof); }, "actor zero/non-62 temporary identity");
             refuses([&] { convert(blob,parse(blob,true),fixEvidence(blob,parse(blob,true)),true); },
-                "fix temporary cache target");
+                "fix zero/non-62 temporary cache target");
         }
+        const auto temporary=(std::uint64_t{62}<<32)|0xff0012c7;
+        const auto temporaryRaw=std::vector<std::string>{
+            transport("facts with space\n%0A"),transport("gossip with space\n%25"),
+            transport("task history\nline")};
+        const auto temporaryEncoded=std::vector<std::string>{
+            "facts\awith\aspace%0A%250A","gossip\awith\aspace%0A%2525","task\ahistory%0Aline"};
+        const auto temporaryPayload="1 "+std::to_string(temporary)+" 5 intel_factsrendered "+temporaryRaw[0]
+            +" intel_gossiprendered "+temporaryRaw[1]+" intel_taskhistoryrendered "+temporaryRaw[2]
+            +" rne_name Kept\aName intel_target The\aBannered\aMare%0A";
+        const auto temporaryInput=fixture(temporaryPayload);
+        const auto temporaryExpected=fixture("1 "+std::to_string(temporary)+" 5 intel_factsrendered "+temporaryEncoded[0]
+            +" intel_gossiprendered "+temporaryEncoded[1]+" intel_taskhistoryrendered "+temporaryEncoded[2]
+            +" rne_name Kept\aName intel_target The\aBannered\aMare%0A");
+        const auto temporaryConverted=convert(temporaryInput,parse(temporaryInput,true),
+            fixEvidence(temporaryInput,parse(temporaryInput,true)),true);
+        require(temporaryConverted.bytes==temporaryExpected,
+            "FF fix conversion changed exact bytes or unrelated fields");
+        require(temporaryConverted.temporary_identities==Json::array({std::to_string(temporary)}),
+            "FF fix temporary identity list differs or is not unique");
+        const auto temporaryProof=evidence(temporaryInput,{"facts with space\n%0A","gossip with space\n%25",
+            "task history\nline"},{"legacy","legacy","legacy"},"actor-in-place");
+        refuses([&] { convert(temporaryInput,parse(temporaryInput),temporaryProof); },
+            "evidence mode accepted temporary identity");
         auto actorEsc=actorRaw; actorEsc[0]="\x1b";
         const auto actorEscInput=fixture(actorPayload(actor1,actor2,actorEsc));
         auto actorEscProof=evidence(actorEscInput,{"",actorOriginals[1],actorOriginals[2]},
