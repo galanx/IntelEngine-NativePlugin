@@ -245,8 +245,7 @@ default_relations:
         LoadSettings();
 
         if (!enabled_.load()) {
-            logger::info("FactionPolitics: Disabled in settings");
-            return;
+            logger::info("FactionPolitics: Disabled in settings; initializing for later enable");
         }
 
         if (!LoadConfig()) return;
@@ -315,38 +314,63 @@ default_relations:
         logger::info("FactionPolitics: Recalculated relation scores (replayed {} event deltas)", replayed);
     }
 
+    bool FactionPolitics::SetEnabled(bool val) {
+        if (!DashboardConfig::GetSingleton()->WriteYamlValue("politics", "enabled", val ? "true" : "false")) {
+            logger::error("FactionPolitics: Failed to save politics.enabled");
+            return false;
+        }
+        enabled_.store(val);
+        return true;
+    }
+
+    bool FactionPolitics::SetTickIntervalHours(int val) {
+        if (val < 1 || val > 168 ||
+            !DashboardConfig::GetSingleton()->WriteYamlValue("politics", "tick_interval_hours", std::to_string(val))) {
+            logger::error("FactionPolitics: Failed to save politics.tick_interval_hours={}", val);
+            return false;
+        }
+        tickIntervalHours_.store(val);
+        return true;
+    }
+
+    bool FactionPolitics::SetMaxRelationChangePerTick(int val) {
+        if (val < 5 || val > 30 ||
+            !DashboardConfig::GetSingleton()->WriteYamlValue("politics", "max_relation_change_per_tick", std::to_string(val))) {
+            logger::error("FactionPolitics: Failed to save politics.max_relation_change_per_tick={}", val);
+            return false;
+        }
+        maxRelationChangePerTick_.store(val);
+        return true;
+    }
+
+    bool FactionPolitics::SetMaxActiveWars(int val) {
+        if (val < 1 || val > 5 ||
+            !DashboardConfig::GetSingleton()->WriteYamlValue("politics", "max_active_wars", std::to_string(val))) {
+            logger::error("FactionPolitics: Failed to save politics.max_active_wars={}", val);
+            return false;
+        }
+        maxActiveWars_.store(val);
+        return true;
+    }
+
     void FactionPolitics::LoadSettings() {
         auto* config = DashboardConfig::GetSingleton();
-        std::string path = "Data/SKSE/Plugins/SkyrimNet/config/plugins/IntelEngine/settings.yaml";
-
-        auto readBool = [&](const std::string& key, bool def) -> bool {
-            if (SkyrimNetAPI::GetPluginConfigValue) {
-                try {
-                    std::string val = SkyrimNetAPI::GetPluginConfigValue("IntelEngine", key.c_str(), def ? "true" : "false");
-                    return val == "true" || val == "1";
-                } catch (...) {}
-            }
-            std::string val = config->ReadYamlString(path, "politics", key.substr(key.find('.') + 1), def ? "true" : "false");
+        const std::string path = "Data/SKSE/Plugins/SkyrimNet/config/plugins/IntelEngine/settings.yaml";
+        auto readBool = [&](const std::string& key, bool def) {
+            std::string val = config->ReadYamlString(path, "politics", key, def ? "true" : "false");
             return val == "true" || val == "1";
         };
-
-        auto readInt = [&](const std::string& key, const std::string& yamlKey, int def) -> int {
-            if (SkyrimNetAPI::GetPluginConfigValue) {
-                try {
-                    std::string val = SkyrimNetAPI::GetPluginConfigValue("IntelEngine", key.c_str(), std::to_string(def).c_str());
-                    return std::stoi(val);
-                } catch (...) {}
-            }
-            std::string val = config->ReadYamlString(path, "politics", yamlKey, std::to_string(def));
+        auto readInt = [&](const std::string& key, int def) {
+            std::string val = config->ReadYamlString(path, "politics", key, std::to_string(def));
             try { return std::stoi(val); } catch (...) { return def; }
         };
 
-        enabled_.store(readBool("politics.enabled", true));
-        tickIntervalHours_.store(readInt("politics.tick_interval_hours", "tick_interval_hours", 6));
-        maxRelationChangePerTick_.store(readInt("politics.max_relation_change_per_tick", "max_relation_change_per_tick", 15));
-        maxActiveWars_.store(readInt("politics.max_active_wars", "max_active_wars", 2));
-        warDeclarationCooldownDays_.store(readInt("politics.war_declaration_cooldown_days", "war_declaration_cooldown_days", 7));
-        moraleDecayPerTick_.store(readInt("politics.morale_decay_per_tick", "morale_decay_per_tick", 2));
+        enabled_.store(readBool("enabled", true));
+        tickIntervalHours_.store(std::clamp(readInt("tick_interval_hours", 6), 1, 168));
+        maxRelationChangePerTick_.store(std::clamp(readInt("max_relation_change_per_tick", 15), 5, 30));
+        maxActiveWars_.store(std::clamp(readInt("max_active_wars", 2), 1, 5));
+        warDeclarationCooldownDays_.store(readInt("war_declaration_cooldown_days", 7));
+        moraleDecayPerTick_.store(readInt("morale_decay_per_tick", 2));
 
         logger::info("FactionPolitics: Settings loaded - enabled={}, tick={}h, maxDelta={}, maxWars={}, warCooldown={}d, moraleDecay={}",
                      enabled_.load(), tickIntervalHours_.load(),

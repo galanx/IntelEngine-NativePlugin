@@ -334,7 +334,7 @@ When the optional [PrismaUI](https://www.prismaui.dev/) SKSE plugin is installed
 
 **Active Packages** — See which NPCs are currently running IntelEngine AI packages (travel, sandbox, stalk). Remove packages from stuck NPCs directly.
 
-**Settings** — Full parity with the MCM. Every setting has a description hint. Includes plugin configuration (blocklists, LLM overrides, dashboard hotkey) read from `settings.yaml`.
+**Settings** — Shared settings behavior with the MCM. Politics settings are read from `settings.yaml` and saved there by both interfaces; plugin configuration includes blocklists, LLM overrides, and dashboard hotkey.
 
 ### How It Works
 
