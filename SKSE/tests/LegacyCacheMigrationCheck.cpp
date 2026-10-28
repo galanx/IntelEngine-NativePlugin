@@ -107,12 +107,12 @@ void vrCheck(const fs::path& area) {
         auto bad=input; put32(bad,offset,0xffffffff);
         reject(ess,bad);
     }
-    for (const auto& payload : {
+    for (const auto& invalidPayload : {
         "2 "+actor+" 1 intel_factsrendered gap",
         "1 "+actor+" 2 intel_factsrendered x Intel_FactsRendered y",
         "1 "+actor+" 1 intel_factsrendered bad\tcontrol",
         "1 "+std::to_string((std::uint64_t{62}<<32)|0xff000001)+" 1 intel_factsrendered temporary"}) {
-        auto bad=fixture(payload); put32(bad,8,SkseVR); put32(bad,12,RuntimeVR);
+        auto bad=fixture(invalidPayload); put32(bad,8,SkseVR); put32(bad,12,RuntimeVR);
         reject(ess,bad);
     }
     auto badEss=ess; put32(badEss,17,11); reject(badEss,input);
@@ -328,7 +328,7 @@ int main(int argc, char** argv) {
         refuses([&] { parse(wrongRuntime,true); }, "unsupported fix runtime");
         refuses([&] { gameRunning([] { return true; }); }, "running game seam");
         require(!gameRunning([] { return false; }), "closed-game seam");
-        refuses([&] { gameRunning([] { throw std::runtime_error("enumeration failed"); return false; }); },
+        refuses([&] { gameRunning([]() -> bool { throw std::runtime_error("enumeration failed"); }); },
             "process enumeration failure seam");
         const auto actorConverted=convert(actorInput,parse(actorInput),actorManifest);
         require(actorConverted.bytes==actorExpected && actorConverted.legacy==3, "actor-in-place exact bytes or family coverage differs");
