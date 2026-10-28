@@ -244,6 +244,58 @@ void globalCheck(const fs::path& area) {
         sourceSkse.bytes()==mixed && backupSkse.bytes()==mixed && outputSkse.bytes()==expected,
         "mixed global fix changed source, backup, ESS, opaque bytes or expected output");
 }
+void alreadyEncodedCheck(const fs::path& area) {
+    fs::create_directory(area);
+    const Bytes ess{'T','E','S','V','_','S','A','V','E','G','A','M','E',0,9,255};
+    const auto actor=std::to_string((std::uint64_t{62}<<32)|0x123456);
+    const std::vector<std::string> keys{
+        "intel_factsrendered","intel_gossiprendered","intel_taskhistoryrendered"};
+    for (const auto& key : keys) {
+        const auto folder=area/key;
+        fs::create_directory(folder);
+        const auto legacy=fixture("2 0 1 intel_factsrendered ##\aThings\aI\aKnow "
+            +actor+" 1 "+key+" ##\aHeading\nlegacy\a%0A");
+        const auto encoded=fixture("2 0 1 intel_factsrendered ##\aThings\aI\aKnow "
+            +actor+" 1 "+key+" ##\aHeading%0Alegacy\a%250A");
+        write(folder/"legacy.ess",ess); write(folder/"legacy.skse",legacy);
+        require(fix(folder/"legacy.ess")==0,"legacy with header-only stub refused");
+        require(Source(folder/"legacy_IEconverted.skse").bytes()==encoded,
+            "legacy conversion or neutral global stub changed");
+        // Feed actual converter output back under a plain stem.
+        fs::copy_file(folder/"legacy_IEconverted.ess",folder/"renamed.ess");
+        fs::copy_file(folder/"legacy_IEconverted.skse",folder/"renamed.skse");
+        const auto entries=std::distance(fs::directory_iterator(folder),fs::directory_iterator{});
+        require(fix(folder/"renamed.ess")==2,"renamed 3.6 cache was double-encoded");
+        require(std::distance(fs::directory_iterator(folder),fs::directory_iterator{})==entries &&
+            Source(folder/"renamed.ess").bytes()==ess && Source(folder/"renamed.skse").bytes()==encoded,
+            "already-encoded refusal created artifacts or changed originals");
+        require(fix(folder/"renamed.ess",verifyBeforePublish,true)==0,"force did not bypass format check");
+        const auto doubled=fixture("2 0 1 intel_factsrendered ##\aThings\aI\aKnow "
+            +actor+" 1 "+key+" ##\aHeading%250Alegacy\a%25250A");
+        require(Source(folder/"renamed_IEconverted.skse").bytes()==doubled,
+            "force double-encoding bytes differ");
+        refuses([&] { fix(folder/"legacy_IEconverted.ess",verifyBeforePublish,true); },
+            "force bypassed filename guard");
+        refuses([&] { fix(folder/"renamed.ess",verifyBeforePublish,true); },
+            "force bypassed output collision guard");
+    }
+    const auto mixed=fixture("1 "+actor+" 2 intel_factsrendered ##\aHeading%0Aencoded"
+        " intel_taskhistoryrendered ###\aPast\aTasks\nlegacy");
+    write(area/"mixed.ess",ess); write(area/"mixed.skse",mixed);
+    std::ostringstream diagnostic;
+    auto* previous=std::cerr.rdbuf(diagnostic.rdbuf());
+    int status;
+    try { status=fix(area/"mixed.ess"); }
+    catch (...) { std::cerr.rdbuf(previous); throw; }
+    std::cerr.rdbuf(previous);
+    require(status==2 && diagnostic.str().find("mixed legacy and 3.6")!=std::string::npos,
+        "mixed-format refusal missing");
+    require(!fs::exists(area/"mixed_IEbackup") && !fs::exists(area/"mixed_IEconverted.staging") &&
+        !fs::exists(area/"mixed_IEconverted.ess") && !fs::exists(area/"mixed_IEconverted.skse") &&
+        Source(area/"mixed.ess").bytes()==ess && Source(area/"mixed.skse").bytes()==mixed,
+        "mixed-format refusal created artifacts or changed originals");
+    std::cout << "PASS: all three already-encoded cache keys refuse; mixed saves refuse; force double-encodes only on explicit request; header-only global stub unchanged.\n";
+}
 void filesystemCheck(const fs::path& area, const Bytes& input, const Bytes& converted) {
     require(!fs::exists(area), "self-check area must not exist");
     require(fs::create_directory(area), "cannot create exclusive self-check area");
@@ -271,6 +323,7 @@ void filesystemCheck(const fs::path& area, const Bytes& input, const Bytes& conv
         "VR refusal changed the original pair");
     vrCheck(source/"vr-supported");
     globalCheck(source/"global-mixed");
+    alreadyEncodedCheck(source/"already-encoded");
     {
         Source e(source/"test.ess"), s(source/"test.skse");
         require(e.hash()==essHash && s.hash()==skseHash, "source hash mismatch");
