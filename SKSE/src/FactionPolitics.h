@@ -317,8 +317,10 @@ namespace IntelEngine {
         int GetWarDeclarationCooldownDays() const { return warDeclarationCooldownDays_.load(); }
         int GetMoraleDecayPerTick() const { return moraleDecayPerTick_.load(); }
 
-        void SetEnabled(bool val) { enabled_.store(val); }
-        void SetTickIntervalHours(int val) { tickIntervalHours_.store(std::clamp(val, 1, 24)); }
+        bool SetEnabled(bool val);
+        bool SetTickIntervalHours(int val);
+        bool SetMaxRelationChangePerTick(int val);
+        bool SetMaxActiveWars(int val);
 
         /** Reload politics settings from settings.yaml. */
         void LoadSettings();

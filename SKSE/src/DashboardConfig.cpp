@@ -175,7 +175,8 @@ namespace IntelEngine {
             outFile << lines[i];
             if (i + 1 < lines.size()) outFile << "\n";
         }
-        return true;
+        outFile.close();
+        return outFile.good();
     }
 
     // Convenience: write integer value

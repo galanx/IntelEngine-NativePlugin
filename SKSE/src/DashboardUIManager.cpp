@@ -11,6 +11,7 @@
 
 #include "DashboardUIManager.h"
 #include "DashboardConfig.h"
+#include "FactionPolitics.h"
 #include "SkyrimNetAPI.h"
 #include "SlotTracker.h"
 #include "ProcessUtils.h"
@@ -195,12 +196,12 @@ namespace IntelEngine {
 
             auto parsed = nlohmann::json::parse(fixed);
 
-            // Inject plugin config values from settings.yaml (read via SkyrimNet API)
+            // Inject plugin config values; politics comes from the live native settings state.
+            nlohmann::json pc;
             if (SkyrimNetAPI::GetPluginConfigValue) {
                 auto rv = [](const char* p, const char* d) -> std::string {
                     return SkyrimNetAPI::GetPluginConfigValue("IntelEngine", p, d);
                 };
-                nlohmann::json pc;
                 try {
                     // Read hotkey/modifiers from DashboardConfig atomics (source of
                     // truth), NOT from SkyrimNet API which may have stale cache.
@@ -220,8 +221,13 @@ namespace IntelEngine {
                     pc["llm.max_tokens"] = std::stoi(rv("llm.max_tokens", "0"));
                     pc["llm.timeout"] = std::stoi(rv("llm.timeout", "0"));
                 } catch (...) {}
-                parsed["pluginConfig"] = pc;
             }
+            auto* politics = FactionPolitics::GetSingleton();
+            pc["politics.enabled"] = politics->IsEnabled();
+            pc["politics.tick_interval_hours"] = politics->GetTickIntervalHours();
+            pc["politics.max_relation_change_per_tick"] = politics->GetMaxRelationChangePerTick();
+            pc["politics.max_active_wars"] = politics->GetMaxActiveWars();
+            parsed["pluginConfig"] = pc;
 
             // Inject loaded NPCs for Director tab (same cell as player only)
             {
@@ -522,6 +528,24 @@ namespace IntelEngine {
                         logger::warn("[Dashboard] Failed to save modifiers {}", mods);
                     }
                     DashboardUIManager::GetSingleton()->SendModEvent("IntelEngine_DashboardRefresh");
+                    return;
+                }
+
+                if (section == "politics") {
+                    auto* politics = FactionPolitics::GetSingleton();
+                    bool saved = false;
+                    if (key == "enabled" && val.is_boolean()) {
+                        saved = politics->SetEnabled(val.get<bool>());
+                    } else if (key == "tick_interval_hours" && val.is_number_integer()) {
+                        saved = politics->SetTickIntervalHours(val.get<int>());
+                    } else if (key == "max_relation_change_per_tick" && val.is_number_integer()) {
+                        saved = politics->SetMaxRelationChangePerTick(val.get<int>());
+                    } else if (key == "max_active_wars" && val.is_number_integer()) {
+                        saved = politics->SetMaxActiveWars(val.get<int>());
+                    } else {
+                        logger::warn("[Dashboard] Invalid politics setting value: {}", path);
+                    }
+                    if (saved) DashboardUIManager::GetSingleton()->SendModEvent("IntelEngine_DashboardRefresh");
                     return;
                 }
 
