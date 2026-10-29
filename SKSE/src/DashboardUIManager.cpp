@@ -11,6 +11,7 @@
 
 #include "DashboardUIManager.h"
 #include "DashboardConfig.h"
+#include "FactionPolitics.h"
 #include "SkyrimNetAPI.h"
 #include "SlotTracker.h"
 #include "ProcessUtils.h"
@@ -22,31 +23,6 @@
 
 namespace IntelEngine {
 
-    // Static member definitions
-    std::unordered_map<std::string, std::string> DashboardUIManager::pendingParams_;
-    std::mutex DashboardUIManager::pendingParamsMutex_;
-
-    std::string DashboardUIManager::GetPendingParam(const std::string& key) {
-        std::lock_guard<std::mutex> lock(pendingParamsMutex_);
-        auto it = pendingParams_.find(key);
-        return it != pendingParams_.end() ? it->second : "";
-    }
-
-    void DashboardUIManager::ClearPendingParams() {
-        std::lock_guard<std::mutex> lock(pendingParamsMutex_);
-        pendingParams_.clear();
-    }
-
-    std::string DashboardUIManager::ClaimPendingParams() {
-        std::lock_guard<std::mutex> lock(pendingParamsMutex_);
-        if (pendingParams_.empty()) return "";
-        nlohmann::json j;
-        for (auto& [key, val] : pendingParams_) {
-            j[key] = val;
-        }
-        pendingParams_.clear();
-        return j.dump();
-    }
 
     static constexpr int kViewRenderOrder = 90;
     static constexpr auto kPollIntervalMs = std::chrono::milliseconds(50);
@@ -195,12 +171,12 @@ namespace IntelEngine {
 
             auto parsed = nlohmann::json::parse(fixed);
 
-            // Inject plugin config values from settings.yaml (read via SkyrimNet API)
+            // Inject plugin config values; politics comes from the live native settings state.
+            nlohmann::json pc;
             if (SkyrimNetAPI::GetPluginConfigValue) {
                 auto rv = [](const char* p, const char* d) -> std::string {
                     return SkyrimNetAPI::GetPluginConfigValue("IntelEngine", p, d);
                 };
-                nlohmann::json pc;
                 try {
                     // Read hotkey/modifiers from DashboardConfig atomics (source of
                     // truth), NOT from SkyrimNet API which may have stale cache.
@@ -220,8 +196,13 @@ namespace IntelEngine {
                     pc["llm.max_tokens"] = std::stoi(rv("llm.max_tokens", "0"));
                     pc["llm.timeout"] = std::stoi(rv("llm.timeout", "0"));
                 } catch (...) {}
-                parsed["pluginConfig"] = pc;
             }
+            auto* politics = FactionPolitics::GetSingleton();
+            pc["politics.enabled"] = politics->IsEnabled();
+            pc["politics.tick_interval_hours"] = politics->GetTickIntervalHours();
+            pc["politics.max_relation_change_per_tick"] = politics->GetMaxRelationChangePerTick();
+            pc["politics.max_active_wars"] = politics->GetMaxActiveWars();
+            parsed["pluginConfig"] = pc;
 
             // Inject loaded NPCs for Director tab (same cell as player only)
             {
@@ -285,6 +266,15 @@ namespace IntelEngine {
         while (!stopPolling_.load()) {
             std::this_thread::sleep_for(kPollIntervalMs);
 
+            HWND foregroundWindow = GetForegroundWindow();
+            DWORD foregroundProcessId = 0;
+            if (!foregroundWindow ||
+                GetWindowThreadProcessId(foregroundWindow, &foregroundProcessId) == 0 ||
+                foregroundProcessId != GetCurrentProcessId()) {
+                wasComboPressed = true;
+                continue;
+            }
+
             auto* config = DashboardConfig::GetSingleton();
             int vk = config->GetHotkey();
             int mods = config->GetModifiers();
@@ -293,10 +283,13 @@ namespace IntelEngine {
             auto* ui = RE::UI::GetSingleton();
             if (ui && ui->GameIsPaused() && !isOpen_.load()) continue;
 
-            bool modifiersOk = true;
-            if (mods & kModCtrl)  modifiersOk = modifiersOk && (GetAsyncKeyState(VK_CONTROL) & 0x8000);
-            if (mods & kModShift) modifiersOk = modifiersOk && (GetAsyncKeyState(VK_SHIFT) & 0x8000);
-            if (mods & kModAlt)   modifiersOk = modifiersOk && (GetAsyncKeyState(VK_MENU) & 0x8000);
+            const bool ctrlDown = (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0;
+            const bool shiftDown = (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0;
+            const bool altDown = (GetAsyncKeyState(VK_MENU) & 0x8000) != 0;
+            const bool modifiersOk =
+                ctrlDown == ((mods & kModCtrl) != 0) &&
+                shiftDown == ((mods & kModShift) != 0) &&
+                altDown == ((mods & kModAlt) != 0);
 
             bool mainKeyDown = (GetAsyncKeyState(vk) & 0x8000) != 0;
             bool comboPressed = modifiersOk && mainKeyDown;
@@ -510,6 +503,24 @@ namespace IntelEngine {
                         logger::warn("[Dashboard] Failed to save modifiers {}", mods);
                     }
                     DashboardUIManager::GetSingleton()->SendModEvent("IntelEngine_DashboardRefresh");
+                    return;
+                }
+
+                if (section == "politics") {
+                    auto* politics = FactionPolitics::GetSingleton();
+                    bool saved = false;
+                    if (key == "enabled" && val.is_boolean()) {
+                        saved = politics->SetEnabled(val.get<bool>());
+                    } else if (key == "tick_interval_hours" && val.is_number_integer()) {
+                        saved = politics->SetTickIntervalHours(val.get<int>());
+                    } else if (key == "max_relation_change_per_tick" && val.is_number_integer()) {
+                        saved = politics->SetMaxRelationChangePerTick(val.get<int>());
+                    } else if (key == "max_active_wars" && val.is_number_integer()) {
+                        saved = politics->SetMaxActiveWars(val.get<int>());
+                    } else {
+                        logger::warn("[Dashboard] Invalid politics setting value: {}", path);
+                    }
+                    if (saved) DashboardUIManager::GetSingleton()->SendModEvent("IntelEngine_DashboardRefresh");
                     return;
                 }
 
@@ -758,26 +769,15 @@ namespace IntelEngine {
                 std::string actionName = j.value("actionName", "");
                 if (formId <= 0 || actionName.empty()) return;
 
-                // Store all action params for Papyrus retrieval
-                {
-                    std::lock_guard<std::mutex> lock(pendingParamsMutex_);
-                    pendingParams_.clear();
-                    pendingParams_["actionName"] = actionName;
-                    if (j.contains("params") && j["params"].is_object()) {
-                        for (auto& [key, val] : j["params"].items()) {
-                            pendingParams_[key] = val.is_string() ? val.get<std::string>() : val.dump();
-                        }
+                // Pass action params directly in the ModEvent payload.
+                nlohmann::json eventPayload;
+                eventPayload["actionName"] = actionName;
+                if (j.contains("params") && j["params"].is_object()) {
+                    for (auto& [key, val] : j["params"].items()) {
+                        eventPayload[key] = val.is_string() ? val.get<std::string>() : val.dump();
                     }
                 }
 
-                // Pass ALL params as JSON in strArg (same race fix)
-                nlohmann::json eventPayload;
-                {
-                    std::lock_guard<std::mutex> lock(pendingParamsMutex_);
-                    for (auto& [k, v] : pendingParams_) {
-                        eventPayload[k] = v;
-                    }
-                }
                 DashboardUIManager::GetSingleton()->SendModEvent(
                     "IntelEngine_DashboardExecuteAction", eventPayload.dump(), static_cast<float>(formId));
                 logger::info("[Dashboard] Director: execute action={} npc=0x{:X}", actionName, formId);

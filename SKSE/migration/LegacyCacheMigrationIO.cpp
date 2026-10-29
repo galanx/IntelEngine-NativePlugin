@@ -28,20 +28,44 @@ constexpr DWORD kChunkBytes = 1024 * 1024;
 
 [[noreturn]] void fail(const char* message) { throw std::runtime_error(message); }
 
+std::string pathUtf8(const std::wstring& path)
+{
+    if (path.empty()) return {};
+    const int size = WideCharToMultiByte(CP_UTF8, 0, path.data(), static_cast<int>(path.size()),
+                                         nullptr, 0, nullptr, nullptr);
+    if (size <= 0) return "<unprintable path>";
+    std::string result(static_cast<std::size_t>(size), '\0');
+    if (WideCharToMultiByte(CP_UTF8, 0, path.data(), static_cast<int>(path.size()),
+                            result.data(), size, nullptr, nullptr) != size)
+        return "<unprintable path>";
+    return result;
+}
+
+[[noreturn]] void ioFail(const char* operation, const std::wstring& path, DWORD error = GetLastError())
+{
+    throw IOError(std::string(operation) + " failed for '" + pathUtf8(path) +
+                  "' (Windows error " + std::to_string(error) + ")");
+}
+
+[[noreturn]] void pathFail(const std::string& reason, const std::wstring& path)
+{
+    throw IOError(reason + ": " + pathUtf8(path));
+}
+
 std::wstring fullPath(const std::filesystem::path& path)
 {
-    if (path.empty()) fail("Empty path");
+    if (path.empty()) pathFail("Empty path", path.native());
+    const auto spelling = path.native();
+    if (spelling.rfind(L"\\\\?\\", 0) == 0 || spelling.rfind(L"\\\\.\\", 0) == 0)
+        pathFail("Extended/device path unsupported; copy both files to a short normal writable physical folder, e.g. C:\\IE-convert", spelling);
     for (const auto& part : path)
-        if (part == L"." || part == L"..") fail("Unsafe path component");
+        if (part == L"..") pathFail("Unsafe parent path component", spelling);
     try {
-        auto absolute = std::filesystem::absolute(path).lexically_normal().native();
-        if (absolute.rfind(L"\\\\?\\", 0) == 0 || absolute.rfind(L"\\\\.\\", 0) == 0)
-            fail("Device path rejected");
-        return absolute;
-    } catch (const std::runtime_error&) {
-        throw;
+        return std::filesystem::absolute(path).lexically_normal().native();
+    } catch (const std::filesystem::filesystem_error& error) {
+        pathFail("Resolve absolute path (Windows error " + std::to_string(error.code().value()) + ")", spelling);
     } catch (...) {
-        fail("Invalid path");
+        pathFail("Invalid path", spelling);
     }
 }
 
@@ -87,16 +111,17 @@ bool componentPrefix(const std::wstring& parent, const std::wstring& child)
     return true;
 }
 
-bool isReparseOrDirectory(const std::wstring& path, bool& exists)
+bool isReparseOrDirectory(const std::wstring& path, bool& exists, DWORD& missingError)
 {
     const DWORD attributes = GetFileAttributesW(path.c_str());
     if (attributes == INVALID_FILE_ATTRIBUTES) {
         const DWORD error = GetLastError();
         if (error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND) {
             exists = false;
+            missingError = error;
             return false;
         }
-        fail("Cannot inspect path");
+        ioFail("Inspect path", path, error);
     }
     exists = true;
     return (attributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0;
@@ -106,25 +131,28 @@ void safePathImpl(const std::wstring& full, bool mayNotExist)
 {
     const std::filesystem::path p(full);
     std::wstring current = p.root_path().native();
-    if (current.empty()) fail("Path has no root");
+    if (current.empty()) pathFail("Path has no root", full);
     const DWORD rootAttributes = GetFileAttributesW(current.c_str());
-    if (rootAttributes == INVALID_FILE_ATTRIBUTES ||
-        (rootAttributes & FILE_ATTRIBUTE_REPARSE_POINT) ||
-        !(rootAttributes & FILE_ATTRIBUTE_DIRECTORY))
-        fail("Unsafe path root");
+    if (rootAttributes == INVALID_FILE_ATTRIBUTES) ioFail("Inspect path root", current);
+    if (rootAttributes & FILE_ATTRIBUTE_REPARSE_POINT)
+        pathFail("Linked/cloud-managed path component unsupported; copy both files to a short normal writable physical folder, e.g. C:\\IE-convert", current);
+    if (!(rootAttributes & FILE_ATTRIBUTE_DIRECTORY))
+        pathFail("Unsafe path root", current);
     for (const auto& item : p.relative_path()) {
         const std::wstring part = item.native();
-        if (part.empty() || part == L"." || part == L".." || unsafeComponent(part))
-            fail("Unsafe path component");
-        if (part.find(L':') != std::wstring::npos) fail("Unsafe path component");
+        if (part.empty() || part == L"." || part == L".." || unsafeComponent(part) ||
+            part.find(L':') != std::wstring::npos)
+            pathFail("Unsafe path component", current + L"\\" + part);
         current = (std::filesystem::path(current) / part).native();
         bool exists = false;
-        const bool reparse = isReparseOrDirectory(current, exists);
+        DWORD missingError = ERROR_PATH_NOT_FOUND;
+        const bool reparse = isReparseOrDirectory(current, exists, missingError);
         if (!exists) {
             if (mayNotExist && current == full) return;
-            fail("Path does not exist");
+            ioFail("Inspect path component", current, missingError);
         }
-        if (reparse) fail("Reparse path rejected");
+        if (reparse)
+            pathFail("Linked/cloud-managed path component unsupported; copy both files to a short normal writable physical folder, e.g. C:\\IE-convert", current);
     }
 }
 
@@ -132,7 +160,7 @@ HANDLE openHandle(const std::wstring& path, DWORD access, DWORD share, DWORD cre
                   DWORD flags = FILE_ATTRIBUTE_NORMAL)
 {
     HANDLE h = CreateFileW(path.c_str(), access, share, nullptr, creation, flags, nullptr);
-    if (h == INVALID_HANDLE_VALUE) throw IOError("Cannot open path");
+    if (h == INVALID_HANDLE_VALUE) ioFail("Open", path);
     return h;
 }
 
@@ -153,10 +181,10 @@ struct Handle {
     }
 };
 
-BY_HANDLE_FILE_INFORMATION info(HANDLE h)
+BY_HANDLE_FILE_INFORMATION info(HANDLE h, const std::wstring& path)
 {
     BY_HANDLE_FILE_INFORMATION result{};
-    if (!GetFileInformationByHandle(h, &result)) throw IOError("Cannot inspect open file");
+    if (!GetFileInformationByHandle(h, &result)) ioFail("Inspect open file", path);
     return result;
 }
 
@@ -171,34 +199,37 @@ std::uint64_t fileSize(const BY_HANDLE_FILE_INFORMATION& i)
     return (static_cast<std::uint64_t>(i.nFileSizeHigh) << 32) | i.nFileSizeLow;
 }
 
-void seekStart(HANDLE h)
+void seekStart(HANDLE h, const std::wstring& path)
 {
     LARGE_INTEGER zero{};
-    if (!SetFilePointerEx(h, zero, nullptr, FILE_BEGIN)) throw IOError("Cannot seek file");
+    if (!SetFilePointerEx(h, zero, nullptr, FILE_BEGIN)) ioFail("Seek", path);
 }
 
-Bytes readAll(HANDLE h, std::uint64_t size)
+Bytes readAll(HANDLE h, const std::wstring& path, std::uint64_t size)
 {
-    if (size > kMaxSourceBytes || size > std::numeric_limits<std::size_t>::max()) fail("File too large");
+    if (size > kMaxSourceBytes || size > std::numeric_limits<std::size_t>::max())
+        pathFail("File exceeds the 512 MiB per-file limit", path);
     Bytes bytes(static_cast<std::size_t>(size));
-    seekStart(h);
+    seekStart(h, path);
     std::size_t offset = 0;
     while (offset < bytes.size()) {
         const DWORD ask = static_cast<DWORD>(std::min<std::size_t>(bytes.size() - offset, kChunkBytes));
         DWORD got = 0;
-        if (!ReadFile(h, bytes.data() + offset, ask, &got, nullptr) || got == 0) throw IOError("Cannot read file");
+        if (!ReadFile(h, bytes.data() + offset, ask, &got, nullptr)) ioFail("Read", path);
+        if (got == 0) ioFail("Read", path, ERROR_HANDLE_EOF);
         offset += got;
     }
     unsigned char extra = 0;
     DWORD got = 0;
-    if (!ReadFile(h, &extra, 1, &got, nullptr) || got != 0) throw IOError("File changed while reading");
+    if (!ReadFile(h, &extra, 1, &got, nullptr)) ioFail("Check file length while reading", path);
+    if (got != 0) pathFail("File changed while reading", path);
     return bytes;
 }
 
-std::string hashHandle(HANDLE h)
+std::string hashHandle(HANDLE h, const std::wstring& path)
 {
-    const auto initial = info(h);
-    const Bytes bytes = readAll(h, fileSize(initial));
+    const auto initial = info(h, path);
+    const Bytes bytes = readAll(h, path, fileSize(initial));
     return sha256(bytes);
 }
 
@@ -209,10 +240,11 @@ void writeNew(const std::wstring& path, const unsigned char* data, std::size_t s
     while (offset < size) {
         const DWORD ask = static_cast<DWORD>(std::min<std::size_t>(size - offset, kChunkBytes));
         DWORD wrote = 0;
-        if (!WriteFile(h.value, data + offset, ask, &wrote, nullptr) || wrote == 0) fail("Cannot write file");
+        if (!WriteFile(h.value, data + offset, ask, &wrote, nullptr)) ioFail("Write", path);
+        if (wrote == 0) pathFail("Write made no progress", path);
         offset += wrote;
     }
-    if (!FlushFileBuffers(h.value)) fail("Cannot flush file");
+    if (!FlushFileBuffers(h.value)) ioFail("Flush", path);
 }
 
 void writeNew(const std::wstring& path, const std::string& text)
@@ -223,19 +255,19 @@ void writeNew(const std::wstring& path, const std::string& text)
 void verifyWritten(const std::wstring& path, std::string_view expectedHash)
 {
     Handle h(openHandle(path, GENERIC_READ, FILE_SHARE_READ, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT));
-    const auto i = info(h.value);
+    const auto i = info(h.value, path);
     if ((i.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) || (i.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT))
-        fail("Unexpected staged file type");
-    if (hashHandle(h.value) != expectedHash) fail("Staged file verification failed");
+        pathFail("Unexpected staged file type", path);
+    if (hashHandle(h.value, path) != expectedHash) pathFail("Staged file verification failed", path);
 }
 
 Handle lockDirectory(const std::wstring& path)
 {
     Handle handle(openHandle(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, OPEN_EXISTING,
         FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT));
-    const auto attributes = info(handle.value).dwFileAttributes;
+    const auto attributes = info(handle.value, path).dwFileAttributes;
     if (!(attributes & FILE_ATTRIBUTE_DIRECTORY) || (attributes & FILE_ATTRIBUTE_REPARSE_POINT))
-        fail("Unsafe directory handle");
+        pathFail("Unsafe directory handle", path);
     return handle;
 }
 
@@ -246,7 +278,8 @@ std::wstring physicalDirectory(const std::wstring& path)
     std::wstring result(32768, L'\0');
     const auto length = GetFinalPathNameByHandleW(handle.value, result.data(),
         static_cast<DWORD>(result.size()), FILE_NAME_NORMALIZED | VOLUME_NAME_GUID);
-    if (length == 0 || length >= result.size()) fail("Cannot resolve physical directory");
+    if (length == 0) ioFail("Resolve physical directory", path);
+    if (length >= result.size()) pathFail("Resolved physical directory path is too long", path);
     result.resize(length);
     return result;
 }
@@ -257,11 +290,11 @@ std::wstring physicalDestination(const std::wstring& path)
     return (std::filesystem::path(physicalDirectory(p.parent_path().native())) / p.filename()).native();
 }
 
-void ensureRegular(HANDLE h)
+void ensureRegular(HANDLE h, const std::wstring& path)
 {
-    const auto i = info(h);
+    const auto i = info(h, path);
     if ((i.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) || (i.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT))
-        fail("Regular file required");
+        pathFail("Regular file required", path);
 }
 
 std::wstring child(const std::wstring& dir, const wchar_t* name)
@@ -331,11 +364,13 @@ Source::Source(const std::filesystem::path& path) : impl_(new Impl)
             if (relative.empty()) fail("Invalid source parent");
             current /= *relative.begin();
         }
-        impl_->handle = Handle(openHandle(impl_->path, GENERIC_READ, FILE_SHARE_READ, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT));
-        ensureRegular(impl_->handle.value);
-        impl_->initial = info(impl_->handle.value);
-        if (fileSize(impl_->initial) > kMaxSourceBytes) fail("File too large");
-        impl_->data = readAll(impl_->handle.value, fileSize(impl_->initial));
+        impl_->handle = Handle(openHandle(impl_->path, GENERIC_READ, FILE_SHARE_READ,
+                                          OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT));
+        ensureRegular(impl_->handle.value, impl_->path);
+        impl_->initial = info(impl_->handle.value, impl_->path);
+        if (fileSize(impl_->initial) > kMaxSourceBytes)
+            pathFail("File exceeds the 512 MiB per-file limit", impl_->path);
+        impl_->data = readAll(impl_->handle.value, impl_->path, fileSize(impl_->initial));
         impl_->digest = sha256(impl_->data);
         verify();
     } catch (...) { delete impl_; impl_ = nullptr; throw; }
@@ -347,20 +382,20 @@ const std::string& Source::hash() const { return impl_->digest; }
 
 void Source::verify() const
 {
-    const auto current = info(impl_->handle.value);
+    const auto current = info(impl_->handle.value, impl_->path);
     if (!sameIdentity(impl_->initial, current) || fileSize(impl_->initial) != fileSize(current) ||
         CompareFileTime(&impl_->initial.ftLastWriteTime, &current.ftLastWriteTime) != 0)
-        throw IOError("Source changed");
+        pathFail("Source changed", impl_->path);
     const auto path = fullPath(std::filesystem::path(impl_->path));
     safePathImpl(path, false);
     Handle reopened(openHandle(path, GENERIC_READ, FILE_SHARE_READ, OPEN_EXISTING));
-    ensureRegular(reopened.value);
-    const auto pathInfo = info(reopened.value);
+    ensureRegular(reopened.value, path);
+    const auto pathInfo = info(reopened.value, path);
     if (!sameIdentity(impl_->initial, pathInfo) || fileSize(impl_->initial) != fileSize(pathInfo) ||
         CompareFileTime(&impl_->initial.ftLastWriteTime, &pathInfo.ftLastWriteTime) != 0)
-        throw IOError("Source identity changed");
-    if (hashHandle(impl_->handle.value) != impl_->digest)
-        throw IOError("Source content changed");
+        pathFail("Source identity changed", path);
+    if (hashHandle(impl_->handle.value, impl_->path) != impl_->digest)
+        pathFail("Source content changed", impl_->path);
 }
 
 void safePath(const std::filesystem::path& path, bool mayNotExist)
@@ -376,8 +411,8 @@ bool sameFile(const std::filesystem::path& left, const std::filesystem::path& ri
     safePathImpl(b, false);
     Handle ah(openHandle(a, FILE_READ_ATTRIBUTES, FILE_SHARE_READ, OPEN_EXISTING));
     Handle bh(openHandle(b, FILE_READ_ATTRIBUTES, FILE_SHARE_READ, OPEN_EXISTING));
-    ensureRegular(ah.value); ensureRegular(bh.value);
-    return sameIdentity(info(ah.value), info(bh.value));
+    ensureRegular(ah.value, a); ensureRegular(bh.value, b);
+    return sameIdentity(info(ah.value, a), info(bh.value, b));
 }
 
 void publishFixedPair(const std::filesystem::path& save, const Source& ess,
@@ -393,24 +428,32 @@ void publishFixedPair(const std::filesystem::path& save, const Source& ess,
     const auto outSkse = parent / (stem + L"_IEconverted.skse");
     for (const auto& path : {backup, staging, outEss, outSkse}) {
         safePath(path, true);
-        if (fs::exists(path)) fail("Backup, staging or converted output already exists");
+        const DWORD attributes = GetFileAttributesW(path.c_str());
+        if (attributes != INVALID_FILE_ATTRIBUTES)
+            pathFail("Output collision at '" + pathUtf8(path.native()) +
+                     "'; do not overwrite backups or load incomplete output. Inspect retained artifacts and retry the original pair in a fresh physical folder", path.native());
+        const DWORD error = GetLastError();
+        if (error != ERROR_FILE_NOT_FOUND && error != ERROR_PATH_NOT_FOUND)
+            ioFail("Check output collision", path.native(), error);
     }
     const auto parentLock = lockDirectory(parent.native());
     ess.verify(); skse.verify();
-    if (!CreateDirectoryW(backup.c_str(), nullptr)) fail("Cannot create exclusive backup directory");
+    if (!CreateDirectoryW(backup.c_str(), nullptr)) ioFail("Create exclusive backup directory", backup.native());
     const auto backupLock = lockDirectory(backup.native());
     const auto backupEss = backup / L"original.ess", backupSkse = backup / L"original.skse";
     writeNew(backupEss.native(), ess.bytes().data(), ess.bytes().size());
     writeNew(backupSkse.native(), skse.bytes().data(), skse.bytes().size());
     Handle backedEss(openHandle(backupEss.native(), GENERIC_READ, FILE_SHARE_READ, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT));
     Handle backedSkse(openHandle(backupSkse.native(), GENERIC_READ, FILE_SHARE_READ, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT));
-    ensureRegular(backedEss.value); ensureRegular(backedSkse.value);
-    if (hashHandle(backedEss.value) != ess.hash() || hashHandle(backedSkse.value) != skse.hash())
-        fail("Backup pair verification failed");
-    if (!SetFileAttributesW(backupEss.c_str(), FILE_ATTRIBUTE_READONLY) ||
-        !SetFileAttributesW(backupSkse.c_str(), FILE_ATTRIBUTE_READONLY))
-        fail("Cannot protect verified backup");
-    if (!CreateDirectoryW(staging.c_str(), nullptr)) fail("Cannot create exclusive staging directory");
+    ensureRegular(backedEss.value, backupEss.native()); ensureRegular(backedSkse.value, backupSkse.native());
+    if (hashHandle(backedEss.value, backupEss.native()) != ess.hash() ||
+        hashHandle(backedSkse.value, backupSkse.native()) != skse.hash())
+        pathFail("Backup pair verification failed", backup.native());
+    if (!SetFileAttributesW(backupEss.c_str(), FILE_ATTRIBUTE_READONLY))
+        ioFail("Protect verified backup", backupEss.native());
+    if (!SetFileAttributesW(backupSkse.c_str(), FILE_ATTRIBUTE_READONLY))
+        ioFail("Protect verified backup", backupSkse.native());
+    if (!CreateDirectoryW(staging.c_str(), nullptr)) ioFail("Create exclusive staging directory", staging.native());
     auto stagingLock = lockDirectory(staging.native());
     const auto stagedEss = staging / L"converted.ess", stagedSkse = staging / L"converted.skse";
     writeNew(stagedEss.native(), ess.bytes().data(), ess.bytes().size());
@@ -422,9 +465,10 @@ void publishFixedPair(const std::filesystem::path& save, const Source& ess,
                                 OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT));
     Handle skseHandle(openHandle(stagedSkse.native(), GENERIC_READ | DELETE, FILE_SHARE_READ,
                                  OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT));
-    ensureRegular(essHandle.value); ensureRegular(skseHandle.value);
-    if (hashHandle(essHandle.value) != ess.hash() || hashHandle(skseHandle.value) != convertedHash)
-        fail("Staged pair changed");
+    ensureRegular(essHandle.value, stagedEss.native()); ensureRegular(skseHandle.value, stagedSkse.native());
+    if (hashHandle(essHandle.value, stagedEss.native()) != ess.hash() ||
+        hashHandle(skseHandle.value, stagedSkse.native()) != convertedHash)
+        pathFail("Staged pair changed", staging.native());
     ess.verify(); skse.verify();
     if (beforePublish) beforePublish();
     auto renameNew = [](HANDLE handle, const fs::path& destination) {
@@ -436,17 +480,25 @@ void publishFixedPair(const std::filesystem::path& save, const Source& ess,
         rename->RootDirectory = nullptr;
         rename->FileNameLength = static_cast<DWORD>(bytes);
         std::copy(name.begin(), name.end(), rename->FileName);
-        return SetFileInformationByHandle(handle, FileRenameInfo, rename,
-                                         static_cast<DWORD>(storage.size())) != 0;
+        if (!SetFileInformationByHandle(handle, FileRenameInfo, rename,
+                                         static_cast<DWORD>(storage.size())))
+            ioFail("Publish", destination.native());
     };
-    if (!renameNew(essHandle.value, outEss)) fail("ESS publication failed; no complete converted pair was published");
-    if (!renameNew(skseHandle.value, outSkse))
-        fail("Incomplete publication: converted ESS exists but SKSE rename failed. Do not load it; originals are untouched");
-    if (hashHandle(essHandle.value) != ess.hash() || hashHandle(skseHandle.value) != convertedHash)
-        fail("Published pair verification failed; do not load it; originals are untouched");
+    renameNew(essHandle.value, outEss);
+    try {
+        renameNew(skseHandle.value, outSkse);
+    } catch (const std::exception& error) {
+        throw IOError(std::string("Incomplete publication: converted ESS exists at '") +
+                      pathUtf8(outEss.native()) + "' but SKSE publication failed (" + error.what() +
+                      "). Do not load the incomplete output; originals are untouched");
+    }
+    if (hashHandle(essHandle.value, outEss.native()) != ess.hash() ||
+        hashHandle(skseHandle.value, outSkse.native()) != convertedHash)
+        pathFail("Published pair verification failed; do not load the output; originals are untouched", parent.native());
     ess.verify(); skse.verify();
     stagingLock = Handle{};
-    if (!RemoveDirectoryW(staging.c_str())) fail("Converted pair published, but empty staging directory could not be removed");
+    if (!RemoveDirectoryW(staging.c_str()))
+        ioFail("Remove staging directory (both converted outputs are already published)", staging.native());
 }
 
 struct Transaction::Impl {
@@ -550,14 +602,17 @@ void Transaction::stage(const Bytes& ess, const Bytes& skse, const std::string& 
     verifyWritten(child(impl_->staging, L"converted.skse"), skseHash);
     Handle manifest(openHandle(child(impl_->staging, L"manifest.json"), GENERIC_READ, FILE_SHARE_READ,
                                OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT));
-    ensureRegular(manifest.value);
-    const auto manifestInfo = info(manifest.value);
-    if (fileSize(manifestInfo) != report.size() || readAll(manifest.value, report.size()) != Bytes(report.begin(), report.end()))
-        fail("Manifest verification failed");
+    ensureRegular(manifest.value, child(impl_->staging, L"manifest.json"));
+    const auto manifestInfo = info(manifest.value, child(impl_->staging, L"manifest.json"));
+    if (fileSize(manifestInfo) != report.size() ||
+        readAll(manifest.value, child(impl_->staging, L"manifest.json"), report.size()) !=
+            Bytes(report.begin(), report.end()))
+        pathFail("Manifest verification failed", child(impl_->staging, L"manifest.json"));
     for (const auto* name : { L"converted.ess", L"converted.skse", L"manifest.json" }) {
-        impl_->stagedFiles.emplace_back(openHandle(child(impl_->staging, name),
+        const auto path = child(impl_->staging, name);
+        impl_->stagedFiles.emplace_back(openHandle(path,
             GENERIC_READ, FILE_SHARE_READ, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT));
-        ensureRegular(impl_->stagedFiles.back().value);
+        ensureRegular(impl_->stagedFiles.back().value, path);
     }
     impl_->staged = true;
 }
