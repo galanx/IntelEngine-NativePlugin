@@ -5,6 +5,7 @@
  */
 
 #include "NPCIndex.h"
+#include "Utf8Truncate.h"
 #include <algorithm>
 #include "CellAnalyzer.h"
 #include "FactionPolitics.h"
@@ -32,6 +33,28 @@
 #include <sstream>
 
 namespace IntelEngine {
+
+    static std::vector<std::string> ExtractSharedKnowledge(std::vector<std::vector<std::string>>& candidateKnowledge) {
+        std::vector<std::string> sharedKnowledge;
+        if (candidateKnowledge.size() > 1) {
+            for (const auto& fact : candidateKnowledge.front()) {
+                if (std::all_of(candidateKnowledge.begin() + 1, candidateKnowledge.end(),
+                                [&fact](const auto& knowledge) {
+                                    return std::find(knowledge.begin(), knowledge.end(), fact) != knowledge.end();
+                                })) {
+                    sharedKnowledge.push_back(fact);
+                }
+            }
+        }
+        for (auto& knowledge : candidateKnowledge) {
+            knowledge.erase(std::remove_if(knowledge.begin(), knowledge.end(),
+                                           [&sharedKnowledge](const auto& fact) {
+                                               return std::find(sharedKnowledge.begin(), sharedKnowledge.end(), fact) != sharedKnowledge.end();
+                                           }),
+                            knowledge.end());
+        }
+        return sharedKnowledge;
+    }
 
     // ── Faction Blocklist (populated from plugin config) ──
     // Format: "FactionEditorID" blocks all ranks, "FactionEditorID:N" blocks rank <= N
@@ -2319,19 +2342,9 @@ namespace IntelEngine {
                 if (!d.subType.empty()) { md += "/"; md += d.subType; }
                 if (!d.npcName.empty()) { md += " — "; md += d.npcName; }
                 if (!d.narration.empty()) {
-                    // UTF-8-safe truncation: walk back from the byte cap to the
-                    // previous lead byte so we don't split a multi-byte sequence.
                     md += " (";
-                    if (d.narration.size() <= MAX_DISPATCH_NARRATION_CHARS) {
-                        md += d.narration;
-                    } else {
-                        size_t cut = MAX_DISPATCH_NARRATION_CHARS;
-                        while (cut > 0 && (static_cast<unsigned char>(d.narration[cut]) & 0xC0u) == 0x80u) {
-                            --cut;
-                        }
-                        md += d.narration.substr(0, cut);
-                        md += "...";
-                    }
+                    md.append(d.narration, 0, Utf8PrefixBytes(d.narration, MAX_DISPATCH_NARRATION_CHARS));
+                    if (d.narration.size() > MAX_DISPATCH_NARRATION_CHARS) md += "...";
                     md += ")";
                 }
                 if (d.outcome == DispatchOutcome::Rejected) {
@@ -2366,16 +2379,30 @@ namespace IntelEngine {
 
         // Reverse so most-important candidates appear last (LLM attention bias)
         std::reverse(finalPool.begin(), finalPool.end());
-        md += "## Candidate Pool\n\n";
         int memPerCandidate = snap.memoriesPerCandidate;
+        std::vector<std::vector<std::string>> candidateKnowledge;
+        candidateKnowledge.reserve(finalPool.size());
+        for (const auto& candidate : finalPool) {
+            candidateKnowledge.push_back(memDB->GetWorldKnowledgeForActor(candidate.a->dbFormId, 3));
+        }
 
+        // A lone candidate keeps all knowledge in its own block.
+        auto sharedKnowledge = ExtractSharedKnowledge(candidateKnowledge);
+        if (!sharedKnowledge.empty()) {
+            md += "## Everyone here knows:\n";
+            for (const auto& fact : sharedKnowledge) {
+                md += "- ";  md += fact;  md += "\n";
+            }
+            md += "\n";
+        }
+
+        md += "## Candidate Pool\n\n";
         for (int i = 0; i < static_cast<int>(finalPool.size()); ++i) {
             const auto* a = finalPool[i].a;
             const char* gender = a->isFemale ? "Female" : "Male";
 
             char uuid[16];
             snprintf(uuid, sizeof(uuid), "0x%08X", a->formId);
-
             // Distance string
             std::string distStr;
             if (a->is3DLoaded) {
@@ -2487,15 +2514,14 @@ namespace IntelEngine {
                 md += "Recent:\n";  md += recentEvents;  md += "\n";
             }
 
-            // World knowledge — facts about this NPC's world that the author
-            // flagged always_inject. Cheap path, ~5-8 candidates per build.
-            auto knowledge = memDB->GetWorldKnowledgeForActor(a->dbFormId, 3);
+            const auto& knowledge = candidateKnowledge[static_cast<size_t>(i)];
             if (!knowledge.empty()) {
                 md += "Knows:\n";
-                for (const auto& k : knowledge) {
-                    md += "- ";  md += k;  md += "\n";
+                for (const auto& fact : knowledge) {
+                    md += "- ";  md += fact;  md += "\n";
                 }
             }
+
 
             auto relatedNPCs = memDB->GetRelatedCandidateFormIDs(a->dbFormId, 5);
             if (!relatedNPCs.empty()) {
@@ -2576,18 +2602,6 @@ namespace IntelEngine {
             return s.substr(start, end - start + 1);
         }
 
-        // UTF-8-safe byte-cap truncation. Walks back from the cap to the
-        // previous lead byte so a multi-byte sequence is never split. Append
-        // ellipsis if anything was actually trimmed.
-        void TruncateUtf8Inplace(std::string& s, size_t maxBytes) {
-            if (s.size() <= maxBytes) return;
-            size_t cut = maxBytes;
-            while (cut > 0 && (static_cast<unsigned char>(s[cut]) & 0xC0u) == 0x80u) {
-                --cut;
-            }
-            s.resize(cut);
-            s += "...";
-        }
     }
 
     void NPCIndex::RecordStoryDispatch(const std::string& storyType,
@@ -2620,7 +2634,10 @@ namespace IntelEngine {
 
     void NPCIndex::MarkLastDispatchFailed(const std::string& reason) {
         std::string clean = SanitizeForHistory(reason);
-        TruncateUtf8Inplace(clean, MAX_DISPATCH_REASON_CHARS);
+        if (clean.size() > MAX_DISPATCH_REASON_CHARS) {
+            clean.resize(Utf8PrefixBytes(clean, MAX_DISPATCH_REASON_CHARS));
+            clean += "...";
+        }
 
         std::unique_lock lock(m_mutex);
         if (m_recentDispatches.empty()) {

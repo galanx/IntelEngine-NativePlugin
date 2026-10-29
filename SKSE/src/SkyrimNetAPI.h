@@ -58,8 +58,6 @@ namespace IntelEngine::SkyrimNetAPI {
     /** Retrieve recent dialogue between the player and a specific NPC. */
     inline std::string (*GetRecentDialogue)(uint32_t formId, int maxExchanges) = nullptr;
 
-    /** Get the most recent NPC who spoke to the player. */
-    inline std::string (*GetLatestDialogueInfo)() = nullptr;
 
     /** Check if the memory/database system is ready. */
     inline bool (*IsMemorySystemReady)() = nullptr;
@@ -173,8 +171,6 @@ namespace IntelEngine::SkyrimNetAPI {
         GetRecentDialogue = reinterpret_cast<std::string(*)(uint32_t, int)>(
             GetProcAddress(hDLL, "PublicGetRecentDialogue"));
 
-        GetLatestDialogueInfo = reinterpret_cast<std::string(*)()>(
-            GetProcAddress(hDLL, "PublicGetLatestDialogueInfo"));
 
         IsMemorySystemReady = reinterpret_cast<bool(*)()>(
             GetProcAddress(hDLL, "PublicIsMemorySystemReady"));
@@ -231,11 +227,11 @@ namespace IntelEngine::SkyrimNetAPI {
             GetProcAddress(hDLL, "PublicGetWorldKnowledgeForActor"));
 
         // Bio template API
-        logger::info("SkyrimNet Data API: Memories={}, Events={}, Dialogue={}, LatestDialogue={}, Ready={}, "
+        logger::info("SkyrimNet Data API: Memories={}, Events={}, Dialogue={}, Ready={}, "
                      "ActorEngagement={}, RelatedActors={}, PlayerContext={}, EventPairs={}, "
                      "EventCallback={}, BioTemplate={}, WorldKnowledge={}",
                      GetMemoriesForActor != nullptr, GetRecentEvents != nullptr,
-                     GetRecentDialogue != nullptr, GetLatestDialogueInfo != nullptr,
+                     GetRecentDialogue != nullptr,
                      IsMemorySystemReady != nullptr, GetActorEngagement != nullptr,
                      GetRelatedActors != nullptr, GetPlayerContext != nullptr,
                      GetEventPairCounts != nullptr,

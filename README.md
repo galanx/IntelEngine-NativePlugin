@@ -322,7 +322,9 @@ View all pending scheduled tasks with times and targets. Cancel individually or 
 
 ## In-Game Dashboard (PrismaUI)
 
-When the optional [PrismaUI](https://www.prismaui.dev/) SKSE plugin is installed, IntelEngine provides a real-time overlay dashboard accessible via hotkey (default: Shift+7). The dashboard is a React web UI rendered in-game with full mouse/keyboard interaction.
+When the optional [PrismaUI](https://www.prismaui.dev/) SKSE plugin is installed, IntelEngine provides a real-time overlay dashboard accessible via hotkey (default: Shift+7). The hotkey requires Skyrim to have foreground focus and exactly the configured Ctrl/Shift/Alt modifiers; a held combo must be released after returning focus. The dashboard is a React web UI rendered in-game with full mouse/keyboard interaction.
+
+Change the dashboard hotkey in the dashboard's Settings tab or on the SkyrimNet settings page (click Save); both apply immediately. The MCM has no hotkey option.
 
 ### Tabs
 
@@ -334,7 +336,7 @@ When the optional [PrismaUI](https://www.prismaui.dev/) SKSE plugin is installed
 
 **Active Packages** — See which NPCs are currently running IntelEngine AI packages (travel, sandbox, stalk). Remove packages from stuck NPCs directly.
 
-**Settings** — Full parity with the MCM. Every setting has a description hint. Includes plugin configuration (blocklists, LLM overrides, dashboard hotkey) read from `settings.yaml`.
+**Settings** — Shared settings behavior with the MCM. Politics settings are read from `settings.yaml` and saved there by both interfaces; plugin configuration includes blocklists and LLM overrides.
 
 ### How It Works
 
@@ -372,7 +374,7 @@ IntelEngine operates as two tightly integrated layers, with a third connecting i
 
 ## Story Engine — The Dungeon Master
 
-The Story Engine is Part 2 of IntelEngine. Every few in-game hours, an LLM Dungeon Master observes the full world state — your location, time of day, NPC memories and relationships — and decides if something should happen. No random dice rolls. Every event is grounded in the actual history of your playthrough.
+The Story Engine is Part 2 of IntelEngine. Every few in-game hours, an LLM Dungeon Master observes the full world state — your location, time of day, NPC memories and relationships — and decides if something should happen. World facts shared by every candidate are shown once, while each NPC's additional knowledge remains attached to them for silent fact-checking. No random dice rolls. Every event is grounded in the actual history of your playthrough.
 
 Nine story types, each individually toggleable via MCM:
 
@@ -388,7 +390,7 @@ Nine story types, each individually toggleable via MCM:
 - **NPC Interaction** — Two NPCs interact independently of you. Arguments, deals, training, whispered conspiracies. Happens whether you're watching or not.
 - **NPC Gossip** — Rumors spread through chains of up to 10 people. Information travels realistically through the world.
 
-Every event injects facts into NPC bios that persist and influence all future dialogue. The Dungeon Master uses anti-repetition, type balancing, and per-NPC cooldowns to keep stories varied and meaningful.
+Every event injects facts into NPC bios that persist and influence all future dialogue. Message and quest courier facts/memories are recorded only after arrival passes the travel rejection checks; rejected pending quests do not publish quest facts or repetition history. The Dungeon Master prompt lists only enabled story types and guards long-absence seek-player guidance accordingly. Anti-repetition, type balancing, and per-NPC cooldowns keep stories varied and meaningful.
 
 ---
 
@@ -428,19 +430,21 @@ One real VR fixture passed bounded converted-copy acceptance: six repaired facts
 
 Only rendered-cache values are rewritten. Non-cache fields, including BEL-bearing task destinations and stored names, pass through byte-for-byte without normalization. If STRV is absent and the PapyrusUtil owner contains only recognized record types/versions, `fix` can publish a verified byte-identical cache-free pair; this is a copy, not a repair. Unknown records in that path or a present STRV with no eligible targets refuse.
 
+Player `fix` also re-encodes save-local `0xFF` rendered-cache holders in place when their serialized type is actor (`62`), and orphaned global (object `0`) cache entries; no form resolution or remapping is needed. Both use the same legacy policy: restore BEL to space, then encode. Target values are byte strings: malformed UTF-8 (including historical byte-truncated messages) is preserved without transcoding or replacement. TAB, LF, VT, FF, CR and embedded ESC are encoded; a lone ESC (ambiguous empty sentinel), NUL, DEL and unsupported C0 controls still refuse, as do restored-original mismatches. Native target assignments and reverse-patch byte equality must still verify. Human output lists converted fields, temporary identities (decimal object ID plus hexadecimal form ID), orphaned global keys, and each output path on separate lines. Expert `inspect`/`convert` JSON, strict UTF-8 and qualification rules are unchanged.
+
 Validation focuses on IntelEngine's rendered caches. Other plugins' blocks, including duplicate serialization IDs, and non-cache keys and values pass through byte-for-byte; their content does not disqualify an otherwise eligible save. This does not repair other mods' data. Ambiguous IntelEngine targets, duplicate PapyrusUtil owners or STRV records, and incomplete framing still refuse. The converter verifies that every byte outside the cache values and their enclosing length fields stays unchanged.
 
 For Skyrim **1.6.1170**, the converter accepts **SKSE64 2.2.6, 2.2.7 and 2.2.8**; the other runtime gates are unchanged. The [SKSE release history](https://github.com/ianpatt/skse64/blob/v2.2.8/skse64_whatsnew.txt) and [2.2.8 runtime definition](https://github.com/ianpatt/skse64/blob/v2.2.8/skse64_common/skse_version.h) identify these as builds for the same runtime. Header eligibility is not a separate in-game acceptance test.
 
 Offline fixture check: `python SKSE/tests/RunLegacyCacheMigrationFixtureCheck.py --converter <converter.exe> --fixtures <fixture-folder-or-ESS> --work-dir <new-scratch-folder> [--expected <known-good.skse>]`. Omit `--fixtures` to use `IE_CONVERTER_PRIVATE_FIXTURES`; unavailable private fixtures are skipped. The check converts copies and compares the complete output against an independent cache-only rewrite, optionally against a known-good co-save too. Keep private saves outside this repository.
 
-Converter build candidate **3.6.1** embeds IntelEngine Windows version metadata. Build the standalone tool with MSVC Release (static C++ runtime, no debug information): `cmake -S SKSE/migration -B <build-dir> -G "Visual Studio 17 2022" -A x64 -DCMAKE_PREFIX_PATH=<existing-vcpkg-prefix>`, then `cmake --build <build-dir> --config Release --target LegacyCacheMigration LegacyCacheMigrationCheck`. Run `<build-dir>/Release/LegacyCacheMigrationCheck.exe <new-scratch-dir>` for the synthetic conversion/publication checks. The closed-game process check remains unchanged; window-only detection can miss a starting or headless game. Build metadata is not a digital signature or an antivirus clearance; this candidate does not replace the published 3.6.0 package.
+Converter build candidate **3.6.2** embeds IntelEngine Windows version metadata. Build the standalone tool with MSVC Release (static C++ runtime, no debug information): `cmake -S SKSE/migration -B <build-dir> -G "Visual Studio 17 2022" -A x64 -DCMAKE_PREFIX_PATH=<existing-vcpkg-prefix>`, then `cmake --build <build-dir> --config Release --target LegacyCacheMigration LegacyCacheMigrationCheck`. Run `<build-dir>/Release/LegacyCacheMigrationCheck.exe <new-scratch-dir>` for the synthetic conversion/publication checks. The closed-game process check remains unchanged; window-only detection can miss a starting or headless game. Build metadata is not a digital signature or an antivirus clearance; this candidate does not replace the published 3.6.0 package.
 
-If the converter says the save path is not allowed (Reparse path rejected), your save folder is a link or junction (for example My Games moved to another drive, or OneDrive): copy the .ess and .skse pair to a normal folder such as Desktop\IE-convert and drag the .ess from there.
+Linked/cloud-managed components and extended/device paths remain unsupported. Copy **both** `.ess` and `.skse` to a short writable normal physical folder, e.g. `C:\IE-convert`, preserving the originals. Desktop/Documents may themselves be cloud-managed. Ordinary `.\My Save.ess` spelling and case-insensitive `.ess` extensions are accepted without renaming the input. Access failures identify paths and OS errors; runtime refusals list the detected and supported runtime/SKSE tuples. Existing backup/output/staging collisions must be inspected, never overwritten: retry the original pair in a fresh physical folder, and do not load an incomplete output pair.
 
 It preserves the originals in `<stem>_IEbackup/` and creates sibling `<stem>_IEconverted.ess` / `<stem>_IEconverted.skse` without replacing existing files. Exit **0** means both outputs were published; **2** is a usage, eligibility or safety refusal; **3** is an I/O, verification or publication failure. If the second rename fails, the first converted file may remain; do not load an incomplete pair. Install the complete repaired DLL, both affected PEX files and all three prompts before using the converted pair. Never load a converted save with 3.5.2 or earlier.
 
-Do not repeat conversion or mix original and converted companions. Writer provenance cannot be proved from the save; BEL-to-space is owner policy. Rollback requires the original pair, matching old components and corresponding IntelEngine/SkyrimNet external-data backups; the converter backs up only the pair.
+Do not repeat conversion or mix original and converted companions. `fix` refuses input stems ending in `_IEconverted` (case-insensitive), but renaming bypasses this filename guard. There is no reliable save marker distinguishing legacy values from already-encoded 3.6.x values; percent-looking text is legitimate legacy text too. **Do not convert a save written by 3.6.x or a previously converted save**, even after renaming: it can double-encode values. Writer provenance cannot be proved from the save; BEL-to-space is owner policy. Rollback requires the original pair, matching old components and corresponding IntelEngine/SkyrimNet external-data backups; the converter backs up only the pair.
 
 **If you skip conversion:** fixed templates interpret recognized literal percent escapes as controls (for example, `%0A` becomes a newline); `%250A` becomes literal `%0A` without recursion. This does not make native restoration of raw legacy saves safe. See the [API conversion record](docs/DLL_API.md#player-fix-mode-how-to-convert-an-old-save) for exact decoder results and offline byte comparisons.
 

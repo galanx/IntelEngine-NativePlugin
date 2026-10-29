@@ -461,9 +461,11 @@ The Native-owned encoder preserves plain Markdown renderer APIs and the scalar-c
 
 One bytewise pass maps `%` → `%25`, BEL → `%07`, TAB → `%09`, LF → `%0A`, VT → `%0B`, FF → `%0C`, CR → `%0D`, ESC → `%1B`. Empty input stays empty; spaces, UTF-8, quotes and backslashes are unchanged. Embedded NUL/binary text is unsupported. The three cached readers reverse the seven control tokens, then `%25` **LAST**, once, before checking emptiness/output. This is neither URI decoding nor an idempotent encoder.
 
+Native text caps now retain complete UTF-8 code points: delivery-message task descriptions retain at most 80 bytes before `...`, and political event/battle narratives and dispatch prompt history use the same boundary helper with their existing caps/suffixes. This prevents new split-code-point text; it does not repair suffixes already lost in historical saves. `Utf8TruncateCheck` is the standalone boundary check. Source/build verification is separate from packaging, installation and in-game acceptance.
+
 **BREAKING / coherent providers required:** start a fresh new game with the repaired DLL, freshly compiled `IntelEngine.pex`/`IntelEngine_Core.pex` and all three repaired prompts already winning, or use only an eligible offline-converted copy as described below. Unconverted existing saves, including apparently cache-free saves, remain unsupported: old values can poison restoration before scripts run or ambiguously decode literal percent text. There is no raw fallback or general post-load safety guarantee.
 
-Native owns C++/PSC/templates; Game is the Data-layout mirror. Keep both PSC files and all three prompt pairs byte-identical, and mirror this API document explicitly (root staging does not copy docs). Source equality does not prove DLL/PEX freshness, packaged equality does not identify installed winners, and neither proves runtime behavior. Stop on new PEX/old DLL missing binding, old Core PEX/new DLL raw writes, old templates/new encoded caches, or ambiguous providers; do not assume an unbound call's result.
+Native owns C++/PSC/templates; Game is the Data-layout mirror. Keep both PSC trees and all three prompt pairs byte-identical; `verify.ps1 -DataDir <Game tree>` checks every PSC and the existing prompt bundle. Mirror this API document explicitly (root staging does not copy docs). Source equality does not prove DLL/PEX freshness, packaged equality does not identify installed winners, and neither proves runtime behavior. Stop on new PEX/old DLL missing binding, old Core PEX/new DLL raw writes, old templates/new encoded caches, or ambiguous providers; do not assume an unbound call's result.
 
 Rollback requires the complete old DLL/PEX/template set and its separately preserved pre-cutover save lineage. Do not load repaired saves under old components or rewrite evidence saves.
 
@@ -511,12 +513,15 @@ Offline production byte comparisons passed after safety corrections on two prese
    ```
 
 3. Success creates `<stem>_IEbackup/` containing the original `.ess` and `.skse`, plus sibling `<stem>_IEconverted.ess` and `<stem>_IEconverted.skse`. The tool does not overwrite existing backup/output files. It leaves the original pair unchanged.
+   Player `fix` reports each converted cache, each unique temporary identity (decimal object ID and hexadecimal form ID), and each orphaned global cache key on separate lines. Its conversion result records temporary holders in `temporary_identities` and converted global keys in `global_entries`; expert JSON receipts and inspection output are unchanged.
 4. Exit **0** means both verified converted files were published; **2** means usage, eligibility or safety refusal; **3** means I/O, verification or publication failure. If publishing the second file fails, the first converted file may remain. This is an incomplete pair: do not load it, and retain the backup and all remaining files for diagnosis.
 5. Install the complete repaired providers (DLL, both affected PEX files and all three prompts) before using the converted pair. Never load a converted save with 3.5.2 or earlier. Do not convert again, mix original and converted companions, or assume already-lost names/history can be recovered.
 
-If the converter says the save path is not allowed (Reparse path rejected), your save folder is a link or junction (for example My Games moved to another drive, or OneDrive): copy the .ess and .skse pair to a normal folder such as Desktop\IE-convert and drag the .ess from there.
+Linked/cloud-managed components and extended/device paths remain unsupported. Copy **both** `.ess` and `.skse` to a short writable normal physical folder, e.g. `C:\IE-convert`, preserving the originals; Desktop/Documents may themselves be cloud-managed. Ordinary `.\My Save.ess` spelling and case-insensitive `.ess` extensions are accepted without renaming the input. Refusals identify resolved companion paths/OS errors, matched game executable/PID, detected and supported runtime/SKSE tuples, and retained output collisions. Inspect retained artifacts and retry the original pair in a fresh physical folder; never overwrite backups or load an incomplete pair.
 
 Rollback means restoring the preserved original pair with its matching old providers and the corresponding IntelEngine/SkyrimNet external-data snapshot. The pair backup does not include external databases or their `-wal`/`-shm` files. Do not mix saves/providers or claim general legacy-save safety.
+
+`fix` refuses input stems ending in `_IEconverted` (case-insensitive). It also refuses the whole save if any rendered-cache value contains `%0A` without a raw LF, naming the first such object/key: nonempty rendered sections begin with a heading and LF, which 3.6 encodes. If other target values contain raw LF, the refusal identifies mixed legacy/3.6 caches; header-only stubs without either are neutral. Already-encoded saves should load directly with IntelEngine 3.6.x, not be converted again. Support-only escape hatch: `fix --save FILE.ess --force` skips only this structural check and can double-encode text; all other refusals remain active.
 
 The historical writer's identity/provenance cannot be proved from the file. Treating serialized BEL as a space is owner policy, not recovered original text. The required real-template smoke rendered all three full fixed prompts through Inja commit `affabd9fb6e679b2535382063e11ac9cc5ff860c`. Legacy literal `%07%09%0A%0B%0C%0D%1B%25%250A%0a%41%07` produced payload bytes `07090A0B0C0D1B2525304125306125343107`: the upper-case control tokens became their control bytes, `%25` became `%`, `%250A` became literal `%0A` without recursion, and lowercase `%0a` / unknown `%41` remained literal. Encoding that same literal input with the production codec preserved it through all three templates. This measured decoder behavior does not establish that native restoration of legacy percent text is safe.
 
@@ -531,9 +536,9 @@ VR `fix` reuses the shared repair path for eligible VR-capable IE 3.5.1-or-earli
 #### Eligibility and refusal policy
 
 - Require complete supported SKSE/STRV framing, exact counts and EOF, exactly one PapyrusUtil owner and STRV record, canonical lowercase target keys, pinned provider/runtime/codec provenance and evidence covering **every** target: `intel_factsrendered`, `intel_gossiprendered`, `intel_taskhistoryrendered`. Inspection alone never grants eligibility.
-- `actor-in-place` requires explicit `legacy_writer: "IE-3.5.2"`, `actor_bel_policy: "space"` and `preserve_rne_name_bel: true` in both the evidence and qualification basis. It preserves serialized identities without resolving/remapping forms. Only qualified actor identities carrying caches are eligible; temporary cache targets refuse. Non-target holders pass through, not declared runtime-qualified.
-- In the actor cache policy, serialized BEL means space and LF is allowed within a complete cache value. Genuine original cache BEL, ESC, other C0 controls and DEL refuse. Non-cache values, including `rne_name` and task destinations, preserve all bytes without interpretation. `legacy` cache fields require independent original-byte evidence; `legacy-policy` cache fields additionally declare `original_basis: "owner-policy"`.
-- Global mode remains stricter for targets: every cache identity must be global, legacy BEL/ESC collisions refuse, and every target needs independent original-byte evidence. Neither mode guesses unknown target sentinel meanings. Already-encoded fields require a pinned writer codec and exact expected original bytes; literal percent text or a filename does not prove encoding.
+- Expert `actor-in-place` requires explicit `legacy_writer: "IE-3.5.2"`, `actor_bel_policy: "space"` and `preserve_rne_name_bel: true` in both the evidence and qualification basis. It preserves serialized identities without resolving/remapping forms. Only qualified actor identities carrying caches are eligible; temporary cache targets still refuse expert conversion. Player `fix` instead accepts `0xFF` cache holders with serialized actor type `62` and a nonzero form, plus orphaned global (object `0`) cache entries, re-encoding their values in place through the same owner-policy path as other actors. The non-global identity check remains unchanged: non-62 types and zero forms refuse. Non-target holders pass through, not declared runtime-qualified.
+- In the actor cache policy (also used for global entries in player `fix`), serialized BEL means space and LF is allowed within a complete cache value. Player `fix` additionally admits TAB, VT, FF, CR and embedded ESC, and preserves malformed UTF-8 value bytes through the bytewise codec without transcoding/replacement; a lone ESC remains an ambiguous empty sentinel and refuses. NUL, DEL and unsupported C0 controls still refuse. Native assignment and reverse-patch proofs remain mandatory. Expert mode retains strict UTF-8 and its original BEL/ESC/control policy. Restored-original bytes must agree with the BEL-restored span. Non-cache values, including `rne_name` and task destinations, preserve all bytes without interpretation. `legacy` cache fields require independent original-byte evidence; `legacy-policy` cache fields additionally declare `original_basis: "owner-policy"`.
+- Expert global mode remains stricter for targets: every cache identity must be global, legacy BEL/ESC collisions refuse, and every target needs independent original-byte evidence. Neither expert scope guesses unknown target sentinel meanings. Already-encoded fields require a pinned writer codec and exact expected original bytes; literal percent text or a filename does not prove encoding.
 - Refuse the whole candidate on truncation, ambiguous target framing, duplicate PapyrusUtil owners or STRV records, declared/written count gaps (including skipped empty maps), unsupported target version/identity/key, duplicate or noncanonical target keys, repeated object identities involving a target, missing/duplicate/extraneous field evidence, mismatched spans/hashes, unknown target representation or unpinned encoded generation. No partial salvage or force switch.
 - Refuse unmatched companion pairs, source drift, existing/overlapping destinations, unsafe aliases/reparse paths and protected save-directory destinations. Copy-only checks do not prove installation or runtime behavior.
 
@@ -630,19 +635,11 @@ Every decoder-template edit additionally requires a temporary smoke of the actua
 
 ### Papyrus API declarations and array guards
 
-Native owns the three repaired PSC files; Game's source mirrors are byte-identical. `IntelEngine.psc` now declares the existing registered implementations with these signatures; no native implementation, consumer dispatch or compatibility alias was added:
+This cleanup removes unused safety-net and pending Director-parameter Papyrus natives,
+their registrations and their exclusive C++ state. Source scans of both Native and Game
+repositories found no script, prompt, YAML or JavaScript callers; external or dynamic
+callers are not covered.
 
-```papyrus
-String Function ClaimPendingDirectorParams() Global Native
-String Function BuildSafetyNetContextJson(Actor akActor, Int keywordHint) Global Native
-Int Function HasScheduleKeywords(Actor akActor) Global Native
-Actor Function GetLastConversationPartner() Global Native
-Actor Function GetSafetyNetNPC() Global Native
-Function NotifyNewDialogue() Global Native
-Int Function RunSafetyNetCheck() Global Native
-```
-
-Schedule hints are `0=none`, `1=meeting`, `2=fetch`, `3=delivery`. `GetSafetyNetNPC` returns the last stored positive-check NPC if still resolvable; a negative check does not clear it. `NotifyNewDialogue` resets unchanged-dialogue backoff, not the cooldown timestamp. Context JSON is escaped and empty for unavailable actor/dialogue. Director claim atomically consumes pending parameters as JSON, returning empty when already claimed. Literal source consumers were not found in either repository; external/dynamic callers remain unexcluded.
 
 Core `Maintenance` uses `If !SlotStates`; Schedule `RestartMonitoring` uses `If !ScheduledAgents` twice. Initialization, Core's separate length validation, restored arrays, co-save/legacy recovery, recount and monitoring remain unchanged. The encoder declaration, four complete writes and three mirrored readers are preserved.
 

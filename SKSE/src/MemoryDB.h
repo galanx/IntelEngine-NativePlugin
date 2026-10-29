@@ -38,10 +38,6 @@ namespace IntelEngine {
         float lastInteractionHours;  // game_time (in DB seconds) of most recent interaction
     };
 
-    struct LatestDialogueInfo {
-        RE::FormID npcFormId = 0;
-        float gameTimeHours = 0.0f;  // game_time (in DB seconds) of latest dialogue event
-    };
 
     struct NPCPairRelationship {
         RE::FormID formId1;
@@ -219,7 +215,7 @@ namespace IntelEngine {
         std::vector<NPCPairRelationship> GetPoolRelationships(const std::vector<RE::FormID>& poolFormIds);
 
         // =================================================================
-        // Dialogue Safety Net Functions
+        // Dialogue Functions
         // =================================================================
 
         /**
@@ -232,18 +228,7 @@ namespace IntelEngine {
          */
         std::string GetRecentDialogueForActor(RE::FormID formId, int maxExchanges);
 
-        /**
-         * Find the most recent NPC the player had a dialogue with, plus event timestamp.
-         *
-         * @return LatestDialogueInfo with FormID + game_time (both 0 if not found)
-         */
-        LatestDialogueInfo GetLatestDialogueInfo();
 
-        /**
-         * Check dialogue text for schedule-related keywords.
-         * Returns: 0=none, 1=meeting, 2=fetch, 3=delivery
-         */
-        static int CheckScheduleKeywords(const std::string& text);
 
         // Escape string for JSON embedding (quotes, backslashes, newlines)
         static std::string EscapeJsonString(const std::string& text);
