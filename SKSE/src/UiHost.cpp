@@ -187,7 +187,6 @@ void FinishPrismaDomReady(PrismaContext& context, PrismaView view, std::uint64_t
     }
     if (!focused) {
         api->Hide(view);
-        logger::debug("[Dashboard] PrismaUI focus refused due to input ownership");
         if (sink && *sink) (*sink)(UiHostEvent::Refused);
         return;
     }
@@ -314,7 +313,6 @@ public:
         const bool competingMagelight = magelight_ && magelight_->IsUIModeActive &&
                                           magelight_->IsUIModeActive();
         if (competingMagelight || api_->HasAnyActiveFocus()) {
-            logger::debug("[Dashboard] PrismaUI focus refused due to input ownership");
             return UiOpenResult::Refused;
         }
         bool ready;

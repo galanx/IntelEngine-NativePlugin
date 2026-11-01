@@ -257,6 +257,8 @@ namespace IntelEngine::Papyrus {
     bool StoryResponseShouldAct(RE::StaticFunctionTag*, RE::BSFixedString response);
     RE::BSFixedString StoryResponseGetField(RE::StaticFunctionTag*, RE::BSFixedString json,
                                             RE::BSFixedString fieldName);
+    RE::BSFixedString StoryResponseGetOptionalField(RE::StaticFunctionTag*, RE::BSFixedString json,
+                                                    RE::BSFixedString fieldName);
     RE::BSFixedString BuildActorContextJson(RE::StaticFunctionTag*, RE::Actor* actor,
                                             int slot);
     RE::BSFixedString BuildDungeonMasterContext(RE::StaticFunctionTag*, int maxCandidates,

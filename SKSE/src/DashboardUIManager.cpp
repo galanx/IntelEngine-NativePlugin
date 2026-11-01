@@ -114,9 +114,11 @@ namespace IntelEngine {
     }
 
     void DashboardUIManager::Shutdown() {
+        bool logHostExit = false;
         {
             std::lock_guard<std::mutex> lock(mutex_);
             if (!initialized_ || shuttingDown_) return;
+            logHostExit = requestedOpen_ || isOpen_.load();
             shuttingDown_ = true;
             acceptingCallbacks_.store(false);
             available_.store(false);
@@ -129,6 +131,8 @@ namespace IntelEngine {
             pendingFullStatePayloadSet_ = false;
             pendingFullStatePayload_.clear();
         }
+        if (logHostExit)
+            logger::info("[Dashboard] Closed (cause=host exit; Esc/host reason unavailable)");
         stopPolling_.store(true);
         pollCondition_.notify_all();
         if (hotkeyThread_.joinable()) hotkeyThread_.join();
@@ -153,15 +157,48 @@ namespace IntelEngine {
     }
 
     void DashboardUIManager::Toggle() {
-        std::lock_guard<std::mutex> lock(mutex_);
-        if (shuttingDown_ || !host_ || !available_.load()) return;
-        requestedOpen_ = !requestedOpen_;
-        ++generation_;
-        ++intentGeneration_;
-        if (requestedOpen_) {
-            if (!isOpen_.load()) openedEventSent_ = false;
-            pendingOpen_ = true;
-        } else {
+        bool logClose = false;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (shuttingDown_ || !host_ || !available_.load()) return;
+            const bool wasRequestedOpen = requestedOpen_;
+            requestedOpen_ = !requestedOpen_;
+            ++generation_;
+            ++intentGeneration_;
+            if (requestedOpen_) {
+                if (!isOpen_.load()) openedEventSent_ = false;
+                pendingOpen_ = true;
+            } else {
+                logClose = wasRequestedOpen;
+                pendingClose_ = true;
+                pendingCloseIntentGeneration_ = intentGeneration_;
+                pendingOpen_ = false;
+                isOpen_.store(false);
+                openedEventSent_ = false;
+                pendingFlush_ = false;
+                pendingRefresh_ = false;
+                pendingFullStateSet_ = false;
+                pendingFullState_.clear();
+                pendingSlotPayloadSet_ = false;
+                pendingSlotPayload_.clear();
+                pendingFullStatePayloadSet_ = false;
+                pendingFullStatePayload_.clear();
+            }
+        }
+        if (logClose) logger::info("[Dashboard] Closed (cause=hotkey)");
+        pollCondition_.notify_one();
+    }
+
+
+    void DashboardUIManager::RequestClose() {
+        bool logClose = false;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (shuttingDown_ || !host_ || !available_.load()) return;
+            logClose = requestedOpen_;
+            requestedOpen_ = false;
+            ++generation_;
+            ++intentGeneration_;
             pendingClose_ = true;
             pendingCloseIntentGeneration_ = intentGeneration_;
             pendingOpen_ = false;
@@ -176,35 +213,16 @@ namespace IntelEngine {
             pendingFullStatePayloadSet_ = false;
             pendingFullStatePayload_.clear();
         }
-        pollCondition_.notify_one();
-    }
-
-
-    void DashboardUIManager::RequestClose() {
-        std::lock_guard<std::mutex> lock(mutex_);
-        if (shuttingDown_ || !host_ || !available_.load()) return;
-        requestedOpen_ = false;
-        ++generation_;
-        ++intentGeneration_;
-        pendingClose_ = true;
-        pendingCloseIntentGeneration_ = intentGeneration_;
-        pendingOpen_ = false;
-        isOpen_.store(false);
-        openedEventSent_ = false;
-        pendingFlush_ = false;
-        pendingRefresh_ = false;
-        pendingFullStateSet_ = false;
-        pendingFullState_.clear();
-        pendingSlotPayloadSet_ = false;
-        pendingSlotPayload_.clear();
-        pendingFullStatePayloadSet_ = false;
-        pendingFullStatePayload_.clear();
+        if (logClose) logger::info("[Dashboard] Closed (cause=page close)");
         pollCondition_.notify_one();
     }
 
     void DashboardUIManager::OnHostEvent(UiHostEvent event, std::uint64_t expectedIntentGeneration) {
         bool notifyOpened = false;
         bool notifyRefresh = false;
+        bool logOpened = false;
+        bool logHostExit = false;
+        bool logRefused = false;
         {
             std::lock_guard<std::mutex> lock(mutex_);
             if (expectedIntentGeneration != 0 && intentGeneration_ != expectedIntentGeneration) return;
@@ -229,15 +247,18 @@ namespace IntelEngine {
                     break;
                 }
                 expectedExitPending_ = false;
+                logOpened = !isOpen_.load();
                 isOpen_.store(true);
                 pendingFlush_ = true;
                 break;
             case UiHostEvent::Exited: {
+                logHostExit = requestedOpen_;
                 isOpen_.store(false);
                 const bool expectedReopen = expectedExitPending_ &&
                     requestedOpen_ && intentGeneration_ > expectedExitIntentGeneration_;
                 expectedExitPending_ = false;
                 if (expectedReopen) {
+                    logHostExit = false;
                     ++generation_;
                     pendingRefresh_ = false;
                     pendingFlush_ = false;
@@ -265,6 +286,7 @@ namespace IntelEngine {
                 break;
             }
             case UiHostEvent::Refused:
+                logRefused = requestedOpen_;
                 expectedExitPending_ = false;
                 isOpen_.store(false);
                 requestedOpen_ = false;
@@ -311,10 +333,15 @@ namespace IntelEngine {
                 }
             }
         }
+        if (logOpened) logger::info("[Dashboard] Opened");
+        if (logHostExit)
+            logger::info("[Dashboard] Closed (cause=host exit; Esc/host reason unavailable)");
+        if (logRefused) logger::info("[Dashboard] Open refused");
         pollCondition_.notify_one();
         if (notifyOpened) SendModEvent("IntelEngine_DashboardOpened");
         else if (notifyRefresh) SendModEvent("IntelEngine_DashboardRefresh");
     }
+
 
     void DashboardUIManager::FlushState(std::uint64_t generation) {
         bool ready;
