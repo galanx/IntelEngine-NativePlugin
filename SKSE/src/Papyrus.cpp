@@ -7,6 +7,7 @@
 #include "Papyrus.h"
 #include "FormIDString.h"
 #include "FactionLeaderNameMatch.h"
+#include "FactionPairValidation.h"
 #include "Utf8Truncate.h"
 #include "NPCIndex.h"
 #include "ItemIndex.h"
@@ -3886,6 +3887,11 @@ namespace IntelEngine::Papyrus {
                                RE::BSFixedString factionB, int delta) {
         auto* db = PoliticalDB::GetSingleton();
         if (!db->IsReady()) return 0;
+        if (IsSameFactionPair(factionA.c_str(), factionB.c_str())) {
+            logger::warn("FactionPolitics: Rejected relation adjustment with same faction on both sides: {}",
+                         factionA.c_str());
+            return db->GetRelation(factionA.c_str(), factionB.c_str());
+        }
         return db->AdjustRelation(factionA.c_str(), factionB.c_str(), delta);
     }
 

@@ -7,6 +7,7 @@
  */
 
 #include "FactionPolitics.h"
+#include "FactionPairValidation.h"
 #include "FactionConfigLoader.h"
 #include <filesystem>
 #include <fstream>
@@ -514,6 +515,11 @@ default_relations:
     bool FactionPolitics::ValidateEvent(const std::string& factionA, const std::string& factionB,
                                          const std::string& eventType, int relationDelta) {
         if (!initialized_.load()) return false;
+
+        if (IsSameFactionPair(factionA, factionB)) {
+            logger::warn("FactionPolitics: Rejected political event with same faction on both sides: {}", factionA);
+            return false;
+        }
 
         if (!GetFaction(factionA)) {
             logger::warn("FactionPolitics: Invalid faction_a: {}", factionA);
@@ -1705,6 +1711,10 @@ default_relations:
 
     int FactionPolitics::DeclareWar(const std::string& factionA, const std::string& factionB, float gameTime) {
         if (!initialized_.load()) return -1;
+        if (IsSameFactionPair(factionA, factionB)) {
+            logger::warn("FactionPolitics: Rejected war declaration with same faction on both sides: {}", factionA);
+            return -1;
+        }
 
         auto cfgA = GetFaction(factionA);
         auto cfgB = GetFaction(factionB);
