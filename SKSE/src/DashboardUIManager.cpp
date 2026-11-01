@@ -1,12 +1,12 @@
 /**
  * Dashboard UI Manager Implementation
  *
- * PrismaUI integration for the IntelEngine dashboard.
- * Hotkey polling runs on a background thread (50ms interval).
+ * UI host integration for the IntelEngine dashboard.
+ * Hotkey polling and deferred host/state operations run on a background thread.
  *
  * Data flow:
- *   Papyrus -> PushFullState(json) -> InteropCall("updateFullState", json) -> React
- *   React -> onDashboard_* listeners -> C++ -> SKSE ModEvent -> Papyrus
+ *   Papyrus -> PushFullState(json) -> IUiHost::Call("updateFullState", json) -> React
+ *   React -> UI host listeners -> C++ -> SKSE ModEvent -> Papyrus
  */
 
 #include "DashboardUIManager.h"
@@ -18,16 +18,14 @@
 #include <windows.h>
 #include <filesystem>
 #include <fstream>
-#include <sstream>
 #include <nlohmann/json.hpp>
 #include <cstdint>
 #include <limits>
 #include <optional>
+#include <utility>
 
 namespace IntelEngine {
 
-
-    static constexpr int kViewRenderOrder = 90;
     static constexpr auto kPollIntervalMs = std::chrono::milliseconds(50);
     static constexpr auto kKeyPressCooldownMs = std::chrono::milliseconds(300);
     static constexpr const char* kActionYamlDirectory =
@@ -50,30 +48,63 @@ namespace IntelEngine {
         return std::nullopt;
     }
 
-    // =========================================================================
-    // Lifecycle
-    // =========================================================================
 
     void DashboardUIManager::Initialize() {
-        std::lock_guard<std::mutex> lock(mutex_);
-
-        if (initialized_) return;
-        initialized_ = true;
-
-        try {
-            auto* api = static_cast<PRISMA_UI_API::IVPrismaUI1*>(
-                PRISMA_UI_API::RequestPluginAPI(PRISMA_UI_API::InterfaceVersion::V1));
-            if (api) {
-                prismaUI_ = api;
-                logger::info("[Dashboard] PrismaUI API acquired");
-                CreateViewIfNeeded();
-            }
-        } catch (...) {
-            logger::warn("[Dashboard] Failed to acquire PrismaUI API");
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (initialized_) return;
+            initialized_ = true;
+            shuttingDown_ = false;
+            acceptingCallbacks_.store(true);
+            ++generation_;
+            ++intentGeneration_;
         }
+        static const UiListener listeners[] = {
+            {"onCloseDashboard", OnCloseStatic},
+            {"onRequestRefresh", OnRequestRefreshStatic},
+            {"onReloadUI", OnReloadUIStatic},
+            {"onDashboard_cancelTask", OnCancelTaskStatic},
+            {"onDashboard_cancelSchedule", OnCancelScheduleStatic},
+            {"onDashboard_cancelQuest", OnCancelQuestStatic},
+            {"onDashboard_toggleStoryType", OnToggleStoryTypeStatic},
+            {"onDashboard_changeSetting", OnChangeSettingStatic},
+            {"onDashboard_removePackages", OnRemovePackagesStatic},
+            {"onDashboard_changePluginConfig", OnChangePluginConfigStatic},
+            {"onDashboard_dispatchStory", OnDispatchStoryStatic},
+            {"onDashboard_dispatchNpcSocial", OnDispatchNpcSocialStatic},
+            {"onDashboard_dispatchPolitics", OnDispatchPoliticsStatic},
+            {"onDashboard_executeAction", OnExecuteActionStatic},
+            {"onDashboard_toggleAction", OnToggleActionStatic},
+        };
 
-        if (!prismaUI_) {
-            logger::info("[Dashboard] PrismaUI not available - dashboard disabled");
+        std::unique_ptr<IUiHost> host;
+        try {
+            host = CreateUiHost(DashboardConfig::GetSingleton()->GetHostPreference(),
+                                listeners,
+                                [this](UiHostEvent event) { OnHostEvent(event); });
+            if (!host || !host->IsAvailable() || !host->Create() || !host->IsAvailable()) {
+                logger::info("[Dashboard] No dashboard UI host is available");
+                if (host) host->Shutdown();
+                return;
+            }
+        } catch (const std::exception& e) {
+            logger::warn("[Dashboard] Failed to initialize UI host: {}", e.what());
+            if (host) host->Shutdown();
+            return;
+        } catch (...) {
+            logger::warn("[Dashboard] Failed to initialize UI host");
+            if (host) host->Shutdown();
+            return;
+        }
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (!shuttingDown_) {
+                host_ = std::move(host);
+                available_.store(true);
+            }
+        }
+        if (host) {
+            host->Shutdown();
             return;
         }
 
@@ -83,94 +114,265 @@ namespace IntelEngine {
     }
 
     void DashboardUIManager::Shutdown() {
-        stopPolling_.store(true);
-        if (hotkeyThread_.joinable()) hotkeyThread_.join();
-
-        std::lock_guard<std::mutex> lock(mutex_);
-        if (prismaUI_ && dashboardView_ != 0) {
-            try { prismaUI_->Destroy(dashboardView_); } catch (...) {}
-            dashboardView_ = 0;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (!initialized_ || shuttingDown_) return;
+            shuttingDown_ = true;
+            acceptingCallbacks_.store(false);
+            available_.store(false);
+            ++generation_;
+            ++intentGeneration_;
+            pendingFullStateSet_ = false;
+            pendingFullState_.clear();
+            pendingSlotPayloadSet_ = false;
+            pendingSlotPayload_.clear();
+            pendingFullStatePayloadSet_ = false;
+            pendingFullStatePayload_.clear();
         }
-        isOpen_.store(false);
-        domReady_.store(false);
+        stopPolling_.store(true);
+        pollCondition_.notify_all();
+        if (hotkeyThread_.joinable()) hotkeyThread_.join();
+        std::unique_ptr<IUiHost> host;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            host = std::move(host_);
+        }
+        if (host) host->Shutdown();
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            requestedOpen_ = false;
+            openedEventSent_ = false;
+            domReady_.store(false);
+            isOpen_.store(false);
+            initialized_ = false;
+        }
+    }
+
+    bool DashboardUIManager::IsAvailable() const {
+        return available_.load();
     }
 
     void DashboardUIManager::Toggle() {
-        if (isOpen_.load()) Hide();
-        else Show();
-    }
-
-    void DashboardUIManager::Show() {
         std::lock_guard<std::mutex> lock(mutex_);
-        if (!prismaUI_ || isOpen_.load()) return;
-        if (!CreateViewIfNeeded()) return;
-
-        isOpen_.store(true);
-        prismaUI_->Show(dashboardView_);
-        logger::info("[Dashboard] Show: domReady={}", domReady_.load());
-
-        if (domReady_.load()) {
-            prismaUI_->Focus(dashboardView_, true, false);
-            // Request full state from Papyrus via ModEvent
-            SendModEvent("IntelEngine_DashboardOpened");
-            // Also push slot data as fallback
-            PushSlotData();
+        if (shuttingDown_ || !host_ || !available_.load()) return;
+        requestedOpen_ = !requestedOpen_;
+        ++generation_;
+        ++intentGeneration_;
+        if (requestedOpen_) {
+            if (!isOpen_.load()) openedEventSent_ = false;
+            pendingOpen_ = true;
+        } else {
+            pendingClose_ = true;
+            pendingCloseIntentGeneration_ = intentGeneration_;
+            pendingOpen_ = false;
+            isOpen_.store(false);
+            openedEventSent_ = false;
+            pendingFlush_ = false;
+            pendingRefresh_ = false;
+            pendingFullStateSet_ = false;
+            pendingFullState_.clear();
+            pendingSlotPayloadSet_ = false;
+            pendingSlotPayload_.clear();
+            pendingFullStatePayloadSet_ = false;
+            pendingFullStatePayload_.clear();
         }
+        pollCondition_.notify_one();
     }
 
-    void DashboardUIManager::Hide() {
+
+    void DashboardUIManager::RequestClose() {
         std::lock_guard<std::mutex> lock(mutex_);
-        if (!prismaUI_ || dashboardView_ == 0 || !isOpen_.load()) return;
-
-        try {
-            prismaUI_->Unfocus(dashboardView_);
-            prismaUI_->Hide(dashboardView_);
-        } catch (...) {}
-
+        if (shuttingDown_ || !host_ || !available_.load()) return;
+        requestedOpen_ = false;
+        ++generation_;
+        ++intentGeneration_;
+        pendingClose_ = true;
+        pendingCloseIntentGeneration_ = intentGeneration_;
+        pendingOpen_ = false;
         isOpen_.store(false);
+        openedEventSent_ = false;
+        pendingFlush_ = false;
+        pendingRefresh_ = false;
+        pendingFullStateSet_ = false;
+        pendingFullState_.clear();
+        pendingSlotPayloadSet_ = false;
+        pendingSlotPayload_.clear();
+        pendingFullStatePayloadSet_ = false;
+        pendingFullStatePayload_.clear();
+        pollCondition_.notify_one();
     }
 
-    bool DashboardUIManager::CreateViewIfNeeded() {
-        if (dashboardView_ != 0 && prismaUI_->IsValid(dashboardView_)) return true;
-
-        // Don't check std::filesystem::exists — MO2's VFS makes the file visible
-        // to PrismaUI but not to the real filesystem. Let CreateView handle resolution.
-
-        domReady_.store(false);
-
-        try {
-            const char* viewPath = "IntelEngine/dashboard/index.html";
-            dashboardView_ = prismaUI_->CreateView(viewPath, OnDomReadyStatic);
-            if (dashboardView_ == 0) return false;
-
-            prismaUI_->SetOrder(dashboardView_, kViewRenderOrder);
-            prismaUI_->Hide(dashboardView_);
-            return true;
-        } catch (...) {
-            dashboardView_ = 0;
-            return false;
+    void DashboardUIManager::OnHostEvent(UiHostEvent event, std::uint64_t expectedIntentGeneration) {
+        bool notifyOpened = false;
+        bool notifyRefresh = false;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (expectedIntentGeneration != 0 && intentGeneration_ != expectedIntentGeneration) return;
+            if (shuttingDown_) return;
+            switch (event) {
+            case UiHostEvent::DomReady:
+                domReady_.store(true);
+                ++generation_;
+                pendingFullStateSet_ = false;
+                pendingFullState_.clear();
+                pendingSlotPayloadSet_ = false;
+                pendingSlotPayload_.clear();
+                pendingFullStatePayloadSet_ = false;
+                pendingFullStatePayload_.clear();
+                pendingFlush_ = true;
+                pendingRefresh_ = openedEventSent_;
+                break;
+            case UiHostEvent::Entered:
+                if (!requestedOpen_) {
+                    pendingClose_ = true;
+                    pendingCloseIntentGeneration_ = intentGeneration_;
+                    break;
+                }
+                expectedExitPending_ = false;
+                isOpen_.store(true);
+                pendingFlush_ = true;
+                break;
+            case UiHostEvent::Exited: {
+                isOpen_.store(false);
+                const bool expectedReopen = expectedExitPending_ &&
+                    requestedOpen_ && intentGeneration_ > expectedExitIntentGeneration_;
+                expectedExitPending_ = false;
+                if (expectedReopen) {
+                    ++generation_;
+                    pendingRefresh_ = false;
+                    pendingFlush_ = false;
+                    pendingFullStateSet_ = false;
+                    pendingFullState_.clear();
+                    pendingSlotPayloadSet_ = false;
+                    pendingSlotPayload_.clear();
+                    pendingFullStatePayloadSet_ = false;
+                    pendingFullStatePayload_.clear();
+                    break;
+                }
+                requestedOpen_ = false;
+                openedEventSent_ = false;
+                ++generation_;
+                pendingRefresh_ = false;
+                ++intentGeneration_;
+                pendingOpen_ = false;
+                pendingFlush_ = false;
+                pendingFullStateSet_ = false;
+                pendingFullState_.clear();
+                pendingSlotPayloadSet_ = false;
+                pendingSlotPayload_.clear();
+                pendingFullStatePayloadSet_ = false;
+                pendingFullStatePayload_.clear();
+                break;
+            }
+            case UiHostEvent::Refused:
+                expectedExitPending_ = false;
+                isOpen_.store(false);
+                requestedOpen_ = false;
+                openedEventSent_ = false;
+                pendingRefresh_ = false;
+                ++intentGeneration_;
+                ++generation_;
+                pendingOpen_ = false;
+                pendingFlush_ = false;
+                pendingFullStateSet_ = false;
+                pendingFullState_.clear();
+                pendingSlotPayloadSet_ = false;
+                pendingSlotPayload_.clear();
+                pendingFullStatePayloadSet_ = false;
+                pendingFullStatePayload_.clear();
+                break;
+            case UiHostEvent::Unavailable:
+                expectedExitPending_ = false;
+                available_.store(false);
+                isOpen_.store(false);
+                domReady_.store(false);
+                requestedOpen_ = false;
+                openedEventSent_ = false;
+                pendingRefresh_ = false;
+                ++intentGeneration_;
+                ++generation_;
+                pendingOpen_ = false;
+                pendingFlush_ = false;
+                pendingFullStateSet_ = false;
+                pendingFullState_.clear();
+                pendingSlotPayloadSet_ = false;
+                pendingSlotPayload_.clear();
+                pendingFullStatePayloadSet_ = false;
+                pendingFullStatePayload_.clear();
+                break;
+            }
+            if (requestedOpen_ && domReady_.load() && isOpen_.load()) {
+                if (!openedEventSent_) {
+                    openedEventSent_ = true;
+                    notifyOpened = true;
+                } else if (pendingRefresh_) {
+                    pendingRefresh_ = false;
+                    notifyRefresh = true;
+                }
+            }
         }
+        pollCondition_.notify_one();
+        if (notifyOpened) SendModEvent("IntelEngine_DashboardOpened");
+        else if (notifyRefresh) SendModEvent("IntelEngine_DashboardRefresh");
+    }
+
+    void DashboardUIManager::FlushState(std::uint64_t generation) {
+        bool ready;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            ready = !shuttingDown_ && generation_ == generation &&
+                    requestedOpen_ && isOpen_.load() && domReady_.load();
+        }
+        if (ready) SendSlotData(generation);
+    }
+
+    void DashboardUIManager::PushSlotData() {
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (shuttingDown_ || !available_.load() || !requestedOpen_) return;
+            pendingFlush_ = true;
+        }
+        pollCondition_.notify_one();
+    }
+
+    void DashboardUIManager::SendSlotData(std::uint64_t generation) {
+        if (!domReady_.load()) return;
+        try {
+            std::string json = SlotTracker::GetSingleton()->SerializeToJson();
+            {
+                std::lock_guard<std::mutex> lock(mutex_);
+                if (shuttingDown_ || generation_ != generation ||
+                    !requestedOpen_ || !isOpen_.load() || !domReady_.load()) return;
+                pendingSlotPayload_ = std::move(json);
+                slotPayloadGeneration_ = generation;
+                pendingSlotPayloadSet_ = true;
+            }
+            pollCondition_.notify_one();
+        } catch (const std::exception& e) {
+            logger::error("[Dashboard] Failed to serialize slot data: {}", e.what());
+        }
+    }
+
+    void DashboardUIManager::PushFullState(const std::string& json) {
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (shuttingDown_ || !available_.load() || !requestedOpen_) return;
+            pendingFullState_ = json;
+            pendingFullStateSet_ = true;
+        }
+        pollCondition_.notify_one();
     }
 
     // =========================================================================
     // Data Push (C++ -> JS)
     // =========================================================================
 
-    void DashboardUIManager::PushSlotData() {
-        if (!prismaUI_ || dashboardView_ == 0 || !domReady_.load()) return;
-        try {
-            std::string json = SlotTracker::GetSingleton()->SerializeToJson();
-            prismaUI_->InteropCall(dashboardView_, "updateSlots", json.c_str());
-        } catch (const std::exception& e) {
-            logger::error("[Dashboard] Failed to push slot data: {}", e.what());
-        }
-    }
 
-    void DashboardUIManager::PushFullState(const std::string& json) {
-        if (!prismaUI_ || dashboardView_ == 0 || !domReady_.load()) {
-            logger::warn("[Dashboard] PushFullState: skipped (prisma={}, view={}, domReady={})",
-                        prismaUI_ != nullptr, dashboardView_, domReady_.load());
-            return;
+    void DashboardUIManager::ProcessFullState(const std::string& json, std::uint64_t generation) {
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (shuttingDown_ || generation_ != generation ||
+                !requestedOpen_ || !isOpen_.load() || !domReady_.load()) return;
         }
         try {
             // Fix Papyrus Bool-to-String before parsing — Papyrus produces
@@ -268,8 +470,15 @@ namespace IntelEngine {
             }
 
             std::string clean = parsed.dump();
-            logger::debug("[Dashboard] PushFullState: sending {} bytes", clean.size());
-            prismaUI_->InteropCall(dashboardView_, "updateFullState", clean.c_str());
+            {
+                std::lock_guard<std::mutex> lock(mutex_);
+                if (shuttingDown_ || generation_ != generation ||
+                    !requestedOpen_ || !isOpen_.load() || !domReady_.load()) return;
+                pendingFullStatePayload_ = std::move(clean);
+                fullStatePayloadGeneration_ = generation;
+                pendingFullStatePayloadSet_ = true;
+            }
+            pollCondition_.notify_one();
         } catch (const std::exception& e) {
             logger::error("[Dashboard] Failed to push full state: {}", e.what());
         }
@@ -282,9 +491,151 @@ namespace IntelEngine {
     void DashboardUIManager::HotkeyPollLoop() {
         bool wasComboPressed = false;
         auto lastToggle = std::chrono::steady_clock::now();
-
         while (!stopPolling_.load()) {
-            std::this_thread::sleep_for(kPollIntervalMs);
+
+            std::unique_lock<std::mutex> lock(mutex_);
+            pollCondition_.wait_for(lock, kPollIntervalMs, [this] {
+                const bool ready = requestedOpen_ && isOpen_.load() && domReady_.load() && !shuttingDown_;
+                return stopPolling_.load() || pendingOpen_ || pendingClose_ ||
+                       pendingReload_ || (ready && !gameTaskQueued_ &&
+                           (pendingFlush_ || pendingFullStateSet_ ||
+                            pendingSlotPayloadSet_ || pendingFullStatePayloadSet_));
+            });
+            if (stopPolling_.load()) break;
+            if (gameTaskRetry_) {
+                gameTaskQueued_ = false;
+                gameTaskRetry_ = false;
+            }
+            bool open = std::exchange(pendingOpen_, false);
+            const std::uint64_t closeIntentGeneration = pendingCloseIntentGeneration_;
+            bool close = std::exchange(pendingClose_, false);
+            bool reload = std::exchange(pendingReload_, false);
+            const bool canProcessState =
+                !reload && !gameTaskQueued_ && requestedOpen_ && isOpen_.load() &&
+                domReady_.load() && !shuttingDown_;
+            const std::uint64_t generation = generation_;
+            const std::uint64_t intentGeneration = intentGeneration_;
+            bool sendSlots = canProcessState && pendingSlotPayloadSet_ &&
+                             slotPayloadGeneration_ == generation;
+            bool sendFullState = canProcessState && pendingFullStatePayloadSet_ &&
+                                 fullStatePayloadGeneration_ == generation;
+            std::string slotsPayload;
+            std::string fullStatePayload;
+            if (sendSlots) {
+                slotsPayload = std::move(pendingSlotPayload_);
+                pendingSlotPayloadSet_ = false;
+            } else if (pendingSlotPayloadSet_ && slotPayloadGeneration_ != generation) {
+                pendingSlotPayloadSet_ = false;
+                pendingSlotPayload_.clear();
+            }
+            if (sendFullState) {
+                fullStatePayload = std::move(pendingFullStatePayload_);
+                pendingFullStatePayloadSet_ = false;
+            } else if (pendingFullStatePayloadSet_ && fullStatePayloadGeneration_ != generation) {
+                pendingFullStatePayloadSet_ = false;
+                pendingFullStatePayload_.clear();
+            }
+            bool flush = canProcessState && std::exchange(pendingFlush_, false);
+            bool fullState = canProcessState && std::exchange(pendingFullStateSet_, false);
+            std::string state;
+            if (fullState) state = std::move(pendingFullState_);
+            const bool queueGameTask = flush || fullState;
+            if (queueGameTask) gameTaskQueued_ = true;
+            lock.unlock();
+            if (close) {
+                bool callClose;
+                {
+                    std::lock_guard<std::mutex> commandLock(mutex_);
+                    callClose = !shuttingDown_;
+                    if (callClose) {
+                        expectedExitPending_ = true;
+                        expectedExitIntentGeneration_ = closeIntentGeneration;
+                    }
+                }
+                if (callClose && host_) host_->Close();
+            }
+            if (open) {
+                bool stillRequested;
+                {
+                    std::lock_guard<std::mutex> commandLock(mutex_);
+                    stillRequested = requestedOpen_ && !shuttingDown_ &&
+                                     intentGeneration_ == intentGeneration;
+                }
+                if (stillRequested) {
+                    const auto result = host_ ? host_->Open() : UiOpenResult::Refused;
+                    if (result == UiOpenResult::Refused)
+                        OnHostEvent(UiHostEvent::Refused, intentGeneration);
+                }
+            }
+            if (reload) {
+                DashboardConfig::GetSingleton()->Reload();
+                {
+                    std::lock_guard<std::mutex> cacheLock(actionCacheMutex_);
+                    actionCacheLoaded_ = false;
+                }
+                if (host_) host_->Reload();
+                {
+                    std::lock_guard<std::mutex> reloadLock(mutex_);
+                    domReady_.store(false);
+                }
+            }
+            std::uint64_t serviceGeneration;
+            {
+                std::lock_guard<std::mutex> serviceLock(mutex_);
+                serviceGeneration = intentGeneration_;
+            }
+            if (host_ && host_->Service() == UiOpenResult::Refused)
+                OnHostEvent(UiHostEvent::Refused, serviceGeneration);
+            if (sendSlots) {
+                bool current;
+                {
+                    std::lock_guard<std::mutex> stateLock(mutex_);
+                    current = !shuttingDown_ && generation_ == generation &&
+                              requestedOpen_ && isOpen_.load() && domReady_.load();
+                }
+                if (current && host_) host_->Call("updateSlots", slotsPayload);
+            }
+            if (sendFullState) {
+                bool current;
+                {
+                    std::lock_guard<std::mutex> stateLock(mutex_);
+                    current = !shuttingDown_ && generation_ == generation &&
+                              requestedOpen_ && isOpen_.load() && domReady_.load();
+                }
+                if (current && host_) host_->Call("updateFullState", fullStatePayload);
+            }
+            if (queueGameTask) {
+                auto* task = SKSE::GetTaskInterface();
+                if (task) {
+                    task->AddTask([this, generation, flush, fullState, state = std::move(state)]() mutable {
+                        bool current;
+                        {
+                            std::lock_guard<std::mutex> taskLock(mutex_);
+                            current = !shuttingDown_ && generation_ == generation &&
+                                      requestedOpen_ && isOpen_.load() && domReady_.load();
+                        }
+                        if (current) {
+                            if (flush) FlushState(generation);
+                            if (fullState) ProcessFullState(state, generation);
+                        }
+                        {
+                            std::lock_guard<std::mutex> taskLock(mutex_);
+                            gameTaskQueued_ = false;
+                        }
+                        pollCondition_.notify_one();
+                    });
+                } else {
+                    std::lock_guard<std::mutex> retryLock(mutex_);
+                    if (!shuttingDown_ && generation_ == generation) {
+                        pendingFlush_ |= flush;
+                        if (fullState) {
+                            pendingFullState_ = std::move(state);
+                            pendingFullStateSet_ = true;
+                        }
+                    }
+                    gameTaskRetry_ = true;
+                }
+            }
 
             HWND foregroundWindow = GetForegroundWindow();
             DWORD foregroundProcessId = 0;
@@ -295,14 +646,14 @@ namespace IntelEngine {
                 continue;
             }
 
+            auto* ui = RE::UI::GetSingleton();
+            if (ui && ui->GameIsPaused() && !isOpen_.load()) continue;
+
             auto* config = DashboardConfig::GetSingleton();
             int vk = config->GetHotkey();
             int mods = config->GetModifiers();
             if (vk < 0 || vk > 255) continue;
-
-            auto* ui = RE::UI::GetSingleton();
-            if (ui && ui->GameIsPaused() && !isOpen_.load()) continue;
-
+            
             const bool ctrlDown = (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0;
             const bool shiftDown = (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0;
             const bool altDown = (GetAsyncKeyState(VK_MENU) & 0x8000) != 0;
@@ -310,12 +661,9 @@ namespace IntelEngine {
                 ctrlDown == ((mods & kModCtrl) != 0) &&
                 shiftDown == ((mods & kModShift) != 0) &&
                 altDown == ((mods & kModAlt) != 0);
-
-            bool mainKeyDown = (GetAsyncKeyState(vk) & 0x8000) != 0;
-            bool comboPressed = modifiersOk && mainKeyDown;
-
+            const bool comboPressed = modifiersOk && (GetAsyncKeyState(vk) & 0x8000) != 0;
             if (comboPressed && !wasComboPressed) {
-                auto now = std::chrono::steady_clock::now();
+                const auto now = std::chrono::steady_clock::now();
                 if (now - lastToggle > kKeyPressCooldownMs) {
                     lastToggle = now;
                     auto* task = SKSE::GetTaskInterface();
@@ -331,284 +679,213 @@ namespace IntelEngine {
     }
 
     // =========================================================================
-    // Static Callbacks (PrismaUI -> Instance)
+    // Static callbacks (UI host -> manager)
     // =========================================================================
 
-    void DashboardUIManager::OnDomReadyStatic(PrismaView view) {
-        DashboardUIManager::GetSingleton()->HandleDomReady(view);
-    }
-
     void DashboardUIManager::OnCloseStatic(const char*) {
-        auto* task = SKSE::GetTaskInterface();
-        if (task) task->AddTask([]() { DashboardUIManager::GetSingleton()->Hide(); });
+        GetSingleton()->RequestClose();
     }
 
     void DashboardUIManager::OnRequestRefreshStatic(const char*) {
-        auto* task = SKSE::GetTaskInterface();
-        if (task) task->AddTask([]() {
-            DashboardUIManager::GetSingleton()->SendModEvent("IntelEngine_DashboardRefresh");
-            DashboardUIManager::GetSingleton()->PushSlotData();
-        });
+        if (!GetSingleton()->acceptingCallbacks_.load()) return;
+        auto* manager = GetSingleton();
+        manager->SendModEvent("IntelEngine_DashboardRefresh");
+        manager->PushSlotData();
     }
 
     void DashboardUIManager::OnReloadUIStatic(const char*) {
-        auto* task = SKSE::GetTaskInterface();
-        if (task) task->AddTask([]() { DashboardUIManager::GetSingleton()->ReloadView(); });
+        if (!GetSingleton()->acceptingCallbacks_.load()) return;
+        GetSingleton()->ReloadView();
     }
 
     // Dashboard action callbacks from JS
     void DashboardUIManager::OnCancelTaskStatic(const char* jsonArg) {
-        auto* task = SKSE::GetTaskInterface();
-        if (!task) return;
+        if (!GetSingleton()->acceptingCallbacks_.load()) return;
+        
+        
         std::string arg(jsonArg ? jsonArg : "{}");
-        task->AddTask([arg]() {
-            try {
-                auto j = nlohmann::json::parse(arg);
-                int slot = j.value("slot", -1);
-                if (slot >= 0) {
-                    DashboardUIManager::GetSingleton()->SendModEvent(
-                        "IntelEngine_DashboardCancelTask", "", static_cast<float>(slot));
-                }
-            } catch (...) {}
-        });
+        try {
+            auto j = nlohmann::json::parse(arg);
+            int slot = j.value("slot", -1);
+            if (slot >= 0) {
+                DashboardUIManager::GetSingleton()->SendModEvent(
+                    "IntelEngine_DashboardCancelTask", "", static_cast<float>(slot));
+            }
+        } catch (...) {}
     }
 
     void DashboardUIManager::OnCancelQuestStatic(const char* /*jsonArg*/) {
-        auto* task = SKSE::GetTaskInterface();
-        if (!task) return;
-        task->AddTask([]() {
-            DashboardUIManager::GetSingleton()->SendModEvent(
-                "IntelEngine_DashboardCancelQuest", "", 0.0f);
-        });
+        if (!GetSingleton()->acceptingCallbacks_.load()) return;
+        
+        
+        GetSingleton()->SendModEvent("IntelEngine_DashboardCancelQuest", "", 0.0f);
     }
 
     void DashboardUIManager::OnCancelScheduleStatic(const char* jsonArg) {
-        auto* task = SKSE::GetTaskInterface();
-        if (!task) return;
+        if (!GetSingleton()->acceptingCallbacks_.load()) return;
+        
+        
         std::string arg(jsonArg ? jsonArg : "{}");
-        task->AddTask([arg]() {
-            try {
-                auto j = nlohmann::json::parse(arg);
-                int slot = j.value("slot", -1);
-                if (slot >= 0) {
-                    DashboardUIManager::GetSingleton()->SendModEvent(
-                        "IntelEngine_DashboardCancelSchedule", "", static_cast<float>(slot));
-                }
-            } catch (...) {}
-        });
+        try {
+            auto j = nlohmann::json::parse(arg);
+            int slot = j.value("slot", -1);
+            if (slot >= 0) {
+                DashboardUIManager::GetSingleton()->SendModEvent(
+                    "IntelEngine_DashboardCancelSchedule", "", static_cast<float>(slot));
+            }
+        } catch (...) {}
     }
 
     void DashboardUIManager::OnToggleStoryTypeStatic(const char* jsonArg) {
-        auto* task = SKSE::GetTaskInterface();
-        if (!task) return;
+        if (!GetSingleton()->acceptingCallbacks_.load()) return;
+        
+        
         std::string arg(jsonArg ? jsonArg : "{}");
-        task->AddTask([arg]() {
-            try {
-                auto j = nlohmann::json::parse(arg);
-                std::string type = j.value("type", "");
-                bool enabled = j.value("enabled", true);
-                if (!type.empty()) {
-                    DashboardUIManager::GetSingleton()->SendModEvent(
-                        "IntelEngine_DashboardToggleStory", type, enabled ? 1.0f : 0.0f);
-                }
-            } catch (...) {}
-        });
+        try {
+            auto j = nlohmann::json::parse(arg);
+            std::string type = j.value("type", "");
+            bool enabled = j.value("enabled", true);
+            if (!type.empty()) {
+                DashboardUIManager::GetSingleton()->SendModEvent(
+                    "IntelEngine_DashboardToggleStory", type, enabled ? 1.0f : 0.0f);
+            }
+        } catch (...) {}
     }
 
     void DashboardUIManager::OnChangeSettingStatic(const char* jsonArg) {
-        auto* task = SKSE::GetTaskInterface();
-        if (!task) return;
+        if (!GetSingleton()->acceptingCallbacks_.load()) return;
+        
+        
         std::string arg(jsonArg ? jsonArg : "{}");
-        task->AddTask([arg]() {
-            try {
-                auto j = nlohmann::json::parse(arg);
-                std::string key = j.value("key", "");
-                if (!key.empty()) {
-                    // Pack the value as numArg for numeric settings, strArg for key
-                    float value = 0.0f;
-                    if (j["value"].is_boolean()) value = j["value"].get<bool>() ? 1.0f : 0.0f;
-                    else if (j["value"].is_number()) value = j["value"].get<float>();
-                    DashboardUIManager::GetSingleton()->SendModEvent(
-                        "IntelEngine_DashboardSetting", key, value);
-                }
-            } catch (...) {}
-        });
+        try {
+            auto j = nlohmann::json::parse(arg);
+            std::string key = j.value("key", "");
+            if (!key.empty()) {
+                // Pack the value as numArg for numeric settings, strArg for key
+                float value = 0.0f;
+                if (j["value"].is_boolean()) value = j["value"].get<bool>() ? 1.0f : 0.0f;
+                else if (j["value"].is_number()) value = j["value"].get<float>();
+                DashboardUIManager::GetSingleton()->SendModEvent(
+                    "IntelEngine_DashboardSetting", key, value);
+            }
+        } catch (...) {}
     }
 
     void DashboardUIManager::OnRemovePackagesStatic(const char* jsonArg) {
-        auto* task = SKSE::GetTaskInterface();
-        if (!task) return;
+        if (!GetSingleton()->acceptingCallbacks_.load()) return;
+        
+        
         std::string arg(jsonArg ? jsonArg : "{}");
-        task->AddTask([arg]() {
-            try {
-                auto j = nlohmann::json::parse(arg);
-                const auto formId = ReadFormID(j, "formId");
-                if (formId) {
-                    DashboardUIManager::GetSingleton()->SendModEvent(
-                        "IntelEngine_DashboardRemovePackages", std::to_string(*formId));
-                }
-            } catch (...) {}
-        });
+        try {
+            auto j = nlohmann::json::parse(arg);
+            const auto formId = ReadFormID(j, "formId");
+            if (formId) {
+                DashboardUIManager::GetSingleton()->SendModEvent(
+                    "IntelEngine_DashboardRemovePackages", std::to_string(*formId));
+            }
+        } catch (...) {}
     }
 
     void DashboardUIManager::OnChangePluginConfigStatic(const char* jsonArg) {
-        auto* task = SKSE::GetTaskInterface();
-        if (!task) return;
+        if (!GetSingleton()->acceptingCallbacks_.load()) return;
+        
+        
         std::string arg(jsonArg ? jsonArg : "{}");
-        task->AddTask([arg]() {
-            try {
-                auto j = nlohmann::json::parse(arg);
-                std::string path = j.value("path", "");
-                if (path.empty()) return;
-
-                // Split "section.key" into section and key
-                auto dot = path.find('.');
-                if (dot == std::string::npos) return;
-                std::string section = path.substr(0, dot);
-                std::string key = path.substr(dot + 1);
-
-                // Format value for YAML based on JSON type
-                std::string yamlValue;
-                auto& val = j["value"];
-                if (val.is_string()) {
-                    std::string s = val.get<std::string>();
-                    // Escape backslashes and quotes for YAML double-quoted string
-                    std::string escaped;
-                    escaped.reserve(s.size() + 2);
-                    for (char c : s) {
-                        if (c == '\\') escaped += "\\\\";
-                        else if (c == '"') escaped += "\\\"";
-                        else escaped += c;
-                    }
-                    yamlValue = "\"" + escaped + "\"";
-                } else if (val.is_number_integer()) {
-                    yamlValue = std::to_string(val.get<int>());
-                } else if (val.is_number_float()) {
-                    char buf[32];
-                    snprintf(buf, sizeof(buf), "%.2f", val.get<double>());
-                    std::string s(buf);
-                    // Trim trailing zeros (1.70 -> 1.7, 1.00 -> 1)
-                    if (s.find('.') != std::string::npos) {
-                        while (s.back() == '0') s.pop_back();
-                        if (s.back() == '.') s.pop_back();
-                    }
-                    yamlValue = s;
-                } else if (val.is_boolean()) {
-                    yamlValue = val.get<bool>() ? "true" : "false";
-                } else {
-                    yamlValue = val.dump();
+        try {
+            auto j = nlohmann::json::parse(arg);
+            std::string path = j.value("path", "");
+            if (path.empty()) return;
+        
+            // Split "section.key" into section and key
+            auto dot = path.find('.');
+            if (dot == std::string::npos) return;
+            std::string section = path.substr(0, dot);
+            std::string key = path.substr(dot + 1);
+        
+            // Format value for YAML based on JSON type
+            std::string yamlValue;
+            auto& val = j["value"];
+            if (val.is_string()) {
+                std::string s = val.get<std::string>();
+                // Escape backslashes and quotes for YAML double-quoted string
+                std::string escaped;
+                escaped.reserve(s.size() + 2);
+                for (char c : s) {
+                    if (c == '\\') escaped += "\\\\";
+                    else if (c == '"') escaped += "\\\"";
+                    else escaped += c;
                 }
-
-                auto* config = DashboardConfig::GetSingleton();
-
-                // Hotkey/modifier: use dedicated setters that write YAML + update
-                // atomics directly.  Do NOT call Reload() — the SkyrimNet API
-                // cache is stale after a direct file write and would revert the
-                // change to the old value.
-                if (key == "dashboard_hotkey" && val.is_number_integer()) {
-                    int vk = val.get<int>();
-                    if (config->SetHotkey(vk)) {
-                        logger::info("[Dashboard] Hotkey updated: VK {}", vk);
-                    } else {
-                        logger::warn("[Dashboard] Failed to save hotkey VK {}", vk);
-                    }
-                    DashboardUIManager::GetSingleton()->SendModEvent("IntelEngine_DashboardRefresh");
-                    return;
+                yamlValue = "\"" + escaped + "\"";
+            } else if (val.is_number_integer()) {
+                yamlValue = std::to_string(val.get<int>());
+            } else if (val.is_number_float()) {
+                char buf[32];
+                snprintf(buf, sizeof(buf), "%.2f", val.get<double>());
+                std::string s(buf);
+                // Trim trailing zeros (1.70 -> 1.7, 1.00 -> 1)
+                if (s.find('.') != std::string::npos) {
+                    while (s.back() == '0') s.pop_back();
+                    if (s.back() == '.') s.pop_back();
                 }
-                if (key == "dashboard_modifiers" && val.is_number_integer()) {
-                    int mods = val.get<int>();
-                    if (config->SetModifiers(mods)) {
-                        logger::info("[Dashboard] Modifiers updated: {}", mods);
-                    } else {
-                        logger::warn("[Dashboard] Failed to save modifiers {}", mods);
-                    }
-                    DashboardUIManager::GetSingleton()->SendModEvent("IntelEngine_DashboardRefresh");
-                    return;
-                }
-
-                if (section == "politics") {
-                    auto* politics = FactionPolitics::GetSingleton();
-                    bool saved = false;
-                    if (key == "enabled" && val.is_boolean()) {
-                        saved = politics->SetEnabled(val.get<bool>());
-                    } else if (key == "tick_interval_hours" && val.is_number_integer()) {
-                        saved = politics->SetTickIntervalHours(val.get<int>());
-                    } else if (key == "max_relation_change_per_tick" && val.is_number_integer()) {
-                        saved = politics->SetMaxRelationChangePerTick(val.get<int>());
-                    } else if (key == "max_active_wars" && val.is_number_integer()) {
-                        saved = politics->SetMaxActiveWars(val.get<int>());
-                    } else {
-                        logger::warn("[Dashboard] Invalid politics setting value: {}", path);
-                    }
-                    if (saved) DashboardUIManager::GetSingleton()->SendModEvent("IntelEngine_DashboardRefresh");
-                    return;
-                }
-
-                if (config->WriteYamlValue(section, key, yamlValue)) {
-                    logger::info("[Dashboard] Plugin config updated: {}.{} = {}", section, key, yamlValue);
-                    DashboardUIManager::GetSingleton()->SendModEvent("IntelEngine_DashboardRefresh");
-                } else {
-                    logger::warn("[Dashboard] Failed to write plugin config: {}.{}", section, key);
-                }
-            } catch (...) {}
-        });
-    }
-
-    // =========================================================================
-    // Instance Handlers
-    // =========================================================================
-
-    void DashboardUIManager::HandleDomReady(PrismaView) {
-        domReady_.store(true);
-
-        // Register JS -> C++ listeners (safe from PrismaUI thread)
-        prismaUI_->RegisterJSListener(dashboardView_, "onCloseDashboard", OnCloseStatic);
-        prismaUI_->RegisterJSListener(dashboardView_, "onRequestRefresh", OnRequestRefreshStatic);
-        prismaUI_->RegisterJSListener(dashboardView_, "onReloadUI", OnReloadUIStatic);
-
-        // Dashboard action listeners
-        prismaUI_->RegisterJSListener(dashboardView_, "onDashboard_cancelTask", OnCancelTaskStatic);
-        prismaUI_->RegisterJSListener(dashboardView_, "onDashboard_cancelSchedule", OnCancelScheduleStatic);
-        prismaUI_->RegisterJSListener(dashboardView_, "onDashboard_cancelQuest", OnCancelQuestStatic);
-        prismaUI_->RegisterJSListener(dashboardView_, "onDashboard_toggleStoryType", OnToggleStoryTypeStatic);
-        prismaUI_->RegisterJSListener(dashboardView_, "onDashboard_changeSetting", OnChangeSettingStatic);
-        prismaUI_->RegisterJSListener(dashboardView_, "onDashboard_removePackages", OnRemovePackagesStatic);
-        prismaUI_->RegisterJSListener(dashboardView_, "onDashboard_changePluginConfig", OnChangePluginConfigStatic);
-        prismaUI_->RegisterJSListener(dashboardView_, "onDashboard_dispatchStory", OnDispatchStoryStatic);
-        prismaUI_->RegisterJSListener(dashboardView_, "onDashboard_dispatchNpcSocial", OnDispatchNpcSocialStatic);
-        prismaUI_->RegisterJSListener(dashboardView_, "onDashboard_dispatchPolitics", OnDispatchPoliticsStatic);
-        prismaUI_->RegisterJSListener(dashboardView_, "onDashboard_executeAction", OnExecuteActionStatic);
-        prismaUI_->RegisterJSListener(dashboardView_, "onDashboard_toggleAction", OnToggleActionStatic);
-
-        logger::info("[Dashboard] JS listeners registered");
-
-        if (isOpen_.load()) {
-            // Focus is a PrismaUI call — safe from this thread
-            prismaUI_->Focus(dashboardView_, true, false);
-
-            // SKSE events and SlotTracker MUST run on the game thread
-            auto* task = SKSE::GetTaskInterface();
-            if (task) {
-                task->AddTask([]() {
-                    auto* mgr = DashboardUIManager::GetSingleton();
-                    mgr->SendModEvent("IntelEngine_DashboardOpened");
-                    mgr->PushSlotData();
-                });
+                yamlValue = s;
+            } else if (val.is_boolean()) {
+                yamlValue = val.get<bool>() ? "true" : "false";
+            } else {
+                yamlValue = val.dump();
             }
-        }
-    }
-
-    void DashboardUIManager::HandleClose() {
-        auto* task = SKSE::GetTaskInterface();
-        if (task) task->AddTask([]() { DashboardUIManager::GetSingleton()->Hide(); });
-    }
-
-    void DashboardUIManager::HandleRequestRefresh() {
-        auto* task = SKSE::GetTaskInterface();
-        if (task) task->AddTask([]() {
-            DashboardUIManager::GetSingleton()->SendModEvent("IntelEngine_DashboardRefresh");
-            DashboardUIManager::GetSingleton()->PushSlotData();
-        });
+        
+            auto* config = DashboardConfig::GetSingleton();
+        
+            // Hotkey/modifier: use dedicated setters that write YAML + update
+            // atomics directly.  Do NOT call Reload() — the SkyrimNet API
+            // cache is stale after a direct file write and would revert the
+            // change to the old value.
+            if (key == "dashboard_hotkey" && val.is_number_integer()) {
+                int vk = val.get<int>();
+                if (config->SetHotkey(vk)) {
+                    logger::info("[Dashboard] Hotkey updated: VK {}", vk);
+                } else {
+                    logger::warn("[Dashboard] Failed to save hotkey VK {}", vk);
+                }
+                DashboardUIManager::GetSingleton()->SendModEvent("IntelEngine_DashboardRefresh");
+                return;
+            }
+            if (key == "dashboard_modifiers" && val.is_number_integer()) {
+                int mods = val.get<int>();
+                if (config->SetModifiers(mods)) {
+                    logger::info("[Dashboard] Modifiers updated: {}", mods);
+                } else {
+                    logger::warn("[Dashboard] Failed to save modifiers {}", mods);
+                }
+                DashboardUIManager::GetSingleton()->SendModEvent("IntelEngine_DashboardRefresh");
+                return;
+            }
+        
+            if (section == "politics") {
+                auto* politics = FactionPolitics::GetSingleton();
+                bool saved = false;
+                if (key == "enabled" && val.is_boolean()) {
+                    saved = politics->SetEnabled(val.get<bool>());
+                } else if (key == "tick_interval_hours" && val.is_number_integer()) {
+                    saved = politics->SetTickIntervalHours(val.get<int>());
+                } else if (key == "max_relation_change_per_tick" && val.is_number_integer()) {
+                    saved = politics->SetMaxRelationChangePerTick(val.get<int>());
+                } else if (key == "max_active_wars" && val.is_number_integer()) {
+                    saved = politics->SetMaxActiveWars(val.get<int>());
+                } else {
+                    logger::warn("[Dashboard] Invalid politics setting value: {}", path);
+                }
+                if (saved) DashboardUIManager::GetSingleton()->SendModEvent("IntelEngine_DashboardRefresh");
+                return;
+            }
+        
+            if (config->WriteYamlValue(section, key, yamlValue)) {
+                logger::info("[Dashboard] Plugin config updated: {}.{} = {}", section, key, yamlValue);
+                DashboardUIManager::GetSingleton()->SendModEvent("IntelEngine_DashboardRefresh");
+            } else {
+                logger::warn("[Dashboard] Failed to write plugin config: {}.{}", section, key);
+            }
+        } catch (...) {}
     }
 
     // =========================================================================
@@ -639,48 +916,47 @@ namespace IntelEngine {
     // =========================================================================
 
     void DashboardUIManager::OnDispatchStoryStatic(const char* jsonArg) {
-        auto* task = SKSE::GetTaskInterface();
-        if (!task) return;
+        if (!GetSingleton()->acceptingCallbacks_.load()) return;
+        
+        
         std::string arg(jsonArg ? jsonArg : "{}");
-        task->AddTask([arg]() {
-            try {
-                auto j = nlohmann::json::parse(arg);
-                std::string npcName = j.value("npcName", "");
-                std::string type = j.value("storyType", "");
-                std::string narration = j.value("narration", "");
-                if (npcName.empty() || type.empty() || narration.empty()) return;
-
-                // Build response JSON with proper escaping (all optional fields default to "")
-                nlohmann::json response;
-                for (const char* f : {"sender","subject","gossip","destination",
-                                      "msgContent","meetTime","questLocation",
-                                      "enemyType","questSubType","victimName",
-                                      "itemName","itemDesc"}) {
-                    response[f] = "";
-                }
-                for (auto& [key, val] : j.items()) {
-                    if (key == "npcName" || key == "storyType" || key == "narration") continue;
-                    if (val.is_string()) {
-                        response[key] = val.get<std::string>();
-                    }
-                }
-
-                // Build event payload directly from locals — no shared state needed
-                nlohmann::json eventPayload;
-                eventPayload["storyType"] = type;
-                eventPayload["narration"] = narration;
-                eventPayload["npcName"] = npcName;
-                eventPayload["response"] = response.dump();
-
-                DashboardUIManager::GetSingleton()->SendModEvent(
-                    "IntelEngine_DashboardDispatchStory", eventPayload.dump(), 0.0f);
-                logger::info("[Dashboard] Director: dispatch story type={} npc={}", type, npcName);
-            } catch (const std::exception& e) {
-                logger::error("[Dashboard] Director story dispatch failed: {}", e.what());
-            } catch (...) {
-                logger::error("[Dashboard] Director story dispatch failed: unknown error");
+        try {
+            auto j = nlohmann::json::parse(arg);
+            std::string npcName = j.value("npcName", "");
+            std::string type = j.value("storyType", "");
+            std::string narration = j.value("narration", "");
+            if (npcName.empty() || type.empty() || narration.empty()) return;
+        
+            // Build response JSON with proper escaping (all optional fields default to "")
+            nlohmann::json response;
+            for (const char* f : {"sender","subject","gossip","destination",
+                                  "msgContent","meetTime","questLocation",
+                                  "enemyType","questSubType","victimName",
+                                  "itemName","itemDesc"}) {
+                response[f] = "";
             }
-        });
+            for (auto& [key, val] : j.items()) {
+                if (key == "npcName" || key == "storyType" || key == "narration") continue;
+                if (val.is_string()) {
+                    response[key] = val.get<std::string>();
+                }
+            }
+        
+            // Build event payload directly from locals — no shared state needed
+            nlohmann::json eventPayload;
+            eventPayload["storyType"] = type;
+            eventPayload["narration"] = narration;
+            eventPayload["npcName"] = npcName;
+            eventPayload["response"] = response.dump();
+        
+            DashboardUIManager::GetSingleton()->SendModEvent(
+                "IntelEngine_DashboardDispatchStory", eventPayload.dump(), 0.0f);
+            logger::info("[Dashboard] Director: dispatch story type={} npc={}", type, npcName);
+        } catch (const std::exception& e) {
+            logger::error("[Dashboard] Director story dispatch failed: {}", e.what());
+        } catch (...) {
+            logger::error("[Dashboard] Director story dispatch failed: unknown error");
+        }
     }
 
     // =========================================================================
@@ -688,50 +964,49 @@ namespace IntelEngine {
     // =========================================================================
 
     void DashboardUIManager::OnDispatchNpcSocialStatic(const char* jsonArg) {
-        auto* task = SKSE::GetTaskInterface();
-        if (!task) return;
+        if (!GetSingleton()->acceptingCallbacks_.load()) return;
+        
+        
         std::string arg(jsonArg ? jsonArg : "{}");
-        task->AddTask([arg]() {
-            try {
-                auto j = nlohmann::json::parse(arg);
-                std::string npc1 = j.value("npc1Name", "");
-                std::string npc2 = j.value("npc2Name", "");
-                std::string type = j.value("socialType", "");
-                std::string narration = j.value("narration", "");
-                if (npc1.empty() || npc2.empty() || type.empty() || narration.empty()) return;
-
-                // Build response JSON matching what the NPC DM would return
-                nlohmann::json response;
-                response["should_act"] = true;
-                response["type"] = type;
-                response["npc"] = npc1;
-                response["npc2"] = npc2;
-                response["narration"] = narration;
-                for (const char* f : {"fact1", "fact2", "gossip"}) {
-                    response[f] = "";
-                }
-                for (auto& [key, val] : j.items()) {
-                    if (key == "npc1Name" || key == "npc2Name" || key == "socialType" || key == "narration") continue;
-                    if (val.is_string()) response[key] = val.get<std::string>();
-                }
-
-                // Build event payload directly from locals — no shared state needed
-                nlohmann::json eventPayload;
-                eventPayload["socialType"] = type;
-                eventPayload["narration"] = narration;
-                eventPayload["npc1Name"] = npc1;
-                eventPayload["npc2Name"] = npc2;
-                eventPayload["response"] = response.dump();
-
-                DashboardUIManager::GetSingleton()->SendModEvent(
-                    "IntelEngine_DashboardDispatchNpcSocial", eventPayload.dump(), 0.0f);
-                logger::info("[Dashboard] Director: NPC social type={} npc1={} npc2={}", type, npc1, npc2);
-            } catch (const std::exception& e) {
-                logger::error("[Dashboard] Director NPC social dispatch failed: {}", e.what());
-            } catch (...) {
-                logger::error("[Dashboard] Director NPC social dispatch failed: unknown error");
+        try {
+            auto j = nlohmann::json::parse(arg);
+            std::string npc1 = j.value("npc1Name", "");
+            std::string npc2 = j.value("npc2Name", "");
+            std::string type = j.value("socialType", "");
+            std::string narration = j.value("narration", "");
+            if (npc1.empty() || npc2.empty() || type.empty() || narration.empty()) return;
+        
+            // Build response JSON matching what the NPC DM would return
+            nlohmann::json response;
+            response["should_act"] = true;
+            response["type"] = type;
+            response["npc"] = npc1;
+            response["npc2"] = npc2;
+            response["narration"] = narration;
+            for (const char* f : {"fact1", "fact2", "gossip"}) {
+                response[f] = "";
             }
-        });
+            for (auto& [key, val] : j.items()) {
+                if (key == "npc1Name" || key == "npc2Name" || key == "socialType" || key == "narration") continue;
+                if (val.is_string()) response[key] = val.get<std::string>();
+            }
+        
+            // Build event payload directly from locals — no shared state needed
+            nlohmann::json eventPayload;
+            eventPayload["socialType"] = type;
+            eventPayload["narration"] = narration;
+            eventPayload["npc1Name"] = npc1;
+            eventPayload["npc2Name"] = npc2;
+            eventPayload["response"] = response.dump();
+        
+            DashboardUIManager::GetSingleton()->SendModEvent(
+                "IntelEngine_DashboardDispatchNpcSocial", eventPayload.dump(), 0.0f);
+            logger::info("[Dashboard] Director: NPC social type={} npc1={} npc2={}", type, npc1, npc2);
+        } catch (const std::exception& e) {
+            logger::error("[Dashboard] Director NPC social dispatch failed: {}", e.what());
+        } catch (...) {
+            logger::error("[Dashboard] Director NPC social dispatch failed: unknown error");
+        }
     }
 
     // =========================================================================
@@ -739,39 +1014,38 @@ namespace IntelEngine {
     // =========================================================================
 
     void DashboardUIManager::OnDispatchPoliticsStatic(const char* jsonArg) {
-        auto* task = SKSE::GetTaskInterface();
-        if (!task) return;
+        if (!GetSingleton()->acceptingCallbacks_.load()) return;
+        
+        
         std::string arg(jsonArg ? jsonArg : "{}");
-        task->AddTask([arg]() {
-            try {
-                auto j = nlohmann::json::parse(arg);
-                std::string factionA = j.value("factionA", "");
-                std::string factionB = j.value("factionB", "");
-                std::string eventType = j.value("eventType", "");
-                std::string description = j.value("description", "");
-                int delta = j.value("relationDelta", 0);
-                if (factionA.empty() || factionB.empty() || eventType.empty() || description.empty() || delta == 0) return;
-
-                // Build a fake Political DM response matching the expected JSON format
-                nlohmann::json response;
-                response["should_act"] = true;
-                response["faction_a"] = factionA;
-                response["faction_b"] = factionB;
-                response["event_type"] = eventType;
-                response["description"] = description;
-                response["relation_delta"] = delta;
-
-                // Pass the full response JSON as strArg — Papyrus feeds it to ProcessPoliticalDMResponse
-                DashboardUIManager::GetSingleton()->SendModEvent(
-                    "IntelEngine_DashboardDispatchPolitics", response.dump(), 0.0f);
-                logger::info("[Dashboard] Director: politics event={} factionA={} factionB={} delta={}",
-                    eventType, factionA, factionB, delta);
-            } catch (const std::exception& e) {
-                logger::error("[Dashboard] Director politics dispatch failed: {}", e.what());
-            } catch (...) {
-                logger::error("[Dashboard] Director politics dispatch failed: unknown error");
-            }
-        });
+        try {
+            auto j = nlohmann::json::parse(arg);
+            std::string factionA = j.value("factionA", "");
+            std::string factionB = j.value("factionB", "");
+            std::string eventType = j.value("eventType", "");
+            std::string description = j.value("description", "");
+            int delta = j.value("relationDelta", 0);
+            if (factionA.empty() || factionB.empty() || eventType.empty() || description.empty() || delta == 0) return;
+        
+            // Build a fake Political DM response matching the expected JSON format
+            nlohmann::json response;
+            response["should_act"] = true;
+            response["faction_a"] = factionA;
+            response["faction_b"] = factionB;
+            response["event_type"] = eventType;
+            response["description"] = description;
+            response["relation_delta"] = delta;
+        
+            // Pass the full response JSON as strArg — Papyrus feeds it to ProcessPoliticalDMResponse
+            DashboardUIManager::GetSingleton()->SendModEvent(
+                "IntelEngine_DashboardDispatchPolitics", response.dump(), 0.0f);
+            logger::info("[Dashboard] Director: politics event={} factionA={} factionB={} delta={}",
+                eventType, factionA, factionB, delta);
+        } catch (const std::exception& e) {
+            logger::error("[Dashboard] Director politics dispatch failed: {}", e.what());
+        } catch (...) {
+            logger::error("[Dashboard] Director politics dispatch failed: unknown error");
+        }
     }
 
     // =========================================================================
@@ -779,30 +1053,29 @@ namespace IntelEngine {
     // =========================================================================
 
     void DashboardUIManager::OnExecuteActionStatic(const char* jsonArg) {
-        auto* task = SKSE::GetTaskInterface();
-        if (!task) return;
+        if (!GetSingleton()->acceptingCallbacks_.load()) return;
+        
+        
         std::string arg(jsonArg ? jsonArg : "{}");
-        task->AddTask([arg]() {
-            try {
-                auto j = nlohmann::json::parse(arg);
-                const auto formId = ReadFormID(j, "npcFormId");
-                std::string actionName = j.value("actionName", "");
-                if (!formId || actionName.empty()) return;
-
-                // Pass action params directly in the ModEvent payload.
-                nlohmann::json eventPayload;
-                eventPayload["actionName"] = actionName;
-                if (j.contains("params") && j["params"].is_object()) {
-                    for (auto& [key, val] : j["params"].items()) {
-                        eventPayload[key] = val.is_string() ? val.get<std::string>() : val.dump();
-                    }
+        try {
+            auto j = nlohmann::json::parse(arg);
+            const auto formId = ReadFormID(j, "npcFormId");
+            std::string actionName = j.value("actionName", "");
+            if (!formId || actionName.empty()) return;
+        
+            // Pass action params directly in the ModEvent payload.
+            nlohmann::json eventPayload;
+            eventPayload["actionName"] = actionName;
+            if (j.contains("params") && j["params"].is_object()) {
+                for (auto& [key, val] : j["params"].items()) {
+                    eventPayload[key] = val.is_string() ? val.get<std::string>() : val.dump();
                 }
-                eventPayload["npcFormId"] = std::to_string(*formId);
-                DashboardUIManager::GetSingleton()->SendModEvent(
-                    "IntelEngine_DashboardExecuteAction", eventPayload.dump());
-                logger::info("[Dashboard] Director: execute action={} npc=0x{:X}", actionName, *formId);
-            } catch (...) {}
-        });
+            }
+            eventPayload["npcFormId"] = std::to_string(*formId);
+            DashboardUIManager::GetSingleton()->SendModEvent(
+                "IntelEngine_DashboardExecuteAction", eventPayload.dump());
+            logger::info("[Dashboard] Director: execute action={} npc=0x{:X}", actionName, *formId);
+        } catch (...) {}
     }
 
     // =========================================================================
@@ -810,70 +1083,69 @@ namespace IntelEngine {
     // =========================================================================
 
     void DashboardUIManager::OnToggleActionStatic(const char* jsonArg) {
-        auto* task = SKSE::GetTaskInterface();
-        if (!task) return;
+        if (!GetSingleton()->acceptingCallbacks_.load()) return;
+        
+        
         std::string arg(jsonArg ? jsonArg : "{}");
-        task->AddTask([arg]() {
-            try {
-                auto j = nlohmann::json::parse(arg);
-                std::string name = j.value("name", "");
-                bool enabled = j.value("enabled", true);
-                if (name.empty()) return;
-
-                auto* mgr = DashboardUIManager::GetSingleton();
-
-                // Find action in cache to get its fileName
-                std::string fileName;
-                {
-                    std::lock_guard<std::mutex> cacheLock(mgr->actionCacheMutex_);
-                    for (auto& a : mgr->actionCache_) {
-                        if (a.name == name) {
-                            fileName = a.fileName;
-                            a.enabled = enabled;  // Update cache immediately
-                            break;
-                        }
+        try {
+            auto j = nlohmann::json::parse(arg);
+            std::string name = j.value("name", "");
+            bool enabled = j.value("enabled", true);
+            if (name.empty()) return;
+        
+            auto* mgr = DashboardUIManager::GetSingleton();
+        
+            // Find action in cache to get its fileName
+            std::string fileName;
+            {
+                std::lock_guard<std::mutex> cacheLock(mgr->actionCacheMutex_);
+                for (auto& a : mgr->actionCache_) {
+                    if (a.name == name) {
+                        fileName = a.fileName;
+                        a.enabled = enabled;  // Update cache immediately
+                        break;
                     }
                 }
-                if (fileName.empty()) return;
-
-                // Modify the YAML file on disk
-                std::string yamlPath = std::string(kActionYamlDirectory) + "/" + fileName + ".yaml";
-                std::ifstream inFile(yamlPath);
-                if (!inFile.is_open()) {
-                    logger::warn("[Dashboard] Cannot open action YAML: {}", yamlPath);
-                    return;
+            }
+            if (fileName.empty()) return;
+        
+            // Modify the YAML file on disk
+            std::string yamlPath = std::string(kActionYamlDirectory) + "/" + fileName + ".yaml";
+            std::ifstream inFile(yamlPath);
+            if (!inFile.is_open()) {
+                logger::warn("[Dashboard] Cannot open action YAML: {}", yamlPath);
+                return;
+            }
+        
+            // Line-based replacement: only match top-level "enabled:" key
+            std::vector<std::string> lines;
+            std::string line;
+            bool replaced = false;
+            while (std::getline(inFile, line)) {
+                if (!replaced && line.rfind("enabled:", 0) == 0) {
+                    lines.push_back(std::string("enabled: ") + (enabled ? "true" : "false"));
+                    replaced = true;
+                } else {
+                    lines.push_back(line);
                 }
-
-                // Line-based replacement: only match top-level "enabled:" key
-                std::vector<std::string> lines;
-                std::string line;
-                bool replaced = false;
-                while (std::getline(inFile, line)) {
-                    if (!replaced && line.rfind("enabled:", 0) == 0) {
-                        lines.push_back(std::string("enabled: ") + (enabled ? "true" : "false"));
-                        replaced = true;
-                    } else {
-                        lines.push_back(line);
+            }
+            inFile.close();
+        
+            if (replaced) {
+                std::ofstream outFile(yamlPath);
+                if (outFile.is_open()) {
+                    for (size_t i = 0; i < lines.size(); ++i) {
+                        outFile << lines[i];
+                        if (i + 1 < lines.size()) outFile << '\n';
                     }
+                    outFile.close();
+                    logger::info("[Dashboard] Action toggled: {} = {} in {}", name, enabled, yamlPath);
                 }
-                inFile.close();
-
-                if (replaced) {
-                    std::ofstream outFile(yamlPath);
-                    if (outFile.is_open()) {
-                        for (size_t i = 0; i < lines.size(); ++i) {
-                            outFile << lines[i];
-                            if (i + 1 < lines.size()) outFile << '\n';
-                        }
-                        outFile.close();
-                        logger::info("[Dashboard] Action toggled: {} = {} in {}", name, enabled, yamlPath);
-                    }
-                }
-
-                // Push updated state so React reflects the change
-                mgr->SendModEvent("IntelEngine_DashboardRefresh");
-            } catch (...) {}
-        });
+            }
+        
+            // Push updated state so React reflects the change
+            mgr->SendModEvent("IntelEngine_DashboardRefresh");
+        } catch (...) {}
     }
 
     // =========================================================================
@@ -1003,39 +1275,13 @@ namespace IntelEngine {
     // =========================================================================
 
     void DashboardUIManager::ReloadView() {
-        DashboardConfig::GetSingleton()->Reload();
         {
-            std::lock_guard<std::mutex> cacheLock(actionCacheMutex_);
-            actionCacheLoaded_ = false;  // Force re-read on next push
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (shuttingDown_ || !host_ || !available_.load()) return;
+            ++generation_;
+            pendingReload_ = true;
         }
-
-        std::lock_guard<std::mutex> lock(mutex_);
-        if (!prismaUI_) return;
-
-        bool wasOpen = isOpen_.load();
-
-        if (dashboardView_ != 0) {
-            try {
-                prismaUI_->Unfocus(dashboardView_);
-                prismaUI_->Destroy(dashboardView_);
-            } catch (...) {}
-            dashboardView_ = 0;
-        }
-
-        isOpen_.store(false);
-        domReady_.store(false);
-
-        if (!CreateViewIfNeeded()) {
-            logger::error("[Dashboard] Reload failed");
-            return;
-        }
-
-        logger::info("[Dashboard] View reloaded from disk");
-
-        if (wasOpen) {
-            isOpen_.store(true);
-            prismaUI_->Show(dashboardView_);
-        }
+        pollCondition_.notify_one();
     }
 
 }  // namespace IntelEngine
