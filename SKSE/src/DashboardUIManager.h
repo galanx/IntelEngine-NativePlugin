@@ -104,6 +104,7 @@ namespace IntelEngine {
         struct ActionParam {
             std::string name;
             std::string description;
+            std::vector<std::string> enumValues;
         };
         struct ActionMeta {
             std::string name;

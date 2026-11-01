@@ -95,6 +95,7 @@ callbacks = [method(manager, sig) for sig in (
     "    void DashboardUIManager::OnDispatchPoliticsStatic(",
     "    void DashboardUIManager::OnExecuteActionStatic(",
     "    void DashboardUIManager::OnToggleActionStatic(",
+    "    void DashboardUIManager::LoadActionYAMLs()",
     "    void DashboardUIManager::ReloadView()",
     "    void DashboardUIManager::SendModEvent(",
     "    void DashboardUIManager::HotkeyPollLoop()",
@@ -102,6 +103,9 @@ callbacks = [method(manager, sig) for sig in (
 
 with tempfile.TemporaryDirectory(prefix="dashboard-host-") as temp:
     work = pathlib.Path(temp)
+    (work / "actions").mkdir()
+    (work / "actions/report.yaml").write_bytes(
+        (ROOT / "SKSE/Plugins/SkyrimNet/external/galanx.intelengine/actions/reportplayerconduct.yaml").read_bytes())
     (work / "UiHostTestSupport.h").write_text(r'''#pragma once
 #define INTELENGINE_VERSION "3.6.2"
 #include "Windows.h"
@@ -201,6 +205,7 @@ extern "C" short GetAsyncKeyState(int);
 #include <vector>
 #include <filesystem>
 #include <fstream>
+#include <sstream>
 #include <iterator>
 
 #include <chrono>
@@ -670,10 +675,10 @@ public:
     std::uint64_t slotPayloadGeneration_=0,fullStatePayloadGeneration_=0;
     std::string pendingFullState_,pendingSlotPayload_,pendingFullStatePayload_;
     std::mutex mutex_,actionCacheMutex_; std::condition_variable pollCondition_;
-    struct ActionParam {std::string name,description;};
+    struct ActionParam {std::string name,description;std::vector<std::string> enumValues;};
     struct ActionMeta {std::string name,fileName,description;bool enabled=true;std::vector<ActionParam> params;};
     std::vector<ActionMeta> actionCache_; bool actionCacheLoaded_=true;
-    void LoadActionYAMLs() {}
+    void LoadActionYAMLs();
     void SendModEvent(const std::string&,const std::string& = "",float=0.f);
     void Toggle(); void RequestClose(); void OnHostEvent(UiHostEvent,std::uint64_t=0);
     void PushSlotData(); void PushFullState(const std::string&); void SendSlotData(std::uint64_t); void ProcessFullState(const std::string&,std::uint64_t);
@@ -736,6 +741,11 @@ void testManager() {
         {{"formId",0x4E013BF1u},{"name","Brey"}},
         {{"formId",0x10000001u},{"name","Neighbor"}},
         {{"formId",0x10000002u},{"name","Boundary"}}}));
+    m->LoadActionYAMLs();
+    m->ProcessFullState("{\"ready\":true}",generation);
+    const auto actionsPayload=nlohmann::json::parse(m->pendingFullStatePayload_)["actions"];
+    assert(actionsPayload[0]["name"]=="ReportPlayerConduct");
+    assert(actionsPayload[0]["params"][1]["enum"]==nlohmann::json::array({"strongly_positive","positive","negative","strongly_negative"}));
     player->cell=&interior;
     RE::Actor sameInterior, differentInterior;
     sameInterior.id=0x10000007; sameInterior.name="Same Interior"; sameInterior.cell=&interior; sameInterior.position={4000,0,0};

@@ -2471,6 +2471,12 @@ Event OnDashboardExecuteAction(String eventName, String strArg, Float numArg, Fo
         EndIf
         NPCTasks.DeliverMessage(npc, targetName, msgContent, meetLoc, meetTime)
 
+    ElseIf actionName == "ReportPlayerConduct"
+        String factionId = IntelEngine.StoryResponseGetField(strArg, "factionId")
+        String sentiment = IntelEngine.StoryResponseGetField(strArg, "sentiment")
+        String reason = IntelEngine.StoryResponseGetField(strArg, "reason")
+        Politics.ReportPlayerConduct(npc, factionId, sentiment, reason)
+
     ElseIf actionName == "EscortTarget"
         String targetName = IntelEngine.StoryResponseGetField(strArg, "targetName")
         String destination = IntelEngine.StoryResponseGetField(strArg, "destination")

@@ -22,6 +22,7 @@
 #include <cstdint>
 #include <limits>
 #include <optional>
+#include <sstream>
 #include <utility>
 
 namespace IntelEngine {
@@ -502,7 +503,9 @@ namespace IntelEngine {
                     entry["enabled"] = a.enabled;
                     nlohmann::json params = nlohmann::json::array();
                     for (auto& p : a.params) {
-                        params.push_back({{"name", p.name}, {"description", p.description}});
+                        nlohmann::json param = {{"name", p.name}, {"description", p.description}};
+                        if (!p.enumValues.empty()) param["enum"] = p.enumValues;
+                        params.push_back(std::move(param));
                     }
                     entry["params"] = params;
                     acts.push_back(entry);
@@ -1288,6 +1291,18 @@ namespace IntelEngine {
                         std::string val = trimmed.substr(5);
                         auto vs = val.find_first_not_of(" \t");
                         currentParam.name = vs != std::string::npos ? val.substr(vs) : "";
+                    } else if (trimmed.rfind("enum:", 0) == 0 && hasCurrentParam) {
+                        auto start = trimmed.find('[');
+                        auto end = trimmed.find(']', start);
+                        if (start != std::string::npos && end != std::string::npos) {
+                            std::stringstream values(trimmed.substr(start + 1, end - start - 1));
+                            std::string value;
+                            while (std::getline(values, value, ',')) {
+                                auto first = value.find_first_not_of(" \t\"'");
+                                auto last = value.find_last_not_of(" \t\"'");
+                                if (first != std::string::npos) currentParam.enumValues.push_back(value.substr(first, last - first + 1));
+                            }
+                        }
                     } else if (trimmed.rfind("description:", 0) == 0 && hasCurrentParam) {
                         std::string val = trimmed.substr(12);
                         auto vs = val.find_first_not_of(" \t>");
