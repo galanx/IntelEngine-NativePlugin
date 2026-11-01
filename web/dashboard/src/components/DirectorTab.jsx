@@ -306,10 +306,10 @@ function DirectorTab({ loadedNpcs, actions, factions = [], sendAction }) {
   const INTEL_ACTIONS = new Set([
     'GoToLocation', 'FetchPerson', 'DeliverMessage', 'EscortTarget', 'SearchForActor',
     'ScheduleFetch', 'ScheduleDelivery', 'ScheduleMeeting',
-    'CancelCurrentTask', 'ChangeSpeed', 'ReportPlayerConduct',
+    'CancelCurrentTask', 'ChangeSpeed',
   ]);
   const executableActions = useMemo(
-    () => (actions || []).filter(a => a.params && a.params.length > 0 && INTEL_ACTIONS.has(a.name)),
+    () => (actions || []).filter(a => INTEL_ACTIONS.has(a.name)),
     [actions],
   );
 
@@ -323,7 +323,7 @@ function DirectorTab({ loadedNpcs, actions, factions = [], sendAction }) {
     if (!selectedAction) return [];
     if (ACTION_FIELDS[selectedAction]) return ACTION_FIELDS[selectedAction];
     if (currentAction) {
-      return currentAction.params
+      return (currentAction.params || [])
         .filter(p => !HIDDEN_PARAMS.has(p.name))
         .map(p => ({ key: p.name, label: p.name, type: 'text', placeholder: p.description }));
     }
