@@ -630,11 +630,16 @@ class FactionPolitics { public: static PoliticsStub* GetSingleton(){static Polit
 class SlotTracker { public: static SlotStub* GetSingleton(){static SlotStub s;return &s;} };
 namespace SkyrimNetAPI { inline std::string (*GetPluginConfigValue)(const char*,const char*,const char*)=nullptr; }
 namespace RE {
+struct Worldspace {};
+struct Cell { bool interior=false; bool IsInteriorCell() const { return interior; } };
 class Actor { public:
-    bool dead=false,disabled=false,loaded=true; void* cell=nullptr; unsigned id=0; const char* name="";
+    struct NiPoint3 { float x=0,y=0,z=0; };
     struct Base { bool unique=false; bool IsUnique()const{return unique;} } base;
+    bool dead=false,disabled=false,loaded=true; Cell* cell=nullptr; Worldspace* world=nullptr;
+    unsigned id=0; const char* name=""; NiPoint3 position{};
     bool IsDead()const{return dead;} bool IsDisabled()const{return disabled;} bool Is3DLoaded()const{return loaded;}
-    void* GetParentCell()const{return cell;} Base* GetActorBase(){return &base;}
+    Cell* GetParentCell()const{return cell;} Worldspace* GetWorldspace()const{return world;}
+    NiPoint3 GetPosition()const{return position;} Base* GetActorBase(){return &base;}
     unsigned GetFormID()const{return id;} const char* GetDisplayFullName()const{return name;}
 };
 class PlayerCharacter : public Actor { public: static PlayerCharacter* GetSingleton(){static PlayerCharacter p;return &p;} };
@@ -705,18 +710,44 @@ void testManager() {
     assert(m->pendingFullStateSet_ && m->pendingFullState_=="{\"ready\":true}");
     m->pendingFullStateSet_=false;
     m->ProcessFullState("{\"ready\":TRUE}",generation); assert(m->pendingFullStatePayloadSet_);
-    RE::Actor guard, citizen, named, dead, disabled, unloaded, remote;
-    guard.id=0xFF000001; guard.name="Whiterun Guard";
-    citizen.id=0xFE000801; citizen.name="Mod Citizen";
-    named.id=0x4E013BF1; named.name="Brey"; named.base.unique=true;
-    dead.dead=true; disabled.disabled=true; unloaded.loaded=false; remote.cell=&remote;
-    ProcessUtils::actors={nullptr,RE::PlayerCharacter::GetSingleton(),&guard,&citizen,&named,&dead,&disabled,&unloaded,&remote};
+    RE::Cell exterior, neighboringExterior, distantExterior, interior{true}, otherInterior{true};
+    RE::Worldspace world, otherWorld;
+    auto* player=RE::PlayerCharacter::GetSingleton();
+    player->cell=&exterior; player->world=&world; player->position={0,0,0};
+    RE::Actor guard, citizen, named, dead, disabled, unloaded, neighboring, boundary, distant, remoteWorld, interiorActor, otherCellActor, noCell;
+    guard.id=0xFF000001; guard.name="Whiterun Guard"; guard.cell=&exterior; guard.world=&world; guard.position={1,0,0};
+    citizen.id=0xFE000801; citizen.name="Mod Citizen"; citizen.cell=&exterior; citizen.world=&world;
+    named.id=0x4E013BF1; named.name="Brey"; named.base.unique=true; named.cell=&exterior; named.world=&world;
+    dead.dead=true; dead.cell=&exterior; dead.world=&world;
+    disabled.disabled=true; disabled.cell=&exterior; disabled.world=&world;
+    unloaded.loaded=false; unloaded.cell=&exterior; unloaded.world=&world;
+    neighboring.id=0x10000001; neighboring.name="Neighbor"; neighboring.cell=&neighboringExterior; neighboring.world=&world; neighboring.position={3999,0,0};
+    boundary.id=0x10000002; boundary.name="Boundary"; boundary.cell=&neighboringExterior; boundary.world=&world; boundary.position={4000,0,0};
+    distant.id=0x10000003; distant.name="Distant"; distant.cell=&distantExterior; distant.world=&world; distant.position={4001,0,0};
+    remoteWorld.id=0x10000004; remoteWorld.name="Other World"; remoteWorld.cell=&exterior; remoteWorld.world=&otherWorld; remoteWorld.position={2,0,0};
+    interiorActor.id=0x10000005; interiorActor.name="Interior"; interiorActor.cell=&interior; interiorActor.world=&world;
+    otherCellActor.id=0x10000006; otherCellActor.name="Other Interior Cell"; otherCellActor.cell=&otherInterior; otherCellActor.world=&world;
+    ProcessUtils::actors={nullptr,player,&guard,&citizen,&named,&dead,&disabled,&unloaded,&neighboring,&boundary,&distant,&remoteWorld,&interiorActor,&otherCellActor,&noCell};
     m->ProcessFullState("{\"ready\":true}",generation);
     const auto actorPayload=nlohmann::json::parse(m->pendingFullStatePayload_)["loadedNpcs"];
     assert(actorPayload==nlohmann::json::array({
         {{"formId",0xFF000001u},{"name","Whiterun Guard"}},
         {{"formId",0xFE000801u},{"name","Mod Citizen"}},
-        {{"formId",0x4E013BF1u},{"name","Brey"}}}));
+        {{"formId",0x4E013BF1u},{"name","Brey"}},
+        {{"formId",0x10000001u},{"name","Neighbor"}},
+        {{"formId",0x10000002u},{"name","Boundary"}}}));
+    player->cell=&interior;
+    RE::Actor sameInterior, differentInterior;
+    sameInterior.id=0x10000007; sameInterior.name="Same Interior"; sameInterior.cell=&interior; sameInterior.position={4000,0,0};
+    differentInterior.id=0x10000008; differentInterior.name="Different Interior"; differentInterior.cell=&otherInterior;
+    ProcessUtils::actors={&sameInterior,&differentInterior};
+    m->ProcessFullState("{\"ready\":true}",generation);
+    const auto interiorPayload=nlohmann::json::parse(m->pendingFullStatePayload_)["loadedNpcs"];
+    assert(interiorPayload==nlohmann::json::array({{{"formId",0x10000007u},{"name","Same Interior"}}}));
+    player->cell=nullptr;
+    ProcessUtils::actors={&guard};
+    m->ProcessFullState("{\"ready\":true}",generation);
+    assert(nlohmann::json::parse(m->pendingFullStatePayload_)["loadedNpcs"].empty());
     ProcessUtils::actors.clear();
     stopOnForeground=&m->stopPolling_;
     m->HotkeyPollLoop();
