@@ -56,6 +56,7 @@ Bool Function ShouldResetPending(String system, Float timeoutHours, Float curren
 
 ; Utility
 Int Function HexToInt(String hexStr) Global Native
+Int Function ParseFormID(String formId) Global Native
 
 ; Dialogue Tracker — Auto Bio Updates
 Function SetAutoBioEnabled(Bool enabled) Global Native

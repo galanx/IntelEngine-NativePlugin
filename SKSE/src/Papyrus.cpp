@@ -5,6 +5,7 @@
  */
 
 #include "Papyrus.h"
+#include "FormIDString.h"
 #include "FactionLeaderNameMatch.h"
 #include "Utf8Truncate.h"
 #include "NPCIndex.h"
@@ -576,6 +577,7 @@ namespace IntelEngine::Papyrus {
 
         // Utility
         a_vm->RegisterFunction("HexToInt", SCRIPT_NAME, HexToInt); ++count;
+        a_vm->RegisterFunction("ParseFormID", SCRIPT_NAME, ParseFormID); ++count;
 
         // Dialogue Tracker
         a_vm->RegisterFunction("SetAutoBioEnabled", SCRIPT_NAME, SetAutoBioEnabled); ++count;
@@ -2856,6 +2858,10 @@ namespace IntelEngine::Papyrus {
         } catch (...) {
             return 0;
         }
+    }
+
+    int ParseFormID(RE::StaticFunctionTag*, RE::BSFixedString formId) {
+        return IntelEngine::ParseFormID(formId.c_str()).value_or(0);
     }
 
     void SetAutoBioEnabled(RE::StaticFunctionTag*, bool enabled) {

@@ -2009,7 +2009,10 @@ Event OnDashboardCancelQuest(String eventName, String strArg, Float numArg, Form
 EndEvent
 
 Event OnDashboardRemovePackages(String eventName, String strArg, Float numArg, Form sender)
-    Int formId = numArg as Int
+    Int formId = IntelEngine.ParseFormID(strArg)
+    If formId == 0
+        Return
+    EndIf
     Actor npc = Game.GetForm(formId) as Actor
     If npc != None
         DebugMsg("Dashboard: Removing packages from " + npc.GetDisplayName())
@@ -2418,9 +2421,14 @@ EndEvent
 ; DIRECTOR MODE: Action Execution
 ; =============================================================================
 Event OnDashboardExecuteAction(String eventName, String strArg, Float numArg, Form sender)
-    ; strArg = full JSON payload (race-safe), numArg = npcFormId
+    ; strArg = full JSON payload, including exact decimal npcFormId
     String actionName = IntelEngine.StoryResponseGetField(strArg, "actionName")
-    Actor npc = Game.GetForm(numArg as Int) as Actor
+    String formIdString = IntelEngine.StoryResponseGetField(strArg, "npcFormId")
+    Int formId = IntelEngine.ParseFormID(formIdString)
+    If formId == 0
+        Return
+    EndIf
+    Actor npc = Game.GetForm(formId) as Actor
 
     If !npc || npc.IsDead()
         DebugMsg("Director: Invalid or dead NPC for action execution")

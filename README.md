@@ -460,6 +460,8 @@ Both preserved legacy pairs reproduced their verified converted bytes through th
 
 > **Unreleased — #43 leader identity (source/offline only):** political leader lookups reject empty names and use case-insensitive, forward word-boundary matching: `Jarl Ulfric Stormcloak` matches configured `Ulfric Stormcloak`, but `Ulfric` alone and unrelated longer names do not. Loaded-actor selection still prefers the player's cell. Indexed leader/liveness lookups share that contract without fuzzy fallback; matched loaded leaders log their FormIDs at info level. Live bio-fact injection remains unverified.
 
+> **Unreleased — #42 dashboard FormIDs (source/offline only):** Remove Packages and Execute Action carry decimal FormID strings, not ModEvent floats. `IntelEngine.ParseFormID` parses unsigned 32-bit values into Papyrus Int bit patterns, preserving FE/FF IDs; malformed/overflow values and zero are rejected before actor lookup. Dashboard JSON IDs must be positive integers within `uint32_t`. The DLL and rebuilt `IntelEngine.pex`/`IntelEngine_Core.pex` must be staged together; live dispatch remains unverified.
+
 > **3.6.0 NPC Social DM threading repair:** the async tick now queues game-state snapshotting through SKSE's main-thread task interface, including callback-quest inspection. Results and candidate pools from before a save load/revert are discarded. SE/AE soaks passed; stale-result drop and Phase B thread identity remain unverified. The 1.5.97 crash report on the original IntelEngine repo is not confirmed fixed. The faction-name expression and legacy synchronous APIs are unchanged.
 
 ### Historical 3.5.2 compatibility results
