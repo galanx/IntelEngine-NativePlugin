@@ -5,6 +5,8 @@
  */
 
 #include "Papyrus.h"
+#include "FormIDString.h"
+#include "FactionLeaderNameMatch.h"
 #include "Utf8Truncate.h"
 #include "NPCIndex.h"
 #include "ItemIndex.h"
@@ -44,6 +46,7 @@ namespace IntelEngine::Papyrus {
     void ClearSystemPending(RE::StaticFunctionTag*, RE::BSFixedString);
     bool ShouldResetPending(RE::StaticFunctionTag*, RE::BSFixedString, float, float);
     RE::Actor* ResolveStoryCandidate(RE::StaticFunctionTag*, RE::BSFixedString);
+    RE::Actor* ResolveDirectorActor(RE::StaticFunctionTag*, RE::BSFixedString);
     RE::Actor* FindMessengerForSender(RE::StaticFunctionTag*, RE::Actor*);
     void NotifyStoryCooldown(RE::StaticFunctionTag*, RE::Actor*, float);
     void BeginAsyncNPCDMTick(RE::StaticFunctionTag*, std::int32_t, RE::TESQuest*, RE::BSFixedString, RE::BSFixedString);
@@ -236,6 +239,7 @@ namespace IntelEngine::Papyrus {
         a_vm->RegisterFunction("FindNPCByName", SCRIPT_NAME, FindNPCByName); ++count;
         a_vm->RegisterFunction("FindNPCByNameNear", SCRIPT_NAME, FindNPCByNameNear); ++count;
         a_vm->RegisterFunction("ResolveStoryCandidate", SCRIPT_NAME, ResolveStoryCandidate); ++count;
+        a_vm->RegisterFunction("ResolveDirectorActor", SCRIPT_NAME, ResolveDirectorActor); ++count;
         a_vm->RegisterFunction("FindMessengerForSender", SCRIPT_NAME, FindMessengerForSender); ++count;
         a_vm->RegisterFunction("GetNPCCurrentLocation", SCRIPT_NAME, GetNPCCurrentLocation); ++count;
         a_vm->RegisterFunction("IsNPCAccessible", SCRIPT_NAME, IsNPCAccessible); ++count;
@@ -575,6 +579,7 @@ namespace IntelEngine::Papyrus {
 
         // Utility
         a_vm->RegisterFunction("HexToInt", SCRIPT_NAME, HexToInt); ++count;
+        a_vm->RegisterFunction("ParseFormID", SCRIPT_NAME, ParseFormID); ++count;
 
         // Dialogue Tracker
         a_vm->RegisterFunction("SetAutoBioEnabled", SCRIPT_NAME, SetAutoBioEnabled); ++count;
@@ -607,6 +612,10 @@ namespace IntelEngine::Papyrus {
         auto* str = name.c_str();
         if (!str || !*str) return nullptr;
         return NPCIndex::GetSingleton()->ResolveStoryCandidate(str);
+    }
+
+    RE::Actor* ResolveDirectorActor(RE::StaticFunctionTag*, RE::BSFixedString name) {
+        return NPCIndex::GetSingleton()->ResolveDirectorActor(name.c_str());
     }
 
     RE::Actor* FindMessengerForSender(RE::StaticFunctionTag*, RE::Actor* sender) {
@@ -2857,6 +2866,10 @@ namespace IntelEngine::Papyrus {
         }
     }
 
+    int ParseFormID(RE::StaticFunctionTag*, RE::BSFixedString formId) {
+        return IntelEngine::ParseFormID(formId.c_str()).value_or(0);
+    }
+
     void SetAutoBioEnabled(RE::StaticFunctionTag*, bool enabled) {
         DialogueTracker::GetSingleton()->SetEnabled(enabled);
         logger::info("DialogueTracker: enabled={}", enabled);
@@ -4000,46 +4013,32 @@ namespace IntelEngine::Papyrus {
         auto cfg = FactionPolitics::GetSingleton()->GetFaction(factionId.c_str());
         if (!cfg) return result;
 
-        // Always use substring match with player cell priority.
-        // "Ulfric Stormcloak" must match "Jarl Ulfric Stormcloak" in the player's cell,
-        // not a different reference named "Ulfric Stormcloak" in an unloaded cell.
+        // "Ulfric Stormcloak" matches "Jarl Ulfric Stormcloak"; prefer the player's cell.
         auto* player = RE::PlayerCharacter::GetSingleton();
         auto* playerCell = player ? player->GetParentCell() : nullptr;
 
         for (const auto& leaderName : cfg->leaderNames) {
-            std::string lowerName = leaderName;
-            std::transform(lowerName.begin(), lowerName.end(), lowerName.begin(), ::tolower);
-
             RE::Actor* bestMatch = nullptr;
             bool bestInPlayerCell = false;
 
-            ProcessUtils::ForEachLoadedActor([&](RE::Actor* a) -> bool {
-                if (!a || a->IsDead()) return false;
-                std::string displayName = a->GetDisplayFullName();
-                std::string lowerDisplay = displayName;
-                std::transform(lowerDisplay.begin(), lowerDisplay.end(), lowerDisplay.begin(), ::tolower);
+            ProcessUtils::ForEachLoadedActor([&](RE::Actor* actor) -> bool {
+                if (!actor || actor->IsDead()) return false;
+                const char* displayName = actor->GetDisplayFullName();
+                if (!displayName || !IsFactionLeaderNameMatch(displayName, leaderName)) return false;
 
-                // Match: display name contains leader name OR leader name contains display name
-                if (lowerDisplay.find(lowerName) == std::string::npos &&
-                    lowerName.find(lowerDisplay) == std::string::npos) {
-                    return false;
-                }
-
-                bool inPlayerCell = playerCell && a->GetParentCell() == playerCell;
-
-                // Prefer actor in player's cell over one in a different cell
+                const bool inPlayerCell = playerCell && actor->GetParentCell() == playerCell;
                 if (!bestMatch || (inPlayerCell && !bestInPlayerCell)) {
-                    bestMatch = a;
+                    bestMatch = actor;
                     bestInPlayerCell = inPlayerCell;
-                    if (inPlayerCell) return true;  // can't do better
+                    if (inPlayerCell) return true;
                 }
                 return false;
             });
 
             if (bestMatch) {
                 result.push_back(bestMatch);
-                logger::debug("GetFactionLeaderActors: '{}' -> '{}' (sameCell={})",
-                    leaderName, bestMatch->GetDisplayFullName(), bestInPlayerCell);
+                logger::info("GetFactionLeaderActors: '{}' -> '{}' (FormID=0x{:08X}, sameCell={})",
+                    leaderName, bestMatch->GetDisplayFullName(), bestMatch->GetFormID(), bestInPlayerCell);
             }
         }
         return result;
@@ -4052,8 +4051,8 @@ namespace IntelEngine::Papyrus {
 
         auto* npcIndex = NPCIndex::GetSingleton();
         for (const auto& leaderName : cfg->leaderNames) {
-            RE::FormID formId = npcIndex->FindFormIdByName(leaderName);
-            if (formId != 0) {
+            RE::FormID formId = npcIndex->FindFactionLeaderFormId(leaderName);
+            if (formId) {
                 result.push_back(static_cast<int>(formId));
             } else {
                 logger::debug("GetFactionLeaderFormIds: '{}' not found in NPC index", leaderName);
