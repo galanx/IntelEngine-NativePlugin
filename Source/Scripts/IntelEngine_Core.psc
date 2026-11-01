@@ -2273,8 +2273,8 @@ Event OnDashboardDispatchStory(String eventName, String strArg, Float numArg, Fo
     String narration = IntelEngine.StoryResponseGetField(strArg, "narration")
     String response = IntelEngine.StoryResponseGetField(strArg, "response")
 
-    Actor npc = IntelEngine.ResolveStoryCandidate(npcName)
-    If !npc || npc.IsDead()
+    Actor npc = IntelEngine.ResolveDirectorActor(npcName)
+    If !npc || npc.IsDead() || npc.IsDisabled()
         DebugMsg("Director: Could not find NPC '" + npcName + "' for story dispatch")
         Return
     EndIf
@@ -2352,13 +2352,13 @@ Event OnDashboardDispatchNpcSocial(String eventName, String strArg, Float numArg
     String narration = IntelEngine.StoryResponseGetField(strArg, "narration")
     String response = IntelEngine.StoryResponseGetField(strArg, "response")
 
-    Actor npc1 = IntelEngine.FindNPCByName(npc1Name)
-    Actor npc2 = IntelEngine.FindNPCByName(npc2Name)
-    If !npc1 || npc1.IsDead()
+    Actor npc1 = IntelEngine.ResolveDirectorActor(npc1Name)
+    Actor npc2 = IntelEngine.ResolveDirectorActor(npc2Name)
+    If !npc1 || npc1.IsDead() || npc1.IsDisabled()
         DebugMsg("Director: Could not find NPC 1 '" + npc1Name + "' for social dispatch")
         Return
     EndIf
-    If !npc2 || npc2.IsDead()
+    If !npc2 || npc2.IsDead() || npc2.IsDisabled()
         DebugMsg("Director: Could not find NPC 2 '" + npc2Name + "' for social dispatch")
         Return
     EndIf

@@ -46,6 +46,7 @@ namespace IntelEngine::Papyrus {
     void ClearSystemPending(RE::StaticFunctionTag*, RE::BSFixedString);
     bool ShouldResetPending(RE::StaticFunctionTag*, RE::BSFixedString, float, float);
     RE::Actor* ResolveStoryCandidate(RE::StaticFunctionTag*, RE::BSFixedString);
+    RE::Actor* ResolveDirectorActor(RE::StaticFunctionTag*, RE::BSFixedString);
     RE::Actor* FindMessengerForSender(RE::StaticFunctionTag*, RE::Actor*);
     void NotifyStoryCooldown(RE::StaticFunctionTag*, RE::Actor*, float);
     void BeginAsyncNPCDMTick(RE::StaticFunctionTag*, std::int32_t, RE::TESQuest*, RE::BSFixedString, RE::BSFixedString);
@@ -238,6 +239,7 @@ namespace IntelEngine::Papyrus {
         a_vm->RegisterFunction("FindNPCByName", SCRIPT_NAME, FindNPCByName); ++count;
         a_vm->RegisterFunction("FindNPCByNameNear", SCRIPT_NAME, FindNPCByNameNear); ++count;
         a_vm->RegisterFunction("ResolveStoryCandidate", SCRIPT_NAME, ResolveStoryCandidate); ++count;
+        a_vm->RegisterFunction("ResolveDirectorActor", SCRIPT_NAME, ResolveDirectorActor); ++count;
         a_vm->RegisterFunction("FindMessengerForSender", SCRIPT_NAME, FindMessengerForSender); ++count;
         a_vm->RegisterFunction("GetNPCCurrentLocation", SCRIPT_NAME, GetNPCCurrentLocation); ++count;
         a_vm->RegisterFunction("IsNPCAccessible", SCRIPT_NAME, IsNPCAccessible); ++count;
@@ -610,6 +612,10 @@ namespace IntelEngine::Papyrus {
         auto* str = name.c_str();
         if (!str || !*str) return nullptr;
         return NPCIndex::GetSingleton()->ResolveStoryCandidate(str);
+    }
+
+    RE::Actor* ResolveDirectorActor(RE::StaticFunctionTag*, RE::BSFixedString name) {
+        return NPCIndex::GetSingleton()->ResolveDirectorActor(name.c_str());
     }
 
     RE::Actor* FindMessengerForSender(RE::StaticFunctionTag*, RE::Actor* sender) {
