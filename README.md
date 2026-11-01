@@ -456,6 +456,8 @@ Both preserved legacy pairs reproduced their verified converted bytes through th
 
 > **3.6.0 Story DM actor resolution:** model-selected NPC names now resolve only within the latest Story DM/social candidate pools, using exact display names or a unique case/whitespace-normalized name with a trailing bracketed role removed. Unknown and ambiguous names reject instead of falling back to worldwide fuzzy search. Duplicate display names remain ambiguous. Overlapping requests are not request-isolated; the existing Courier/Messenger substitution path is unchanged. Live selection and unknown-name rejection were verified; duplicate-name rejection remains unverified live.
 
+> **Unreleased — #41 rejection diagnostics (source/offline only):** candidate selection remains bounded to the automatic DM/social pools, including rejection of duplicate entries for the same actor. Rejection warnings distinguish `empty-pools`, `no-match`, `ambiguous`, `zero-formid`, `lookup-null`, `deleted`, and `id-mismatch`, with both pool sizes. Ambiguity includes all matching pool/name/FormID entries and whether they identify the same actor. Manual Director resolution is unchanged; live verification remains pending.
+
 > **3.6.0 NPC Social DM threading repair:** the async tick now queues game-state snapshotting through SKSE's main-thread task interface, including callback-quest inspection. Results and candidate pools from before a save load/revert are discarded. SE/AE soaks passed; stale-result drop and Phase B thread identity remain unverified. The 1.5.97 crash report on the original IntelEngine repo is not confirmed fixed. The faction-name expression and legacy synchronous APIs are unchanged.
 
 ### Historical 3.5.2 compatibility results
