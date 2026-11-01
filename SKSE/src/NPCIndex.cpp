@@ -831,11 +831,35 @@ namespace IntelEngine {
         std::shared_lock lock(m_mutex);
         // ponytail: latest-tick pools cannot isolate overlapping requests;
         // upgrade to request-bound resolution via the Papyrus contract.
-        const auto formId = ResolveStoryCandidateFormID(name, m_dmCandidatePool, m_npcCandidatePool);
+        StoryCandidateRejection rejection;
+        const auto formId = ResolveStoryCandidateFormID(name, m_dmCandidatePool, m_npcCandidatePool, &rejection);
         // Candidate IDs are actor references, never base forms or global name aliases.
         auto* actor = formId ? RE::TESForm::LookupByID<RE::Actor>(formId) : nullptr;
         if (!actor || actor->IsDeleted() || actor->GetFormID() != formId) {
-            logger::warn("ResolveStoryCandidate('{}') -> rejected: unknown, ambiguous or unavailable candidate", name);
+            if (formId) {
+                rejection.branch = !actor ? "lookup-null" : actor->IsDeleted() ? "deleted" : "id-mismatch";
+            }
+            std::string matches;
+            if (std::string_view(rejection.branch) == "ambiguous") {
+                std::string lower = name;
+                for (char& c : lower) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+                const auto normalized = rejection.exact ? std::string{} : NormalizeStoryCandidateName(name);
+                std::uint32_t firstId = 0;
+                bool first = true;
+                bool sameActor = true;
+                for (const auto* pool : {&m_dmCandidatePool, &m_npcCandidatePool}) {
+                    for (const auto& [candidate, id] : *pool) {
+                        if (rejection.exact ? candidate != lower : NormalizeStoryCandidateName(candidate) != normalized) continue;
+                        if (first) { firstId = id; first = false; }
+                        else if (id != firstId) sameActor = false;
+                        matches += fmt::format(" [pool={} name='{}' FormID=0x{:08X}]",
+                            pool == &m_dmCandidatePool ? "dm" : "social", candidate, id);
+                    }
+                }
+                matches += fmt::format(" same-actor={}", sameActor);
+            }
+            logger::warn("ResolveStoryCandidate('{}') -> rejected: {} dm-size={} social-size={} FormID=0x{:08X}{}",
+                name, rejection.branch, m_dmCandidatePool.size(), m_npcCandidatePool.size(), formId, matches);
             return nullptr;
         }
         return actor;
