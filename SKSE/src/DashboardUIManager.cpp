@@ -20,6 +20,9 @@
 #include <fstream>
 #include <sstream>
 #include <nlohmann/json.hpp>
+#include <cstdint>
+#include <limits>
+#include <optional>
 
 namespace IntelEngine {
 
@@ -29,6 +32,23 @@ namespace IntelEngine {
     static constexpr auto kKeyPressCooldownMs = std::chrono::milliseconds(300);
     static constexpr const char* kActionYamlDirectory =
         "Data/SKSE/Plugins/SkyrimNet/external/galanx.intelengine/actions";
+
+    static std::optional<std::uint32_t> ReadFormID(const nlohmann::json& json, const char* key) {
+        const auto it = json.find(key);
+        if (it == json.end()) return std::nullopt;
+        if (it->is_number_unsigned()) {
+            const auto value = it->get<std::uint64_t>();
+            if (value != 0 && value <= std::numeric_limits<std::uint32_t>::max()) {
+                return static_cast<std::uint32_t>(value);
+            }
+        } else if (it->is_number_integer()) {
+            const auto value = it->get<std::int64_t>();
+            if (value > 0 && static_cast<std::uint64_t>(value) <= std::numeric_limits<std::uint32_t>::max()) {
+                return static_cast<std::uint32_t>(value);
+            }
+        }
+        return std::nullopt;
+    }
 
     // =========================================================================
     // Lifecycle
@@ -422,10 +442,10 @@ namespace IntelEngine {
         task->AddTask([arg]() {
             try {
                 auto j = nlohmann::json::parse(arg);
-                int formId = j.value("formId", 0);
-                if (formId > 0) {
+                const auto formId = ReadFormID(j, "formId");
+                if (formId) {
                     DashboardUIManager::GetSingleton()->SendModEvent(
-                        "IntelEngine_DashboardRemovePackages", "", static_cast<float>(formId));
+                        "IntelEngine_DashboardRemovePackages", std::to_string(*formId));
                 }
             } catch (...) {}
         });
@@ -765,9 +785,9 @@ namespace IntelEngine {
         task->AddTask([arg]() {
             try {
                 auto j = nlohmann::json::parse(arg);
-                int formId = j.value("npcFormId", 0);
+                const auto formId = ReadFormID(j, "npcFormId");
                 std::string actionName = j.value("actionName", "");
-                if (formId <= 0 || actionName.empty()) return;
+                if (!formId || actionName.empty()) return;
 
                 // Pass action params directly in the ModEvent payload.
                 nlohmann::json eventPayload;
@@ -777,10 +797,10 @@ namespace IntelEngine {
                         eventPayload[key] = val.is_string() ? val.get<std::string>() : val.dump();
                     }
                 }
-
+                eventPayload["npcFormId"] = std::to_string(*formId);
                 DashboardUIManager::GetSingleton()->SendModEvent(
-                    "IntelEngine_DashboardExecuteAction", eventPayload.dump(), static_cast<float>(formId));
-                logger::info("[Dashboard] Director: execute action={} npc=0x{:X}", actionName, formId);
+                    "IntelEngine_DashboardExecuteAction", eventPayload.dump());
+                logger::info("[Dashboard] Director: execute action={} npc=0x{:X}", actionName, *formId);
             } catch (...) {}
         });
     }
