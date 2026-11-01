@@ -3,6 +3,7 @@ import { useState, useMemo, useCallback, useRef, useEffect } from 'react';
 /** Text input with dropdown suggestions. Works in Ultralight (no <datalist> needed). */
 function FactionInput({ value, onChange, factions, placeholder }) {
   const [open, setOpen] = useState(false);
+  const [showAll, setShowAll] = useState(false);
   const ref = useRef(null);
 
   // Close dropdown on outside click
@@ -12,25 +13,34 @@ function FactionInput({ value, onChange, factions, placeholder }) {
     return () => document.removeEventListener('mousedown', handler);
   }, []);
 
-  // Filter suggestions based on current value (single source of truth)
   const filtered = useMemo(() => {
-    if (!value) return factions;
+    if (showAll || !value) return factions;
     const lc = value.toLowerCase();
-    // Hide suggestions if value exactly matches a faction ID (already selected)
-    if (factions.some(f => f.id === value)) return [];
     return factions.filter(f => f.id.toLowerCase().includes(lc) || f.name.toLowerCase().includes(lc));
-  }, [factions, value]);
+  }, [factions, value, showAll]);
 
   return (
     <div ref={ref} className="flex-1 relative">
       <input
         type="text"
         value={value}
-        onChange={e => { onChange(e.target.value); setOpen(true); }}
-        onFocus={() => setOpen(true)}
+        onChange={e => { onChange(e.target.value); setShowAll(false); setOpen(true); }}
+        onFocus={() => { setShowAll(true); setOpen(true); }}
+        onClick={() => { setShowAll(true); setOpen(true); }}
         placeholder={placeholder}
-        className="w-full bg-white/5 border border-white/10 rounded px-2 py-1.5 text-xs text-gray-200 outline-none placeholder:text-gray-600"
+        className="w-full bg-white/5 border border-white/10 rounded px-2 py-1.5 pr-6 text-xs text-gray-200 outline-none placeholder:text-gray-600"
       />
+      {value && (
+        <button
+          type="button"
+          aria-label="Clear faction"
+          onMouseDown={e => e.preventDefault()}
+          onClick={() => { onChange(''); setShowAll(true); setOpen(true); }}
+          className="absolute right-1 top-1/2 -translate-y-1/2 px-1 text-xs text-gray-500 hover:text-gray-200"
+        >
+          ×
+        </button>
+      )}
       {open && filtered.length > 0 && (
         <div className="absolute z-50 top-full left-0 right-0 mt-0.5 max-h-32 overflow-y-auto bg-[#1a1a2e] border border-white/10 rounded shadow-lg">
           {filtered.map(f => (
