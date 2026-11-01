@@ -4,6 +4,30 @@
 
 #include <iostream>
 #include <stdexcept>
+#include <vector>
+
+// Frozen pre-#41 selection algorithm: diagnostics must not change selection.
+static std::uint32_t OriginalResolve(std::string_view name,
+    const IntelEngine::StoryCandidatePool& dm, const IntelEngine::StoryCandidatePool& npc) {
+    std::string lower(name);
+    for (char& c : lower) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    for (const bool exact : {true, false}) {
+        const auto normalized = exact ? std::string{} : IntelEngine::NormalizeStoryCandidateName(name);
+        if (!exact && normalized.empty()) return 0;
+        std::uint32_t match = 0;
+        bool found = false;
+        for (const auto* pool : {&dm, &npc}) {
+            for (const auto& [candidate, formId] : *pool) {
+                if (exact ? candidate != lower : IntelEngine::NormalizeStoryCandidateName(candidate) != normalized) continue;
+                if (formId == 0 || found) return 0;
+                match = formId;
+                found = true;
+            }
+        }
+        if (found) return match;
+    }
+    return 0;
+}
 
 static void Require(bool condition, const char* message) {
     if (!condition) throw std::runtime_error(message);
@@ -32,5 +56,33 @@ int main() {
     Require(ResolveStoryCandidateFormID("Maering", social, {{"maering [guard]", 4}}) == 0,
             "cross-pool ambiguity must reject");
     Require(ResolveStoryCandidateFormID("Maering", {}, {}) == 0, "empty pools must reject");
+    Require(ResolveStoryCandidateFormID("Maering", {{"maering", 42}}, {{"maering", 42}}) == 0,
+            "same-actor duplicate entries must continue to reject");
+    const std::vector<StoryCandidatePool> pools{
+        {}, {{"maering", 0}}, {{"maering", 42}}, {{"maering", 0xFE000801}},
+        {{"maering [soldier]", 42}}, {{"maering [soldier]", 42}, {"maering [guard]", 43}},
+        {{"maering", 42}, {"maering", 42}}, {{"maering", 42}, {"maering", 0}},
+        {{"unknown", 99}}
+    };
+    std::size_t comparisons = 0;
+    for (const auto& left : pools) for (const auto& right : pools) {
+        for (const auto query : {"Maering", "Maering [Soldier]", " \tMAERING  ", "Unknown", "", " \t"}) {
+            StoryCandidateRejection diagnostic;
+            Require(ResolveStoryCandidateFormID(query, left, right, &diagnostic) ==
+                    OriginalResolve(query, left, right), "diagnostics changed candidate selection");
+            ++comparisons;
+        }
+    }
+    for (const auto branch : {"empty-pools", "no-match", "ambiguous", "zero-formid"}) {
+        StoryCandidateRejection diagnostic;
+        const std::string_view expected = branch;
+        StoryCandidatePool left, right;
+        if (expected == "no-match") left.emplace("unknown", 1);
+        if (expected == "zero-formid") left.emplace("maering", 0);
+        if (expected == "ambiguous") { left.emplace("maering", 42); right = left; }
+        Require(ResolveStoryCandidateFormID("Maering", left, right, &diagnostic) == 0 &&
+                diagnostic.branch == expected, "wrong rejection diagnostic");
+    }
+    std::cout << "PASS: " << comparisons << " pre-change selection comparisons and rejection branches\n";
     std::cout << "PASS: exact, suffix-dropped Avresa/Maering, case/whitespace, ambiguous, duplicate, unknown and out-of-set rejection\n";
 }

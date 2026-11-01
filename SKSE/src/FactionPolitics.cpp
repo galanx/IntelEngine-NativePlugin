@@ -583,7 +583,9 @@ default_relations:
         // Essential NPCs can't permanently die (bleedout ≠ death), so never exclude them.
         auto* npcIndex = NPCIndex::GetSingleton();
         return BuildFactionJsonCore(f, [npcIndex](const std::string& name) -> std::pair<bool, bool> {
-            auto* actor = npcIndex ? npcIndex->FindByName(name) : nullptr;
+            auto* actor = npcIndex
+                ? npcIndex->GetActorFromFormId(npcIndex->FindFactionLeaderFormId(name))
+                : nullptr;
             if (!actor) return {false, false};
             return {true, actor->IsDead() && !actor->IsEssential()};
         });
@@ -649,7 +651,7 @@ default_relations:
             e.factionId = info.factionId;
             e.hold = info.hold;
 
-            auto* leader = npcIndex->FindByName(info.name);
+            auto* leader = npcIndex->GetActorFromFormId(npcIndex->FindFactionLeaderFormId(info.name));
             if (leader) {
                 e.formId = leader->GetFormID();
                 e.wasResolved = true;
@@ -1341,7 +1343,7 @@ default_relations:
 
             auto checkLeadersNearby = [&](const FactionConfig& cfg) -> bool {
                 for (const auto& name : cfg.leaderNames) {
-                    auto* actor = npcIndex->FindByName(name);
+                    auto* actor = npcIndex->GetActorFromFormId(npcIndex->FindFactionLeaderFormId(name));
                     if (!actor) continue;
                     float dx = px - actor->GetPositionX();
                     float dy = py - actor->GetPositionY();

@@ -104,14 +104,13 @@ namespace IntelEngine {
         size_t GetLoadedCount() const { return m_npcIndex.size(); }
 
         /**
-         * Find NPC FormID by name (works for unloaded NPCs too).
-         * This allows finding NPCs anywhere in the world.
-         *
-         * @param searchTerm Name to search for
-         * @return FormID if found, 0 otherwise
+         * Find a faction leader FormID by exact name or a forward word-boundary match.
+         * Unlike general NPC search, this does not use fuzzy or reverse substring matches.
          */
-        RE::FormID FindFormIdByName(const std::string& searchTerm);
+        RE::FormID FindFactionLeaderFormId(const std::string& searchTerm);
 
+        /** Find NPC FormID by name (works for unloaded NPCs too). */
+        RE::FormID FindFormIdByName(const std::string& searchTerm);
         /**
          * Get current location of an NPC (if known).
          *
@@ -276,6 +275,9 @@ namespace IntelEngine {
          * Unknown or ambiguous names are rejected; no global name search.
          */
         RE::Actor* ResolveStoryCandidate(const std::string& name);
+
+        /** Manual Director only: exact full name, unique actor-reference identity across the full index. */
+        RE::Actor* ResolveDirectorActor(const std::string& name);
 
         /**
          * Record that an NPC was picked by the story engine at the given game time.
@@ -616,6 +618,10 @@ namespace IntelEngine {
 
         // FormID index: lowercase name -> FormID (ALL NPCs including unloaded)
         std::unordered_map<std::string, RE::FormID> m_npcFormIds;
+
+        // Full reference-name index retains clashes that the legacy name->ID map overwrites.
+        // Keying by reference ID also replaces an actor's old name on refresh.
+        std::unordered_map<RE::FormID, std::string> m_directorActorNames;
 
         // Current locations: lowercase name -> location name
         std::unordered_map<std::string, std::string> m_npcCurrentLocations;

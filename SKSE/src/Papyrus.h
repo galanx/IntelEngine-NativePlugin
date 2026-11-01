@@ -514,6 +514,7 @@ namespace IntelEngine::Papyrus {
 
     // Utility
     int HexToInt(RE::StaticFunctionTag*, RE::BSFixedString hexStr);
+    int ParseFormID(RE::StaticFunctionTag*, RE::BSFixedString formId);
 
     // Dialogue Tracker
     void SetAutoBioEnabled(RE::StaticFunctionTag*, bool enabled);
