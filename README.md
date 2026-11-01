@@ -336,7 +336,7 @@ Change the dashboard hotkey in the dashboard's Settings tab or on the SkyrimNet 
 
 **Story Engine** — Toggle the Story Engine and individual story types on/off. See the active dispatch, next DM check-in timer, NPC social activity, active quests, and a log of recent NPC-to-NPC interactions.
 
-**Director** — Manual Dungeon Master controls. Dispatch any story type to any NPC with full parameter fields (informant gossip, quest locations, message content, etc.). Execute any of the 10 player-driven actions directly on loaded NPCs with guided field hints and required-field validation.
+**Director** — Manual Dungeon Master controls. Dispatch any story type to any NPC with full parameter fields (informant gossip, quest locations, message content, etc.). Execute any of the 11 player-driven actions, including ReportPlayerConduct, with guided field hints and YAML enum choices. Action Execution lists loaded NPCs within 4000 units in the same exterior worldspace or interior cell. Manual CancelCurrentTask stops the current task even beside the player; SkyrimNet-driven cancellation retains its proximity guard.
 
 **Active Packages** — See which NPCs are currently running IntelEngine AI packages (travel, sandbox, stalk). Remove packages from stuck NPCs directly.
 
@@ -348,9 +348,11 @@ The dashboard communicates through a shared C++ host bridge and existing Papyrus
 
 Phase 1 does not close the dashboard or notify on Director submission. SkyMessage confirmations are unchanged. Magelight lifecycle, Escape, contention and game dispatch require separate live acceptance; offline checks/builds are not runtime proof.
 
+DeliverMessage targets the resolved recipient actor, including across cells. An unresolved or invalid recipient is rejected through a player notification/log without replacing an existing task or triggering NPC dialogue that could select an unrelated action.
+
 Offline host checks (Clang and existing nlohmann_json headers required): `python SKSE/tests/RunDashboardHostCheck.py <vcpkg-triplet-dir>`. Build and stage only the dashboard with `pwsh -NoProfile -File build.ps1 -DashboardOnly -DataDir <GamePlugin-worktree>`, then compare both trees with `pwsh -NoProfile -File SKSE/tests/RunDashboardAssetCheck.ps1 -DataDir <GamePlugin-worktree>`. Dashboard-only mode does not install or publish.
 
-Compiled arrival/history smoke: `python SKSE/tests/RunArrivalDeliveryBytecodeCheck.py <papyrus.exe> <GamePlugin-worktree>/Scripts <native-build>/TaskHistoryDescriptionCheck.exe`. This executes the staged PEX delivery/cleanup and common story-arrival paths through a bounded interpreter with modeled engine/storage boundaries and the real native formatter. It checks no-meeting delivery, case-equivalent boundary outcomes, player-absent return, forced arrival reentry and dispatch latch reset; it does not reproduce Skyrim scheduling or establish run3's unlogged result value.
+Compiled arrival/history smoke: `python SKSE/tests/RunArrivalDeliveryBytecodeCheck.py <papyrus.exe> <GamePlugin-worktree>/Scripts <native-build>/TaskHistoryDescriptionCheck.exe`. This executes the staged PEX delivery/cleanup and common story-arrival paths through a bounded interpreter with modeled engine/storage boundaries and the real native formatter. It checks no-meeting delivery, case-equivalent boundary outcomes, player-absent return, guarded/forced Travel cancellation, forced arrival reentry and dispatch latch reset. `RunDeliverMessageRejectionCheck.py` takes the same arguments and checks unresolved-recipient rejection preserves an existing Travel task while distant resolved recipients remain actor targets. Neither check reproduces Skyrim scheduling or model behavior.
 
 ---
 

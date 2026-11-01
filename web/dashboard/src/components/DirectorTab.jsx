@@ -315,7 +315,7 @@ function DirectorTab({ loadedNpcs, actions, factions = [], sendAction }) {
   // Only show IntelEngine actions in the Director tab
   const INTEL_ACTIONS = new Set([
     'GoToLocation', 'FetchPerson', 'DeliverMessage', 'EscortTarget', 'SearchForActor',
-    'ScheduleFetch', 'ScheduleDelivery', 'ScheduleMeeting',
+    'ScheduleFetch', 'ScheduleDelivery', 'ScheduleMeeting', 'ReportPlayerConduct',
     'CancelCurrentTask', 'ChangeSpeed',
   ]);
   const executableActions = useMemo(
@@ -335,7 +335,13 @@ function DirectorTab({ loadedNpcs, actions, factions = [], sendAction }) {
     if (currentAction) {
       return (currentAction.params || [])
         .filter(p => !HIDDEN_PARAMS.has(p.name))
-        .map(p => ({ key: p.name, label: p.name, type: 'text', placeholder: p.description }));
+        .map(p => ({
+          key: p.name,
+          label: p.name,
+          type: Array.isArray(p.enum) && p.enum.length ? 'select' : 'text',
+          options: p.enum || [],
+          placeholder: p.description,
+        }));
     }
     return [];
   }, [selectedAction, currentAction]);
