@@ -29,6 +29,7 @@ GlobalVariable Property IntelEngine_StoryEngineCooldown Auto
 Bool Property IsActive = false Auto Hidden
 Actor Property ActiveStoryNPC = None Auto Hidden
 Int Property DispatchGeneration = 0 Auto Hidden
+Bool Property ArrivalHandling = false Auto Hidden
 String Property ActiveNarration = "" Auto Hidden
 String Property PendingStoryType = "" Auto Hidden
 Actor Property ActiveSecondNPC = None Auto Hidden
@@ -1754,6 +1755,7 @@ Bool Function DispatchToTarget(Actor npc, Actor target, String narration, String
 
     ActiveStoryNPC = npc
     DispatchGeneration += 1
+    ArrivalHandling = false
     ActiveNarration = narration
     IsActive = true
     IntelEngine.MarkSystemPending("storyDM", Utility.GetCurrentGameTime())
@@ -2548,10 +2550,12 @@ EndFunction
 ; =============================================================================
 
 Function OnStoryNPCArrived()
+    If !IsActive || ActiveStoryNPC == None || ArrivalHandling
+        return
+    EndIf
+    ; Latch before side effects or latent calls so concurrent callback/poll stacks cannot both handle arrival.
+    ArrivalHandling = true
     If ActiveStoryType == "message" || ActiveStoryType == "quest"
-        If !IsActive || ActiveStoryNPC == None
-            return
-        EndIf
         IsActive = false
     EndIf
     ; Preserve the journey outcome before quest/message handlers can wait or enter a new phase.
@@ -3493,6 +3497,7 @@ Function BeginQuestGuide(Actor guideNPC)
     ; Transition to guide mode (don't call full CleanupStoryDispatch)
     ActiveStoryType = "quest_guide"
     ActiveStoryNPC = guideNPC
+    ArrivalHandling = false
     IsActive = true
     IntelEngine.MarkSystemPending("storyDM", Utility.GetCurrentGameTime())
 
@@ -3645,6 +3650,7 @@ Function OnQuestGuideArrived()
     EndIf
     ActiveStoryType = ""
     IsActive = false
+    ArrivalHandling = false
 
     ; NOW add sandbox near quest location (after ClearSlot wiped travel packages)
     PO3_SKSEFunctions.SetLinkedRef(QuestGuideNPC, QuestGuideNPC as ObjectReference, Core.IntelEngine_TravelTarget)
@@ -4719,6 +4725,7 @@ Function CleanupQuest()
         ActiveStoryNPC = None
         ActiveNarration = ""
         ActiveStoryType = ""
+        ArrivalHandling = false
         IsActive = false
         Core.DebugMsg("Story [quest]: cleared courier dispatch (quest cancelled)")
     EndIf
@@ -5010,6 +5017,7 @@ Function CleanupStoryDispatch()
     ActiveNarration = ""
     ActiveStoryType = ""
     IsActive = false
+    ArrivalHandling = false
     IntelEngine.ClearSystemPending("storyDM")
     ClearPending()
     ; Re-register game-time scheduling so TickScheduler keeps firing.
