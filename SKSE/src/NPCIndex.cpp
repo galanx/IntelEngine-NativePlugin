@@ -14,6 +14,7 @@
 #include "MemoryDB.h"
 #include "SlotTracker.h"
 #include "StringUtils.h"
+#include "FactionLeaderNameMatch.h"
 #include "ProcessUtils.h"
 #include "Settings.h"
 #include "SkyrimNetAPI.h"
@@ -733,6 +734,19 @@ namespace IntelEngine {
                      searchTerm, best->actor->GetDisplayFullName(), best->nameScore,
                      std::sqrt(best->distSq), candidates.size());
         return best->actor;
+    }
+
+    RE::FormID NPCIndex::FindFactionLeaderFormId(const std::string& searchTerm) {
+        if (searchTerm.empty()) return 0;
+
+        std::shared_lock lock(m_mutex);
+        RE::FormID boundaryMatch = 0;
+        for (const auto& [indexedName, formId] : m_npcFormIds) {
+            if (!formId || !IsFactionLeaderNameMatch(indexedName, searchTerm)) continue;
+            if (indexedName.size() == searchTerm.size()) return formId;
+            if (!boundaryMatch) boundaryMatch = formId;
+        }
+        return boundaryMatch;
     }
 
     RE::FormID NPCIndex::FindFormIdByName(const std::string& searchTerm) {

@@ -5,6 +5,7 @@
  */
 
 #include "Papyrus.h"
+#include "FactionLeaderNameMatch.h"
 #include "Utf8Truncate.h"
 #include "NPCIndex.h"
 #include "ItemIndex.h"
@@ -4000,46 +4001,32 @@ namespace IntelEngine::Papyrus {
         auto cfg = FactionPolitics::GetSingleton()->GetFaction(factionId.c_str());
         if (!cfg) return result;
 
-        // Always use substring match with player cell priority.
-        // "Ulfric Stormcloak" must match "Jarl Ulfric Stormcloak" in the player's cell,
-        // not a different reference named "Ulfric Stormcloak" in an unloaded cell.
+        // "Ulfric Stormcloak" matches "Jarl Ulfric Stormcloak"; prefer the player's cell.
         auto* player = RE::PlayerCharacter::GetSingleton();
         auto* playerCell = player ? player->GetParentCell() : nullptr;
 
         for (const auto& leaderName : cfg->leaderNames) {
-            std::string lowerName = leaderName;
-            std::transform(lowerName.begin(), lowerName.end(), lowerName.begin(), ::tolower);
-
             RE::Actor* bestMatch = nullptr;
             bool bestInPlayerCell = false;
 
-            ProcessUtils::ForEachLoadedActor([&](RE::Actor* a) -> bool {
-                if (!a || a->IsDead()) return false;
-                std::string displayName = a->GetDisplayFullName();
-                std::string lowerDisplay = displayName;
-                std::transform(lowerDisplay.begin(), lowerDisplay.end(), lowerDisplay.begin(), ::tolower);
+            ProcessUtils::ForEachLoadedActor([&](RE::Actor* actor) -> bool {
+                if (!actor || actor->IsDead()) return false;
+                const char* displayName = actor->GetDisplayFullName();
+                if (!displayName || !IsFactionLeaderNameMatch(displayName, leaderName)) return false;
 
-                // Match: display name contains leader name OR leader name contains display name
-                if (lowerDisplay.find(lowerName) == std::string::npos &&
-                    lowerName.find(lowerDisplay) == std::string::npos) {
-                    return false;
-                }
-
-                bool inPlayerCell = playerCell && a->GetParentCell() == playerCell;
-
-                // Prefer actor in player's cell over one in a different cell
+                const bool inPlayerCell = playerCell && actor->GetParentCell() == playerCell;
                 if (!bestMatch || (inPlayerCell && !bestInPlayerCell)) {
-                    bestMatch = a;
+                    bestMatch = actor;
                     bestInPlayerCell = inPlayerCell;
-                    if (inPlayerCell) return true;  // can't do better
+                    if (inPlayerCell) return true;
                 }
                 return false;
             });
 
             if (bestMatch) {
                 result.push_back(bestMatch);
-                logger::debug("GetFactionLeaderActors: '{}' -> '{}' (sameCell={})",
-                    leaderName, bestMatch->GetDisplayFullName(), bestInPlayerCell);
+                logger::info("GetFactionLeaderActors: '{}' -> '{}' (FormID=0x{:08X}, sameCell={})",
+                    leaderName, bestMatch->GetDisplayFullName(), bestMatch->GetFormID(), bestInPlayerCell);
             }
         }
         return result;
@@ -4052,8 +4039,8 @@ namespace IntelEngine::Papyrus {
 
         auto* npcIndex = NPCIndex::GetSingleton();
         for (const auto& leaderName : cfg->leaderNames) {
-            RE::FormID formId = npcIndex->FindFormIdByName(leaderName);
-            if (formId != 0) {
+            RE::FormID formId = npcIndex->FindFactionLeaderFormId(leaderName);
+            if (formId) {
                 result.push_back(static_cast<int>(formId));
             } else {
                 logger::debug("GetFactionLeaderFormIds: '{}' not found in NPC index", leaderName);

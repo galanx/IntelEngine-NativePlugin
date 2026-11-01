@@ -104,14 +104,13 @@ namespace IntelEngine {
         size_t GetLoadedCount() const { return m_npcIndex.size(); }
 
         /**
-         * Find NPC FormID by name (works for unloaded NPCs too).
-         * This allows finding NPCs anywhere in the world.
-         *
-         * @param searchTerm Name to search for
-         * @return FormID if found, 0 otherwise
+         * Find a faction leader FormID by exact name or a forward word-boundary match.
+         * Unlike general NPC search, this does not use fuzzy or reverse substring matches.
          */
-        RE::FormID FindFormIdByName(const std::string& searchTerm);
+        RE::FormID FindFactionLeaderFormId(const std::string& searchTerm);
 
+        /** Find NPC FormID by name (works for unloaded NPCs too). */
+        RE::FormID FindFormIdByName(const std::string& searchTerm);
         /**
          * Get current location of an NPC (if known).
          *
