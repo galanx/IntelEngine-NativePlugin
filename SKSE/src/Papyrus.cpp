@@ -26,6 +26,7 @@
 #include "StuckDetector.h"
 #include "OffScreenTracker.h"
 #include "ProximityMonitor.h"
+#include "ProximityDistance.h"
 #include "SlotTracker.h"
 #include "MemoryDB.h"
 #include "Settings.h"
@@ -298,6 +299,7 @@ namespace IntelEngine::Papyrus {
         // Distance / Math Utility Functions
         a_vm->RegisterFunction("GetDistance3D", SCRIPT_NAME, GetDistance3D); ++count;
         a_vm->RegisterFunction("GetDistance2D", SCRIPT_NAME, GetDistance2D); ++count;
+        a_vm->RegisterFunction("GetArrivalThreshold", SCRIPT_NAME, GetArrivalThreshold); ++count;
         a_vm->RegisterFunction("CalculateDeadlineFromDistance", SCRIPT_NAME, CalculateDeadlineFromDistance); ++count;
         a_vm->RegisterFunction("GetOffsetBehind", SCRIPT_NAME, GetOffsetBehind); ++count;
 
@@ -1039,6 +1041,26 @@ namespace IntelEngine::Papyrus {
     float GetDistance3D(RE::StaticFunctionTag*, RE::TESObjectREFR* ref1, RE::TESObjectREFR* ref2) {
         if (!ref1 || !ref2) return 0.0f;
         return ref1->GetPosition().GetDistance(ref2->GetPosition());
+    }
+
+    float GetArrivalThreshold(RE::StaticFunctionTag*, RE::Actor* agent, RE::TESObjectREFR* target) {
+        if (!target || !target->As<RE::Actor>()) {
+            return ProximityMonitor::DEFAULT_MARKER_THRESHOLD;
+        }
+        if (!agent) return ProximityMonitor::DEFAULT_ACTOR_THRESHOLD;
+        // Keep the native floor gate when Papyrus polls the speed-expanded radius.
+        if (std::fabs(agent->GetPosition().z - target->GetPosition().z) >
+            ProximityMonitor::DEFAULT_ACTOR_Z_TOLERANCE) return 0.0f;
+
+        RE::NiPoint3 velocity{};
+        if (agent->Is3DLoaded()) agent->GetLinearVelocity(velocity);
+        const float speed = std::sqrt(velocity.x * velocity.x +
+                                      velocity.y * velocity.y +
+                                      velocity.z * velocity.z);
+        const float acceptedThreshold = ProximityMonitor::GetSingleton()->GetAcceptedThreshold(
+            agent->GetFormID(), target->GetFormID());
+        return GetActorArrivalThreshold(ProximityMonitor::DEFAULT_ACTOR_THRESHOLD, speed,
+                                        acceptedThreshold);
     }
 
     float GetDistance2D(RE::StaticFunctionTag*, RE::TESObjectREFR* ref1, RE::TESObjectREFR* ref2) {

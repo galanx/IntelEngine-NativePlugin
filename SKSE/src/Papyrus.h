@@ -139,6 +139,7 @@ namespace IntelEngine::Papyrus {
 
     float GetDistance3D(RE::StaticFunctionTag*, RE::TESObjectREFR* ref1, RE::TESObjectREFR* ref2);
     float GetDistance2D(RE::StaticFunctionTag*, RE::TESObjectREFR* ref1, RE::TESObjectREFR* ref2);
+    float GetArrivalThreshold(RE::StaticFunctionTag*, RE::Actor* agent, RE::TESObjectREFR* target);
     float CalculateDeadlineFromDistance(RE::StaticFunctionTag*,
                                         RE::TESObjectREFR* source, RE::TESObjectREFR* target,
                                         bool isRoundTrip, float minHours, float maxHours);
