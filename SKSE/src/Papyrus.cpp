@@ -368,6 +368,7 @@ namespace IntelEngine::Papyrus {
         a_vm->RegisterFunction("IsPlayerInWhitelistedLocation", SCRIPT_NAME, IsPlayerInWhitelistedLocation); ++count;
         a_vm->RegisterFunction("StoryResponseShouldAct", SCRIPT_NAME, StoryResponseShouldAct); ++count;
         a_vm->RegisterFunction("StoryResponseGetField", SCRIPT_NAME, StoryResponseGetField); ++count;
+        a_vm->RegisterFunction("StoryResponseGetOptionalField", SCRIPT_NAME, StoryResponseGetOptionalField); ++count;
         a_vm->RegisterFunction("BuildActorContextJson", SCRIPT_NAME, BuildActorContextJson); ++count;
         a_vm->RegisterFunction("BuildDungeonMasterContext", SCRIPT_NAME, BuildDungeonMasterContext); ++count;
         a_vm->RegisterFunction("BuildNPCInteractionContext", SCRIPT_NAME, BuildNPCInteractionContext); ++count;
@@ -1859,8 +1860,8 @@ namespace IntelEngine::Papyrus {
     static std::string s_cachedJsonStr;
     static std::unordered_map<std::string, std::string> s_cachedFields;  // lowercased key -> value
 
-    RE::BSFixedString StoryResponseGetField(RE::StaticFunctionTag*, RE::BSFixedString json,
-                                            RE::BSFixedString fieldName) {
+    static RE::BSFixedString GetStoryResponseField(RE::BSFixedString json,
+                                                  RE::BSFixedString fieldName, bool required) {
         std::string jsonStr(json.c_str());
         std::string field(fieldName.c_str());
 
@@ -1873,7 +1874,7 @@ namespace IntelEngine::Papyrus {
 
         std::string fieldLower = field;
         std::transform(fieldLower.begin(), fieldLower.end(), fieldLower.begin(),
-                       [](unsigned char c) { return std::tolower(c); });
+                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
 
         // Result copied out of cache under lock; BSFixedString constructed outside
         // to avoid lock-ordering with BSStringPool's internal lock.
@@ -1905,7 +1906,7 @@ namespace IntelEngine::Papyrus {
                     for (auto& [key, value] : j.items()) {
                         std::string keyLower = key;
                         std::transform(keyLower.begin(), keyLower.end(), keyLower.begin(),
-                                       [](unsigned char c) { return std::tolower(c); });
+                                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
 
                         if (value.is_string()) {
                             s_cachedFields[keyLower] = value.get<std::string>();
@@ -1944,9 +1945,22 @@ namespace IntelEngine::Papyrus {
             return RE::BSFixedString(result.c_str());
         }
 
-        logger::warn("[StoryDM] GetField('{}') NOT FOUND in parsed JSON — keys: {}",
-                     field, warnKeys);
+        if (required) {
+            logger::warn("[StoryDM] GetField('{}') NOT FOUND in parsed JSON — keys: {}", field, warnKeys);
+        } else {
+            logger::debug("[StoryDM] GetField('{}') NOT FOUND in parsed JSON — keys: {}", field, warnKeys);
+        }
         return "";
+    }
+
+    RE::BSFixedString StoryResponseGetField(RE::StaticFunctionTag*, RE::BSFixedString json,
+                                            RE::BSFixedString fieldName) {
+        return GetStoryResponseField(json, fieldName, true);
+    }
+
+    RE::BSFixedString StoryResponseGetOptionalField(RE::StaticFunctionTag*, RE::BSFixedString json,
+                                                    RE::BSFixedString fieldName) {
+        return GetStoryResponseField(json, fieldName, false);
     }
 
     RE::BSFixedString BuildActorContextJson(RE::StaticFunctionTag*, RE::Actor* actor,

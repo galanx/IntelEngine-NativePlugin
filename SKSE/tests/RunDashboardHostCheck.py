@@ -107,6 +107,7 @@ with tempfile.TemporaryDirectory(prefix="dashboard-host-") as temp:
 #include "Windows.h"
 #include <cstdint>
 #include <string>
+#include <vector>
 namespace SKSE {
 using PluginHandle = std::uint32_t;
 struct TaskInterface { template<class F> void AddTask(F&& f) { f(); } };
@@ -114,7 +115,8 @@ inline TaskInterface* GetTaskInterface() { static TaskInterface task; return &ta
 }
 #include "PrismaUI_API.h"
 namespace logger {
-template<class... T> void info(const char*, T&&...) {}
+inline std::vector<std::string> infoMessages;
+template<class... T> void info(const char* message, T&&...) { infoMessages.emplace_back(message); }
 template<class... T> void warn(const char*, T&&...) {}
 template<class... T> void error(const char*, T&&...) {}
 template<class... T> void debug(const char*, T&&...) {}
@@ -789,11 +791,53 @@ void testManager() {
     assert(eventCalls.size()==1 && eventCalls[0].name=="IntelEngine_DashboardRefresh");
     m->acceptingCallbacks_=false; eventCalls.clear(); DashboardUIManager::OnCancelQuestStatic(nullptr); assert(eventCalls.empty());
 }
+void testLifecycleLogs() {
+    auto* m=DashboardUIManager::GetSingleton();
+    m->host_=std::make_unique<FakeHost>();
+    m->shuttingDown_=false; m->available_=true; m->requestedOpen_=false;
+    m->isOpen_=false; m->domReady_=true; m->openedEventSent_=false;
+    m->expectedExitPending_=false;
+    logger::infoMessages.clear();
+    auto countLog=[](std::string_view expected) {
+        return std::count_if(logger::infoMessages.begin(),logger::infoMessages.end(),
+            [expected](const std::string& message){return message==expected;});
+    };
+
+    m->Toggle(); m->OnHostEvent(UiHostEvent::Entered);
+    assert(countLog("[Dashboard] Opened")==1);
+    m->OnHostEvent(UiHostEvent::Entered);
+    assert(countLog("[Dashboard] Opened")==1);
+
+    logger::infoMessages.clear();
+    m->Toggle();
+    assert(countLog("[Dashboard] Closed (cause=hotkey)")==1);
+
+    logger::infoMessages.clear();
+    m->requestedOpen_=true; m->isOpen_=true;
+    DashboardUIManager::OnCloseStatic(nullptr);
+    assert(countLog("[Dashboard] Closed (cause=page close)")==1);
+    DashboardUIManager::OnCloseStatic(nullptr);
+    assert(countLog("[Dashboard] Closed (cause=page close)")==1);
+
+    logger::infoMessages.clear();
+    m->requestedOpen_=true; m->isOpen_=true;
+    m->OnHostEvent(UiHostEvent::Exited);
+    assert(countLog("[Dashboard] Closed (cause=host exit; Esc/host reason unavailable)")==1);
+    m->OnHostEvent(UiHostEvent::Exited);
+    assert(countLog("[Dashboard] Closed (cause=host exit; Esc/host reason unavailable)")==1);
+
+    logger::infoMessages.clear();
+    m->requestedOpen_=true;
+    m->OnHostEvent(UiHostEvent::Refused);
+    assert(countLog("[Dashboard] Open refused")==1);
+    m->OnHostEvent(UiHostEvent::Refused);
+    assert(countLog("[Dashboard] Open refused")==1);
+}
 }
 int main() {
     for (std::size_t i=0; i<listeners.size(); ++i)
         assert(listeners[i].name == expectedNames[i]);
-    selectTest(); prismaTest(); magelightTest(); materializationTest(); failCleanupTest(); IntelEngine::testManager();
+    selectTest(); prismaTest(); magelightTest(); materializationTest(); failCleanupTest(); IntelEngine::testManager(); IntelEngine::testLifecycleLogs();
     std::cout << "PASS dashboard host selection, adapters, lifecycle, routing, and manager callbacks\n";
 }
 ''', encoding="utf-8")
