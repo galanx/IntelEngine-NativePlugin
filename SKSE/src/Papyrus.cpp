@@ -9,6 +9,7 @@
 #include "FactionLeaderNameMatch.h"
 #include "FactionPairValidation.h"
 #include "Utf8Truncate.h"
+#include "TaskHistoryDescription.h"
 #include "NPCIndex.h"
 #include "ItemIndex.h"
 #include <random>
@@ -4823,39 +4824,8 @@ namespace IntelEngine::Papyrus {
                                             RE::BSFixedString taskType, RE::BSFixedString target,
                                             RE::BSFixedString result, RE::BSFixedString msgContent,
                                             RE::BSFixedString meetLocation) {
-        std::string type = taskType.c_str();
-        std::string tgt = target.c_str();
-        std::string res = result.c_str();
-        std::string msg = msgContent.c_str();
-        std::string loc = meetLocation.c_str();
-        std::string desc;
-
-        if (type == "travel") {
-            desc = (res == "timeout") ? "Went to " + tgt + " but gave up waiting" : "Traveled to " + tgt;
-        } else if (type == "fetch_npc") {
-            desc = (res == "success") ? "Found " + tgt + " and brought them back"
-                                      : "Looked for " + tgt + " but couldn't bring them";
-        } else if (type == "deliver_message") {
-            if (res == "delivered") {
-                desc = "Delivered a message to " + tgt;
-                if (!msg.empty()) {
-                    if (msg.size() > 80) msg = TruncateUtf8Bytes(msg, 80, "...");
-                    desc += ": '" + msg + "'";
-                }
-                if (!loc.empty()) desc += " (meeting at " + loc + ")";
-            } else {
-                desc = "Tried to deliver a message to " + tgt;
-            }
-        } else if (type == "search_for_actor") {
-            desc = "Searched for " + tgt;
-        } else if (type == "story") {
-            desc = "Sought out " + tgt;
-        } else if (type == "story_npc") {
-            desc = "Went to talk with " + tgt;
-        } else {
-            desc = "Completed a task involving " + tgt;
-        }
-        return RE::BSFixedString(desc);
+        return RE::BSFixedString(BuildTaskHistoryDescription(taskType.c_str(), target.c_str(),
+            result.c_str(), msgContent.c_str(), meetLocation.c_str()));
     }
 
     RE::BSFixedString GetSlotStatusNative(RE::StaticFunctionTag*,
