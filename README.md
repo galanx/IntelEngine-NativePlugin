@@ -350,6 +350,8 @@ Phase 1 does not close the dashboard or notify on Director submission. SkyMessag
 
 Offline host checks (Clang and existing nlohmann_json headers required): `python SKSE/tests/RunDashboardHostCheck.py <vcpkg-triplet-dir>`. Build and stage only the dashboard with `pwsh -NoProfile -File build.ps1 -DashboardOnly -DataDir <GamePlugin-worktree>`, then compare both trees with `pwsh -NoProfile -File SKSE/tests/RunDashboardAssetCheck.ps1 -DataDir <GamePlugin-worktree>`. Dashboard-only mode does not install or publish.
 
+Compiled arrival/history smoke: `python SKSE/tests/RunArrivalDeliveryBytecodeCheck.py <papyrus.exe> <GamePlugin-worktree>/Scripts <native-build>/TaskHistoryDescriptionCheck.exe`. This executes the staged PEX delivery/cleanup and common story-arrival paths through a bounded interpreter with modeled engine/storage boundaries and the real native formatter. It checks no-meeting delivery, case-equivalent boundary outcomes, player-absent return, forced arrival reentry and dispatch latch reset; it does not reproduce Skyrim scheduling or establish run3's unlogged result value.
+
 ---
 
 ## Architecture
@@ -464,7 +466,7 @@ Both preserved legacy pairs reproduced their verified converted bytes through th
 
 > **Unreleased — same-faction dispatch (source/offline only):** reject identical faction IDs in political event validation, direct war declaration and direct relation adjustment; the Director form disables dispatch for the same pair. One-sided political events remain supported.
 
-> **Unreleased — actor arrival distance (source/offline only):** actor-target proximity and Papyrus arrival checks use a 200-unit radial threshold; the native actor gate also retains its 120-unit Z tolerance. Marker destinations retain their existing 300-unit horizontal threshold. Matching the actor distance predicates prevents consuming the single-shot callback before Papyrus accepts arrival. Travel-package overshoot versus post-arrival movement is not established by the historical logs; no package changes are included.
+> **Unreleased — actor arrival (source/offline only):** actor targets use a 200-unit radial base plus current speed times a 0.50-second response allowance (150ms polling + estimated 350ms VM/package delay), with a 120-unit Z gate. A claimed native threshold survives a speed drop before the Papyrus recheck; disarm/re-arm clears it. Markers retain 300-unit horizontal/200-unit Z bounds. Story sandbox evaluation no longer waits an extra 100ms; player-targeted sandbox remains self-linked, not player-following. Run3 confirmed running overshoot at the old fixed threshold. Physical stopping and the latency allowance still need live verification.
 
 > **Unreleased — absent meeting location (source/offline only):** the shared meeting description omits the location clause for the `none` sentinel, including declined-meeting facts.
 
@@ -472,7 +474,11 @@ Both preserved legacy pairs reproduced their verified converted bytes through th
 
 > **Unreleased — Action Execution actors (source/offline only):** the loaded same-cell actor list includes non-unique guards and mod-added citizens, retaining exact reference FormIDs and existing unavailable-actor checks. Automatic DM/social selection is unchanged.
 
-> **Unreleased — #44 task-history outcomes (source/offline only):** failed/aborted/unknown-result travel and story tasks use attempted wording; successful story journeys record `arrived` before later quest phases. Escort completion records success only for proven destination arrival/relocation, not missing-marker or visible-timeout cleanup. Deliveries retain the `delivered` success contract and no longer duplicate the return trace through debug and notification. The historical run1 successful-delivery/attempted-history mismatch is not reproduced offline; no runtime fix is claimed.
+> **Unreleased — #44 task-history outcomes (source/offline only):** failed/aborted/unknown-result travel and story tasks use attempted wording; successful story journeys and proven escort arrivals record their outcomes. Native success-token comparisons now preserve Papyrus's case-insensitive semantics, including `delivered`/`Delivered`, without modifying message or target text. The run3 delivery path writes the result before player-present cleanup reads the same actor/key and then unsets it; no intervening overwrite exists in that path. The raw run3 result spelling was not logged, so the casing defect is fixed offline without claiming that it proves the live inverse's cause.
+
+> **Unreleased — single story arrival (source/offline only):** a shared entry latch prevents callback/poll re-entry for seek-player and other story types, while retaining ambush/quest monitoring and resetting for new dispatches.
+
+> **Unreleased — Director actions and faction picker (source/offline/browser only):** Action Execution excludes unsupported `ReportPlayerConduct` and includes parameter-less `CancelCurrentTask`. Clicking/focusing a filled faction field opens the full list; typing filters it, free text remains valid, and the clear button empties it in one click.
 
 > **Unreleased — #41 automatic rejection diagnostics (source/offline only):** automatic candidate selection remains bounded to the DM/social pools, including rejection of duplicate entries for the same actor. Rejection warnings distinguish `empty-pools`, `no-match`, `ambiguous`, `zero-formid`, `lookup-null`, `deleted`, and `id-mismatch`, with both pool sizes. Ambiguity includes all matching pool/name/FormID entries and whether they identify the same actor. Live verification remains pending.
 
