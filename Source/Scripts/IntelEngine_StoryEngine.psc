@@ -1029,7 +1029,7 @@ Function CheckNPCSocialArrival()
     Float dist = NPCSocialTraveler.GetDistance(NPCSocialTarget)
 
     ; Arrival check
-    If dist <= Core.ACTOR_ARRIVAL_DISTANCE && dist > 0.0
+    If dist <= IntelEngine.GetArrivalThreshold(NPCSocialTraveler, NPCSocialTarget as ObjectReference) && dist > 0.0
         OnNPCSocialArrived()
         return
     EndIf
@@ -1998,7 +1998,6 @@ Function FinishArrivalWithLinger(Actor arrivedNPC, ObjectReference lingerTarget)
     EndIf
     PO3_SKSEFunctions.SetLinkedRef(arrivedNPC, sandboxRef, Core.IntelEngine_TravelTarget)
     ActorUtil.AddPackageOverride(arrivedNPC, Core.SandboxNearPlayerPackage, Core.PRIORITY_SANDBOX, 1)
-    Utility.Wait(0.1)
     arrivedNPC.EvaluatePackage()
     ; Ensure building access: if NPC is inside an interior, unlock door + remove trespass
     Core.EnsureBuildingAccess(arrivedNPC)
@@ -2438,7 +2437,7 @@ Function CheckStoryNPCArrival()
     Float dist = ActiveStoryNPC.GetDistance(arrivalTarget)
 
     ; Arrived when within standard arrival distance
-    If dist <= Core.ACTOR_ARRIVAL_DISTANCE && dist > 0.0
+    If dist <= IntelEngine.GetArrivalThreshold(ActiveStoryNPC, arrivalTarget as ObjectReference) && dist > 0.0
         OnStoryNPCArrived()
         return
     EndIf
@@ -2448,7 +2447,7 @@ Function CheckStoryNPCArrival()
     Cell targetCell = arrivalTarget.GetParentCell()
     Cell npcCell2 = ActiveStoryNPC.GetParentCell()
     If npcCell2 != None && targetCell != None && npcCell2 == targetCell
-        If targetCell.IsInterior() && dist <= Core.ACTOR_ARRIVAL_DISTANCE && dist > 0.0
+        If targetCell.IsInterior() && dist <= IntelEngine.GetArrivalThreshold(ActiveStoryNPC, arrivalTarget as ObjectReference) && dist > 0.0
             OnStoryNPCArrived()
             return
         EndIf

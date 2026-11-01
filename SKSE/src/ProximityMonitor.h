@@ -13,13 +13,13 @@
  * enters the arrival threshold around its target, we dispatch a Papyrus
  * callback synchronously via AsyncDispatch::ExecuteQuestFunctionString.
  *
- * The 150ms cadence combined with a 200-unit default actor threshold catches
- * NPCs before the legacy Papyrus poll can let them overshoot into the player.
- * Marker targets retain their wider 300-unit threshold.
+ * The 150ms cadence combines with a speed-aware actor threshold: base 200u
+ * plus actual world speed times an estimated 0.50s response budget. Marker
+ * targets retain their wider 300-unit threshold.
  *
  * Papyrus keeps its 3s poll for stuck detection, off-screen time-based
  * arrival estimation, and linger monitoring. Loaded actor-arrival checks use the
- * same 200-unit radial threshold so the callback is accepted by the state machine.
+ * same speed-aware radial threshold so the callback is accepted by the state machine.
  */
 
 #include "Plugin.h"
@@ -81,6 +81,9 @@ namespace IntelEngine {
                  const std::string& scriptName,
                  const std::string& callbackFn);
 
+        /** Return the accepted threshold for a claimed callback, or zero if none. */
+        float GetAcceptedThreshold(RE::FormID agentFormID, RE::FormID targetFormID) const;
+
         /** Disarm a specific slot. Safe to call on an unarmed slot. */
         void Disarm(int slot);
 
@@ -107,6 +110,7 @@ namespace IntelEngine {
             RE::FormID agentFormID = 0;
             RE::FormID targetFormID = 0;
             float threshold = DEFAULT_ACTOR_THRESHOLD;
+            float acceptedThreshold = 0.0f;
             float zTolerance = DEFAULT_ACTOR_Z_TOLERANCE;
             std::string questEditorId;
             std::string scriptName;
