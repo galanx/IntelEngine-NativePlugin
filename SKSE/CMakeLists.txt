@@ -145,6 +145,9 @@ set(SOURCES
     src/ProximityMonitor.cpp
     src/MemoryDB.cpp
     src/DashboardConfig.cpp
+    # Unmodified Magelight v1.7.1 API header from https://github.com/Severause/MagelightUI/blob/v1.7.1/api/MagelightUI_API.h
+    # v1.7.1 peeled commit: 05d05d8cf13164e0dead3596640f28c058b9b307; upstream LICENSE is MIT (Copyright (c) 2026 Severause).
+    src/UiHost.cpp
     src/DashboardUIManager.cpp
     src/PoliticalDB.cpp
     src/FactionPolitics.cpp

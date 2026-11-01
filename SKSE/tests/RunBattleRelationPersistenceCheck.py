@@ -51,7 +51,7 @@ template<class... T> void error(T&&...) {}
     executable = work / "check.exe"
     subprocess.run([
         "clang++", "-std=c++20", "-Wall", "-Wextra", "-Werror", "-D_CRT_SECURE_NO_WARNINGS",
-        "-I" + str(work), "-isystem", str(deps / "include"),
+        "-I" + str(work), "-I" + str(src), "-isystem", str(deps / "include"),
         str(pathlib.Path(__file__).with_name("BattleRelationPersistenceCheck.cpp")),
         str(work / "PoliticalDB.cpp"), str(deps / "lib/sqlite3.lib"),
         "-o", str(executable),
