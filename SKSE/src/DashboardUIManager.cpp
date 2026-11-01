@@ -453,24 +453,39 @@ namespace IntelEngine {
             pc["politics.max_active_wars"] = politics->GetMaxActiveWars();
             parsed["pluginConfig"] = pc;
 
-            // Inject loaded NPCs for Director tab (same cell as player only)
+            // Include nearby actors across exterior cell borders, but never across worldspaces.
             {
                 nlohmann::json npcs = nlohmann::json::array();
                 auto* player = RE::PlayerCharacter::GetSingleton();
                 auto* playerCell = player ? player->GetParentCell() : nullptr;
-                ProcessUtils::ForEachLoadedActor([&](RE::Actor* actor) {
-                    if (!actor || actor == player) return false;
-                    if (actor->IsDead() || actor->IsDisabled()) return false;
-                    if (!actor->Is3DLoaded()) return false;
-                    if (actor->GetParentCell() != playerCell) return false;
-                    auto* base = actor->GetActorBase();
-                    if (!base) return false;
-                    nlohmann::json entry;
-                    entry["formId"] = actor->GetFormID();
-                    entry["name"] = actor->GetDisplayFullName();
-                    npcs.push_back(entry);
-                    return false;
-                });
+                auto* playerWorld = player ? player->GetWorldspace() : nullptr;
+                if (player && playerCell) {
+                    const auto playerPos = player->GetPosition();
+                    ProcessUtils::ForEachLoadedActor([&](RE::Actor* actor) {
+                        if (!actor || actor == player) return false;
+                        if (actor->IsDead() || actor->IsDisabled()) return false;
+                        if (!actor->Is3DLoaded()) return false;
+                        auto* actorCell = actor->GetParentCell();
+                        if (!actorCell) return false;
+                        const bool sameLocation = playerCell->IsInteriorCell()
+                            ? actorCell == playerCell
+                            : !actorCell->IsInteriorCell() && playerWorld &&
+                                actor->GetWorldspace() == playerWorld;
+                        if (!sameLocation) return false;
+                        const auto actorPos = actor->GetPosition();
+                        const float dx = actorPos.x - playerPos.x;
+                        const float dy = actorPos.y - playerPos.y;
+                        const float dz = actorPos.z - playerPos.z;
+                        if (dx * dx + dy * dy + dz * dz > 4000.0f * 4000.0f) return false;
+                        auto* base = actor->GetActorBase();
+                        if (!base) return false;
+                        nlohmann::json entry;
+                        entry["formId"] = actor->GetFormID();
+                        entry["name"] = actor->GetDisplayFullName();
+                        npcs.push_back(entry);
+                        return false;
+                    });
+                }
                 parsed["loadedNpcs"] = npcs;
             }
 
