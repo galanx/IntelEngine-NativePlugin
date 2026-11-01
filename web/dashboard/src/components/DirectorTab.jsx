@@ -598,7 +598,8 @@ function DirectorTab({ loadedNpcs, actions, factions = [], sendAction }) {
           />
           <button
             onClick={handleDispatchPolitics}
-            disabled={!polFactionA.trim() || !polFactionB.trim() || !polDescription.trim()}
+            disabled={!polFactionA.trim() || !polFactionB.trim() ||
+              polFactionA.trim() === polFactionB.trim() || !polDescription.trim()}
             className="w-full px-3 py-1.5 text-xs font-medium rounded transition-colors bg-amber-500/20 text-amber-400 hover:bg-amber-500/30 disabled:opacity-30 disabled:cursor-not-allowed"
           >
             Dispatch Political Event
