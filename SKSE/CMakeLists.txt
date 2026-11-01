@@ -208,6 +208,8 @@ add_executable(ReferenceGetterDispatchCheck EXCLUDE_FROM_ALL tests/ReferenceGett
 target_compile_definitions(ReferenceGetterDispatchCheck PRIVATE ENABLE_COMMONLIBSSE_TESTING=1)
 target_link_libraries(ReferenceGetterDispatchCheck PRIVATE CommonLibSSE::CommonLibSSE)
 
+add_executable(ProximityDistanceCheck EXCLUDE_FROM_ALL tests/ProximityDistanceCheck.cpp)
+target_include_directories(ProximityDistanceCheck PRIVATE src)
 
 # =============================================================================
 # Output Configuration

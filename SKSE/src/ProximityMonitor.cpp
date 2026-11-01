@@ -5,6 +5,7 @@
  */
 
 #include "ProximityMonitor.h"
+#include "ProximityDistance.h"
 #include "AsyncDispatch.h"
 
 #include <chrono>
@@ -111,8 +112,8 @@ namespace IntelEngine {
      * 3. For each armed slot, resolve agent+target via FormID lookup (returns nullptr
      *    if the form was deleted). Skip until both references are 3D-loaded; off-screen
      *    arrival is handled by the Papyrus 3s poll's time-based estimator (OffScreenTracker).
-     * 4. Compute horizontal (XY) distance and absolute Z delta. Fire when both are
-     *    within the slot's threshold.
+     * 4. Check actor radial distance (matching Papyrus GetDistance) or marker XY
+     *    distance, plus the separate Z tolerance.
      * 5. On fire: claim the slot by clearing its armed flag under unique_lock and
      *    capture the callback, then invoke the Papyrus VM synchronously. Clearing
      *    inside the lock makes this a single-shot per Arm without needing a separate
@@ -152,10 +153,10 @@ namespace IntelEngine {
             auto tPos = target->GetPosition();
             float dx = aPos.x - tPos.x;
             float dy = aPos.y - tPos.y;
-            float horiz = std::sqrt(dx * dx + dy * dy);
             float dz = std::fabs(aPos.z - tPos.z);
 
-            if (horiz > w.threshold || dz > w.zTolerance) continue;
+            if (!IsWithinProximityDistance(dx, dy, dz, w.threshold, w.zTolerance,
+                                           target->As<RE::Actor>() != nullptr)) continue;
 
             // Claim + disarm atomically; a concurrent Arm on the same slot would
             // have bumped the agentFormID, so we re-check to avoid firing a stale
@@ -174,6 +175,7 @@ namespace IntelEngine {
                 live = Watch{};  // single-shot per Arm
             }
 
+            const float horiz = std::sqrt(dx * dx + dy * dy);
             logger::info("ProximityMonitor: slot {} arrived agent={:08X} target={:08X} "
                          "horiz={:.1f}u dz={:.1f}u -> {}::{}",
                          slot, w.agentFormID, w.targetFormID, horiz, dz, script, fn);
