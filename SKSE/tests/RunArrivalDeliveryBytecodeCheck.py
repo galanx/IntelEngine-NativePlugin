@@ -352,6 +352,65 @@ def main():
     require(not any(e[0] == "SendTaskNarration" for e in absent.effects),
             "player-absent path emitted player-present narration")
 
+    # Execute the shared cancel and full cleanup on an actively traveling NPC.
+    class CancelVM(VM):
+        def __init__(self, distance):
+            super().__init__(files, history)
+            self.distance = distance
+            self.properties.update({"LINGER_RELEASE_DISTANCE": 1500.0,
+                "SlotTaskTypes": ["Travel"] + [""] * 4, "SlotStates": [1] + [0] * 4,
+                "IntelEngine_TravelTarget": "travel-link"})
+            self.storage[(self.agent, "Intel_TaskType")] = "Travel"
+            self.packages = {"travel"}
+            self.link = self.target
+
+        def external(self, method, args, script):
+            if method == "Is3DLoaded": return True
+            if method == "GetDistance": return self.distance
+            if method == "ClearPackageOverride": self.packages.clear()
+            if method == "SetLinkedRef": self.link = args[1]
+            return super().external(method, args, script)
+
+    # SkyrimNet requires one YAML mapping per reflected parameter; it supplies no defaults.
+    mapping_path = pathlib.Path(__file__).resolve().parents[2] / (
+        "SKSE/Plugins/SkyrimNet/external/galanx.intelengine/actions/cancelcurrenttask.yaml")
+    mapping_text = mapping_path.read_text(encoding="utf-8").split("parameterMapping:", 1)[1].split("eligibilityRules:", 1)[0]
+
+    def automatic_cancel_args(actor):
+        args = []
+        for entry in mapping_text.split("  - ")[1:]:
+            fields = dict(re.findall(r"^\s*(type|value):\s*(\S+)\s*$", entry, re.M))
+            if fields.get("type") == "speaker":
+                args.append(actor)
+            else:
+                require(fields.get("type") == "static" and fields.get("value") in ("true", "false"),
+                        "unsupported cancellation mapping")
+                args.append(fields["value"] == "true")
+        return args
+
+    blocked = CancelVM(100.0)
+    require(blocked.invoke("IntelEngine_Core", "CancelCurrentTask", automatic_cancel_args(blocked.agent)) is False,
+            "ordinary nearby cancellation bypassed the linger guard")
+    require(blocked.properties["SlotStates"][0] == 1 and blocked.packages == {"travel"},
+            "blocked cancellation mutated the traveling task")
+    for force, distance in ((True, 100.0), (False, 2000.0)):
+        cancelled = CancelVM(distance)
+        args = (cancelled.agent, True) if force else automatic_cancel_args(cancelled.agent)
+        require(cancelled.invoke("IntelEngine_Core", "CancelCurrentTask", args) is True,
+                "forced nearby or ordinary distant cancel was rejected")
+        require(cancelled.properties["SlotStates"][0] == 0 and
+                cancelled.properties["SlotTaskTypes"][0] == "" and
+                cancelled.properties["AgentAlias00"].actor is None,
+                "Travel cancellation did not release slot and alias")
+        require(not cancelled.packages and cancelled.link is None and
+                (cancelled.agent, "Intel_TaskType") not in cancelled.storage,
+                "Travel cancellation left packages, link, or persisted task")
+        require(("ClearSlotState", (0,)) in cancelled.effects and
+                ("DisarmProximityArrival", (0,)) in cancelled.effects and
+                ("EvaluatePackage", (cancelled.agent,)) in cancelled.effects,
+                "Travel cancellation did not reset native tracking and resume AI")
+    print("actual PEX Travel cancel: YAML-mapped nearby guarded; forced nearby and mapped distant cleanup passed")
+
     story = VM(files, history)
     story.properties["SlotTaskTypes"][0] = "story"
     story.properties["SlotTargetNames"][0] = "Player"
