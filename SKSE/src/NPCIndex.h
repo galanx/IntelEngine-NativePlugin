@@ -276,6 +276,9 @@ namespace IntelEngine {
          */
         RE::Actor* ResolveStoryCandidate(const std::string& name);
 
+        /** Manual Director only: exact full name, unique actor-reference identity across the full index. */
+        RE::Actor* ResolveDirectorActor(const std::string& name);
+
         /**
          * Record that an NPC was picked by the story engine at the given game time.
          * Called from Papyrus when ApplyCooldownCheck succeeds.
@@ -615,6 +618,10 @@ namespace IntelEngine {
 
         // FormID index: lowercase name -> FormID (ALL NPCs including unloaded)
         std::unordered_map<std::string, RE::FormID> m_npcFormIds;
+
+        // Full reference-name index retains clashes that the legacy name->ID map overwrites.
+        // Keying by reference ID also replaces an actor's old name on refresh.
+        std::unordered_map<RE::FormID, std::string> m_directorActorNames;
 
         // Current locations: lowercase name -> location name
         std::unordered_map<std::string, std::string> m_npcCurrentLocations;

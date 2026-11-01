@@ -15,6 +15,7 @@
 #include "SlotTracker.h"
 #include "StringUtils.h"
 #include "FactionLeaderNameMatch.h"
+#include "DirectorActorResolution.h"
 #include "ProcessUtils.h"
 #include "Settings.h"
 #include "SkyrimNetAPI.h"
@@ -387,6 +388,7 @@ namespace IntelEngine {
         m_allNames.clear();
         m_npcFormIds.clear();
         m_npcCurrentLocations.clear();
+        m_directorActorNames.clear();
 
         // PHASE 1: Index ALL NPC base forms from the entire game
         // This gives us FormIDs for every named NPC, even unloaded ones
@@ -424,6 +426,8 @@ namespace IntelEngine {
 
                 auto* actor = ref->As<RE::Actor>();
                 if (!actor || actor->IsDeleted()) return RE::BSContainer::ForEachResult::kContinue;
+                const char* displayName = actor->GetDisplayFullName();
+                if (displayName && *displayName) m_directorActorNames[actor->GetFormID()] = displayName;
 
                 auto* base = actor->GetActorBase();
                 if (!base || !base->IsUnique()) return RE::BSContainer::ForEachResult::kContinue;
@@ -500,6 +504,7 @@ namespace IntelEngine {
 
         // Update FormID to Actor reference ID (base form ID won't cast to Actor in Papyrus)
         m_npcFormIds[lowerName] = actor->GetFormID();
+        m_directorActorNames[actor->GetFormID()] = name;
 
         // Update current location
         if (auto* cell = actor->GetParentCell()) {
@@ -839,6 +844,42 @@ namespace IntelEngine {
         }
 
         return nullptr;
+    }
+
+    RE::Actor* NPCIndex::ResolveDirectorActor(const std::string& name) {
+        std::unique_lock lock(m_mutex);
+        // Merge current references: actors can spawn or change display names after the load-time build.
+        ProcessUtils::ForEachLoadedActor([this](RE::Actor* actor) {
+            if (!actor) return false;
+            const char* displayName = actor->GetDisplayFullName();
+            if (displayName && *displayName) m_directorActorNames[actor->GetFormID()] = displayName;
+            else m_directorActorNames.erase(actor->GetFormID());
+            return false;
+        });
+        // ponytail: manual-only linear scan; add a name->IDs index if this becomes a hot path.
+        RE::Actor* actor = nullptr;
+        const auto match = ResolveDirectorActorFormID(name, m_directorActorNames, [&actor](RE::FormID id) {
+            using Rejection = DirectorActorRejection;
+            auto* candidate = RE::TESForm::LookupByID<RE::Actor>(id);
+            if (!candidate) return Rejection::LookupNull;
+            if (candidate->GetFormID() != id) return Rejection::IdMismatch;
+            if (candidate->IsDeleted()) return Rejection::Deleted;
+            if (candidate->IsDead()) return Rejection::Dead;
+            if (candidate->IsDisabled()) return Rejection::Disabled;
+            actor = candidate;
+            return Rejection::None;
+        });
+        if (match.clashId) {
+            logger::warn("ResolveDirectorActor('{}') -> rejected: ambiguous FormIDs=0x{:08X},0x{:08X}",
+                name, match.formId, match.clashId);
+            return nullptr;
+        }
+        if (!match.formId) {
+            logger::warn("ResolveDirectorActor('{}') -> rejected: {} FormID=0x{:08X}",
+                name, DirectorActorRejectionName(match.rejection), match.rejectedFormId);
+            return nullptr;
+        }
+        return actor;
     }
 
     RE::Actor* NPCIndex::ResolveStoryCandidate(const std::string& name) {
