@@ -630,11 +630,20 @@ class FactionPolitics { public: static PoliticsStub* GetSingleton(){static Polit
 class SlotTracker { public: static SlotStub* GetSingleton(){static SlotStub s;return &s;} };
 namespace SkyrimNetAPI { inline std::string (*GetPluginConfigValue)(const char*,const char*,const char*)=nullptr; }
 namespace RE {
-class Actor { public: bool IsDead()const{return false;} bool IsDisabled()const{return false;} bool Is3DLoaded()const{return true;} void* GetParentCell()const{return nullptr;} struct Base{bool IsUnique()const{return true;}}; Base* GetActorBase()const{return nullptr;} unsigned GetFormID()const{return 0;} const char* GetDisplayFullName()const{return "";} };
-class PlayerCharacter : public Actor { public: static PlayerCharacter* GetSingleton(){return nullptr;} };
+class Actor { public:
+    bool dead=false,disabled=false,loaded=true; void* cell=nullptr; unsigned id=0; const char* name="";
+    struct Base { bool unique=false; bool IsUnique()const{return unique;} } base;
+    bool IsDead()const{return dead;} bool IsDisabled()const{return disabled;} bool Is3DLoaded()const{return loaded;}
+    void* GetParentCell()const{return cell;} Base* GetActorBase(){return &base;}
+    unsigned GetFormID()const{return id;} const char* GetDisplayFullName()const{return name;}
+};
+class PlayerCharacter : public Actor { public: static PlayerCharacter* GetSingleton(){static PlayerCharacter p;return &p;} };
 class UI { public: static UI* GetSingleton(){return nullptr;} bool GameIsPaused()const{return false;} };
 }
-namespace ProcessUtils { template<class F> void ForEachLoadedActor(F&&) {} }
+namespace ProcessUtils {
+inline std::vector<RE::Actor*> actors;
+template<class F> void ForEachLoadedActor(F&& callback) { for(auto* actor:actors) callback(actor); }
+}
 namespace SKSE {
 using ::SKSE::GetTaskInterface;
 struct ModCallbackEvent { std::string eventName,strArg; float numArg=0; void* sender=nullptr; };
@@ -696,6 +705,19 @@ void testManager() {
     assert(m->pendingFullStateSet_ && m->pendingFullState_=="{\"ready\":true}");
     m->pendingFullStateSet_=false;
     m->ProcessFullState("{\"ready\":TRUE}",generation); assert(m->pendingFullStatePayloadSet_);
+    RE::Actor guard, citizen, named, dead, disabled, unloaded, remote;
+    guard.id=0xFF000001; guard.name="Whiterun Guard";
+    citizen.id=0xFE000801; citizen.name="Mod Citizen";
+    named.id=0x4E013BF1; named.name="Brey"; named.base.unique=true;
+    dead.dead=true; disabled.disabled=true; unloaded.loaded=false; remote.cell=&remote;
+    ProcessUtils::actors={nullptr,RE::PlayerCharacter::GetSingleton(),&guard,&citizen,&named,&dead,&disabled,&unloaded,&remote};
+    m->ProcessFullState("{\"ready\":true}",generation);
+    const auto actorPayload=nlohmann::json::parse(m->pendingFullStatePayload_)["loadedNpcs"];
+    assert(actorPayload==nlohmann::json::array({
+        {{"formId",0xFF000001u},{"name","Whiterun Guard"}},
+        {{"formId",0xFE000801u},{"name","Mod Citizen"}},
+        {{"formId",0x4E013BF1u},{"name","Brey"}}}));
+    ProcessUtils::actors.clear();
     stopOnForeground=&m->stopPolling_;
     m->HotkeyPollLoop();
     stopOnForeground=nullptr;

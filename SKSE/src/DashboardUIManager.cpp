@@ -465,7 +465,6 @@ namespace IntelEngine {
                     if (actor->GetParentCell() != playerCell) return false;
                     auto* base = actor->GetActorBase();
                     if (!base) return false;
-                    if (!base->IsUnique()) return false;
                     nlohmann::json entry;
                     entry["formId"] = actor->GetFormID();
                     entry["name"] = actor->GetDisplayFullName();
