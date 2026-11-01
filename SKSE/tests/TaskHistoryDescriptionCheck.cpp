@@ -3,7 +3,11 @@
 #include <stdexcept>
 
 static void Require(bool value) { if (!value) throw std::runtime_error("task history outcome mismatch"); }
-int main() {
+int main(int argc, char** argv) {
+    if (argc == 7 && std::string_view(argv[1]) == "--describe") {
+        std::cout << IntelEngine::BuildTaskHistoryDescription(argv[2], argv[3], argv[4], argv[5], argv[6]) << '\n';
+        return 0;
+    }
     using IntelEngine::BuildTaskHistoryDescription;
     const auto describe = [](const char* type, const char* result) {
         return BuildTaskHistoryDescription(type, "Nazeem", result, "", "");
@@ -26,6 +30,10 @@ int main() {
     Require(describe("fetch_npc", "success") == "Found Nazeem and brought them back");
     Require(describe("escort_target", "success") == "Completed a task involving Nazeem");
     Require(describe("deliver_message", "delivered") == "Delivered a message to Nazeem");
+    Require(describe("deliver_message", "Delivered") == "Delivered a message to Nazeem");
+    Require(describe("deliver_message", "DELIVERED") == "Delivered a message to Nazeem");
+    Require(describe("travel", "ARRIVED") == "Traveled to Nazeem");
+    Require(describe("fetch_npc", "Success") == "Found Nazeem and brought them back");
     for (const auto location : {"", "none", "None", "NONE"}) {
         Require(BuildTaskHistoryDescription("deliver_message", "Nazeem", "delivered", "Hello", location)
             == "Delivered a message to Nazeem: 'Hello'");

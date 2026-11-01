@@ -1,12 +1,23 @@
 #pragma once
 
 #include "Utf8Truncate.h"
+#include <algorithm>
 #include <string>
 #include <string_view>
 
 namespace IntelEngine {
 inline std::string BuildTaskHistoryDescription(std::string_view type, std::string_view target,
     std::string_view result, std::string_view message, std::string_view location) {
+    // Papyrus/BSFixedString outcomes are case-insensitive; c_str() preserves
+    // the pool's spelling, not necessarily the lowercase spelling of the writer.
+    for (std::string_view outcome : {"success", "arrived", "player_arrived", "timeout", "delivered"}) {
+        if (std::ranges::equal(result, outcome, [](unsigned char a, unsigned char b) {
+                return (a >= 'A' && a <= 'Z' ? a + ('a' - 'A') : a) == b;
+            })) {
+            result = outcome;
+            break;
+        }
+    }
     const bool succeeded = result == "success" || result == "arrived" || result == "player_arrived";
     std::string_view prefix;
     std::string_view suffix;
