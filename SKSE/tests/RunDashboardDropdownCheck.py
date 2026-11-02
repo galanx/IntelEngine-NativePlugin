@@ -67,6 +67,57 @@ SCRIPT = r"""
       actions:[{name:'GoToLocation',params:[]},{name:'ReportPlayerConduct',params:[{name:'sentiment',enum:['strongly_positive','positive','negative','strongly_negative']},{name:'factionId'},{name:'reason'}]},{name:'ChangeSpeed',params:[]}],
       politics:{factions:Array.from({length:5},(_,i)=>({id:i?'ThalmorFaction'+(i===1?'':i):'StormcloakFaction',name:i?'Thalmor '+i:'Stormcloaks'}))}}));
     await pause(); clickText('Director'); await pause();
+    if (location.hash === '#dashboard_sections_collapse') {
+      const reloaded = sessionStorage.getItem('dashboard_sections_collapse') === 'closed';
+      if (!reloaded) {
+        window.updateFullState(JSON.stringify({config:{}, pluginConfig:{'ui.scale':1},
+          tasks:[{index:0,state:0,cooldownRemaining:30}], scheduled:[],
+          story:{enabled:true}, quest:{active:true}, social:{enabled:true},
+          npcSocialLog:[{type:'npc_interaction',text:'A conversation'}],
+          packages:[{formId:1,name:'Nazeem',pkgType:'Sandbox'}],
+          actions:[{name:'GoToLocation',enabled:true},{name:'OtherModAction',enabled:true}],
+          politics:{enabled:true,factions:[{id:'A',name:'Faction A'}],relations:[],
+            wars:[{faction_a:'A',faction_b:'B'}],player_standings:[{faction:'A',standing:5}],events:[]}}));
+        await pause();
+        for (const [tab, expected] of [['Director',4],['Actions',2],['Packages',1],['Politics',5],['Story',5],['Tasks',3]]) {
+          clickText(tab); await pause();
+          const headers = [...document.querySelectorAll('.section-header')];
+          check(headers.length === expected, `${tab}: expected ${expected} section headings, found ${headers.length}`);
+          for (const heading of headers) {
+            const summary = heading.closest('summary'), section = summary?.parentElement;
+            check(section?.tagName === 'DETAILS' && section.open, `${tab}: section header is not open details/summary`);
+            check(getComputedStyle(heading,'::before').content.includes('▾'), `${tab}: open arrow missing`);
+            summary.click(); await pause();
+            check(!section.open && [...section.children].filter(e => e !== summary).every(e => !e.checkVisibility()),
+              `${tab}: collapsed body remains visible (open=${section.open}, body=${[...section.children].filter(e=>e!==summary).map(e=>`${e.tagName}:${e.getClientRects().length}:${e.checkVisibility()}`)})`);
+            check(getComputedStyle(heading,'::before').content.includes('▸'), `${tab}: collapsed arrow missing`);
+            summary.click(); await pause();
+          }
+        }
+        clickText('Director'); await pause();
+      }
+      const details = document.querySelector('section details'), summary = details.querySelector('summary');
+      if (reloaded) {
+        check(!details.open, 'closed section did not persist across page reload');
+        check([...details.children].filter(e => e !== summary).every(e => !e.checkVisibility()), 'reloaded collapsed body remains visible');
+        summary.click(); await pause();
+        payloads.length = 0;
+        [...summary.querySelectorAll('button')].find(e => e.textContent.trim() === 'Generate').click();
+        await pause();
+        check(details.open && payloads.some(([name]) => name === 'generateDirector'), 'header Generate toggled section or callback did not fire');
+        clickText('Stop');
+        sessionStorage.removeItem('dashboard_sections_collapse');
+        document.getElementById('result').textContent=JSON.stringify({status:'PASS',checks:['dashboard_sections_collapse'],sections:20,reloadPersisted:true,headerGenerateFired:true});
+        return;
+      }
+      check(details.open, 'section did not default open');
+      summary.click(); await pause();
+      check(!details.open && !details.querySelector(':scope > :not(summary)').checkVisibility(),
+        'summary click did not close/hide section body');
+      sessionStorage.setItem('dashboard_sections_collapse', 'closed');
+      location.reload();
+      return;
+    }
     if (location.hash === '#director_required_fields') {
       const story = () => document.querySelector('section:nth-of-type(1)');
       const dispatch = () => [...story().querySelectorAll('button')].find(e => e.textContent.trim() === 'Dispatch Story');

@@ -330,6 +330,8 @@ Host selection is fixed until restart. In `Data/SKSE/Plugins/SkyrimNet/config/pl
 
 Change the dashboard hotkey in the dashboard's Settings tab or on the SkyrimNet settings page (click Save); both apply immediately. The MCM has no hotkey option.
 
+Section headers in Tasks, Story, Politics, Director, Actions and Packages toggle their bodies with ▾/▸ indicators. All sections start open; each section's choice is remembered in browser localStorage across reloads. Header controls remain usable without toggling. Offline headless regression: `python SKSE/tests/RunDashboardDropdownCheck.py "<chrome.exe>" web/dashboard/dist --scenario=dashboard_sections_collapse`; game-host behavior is not live-verified.
+
 ### Tabs
 
 **Tasks** — Live view of all active and scheduled tasks. Cancel individual tasks, see agent names, destinations, task types, speeds, and scheduled meeting timing ("in ~3h", "very soon", "overdue"). A successful task-card cancellation shows `<Name>'s task cancelled.`. Cancelling the active story NPC's task also ends the story and its tracking, clearing the Story tab.

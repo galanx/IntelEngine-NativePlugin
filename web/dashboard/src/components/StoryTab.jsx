@@ -1,3 +1,4 @@
+import withSections from './Section';
 import React, { useState } from 'react';
 import GameTime from './GameTime';
 
@@ -224,4 +225,4 @@ function StoryTab({ story, quest, social, npcSocialLog, calendar, sendAction }) 
   );
 }
 
-export default StoryTab;
+export default withSections(StoryTab);
