@@ -347,7 +347,7 @@ Activity dates use the current save's in-game calendar and display to the neares
 
 **Director** — Manual Dungeon Master controls. Dispatch any story type to any NPC with full parameter fields (informant gossip, quest locations, message content, etc.). Execute any of the 11 player-driven actions, including ReportPlayerConduct, with guided field hints and YAML enum choices. Action Execution's NPC combobox filters the existing loaded-NPC list (within 4000 units in the same exterior worldspace or interior cell) while typing; Enter/click picks the actor's unchanged FormID. Unpicked/free text cannot execute, and × clears the pick. Manual CancelCurrentTask stops the current task even beside the player; SkyrimNet-driven cancellation retains its proximity guard.
 
-Director Story, NPC Social and task-creating Action Execution requests refuse actors already bound to an IE task slot, keeping the task and showing a busy notification. Cancellation, speed changes and conduct reports remain available; automatic requests retain their existing behavior.
+Director Story, NPC Social and Action Execution require a second click when a selected NPC owns an active slot: the first click changes the button to `Busy — you sure?`; the second sends the existing slot cancellation(s), then dispatches. Changing an NPC resets confirmation. Papyrus still refuses busy task-creating requests if cancellation has not completed; automatic requests retain their existing behavior.
 
 Director Story also refuses a new story while the story engine is active, even for a different NPC. Finish or cancel the active story before dispatching another; the notification identifies its NPC and story type.
 
