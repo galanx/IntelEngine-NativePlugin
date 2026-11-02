@@ -1000,27 +1000,11 @@ namespace IntelEngine {
             if (!SkyrimNetAPI::SendCustomPromptToLLM) { queue({}, "Generate unavailable"); return; }
             const auto context = request.dump();
             const bool queued = SkyrimNetAPI::SendCustomPromptToLLM("intel_director_generate", "", context.c_str(),
-                [queue, request](const char* response, int success) mutable {
+                [queue](const char* response, int success) mutable {
                     if (!success) { queue({}, "Generation failed"); return; }
                     try {
                         auto fields = nlohmann::json::parse(response ? response : "");
-                        auto schema = request.value("schema", nlohmann::json::object());
-                        const auto typeKey = request["form"] == "story" ? "storyType" :
-                                             request["form"] == "social" ? "socialType" : "eventType";
-                        auto type = fields.value(typeKey, request.value("fields", nlohmann::json::object()).value(typeKey, ""));
-                        auto variants = request.value("variants", nlohmann::json::object());
-                        if (variants.contains(type)) schema.update(variants[type]);
                         if (!fields.is_object() || fields.empty()) throw std::runtime_error("invalid fields");
-                        for (auto& [key, value] : fields.items()) {
-                            if (!schema.contains(key)) throw std::runtime_error("unknown field");
-                            const auto& spec = schema[key];
-                            const auto kind = spec.value("type", "");
-                            if ((kind == "text" || kind == "select") != value.is_string() ||
-                                (kind == "number" && !value.is_number())) throw std::runtime_error("invalid type");
-                            if (spec.contains("options") &&
-                                std::find(spec["options"].begin(), spec["options"].end(), value) == spec["options"].end())
-                                throw std::runtime_error("invalid option");
-                        }
                         queue(std::move(fields), "");
                     } catch (...) { queue({}, "Malformed generation result"); }
                 });

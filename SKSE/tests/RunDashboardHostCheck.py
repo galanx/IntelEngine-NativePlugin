@@ -765,6 +765,10 @@ void testManager() {
     assert(resultCount()==2);
     auto serviceFailure=nlohmann::json::parse(host->calls.back().second);
     assert(!serviceFailure["ok"] && serviceFailure["error"]=="Generation failed");
+    generate();
+    directorCompletion(R"({"narration":"Keep valid narrative","unexpected":false})",1); drainDirector();
+    auto partialResult=nlohmann::json::parse(host->calls.back().second);
+    assert(partialResult["ok"] && partialResult["fields"]["narration"]=="Keep valid narrative");
     const auto beforeStale=resultCount();
     generate();
     auto staleCompletion=std::move(directorCompletion);
