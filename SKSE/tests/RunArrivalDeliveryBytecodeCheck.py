@@ -541,9 +541,19 @@ def run_director_lite_checks(files, history):
                     not any(e[0] == "InjectFact" for e in task.effects[effects_at:]),
                     "repeated cancellation injected a duplicate closing fact")
 
+    def director_action_success_notice():
+        for state, expected in ((1, [("Notification", "Nazeem: ChangeSpeed started.")]), (0, [])):
+            task = DirectorVM(files, history)
+            task.properties["AgentAlias00"].actor = task.agent
+            task.properties["SlotStates"][0] = state
+            payload = json.dumps({"actionName": "ChangeSpeed", "npcFormId": "1234", "newSpeed": 0})
+            task.invoke("IntelEngine_Core", "OnDashboardExecuteAction", ("", payload, 0.0, None))
+            require([e for e in task.effects if e[0] == "Notification"] == expected,
+                    "director_action_success_notice: Bool-true must notify once; Bool-false must not notify")
+
     for case in (director_seek_then_seek_is_refused, run6_seek_seek_fetch_arrival,
                  director_story_while_story_active, cancel_story_task_ends_story,
-                 cancel_story_injects_closing_fact):
+                 cancel_story_injects_closing_fact, director_action_success_notice):
         case()
         print("actual PEX " + case.__name__ + " PASS")
 
