@@ -338,6 +338,8 @@ Change the dashboard hotkey in the dashboard's Settings tab or on the SkyrimNet 
 
 **Director** — Manual Dungeon Master controls. Dispatch any story type to any NPC with full parameter fields (informant gossip, quest locations, message content, etc.). Execute any of the 11 player-driven actions, including ReportPlayerConduct, with guided field hints and YAML enum choices. Action Execution lists loaded NPCs within 4000 units in the same exterior worldspace or interior cell. Manual CancelCurrentTask stops the current task even beside the player; SkyrimNet-driven cancellation retains its proximity guard.
 
+Director faction suggestions measure their rendered height (including UI scale) and open above their input when the viewport or a clipping scroll container has insufficient space below. NPC and enum pickers retain native `<select>` behavior.
+
 **Active Packages** — See which NPCs are currently running IntelEngine AI packages (travel, sandbox, stalk). Remove packages from stuck NPCs directly.
 
 **Settings** — Shared settings behavior with the MCM. Politics settings are read from `settings.yaml` and saved there by both interfaces; plugin configuration includes blocklists and LLM overrides.
