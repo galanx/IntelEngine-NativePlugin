@@ -443,13 +443,12 @@ function DirectorTab({ loadedNpcs, tasks = [], actions, factions = [], sendActio
   const storyRequired = [['NPC', !!storyNpc.trim()], ['Story type', storyTypeValid], ['Narration', !!storyNarration.trim()]];
   const socialRequired = [['NPC 1', !!socialNpc1.trim()], ['NPC 2', !!socialNpc2.trim()], ['Social type', socialTypeValid], ['Narration', !!socialNarration.trim()]];
   const politicalRequired = [['Faction A', !!polFactionA.trim()], ['Faction B', !!polFactionB.trim() && polFactionA.trim() !== polFactionB.trim()], ['Political event type', polEventTypeValid], ['Description', !!polDescription.trim()]];
-  const requiredLabels = fields => <div className="flex flex-wrap gap-x-3 text-[10px] text-gray-500">{fields.map(([label]) => <label key={label}>{label} *</label>)}</div>;
   const missingFields = fields => fields.some(([, valid]) => !valid) && <p className="text-[10px] text-gray-400">Fill required fields: {fields.filter(([, valid]) => !valid).map(([label]) => label).join(', ')}</p>;
-  const generateControls = form => <div className="flex gap-2">
+  const generateControls = form => <div className="flex items-center justify-between mb-2"><h2 className="section-header">{{story:'Story Dispatch',social:'NPC Social Dispatch',political:'Political Dispatch'}[form]}</h2><div className="flex gap-2">
     <button onClick={() => generate(form)} disabled={!!pending}
-      className="flex-1 rounded px-2 py-1 text-xs text-gray-300 bg-white/10 disabled:opacity-40">{pending?.form === form ? 'Generating…' : 'Generate'}</button>
+      className="rounded px-2 py-1 text-xs text-gray-300 bg-white/10 disabled:opacity-40">{pending?.form === form ? 'Generating…' : 'Generate'}</button>
     <button onClick={() => pending?.form === form ? stopGenerate() : clear(form)} className="rounded px-2 py-1 text-xs text-gray-400">{pending?.form === form ? 'Stop' : 'Clear'}</button>
-  </div>;
+  </div></div>;
 
   const handleStoryTypeChange = useCallback((type) => {
     setStoryType(type);
@@ -548,7 +547,6 @@ function DirectorTab({ loadedNpcs, tasks = [], actions, factions = [], sendActio
       <section>
         {generateControls('story')}{pending?.form === 'story' && <small>Generating…</small>}{generateError && !pending && <small>{generateError}</small>}
         <fieldset disabled={pending?.form === 'story'} className="space-y-2 border-0 p-0 m-0 min-w-0" inert={pending?.form === 'story' ? '' : undefined}>
-          {requiredLabels(storyRequired)}
           <div className="flex gap-2">
             <input
               type="text"
@@ -568,7 +566,7 @@ function DirectorTab({ loadedNpcs, tasks = [], actions, factions = [], sendActio
               ))}
             </Select>
           </div>
-          <p className="text-[9px] text-gray-600 leading-tight">NPC: exact display name. Story type: what they will do.</p>
+          <p className="text-[9px] text-gray-600 leading-tight">NPC *: exact display name. Story type *: what they will do.</p>
           <textarea
             value={storyNarration}
             onChange={e => setStoryNarration(e.target.value)}
@@ -576,7 +574,7 @@ function DirectorTab({ loadedNpcs, tasks = [], actions, factions = [], sendActio
             rows={2}
             className="w-full bg-white/5 border border-white/10 rounded px-2 py-1.5 text-xs text-gray-200 outline-none resize-none placeholder:text-gray-600"
           />
-          <p className="text-[9px] text-gray-600 leading-tight">Narration: why the NPC acts; used as story context.</p>
+          <p className="text-[9px] text-gray-600 leading-tight">Narration *: why the NPC acts; used as story context.</p>
 
           {/* Type-specific fields */}
           {currentFields.map(f => (
@@ -625,7 +623,6 @@ function DirectorTab({ loadedNpcs, tasks = [], actions, factions = [], sendActio
       <section>
         {generateControls('social')}{pending?.form === 'social' && <small>Generating…</small>}{generateError && !pending && <small>{generateError}</small>}
         <fieldset disabled={pending?.form === 'social'} className="space-y-2 border-0 p-0 m-0 min-w-0" inert={pending?.form === 'social' ? '' : undefined}>
-          {requiredLabels(socialRequired)}
           <div className="flex gap-2">
             <input
               type="text"
@@ -642,7 +639,7 @@ function DirectorTab({ loadedNpcs, tasks = [], actions, factions = [], sendActio
               className="flex-1 bg-white/5 border border-white/10 rounded px-2 py-1.5 text-xs text-gray-200 outline-none placeholder:text-gray-600"
             />
           </div>
-          <p className="text-[9px] text-gray-600 leading-tight">{socialType === 'npc_gossip' ? 'NPC 1 tells, NPC 2 listens' : 'NPC 1: the traveler. NPC 2: the counterpart they meet.'}</p>
+          <p className="text-[9px] text-gray-600 leading-tight">NPC 1 *: the traveler/teller. NPC 2 *: the counterpart/listener.</p>
           <div className="flex gap-2">
             <Select aria-label="Social type" containerClassName="w-[130px]"
               value={touched.socialType ? socialType : ''}
@@ -662,7 +659,7 @@ function DirectorTab({ loadedNpcs, tasks = [], actions, factions = [], sendActio
               className="flex-1 bg-white/5 border border-white/10 rounded px-2 py-1.5 text-xs text-gray-200 outline-none resize-none placeholder:text-gray-600"
             />
           </div>
-          <p className="text-[9px] text-gray-600 leading-tight">Social type: interaction or gossip. Narration: what happens between them.</p>
+          <p className="text-[9px] text-gray-600 leading-tight">Social type *: interaction or gossip. Narration *: what happens between them.</p>
 
           {currentSocialFields.map(f => (
             <div key={f.key} className="flex flex-col gap-0.5">
@@ -697,7 +694,6 @@ function DirectorTab({ loadedNpcs, tasks = [], actions, factions = [], sendActio
       <section>
         {generateControls('political')}{pending?.form === 'political' && <small>Generating…</small>}{generateError && !pending && <small>{generateError}</small>}
         <fieldset disabled={pending?.form === 'political'} className="space-y-2 border-0 p-0 m-0 min-w-0" inert={pending?.form === 'political' ? '' : undefined}>
-          {requiredLabels(politicalRequired)}
           <div className="flex gap-2">
             <FactionInput
               value={polFactionA}
@@ -712,7 +708,7 @@ function DirectorTab({ loadedNpcs, tasks = [], actions, factions = [], sendActio
               placeholder="Faction B (e.g. ThalmorFaction)"
             />
           </div>
-          <p className="text-[9px] text-gray-600 leading-tight">Faction A: first side. Faction B: other side. Pick two different faction IDs.</p>
+          <p className="text-[9px] text-gray-600 leading-tight">Faction A *: first side. Faction B *: other side. Pick two different faction IDs.</p>
           <div className="flex gap-2">
             <Select aria-label="Political event type" containerClassName="flex-1"
               value={touched.eventType ? polEventType : ''}
@@ -736,7 +732,7 @@ function DirectorTab({ loadedNpcs, tasks = [], actions, factions = [], sendActio
               />
             </div>
           </div>
-          <p className="text-[9px] text-gray-600 leading-tight">Event: what happened. Δ: relation change, from -15 to 15.</p>
+          <p className="text-[9px] text-gray-600 leading-tight">Event *: what happened. Δ: relation change, from -15 to 15.</p>
           <textarea
             value={polDescription}
             onChange={e => setPolDescription(e.target.value)}
@@ -744,7 +740,7 @@ function DirectorTab({ loadedNpcs, tasks = [], actions, factions = [], sendActio
             rows={2}
             className="w-full bg-white/5 border border-white/10 rounded px-2 py-1.5 text-xs text-gray-200 outline-none resize-none placeholder:text-gray-600"
           />
-          <p className="text-[9px] text-gray-600 leading-tight">Description: a short account of the political event.</p>
+          <p className="text-[9px] text-gray-600 leading-tight">Description *: a short account of the political event.</p>
           <button
             onClick={handleDispatchPolitics}
             disabled={politicalRequired.some(([, valid]) => !valid)}
@@ -760,7 +756,6 @@ function DirectorTab({ loadedNpcs, tasks = [], actions, factions = [], sendActio
       <section>
         <h2 className="section-header mb-2">Action Execution</h2>
         <div className="space-y-2">
-          {requiredLabels(actionRequired.slice(0, 2))}
           <div className="flex gap-2">
             <Select aria-label="Action NPC" containerClassName="flex-1"
               value={actionNpc}
@@ -783,7 +778,7 @@ function DirectorTab({ loadedNpcs, tasks = [], actions, factions = [], sendActio
               ))}
             </Select>
           </div>
-          <p className="text-[9px] text-gray-600 leading-tight">NPC: nearby actor who performs the action. Action: command to run.</p>
+          <p className="text-[9px] text-gray-600 leading-tight">NPC *: nearby actor who performs the action. Action *: command to run.</p>
 
           {/* Dynamic param fields for selected action */}
           {currentActionFields.map(f => (

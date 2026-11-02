@@ -70,14 +70,21 @@ SCRIPT = r"""
     if (location.hash === '#director_required_fields') {
       const story = () => document.querySelector('section:nth-of-type(1)');
       const dispatch = () => [...story().querySelectorAll('button')].find(e => e.textContent.trim() === 'Dispatch Story');
-      const labels = () => [...story().querySelectorAll('label')].map(e => e.textContent.trim());
+      const hints = () => [...story().querySelectorAll('p')].map(e => e.textContent);
       const missing = () => [...story().querySelectorAll('p')].find(e => e.textContent.startsWith('Fill required fields:'));
-      check(['NPC *', 'Story type *', 'Narration *'].every(text => labels().includes(text)), 'Story required labels are not marked');
+      check(['NPC *:', 'Story type *:', 'Narration *:'].every(text => hints().some(hint => hint.includes(text))), 'Story required field hints are not marked');
+      for (const [index, title] of [[1,'Story Dispatch'],[2,'NPC Social Dispatch'],[3,'Political Dispatch']]) {
+        const section = document.querySelector(`section:nth-of-type(${index})`);
+        const heading = section.querySelector('h2'), generate = [...section.querySelectorAll('button')].find(e=>e.textContent==='Generate');
+        check(heading?.textContent === title, 'missing form title: '+title);
+        const h=heading.getBoundingClientRect(), b=generate.getBoundingClientRect();
+        check(b.left >= h.right && Math.abs(b.top-h.top)<10 && b.width<100, 'Generate is not a small right-hand header button');
+      }
       check(dispatch().disabled && missing()?.textContent === 'Fill required fields: NPC, Narration', 'Story missing list does not match initial validation');
       await fill('input[placeholder="NPC name (e.g. Saadia)"]', 'Saadia');
       check(dispatch().disabled && missing()?.textContent === 'Fill required fields: Narration', 'filled NPC remained missing');
       await choose('Story type', 'Message');
-      check(!labels().some(text => text.includes('Message content') && text.includes('*')), 'optional Dispatch field marked required');
+      check(![...story().querySelectorAll('label')].some(e => e.textContent.includes('Message content') && e.textContent.includes('*')), 'optional Dispatch field marked required');
       await fill('section:nth-of-type(1) textarea', 'Requests a private meeting');
       check(!dispatch().disabled && !missing(), 'valid Story remains disabled or shows missing fields');
       const section = index => document.querySelector(`section:nth-of-type(${index})`);
