@@ -635,6 +635,13 @@ class FactionPolitics { public: static PoliticsStub* GetSingleton(){static Polit
 class SlotTracker { public: static SlotStub* GetSingleton(){static SlotStub s;return &s;} };
 namespace SkyrimNetAPI { inline std::string (*GetPluginConfigValue)(const char*,const char*,const char*)=nullptr; }
 namespace RE {
+struct Calendar {
+    static Calendar* GetSingleton(){static Calendar c;return &c;}
+    float GetCurrentGameTime() const{return 3.5f;}
+    unsigned GetYear() const{return 201;} unsigned GetMonth() const{return 7;}
+    float GetDay() const{return 20.f;}
+    float GetHour() const{return 12.f;}
+};
 struct Worldspace {};
 struct Cell { bool interior=false; bool IsInteriorCell() const { return interior; } };
 class Actor { public:

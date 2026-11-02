@@ -420,6 +420,13 @@ namespace IntelEngine {
             replaceAll(fixed, "False", "false");
 
             auto parsed = nlohmann::json::parse(fixed);
+            if (auto* calendar = RE::Calendar::GetSingleton()) {
+                parsed["calendar"] = {
+                    {"time", calendar->GetCurrentGameTime()},
+                    {"year", calendar->GetYear()}, {"month", calendar->GetMonth()},
+                    {"day", calendar->GetDay()}, {"hour", calendar->GetHour()}
+                };
+            }
 
             // Inject plugin config values; politics comes from the live native settings state.
             nlohmann::json pc;

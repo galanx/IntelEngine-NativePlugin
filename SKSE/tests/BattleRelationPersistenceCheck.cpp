@@ -64,6 +64,12 @@ int main() try {
     Require(sqlite3_exec(raw,
         "INSERT INTO faction_relations (faction_a, faction_b, relation_score) VALUES ('A', 'A', 0)",
         nullptr, nullptr, nullptr) == SQLITE_OK, "insert legacy self relation fixture");
+    Require(sqlite3_exec(raw,
+        "INSERT INTO faction_events (faction_a,event_type,description,game_time) VALUES "
+        "('A','insult','undated',NULL),('A','insult','dated-zero',0);"
+        "INSERT INTO war_battles (war_id,location_name,attacker,defender,game_time) VALUES "
+        "(777,'undated','A','B',NULL),(777,'dated-zero','A','B',0);",
+        nullptr, nullptr, nullptr) == SQLITE_OK, "insert missing and zero timestamp fixtures");
     sqlite3_close(raw);
     Require(db->Initialize("./relations.db"), "reopen DB with legacy self relation");
     const auto relations = db->GetAllRelations();
@@ -71,8 +77,22 @@ int main() try {
         [](const FactionRelation& relation) { return relation.factionA == relation.factionB; }),
         "legacy self relation must be hidden from relation reads");
     Require(db->GetRelation("A", "A") == 0, "legacy self relation must not be returned");
+    const auto events = db->GetRecentEvents(100);
+    for (const auto& description : {"undated", "dated-zero"}) {
+        const auto event = std::find_if(events.begin(), events.end(),
+            [&](const FactionEvent& row) { return row.description == description; });
+        Require(event != events.end(), "timestamp event fixture missing");
+        Require(event->hasGameTime == (event->description == "dated-zero") && event->gameTime == 0.f,
+                "event read must distinguish missing timestamp from genuine zero");
+    }
+    const auto battles = db->GetBattlesForWar(777, 10);
+    Require(battles.size() == 2, "timestamp battle fixtures missing");
+    for (const auto& battle : battles) {
+        Require(battle.hasGameTime == (battle.locationName == "dated-zero") && battle.gameTime == 0.f,
+                "battle read must distinguish missing timestamp from genuine zero");
+    }
     db->Shutdown();
-    std::cout << "PASS: battle/peace persistence, rejected self pairs, one-sided events and legacy relation filtering\n";
+    std::cout << "PASS: battle/peace persistence, rejected self pairs, legacy filtering and missing/zero timestamps\n";
 }
 catch (const std::exception& error) {
     std::cerr << "FAIL: " << error.what() << '\n';

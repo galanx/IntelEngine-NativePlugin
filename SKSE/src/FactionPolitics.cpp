@@ -1007,7 +1007,7 @@ default_relations:
             ej["faction_b"] = e.factionB;
             ej["description"] = e.description;
             ej["delta"] = e.relationDelta;
-            ej["time"] = e.gameTime;
+            if (e.hasGameTime) ej["time"] = e.gameTime;
             eventsJson.push_back(ej);
         }
         dashboard["events"] = eventsJson;
@@ -1031,6 +1031,7 @@ default_relations:
                 nlohmann::json battlesJson = nlohmann::json::array();
                 for (const auto& b : battles) {
                     nlohmann::json bj;
+                    if (b.hasGameTime) bj["time"] = b.gameTime;
                     bj["location"] = b.locationName;
                     bj["attacker"] = b.attacker;
                     bj["defender"] = b.defender;
