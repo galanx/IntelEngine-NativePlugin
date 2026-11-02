@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback } from 'react';
+import { useState, useMemo, useCallback, useEffect, useRef } from 'react';
 import Select, { useDropdown, dropdownClass } from './Select';
 
 /** Text input with dropdown suggestions. Works in Ultralight (no <datalist> needed). */
@@ -301,6 +301,83 @@ function DirectorTab({ loadedNpcs, tasks = [], actions, factions = [], sendActio
   const [polEventType, setPolEventType] = useState('trade_deal');
   const [polDescription, setPolDescription] = useState('');
   const [polDelta, setPolDelta] = useState(8);
+  const [touched, setTouched] = useState({});
+  const [pending, setPending] = useState(null);
+  const [generateError, setGenerateError] = useState('');
+  const pendingRef = useRef(null);
+  const requestId = useRef(0);
+  const stopGenerate = () => { requestId.current++; pendingRef.current = null; setPending(null); setGenerateError(''); };
+  useEffect(() => {
+    window.directorGenerateResult = json => {
+      const request = pendingRef.current;
+      if (!request) return;
+      let result;
+      try { result = JSON.parse(json); } catch { pendingRef.current = null; setPending(null); setGenerateError('Invalid response; try again.'); return; }
+      if (result.requestId !== request.id || result.form !== request.form) return;
+      pendingRef.current = null; setPending(null);
+      if (!result.ok || !result.fields || typeof result.fields !== 'object' || Array.isArray(result.fields)) {
+        setGenerateError(String(result.error || 'Generation failed; try again.').slice(0,120)); return;
+      }
+      const { form, draft: old, schema, variants, options } = request;
+      const typeKey = form === 'story' ? 'storyType' : form === 'social' ? 'socialType' : 'eventType';
+      const typeOptions = schema[typeKey]?.options || [];
+      const nextType = touched[typeKey] ? old[typeKey] : result.fields[typeKey] ?? old[typeKey];
+      if (typeOptions.length && !typeOptions.includes(nextType)) { setGenerateError('Invalid generated option; try again.'); return; }
+      const allowed = { ...schema, ...(variants[nextType] || {}) };
+      const next = { ...old };
+      for (const [key, value] of Object.entries(result.fields)) {
+        if (!allowed[key] || (['npcName','npc1Name','npc2Name','subject','sender','victimName','factionA','factionB'].includes(key) && old[key]) ||
+            (touched[key] && allowed[key].type === 'select')) continue;
+        if (allowed[key].type === 'number' ? typeof value !== 'number' : typeof value !== 'string') { setGenerateError('Invalid generated field; try again.'); return; }
+        if (allowed[key].type === 'select' && !allowed[key].options.includes(value)) { setGenerateError('Invalid generated option; try again.'); return; }
+        if ((['npcName','npc1Name','npc2Name','subject','sender','victimName'].includes(key) && value && !options.npcs.includes(value)) ||
+            (['factionA','factionB'].includes(key) && value && !options.factions.some(f=>f.id===value))) { setGenerateError('Invalid generated identity; try again.'); return; }
+        if (key === 'relationDelta' && (!Number.isInteger(value) || value < -15 || value > 15)) { setGenerateError('Invalid relation change; try again.'); return; }
+        next[key] = value;
+      }
+      next[typeKey] = nextType;
+      if ((form === 'political' && next.factionA && next.factionA === next.factionB) ||
+          (form === 'social' && next.npc1Name && next.npc2Name && next.npc1Name.trim().toLowerCase() === next.npc2Name.trim().toLowerCase())) { setGenerateError('Generated identities must be distinct; try again.'); return; }
+      if (form === 'story') { setStoryNpc(next.npcName); setStoryType(next.storyType); setStoryNarration(next.narration); setStoryFields(Object.fromEntries(Object.keys(allowed).filter(k => !['npcName','storyType','narration'].includes(k)).map(k => [k,next[k]]))); }
+      if (form === 'social') { setSocialNpc1(next.npc1Name); setSocialNpc2(next.npc2Name); setSocialType(next.socialType); setSocialNarration(next.narration); setSocialFields(Object.fromEntries(Object.keys(allowed).filter(k => !['npc1Name','npc2Name','socialType','narration'].includes(k)).map(k => [k,next[k]]))); }
+      setTouched(t=>({...t,[typeKey]:true}));
+      if (form === 'political') { setPolFactionA(next.factionA); setPolFactionB(next.factionB); setPolEventType(next.eventType); setPolDescription(next.description); setPolDelta(next.relationDelta); }
+      setGenerateError('');
+    };
+    return () => { delete window.directorGenerateResult; };
+  }, [pending, touched]);
+  const generate = form => {
+    const story = form === 'story', social = form === 'social';
+    const type = story ? storyType : social ? socialType : polEventType;
+    const defs = story ? currentFields : social ? currentSocialFields : [];
+    const enumTypes = story ? DIRECTOR_STORY_TYPES : social ? SOCIAL_TYPES : POLITICAL_EVENT_TYPES;
+    const fields = story ? { npcName:storyNpc, storyType, narration:storyNarration, ...storyFields } :
+      social ? { npc1Name:socialNpc1, npc2Name:socialNpc2, socialType, narration:socialNarration, ...socialFields } :
+        { factionA:polFactionA, factionB:polFactionB, eventType:polEventType, description:polDescription, relationDelta:polDelta };
+    const draft = { ...fields };
+    for (const f of defs) if (f.type === 'select' && !touched[f.key]) fields[f.key] = '';
+    const typeKey = story ? 'storyType' : social ? 'socialType' : 'eventType';
+    fields[typeKey] = touched[typeKey] ? type : '';
+    const schema = Object.fromEntries(Object.entries(fields).filter(([k])=>!defs.some(f=>f.key===k)).map(([k,v]) => [k, { type: typeof v === 'number' ? 'number' : k === (story?'storyType':social?'socialType':'eventType') ? 'select' : 'text',
+      ...((k === (story?'storyType':social?'socialType':'eventType')) ? { options:enumTypes.map(x=>x.key) } : {}) }]));
+    const variants = Object.fromEntries(enumTypes.map(t => [t.key, Object.fromEntries((story ? (STORY_TYPE_FIELDS[t.key]||[]) : social ? (SOCIAL_TYPE_FIELDS[t.key]||[]) : []).map(f=>[f.key,{...f}]))]));
+    const id = String(++requestId.current);
+    const options = { npcs:[...new Set([...npcs.map(n=>n.name), ...['npcName','npc1Name','npc2Name','subject','sender','victimName'].map(k=>draft[k]).filter(Boolean)])],
+      factions:factions.map(f=>({id:f.id,name:f.name})) };
+    const request = { id, form, fields, draft, schema, variants, options };
+    pendingRef.current = request; setPending(request); setGenerateError('');
+    send('generateDirector', { requestId:id, form, fields, touched, schema, variants, options });
+  };
+  const clear = form => {
+    const keys = form === 'story' ? ['storyType', ...Object.keys(STORY_TYPE_FIELDS).flatMap(t=>(STORY_TYPE_FIELDS[t]||[]).map(f=>f.key))] :
+      form === 'social' ? ['socialType', ...Object.keys(SOCIAL_TYPE_FIELDS).flatMap(t=>(SOCIAL_TYPE_FIELDS[t]||[]).map(f=>f.key))] : ['eventType'];
+    if (pending?.form === form) stopGenerate();
+    setTouched(t=>Object.fromEntries(Object.entries(t).filter(([key])=>!keys.includes(key))));
+    setGenerateError('');
+    if (form === 'story') { setStoryNpc(''); setStoryType('seek_player'); setStoryNarration(''); setStoryFields({}); }
+    if (form === 'social') { setSocialNpc1(''); setSocialNpc2(''); setSocialType('npc_interaction'); setSocialNarration(''); setSocialFields({}); }
+    if (form === 'political') { setPolFactionA(''); setPolFactionB(''); setPolEventType('trade_deal'); setPolDescription(''); setPolDelta(8); }
+  };
 
   // Action execution state
   const [actionNpc, setActionNpc] = useState('');
@@ -363,6 +440,11 @@ function DirectorTab({ loadedNpcs, tasks = [], actions, factions = [], sendActio
   const storyTypeValid = DIRECTOR_STORY_TYPES.some(type => type.key === storyType);
   const socialTypeValid = SOCIAL_TYPES.some(type => type.key === socialType);
   const polEventTypeValid = POLITICAL_EVENT_TYPES.some(type => type.key === polEventType);
+  const generateControls = form => <div className="flex gap-2">
+    <button onClick={() => generate(form)} disabled={!!pending}
+      className="flex-1 rounded px-2 py-1 text-xs text-gray-300 bg-white/10 disabled:opacity-40">{pending?.form === form ? 'Generating…' : 'Generate'}</button>
+    <button onClick={() => pending?.form === form ? stopGenerate() : clear(form)} className="rounded px-2 py-1 text-xs text-gray-400">{pending?.form === form ? 'Stop' : 'Clear'}</button>
+  </div>;
 
   const handleStoryTypeChange = useCallback((type) => {
     setStoryType(type);
@@ -457,8 +539,8 @@ function DirectorTab({ loadedNpcs, tasks = [], actions, factions = [], sendActio
     <div className="p-3 space-y-4">
       {/* Story Dispatch */}
       <section>
-        <h2 className="section-header mb-2">Story Dispatch</h2>
-        <div className="space-y-2">
+        {generateControls('story')}{pending?.form === 'story' && <small>Generating…</small>}{generateError && !pending && <small>{generateError}</small>}
+        <fieldset disabled={pending?.form === 'story'} className="space-y-2 border-0 p-0 m-0 min-w-0" inert={pending?.form === 'story' ? '' : undefined}>
           <div className="flex gap-2">
             <input
               type="text"
@@ -468,10 +550,11 @@ function DirectorTab({ loadedNpcs, tasks = [], actions, factions = [], sendActio
               className="flex-1 bg-white/5 border border-white/10 rounded px-2 py-1.5 text-xs text-gray-200 outline-none placeholder:text-gray-600"
             />
             <Select aria-label="Story type" containerClassName="w-[130px]"
-              value={storyType}
-              onChange={e => handleStoryTypeChange(e.target.value)}
+              value={touched.storyType ? storyType : ''}
+              onChange={e => { setTouched(t => ({...t,storyType:true})); handleStoryTypeChange(e.target.value); }}
               className="bg-white/5 border border-white/10 rounded px-2 py-1.5 text-xs text-gray-200 outline-none"
             >
+              <option value="" className="text-gray-500">(auto)</option>
               {DIRECTOR_STORY_TYPES.map(t => (
                 <option key={t.key} value={t.key}>{t.label}</option>
               ))}
@@ -497,10 +580,10 @@ function DirectorTab({ loadedNpcs, tasks = [], actions, factions = [], sendActio
               {f.type === 'select' ? (
                 <Select aria-label={f.label}
                   value={storyFields[f.key] || ''}
-                  onChange={e => setStoryFields(prev => ({ ...prev, [f.key]: e.target.value }))}
+                  onChange={e => { setTouched(t=>({...t,[f.key]:true})); setStoryFields(prev => ({ ...prev, [f.key]: e.target.value })); }}
                   className="bg-white/5 border border-white/10 rounded px-2 py-1.5 text-xs text-gray-200 outline-none"
                 >
-                  <option value="">—</option>
+                  <option value="" className={!touched[f.key] ? 'text-gray-500' : ''}>{touched[f.key] ? '—' : '(auto)'}</option>
                   {f.options.map(o => (
                     <option key={o} value={o}>{o}</option>
                   ))}
@@ -527,13 +610,13 @@ function DirectorTab({ loadedNpcs, tasks = [], actions, factions = [], sendActio
           >
             {busyConfirm.startsWith('sent:dispatchStory:') ? 'Sent' : storyBusy.length && busyConfirm === 'story' ? 'Busy — you sure?' : 'Dispatch Story'}
           </button>
-        </div>
+        </fieldset>
       </section>
 
       {/* NPC Social Dispatch */}
       <section>
-        <h2 className="section-header mb-2">NPC Social</h2>
-        <div className="space-y-2">
+        {generateControls('social')}{pending?.form === 'social' && <small>Generating…</small>}{generateError && !pending && <small>{generateError}</small>}
+        <fieldset disabled={pending?.form === 'social'} className="space-y-2 border-0 p-0 m-0 min-w-0" inert={pending?.form === 'social' ? '' : undefined}>
           <div className="flex gap-2">
             <input
               type="text"
@@ -553,10 +636,11 @@ function DirectorTab({ loadedNpcs, tasks = [], actions, factions = [], sendActio
           <p className="text-[9px] text-gray-600 leading-tight">{socialType === 'npc_gossip' ? 'NPC 1 tells, NPC 2 listens' : 'NPC 1: the traveler. NPC 2: the counterpart they meet.'}</p>
           <div className="flex gap-2">
             <Select aria-label="Social type" containerClassName="w-[130px]"
-              value={socialType}
-              onChange={e => handleSocialTypeChange(e.target.value)}
+              value={touched.socialType ? socialType : ''}
+              onChange={e => { setTouched(t => ({...t,socialType:true})); handleSocialTypeChange(e.target.value); }}
               className="bg-white/5 border border-white/10 rounded px-2 py-1.5 text-xs text-gray-200 outline-none"
             >
+              <option value="" className="text-gray-500">(auto)</option>
               {SOCIAL_TYPES.map(t => (
                 <option key={t.key} value={t.key}>{t.label}</option>
               ))}
@@ -580,7 +664,7 @@ function DirectorTab({ loadedNpcs, tasks = [], actions, factions = [], sendActio
               <input
                 type="text"
                 value={socialFields[f.key] || ''}
-                onChange={e => setSocialFields(prev => ({ ...prev, [f.key]: e.target.value }))}
+                onChange={e => { setTouched(t=>({...t,[f.key]:true})); setSocialFields(prev => ({ ...prev, [f.key]: e.target.value })); }}
                 placeholder={f.placeholder}
                 className="bg-white/5 border border-white/10 rounded px-2 py-1.5 text-xs text-gray-200 outline-none placeholder:text-gray-600"
               />
@@ -597,13 +681,13 @@ function DirectorTab({ loadedNpcs, tasks = [], actions, factions = [], sendActio
           >
             {busyConfirm.startsWith('sent:dispatchNpcSocial:') ? 'Sent' : socialBusy.length && busyConfirm === 'social' ? 'Busy — you sure?' : 'Dispatch Social'}
           </button>
-        </div>
+        </fieldset>
       </section>
 
       {/* Political Dispatch */}
       <section>
-        <h2 className="section-header mb-2">Political Event</h2>
-        <div className="space-y-2">
+        {generateControls('political')}{pending?.form === 'political' && <small>Generating…</small>}{generateError && !pending && <small>{generateError}</small>}
+        <fieldset disabled={pending?.form === 'political'} className="space-y-2 border-0 p-0 m-0 min-w-0" inert={pending?.form === 'political' ? '' : undefined}>
           <div className="flex gap-2">
             <FactionInput
               value={polFactionA}
@@ -621,10 +705,11 @@ function DirectorTab({ loadedNpcs, tasks = [], actions, factions = [], sendActio
           <p className="text-[9px] text-gray-600 leading-tight">Faction A: first side. Faction B: other side. Pick two different faction IDs.</p>
           <div className="flex gap-2">
             <Select aria-label="Political event type" containerClassName="flex-1"
-              value={polEventType}
-              onChange={e => handlePolEventTypeChange(e.target.value)}
+              value={touched.eventType ? polEventType : ''}
+              onChange={e => { setTouched(t => ({...t,eventType:true})); handlePolEventTypeChange(e.target.value); }}
               className="bg-white/5 border border-white/10 rounded px-2 py-1.5 text-xs text-gray-200 outline-none"
             >
+              <option value="" className="text-gray-500">(auto)</option>
               {POLITICAL_EVENT_TYPES.map(t => (
                 <option key={t.key} value={t.key}>{t.label}</option>
               ))}
@@ -658,7 +743,7 @@ function DirectorTab({ loadedNpcs, tasks = [], actions, factions = [], sendActio
           >
             {busyConfirm.startsWith('sent:dispatchPolitics:') ? 'Sent' : 'Dispatch Political Event'}
           </button>
-        </div>
+        </fieldset>
       </section>
 
       {/* Action Execution */}

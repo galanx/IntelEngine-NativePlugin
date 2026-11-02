@@ -59,6 +59,8 @@ def method(source, signature):
 
 
 manager = (SRC / "DashboardUIManager.cpp").read_text(encoding="utf-8")
+has_generate = "    void DashboardUIManager::OnGenerateDirectorStatic(" in manager
+listener_count = 15 + int(has_generate)
 listener_start = manager.index("        static const UiListener listeners[] = {")
 listener_end = manager.index("        };", listener_start)
 listener_entries = manager[manager.index("{", listener_start) + 1:listener_end]
@@ -68,6 +70,7 @@ for index, callback in enumerate((
     "OnToggleStoryTypeStatic", "OnChangeSettingStatic", "OnRemovePackagesStatic",
     "OnChangePluginConfigStatic", "OnDispatchStoryStatic", "OnDispatchNpcSocialStatic",
     "OnDispatchPoliticsStatic", "OnExecuteActionStatic", "OnToggleActionStatic",
+    "OnGenerateDirectorStatic",
 )):
     listener_entries = listener_entries.replace(callback, f"listener{index}")
 callbacks = [method(manager, sig) for sig in (
@@ -95,11 +98,12 @@ callbacks = [method(manager, sig) for sig in (
     "    void DashboardUIManager::OnDispatchPoliticsStatic(",
     "    void DashboardUIManager::OnExecuteActionStatic(",
     "    void DashboardUIManager::OnToggleActionStatic(",
+    "    void DashboardUIManager::OnGenerateDirectorStatic(",
     "    void DashboardUIManager::LoadActionYAMLs()",
     "    void DashboardUIManager::ReloadView()",
     "    void DashboardUIManager::SendModEvent(",
     "    void DashboardUIManager::HotkeyPollLoop()",
-)]
+    ) if has_generate or "OnGenerateDirectorStatic" not in sig]
 
 with tempfile.TemporaryDirectory(prefix="dashboard-host-") as temp:
     work = pathlib.Path(temp)
@@ -249,17 +253,28 @@ int callbackHits = 0, routedListener = -1;
 void route(int id,const char* arg) { ++callbackHits; routedListener=id; listenerCalls.push_back({std::to_string(id),arg?arg:""}); }
 #define ROUTE(N) void listener##N(const char* a){route(N,a);}
 ROUTE(0) ROUTE(1) ROUTE(2) ROUTE(3) ROUTE(4) ROUTE(5) ROUTE(6) ROUTE(7)
-ROUTE(8) ROUTE(9) ROUTE(10) ROUTE(11) ROUTE(12) ROUTE(13) ROUTE(14)
+ROUTE(8) ROUTE(9) ROUTE(10) ROUTE(11) ROUTE(12) ROUTE(13) ROUTE(14) ROUTE(15)
 #undef ROUTE
-const std::array<UiListener, 15> listeners{{
+namespace IntelEngine::SkyrimNetAPI {
+inline bool (*SendCustomPromptToLLM)(const char*, const char*, const char*,
+    std::function<void(const char*, int)>) = nullptr;
+}
+std::function<void(const char*, int)> directorCompletion;
+bool fakeDirectorSend(const char*, const char*, const char*, std::function<void(const char*, int)> cb) {
+    directorCompletion = std::move(cb); return true;
+}
+const std::array<UiListener, ''' + str(listener_count) + r'''> listeners{{
 ''' + listener_entries + r'''
 }};
-const std::array<std::string_view, 15> expectedNames{
+const std::array<std::string_view, ''' + str(listener_count) + r'''> expectedNames{
+''' + ",\n".join(f'"{name}"' for name in (
     "onCloseDashboard", "onRequestRefresh", "onReloadUI",
     "onDashboard_cancelTask", "onDashboard_cancelSchedule", "onDashboard_cancelQuest",
     "onDashboard_toggleStoryType", "onDashboard_changeSetting", "onDashboard_removePackages",
     "onDashboard_changePluginConfig", "onDashboard_dispatchStory", "onDashboard_dispatchNpcSocial",
-    "onDashboard_dispatchPolitics", "onDashboard_executeAction", "onDashboard_toggleAction"};
+    "onDashboard_dispatchPolitics", "onDashboard_executeAction", "onDashboard_toggleAction",
+    *(["onDashboard_generateDirector"] if has_generate else []),
+)) + r'''};
 
 struct FakePrisma final : PRISMA_UI_API::IVPrismaUI1 {
     PrismaView view=91; bool focusResult=true, anyFocus=false, valid=true, focusPause=false;
@@ -451,7 +466,7 @@ void prismaTest() {
     assert(h && h->Kind()==UiHostKind::PrismaUI && prisma.order==90);
     assert(prisma.hidden>0 && prisma.names.empty());
     prisma.dom(prisma.view);
-    assert(prisma.names.size()==15 && prisma.callbacks.size()==15);
+    assert(prisma.names.size()==listeners.size() && prisma.callbacks.size()==listeners.size());
     for(size_t i=0;i<listeners.size();++i) assert(prisma.names[i]==listeners[i].name);
     assert(events.size()==1 && events[0]==UiHostEvent::DomReady);
     assert(h->Open()==UiOpenResult::Accepted && prisma.focusPause);
@@ -477,7 +492,7 @@ void magelightTest() {
     assert(f.reloads==1);
     assert(f.registered==1 && f.created==1 && f.viewDesc.fullscreen && !f.viewDesc.startVisible);
     assert(f.capturedPath.find("雪")!=std::string::npos);
-    assert(f.listeners.size()==15);
+    assert(f.listeners.size()==listeners.size());
     for (size_t i=0;i<listeners.size();++i) assert(f.listeners[i].first==listeners[i].name);
     assert(h->Call("updateFullState","{}") && h->Call("updateSlots","[]"));
     assert(f.calls.size()==2 && f.calls[0].starts_with("updateFullState:") && f.calls[1].starts_with("updateSlots:"));
@@ -520,7 +535,7 @@ void magelightTest() {
     f.fire(MAGELIGHT_API::Event::UIModeEntered,f.view);
     assert(events.back()==UiHostEvent::Entered);
     h->Close(); f.fire(MAGELIGHT_API::Event::UIModeExited,f.view); h->Service();
-    assert(f.requestCalls==5 && f.listenerCountsAtReload.size()==1 && f.listenerCountsAtReload[0]==15);
+    assert(f.requestCalls==5 && f.listenerCountsAtReload.size()==1 && f.listenerCountsAtReload[0]==listeners.size());
     const auto staleListener=f.listeners[0].second;
     void* staleUser=f.listenerUsers[0];
     f.domDuringCreate=false;
@@ -530,11 +545,11 @@ void magelightTest() {
     assert(callbackHits==0);
     f.fire(MAGELIGHT_API::Event::ViewDestroyed,f.view);
     h->Service();
-    assert(f.created==2 && f.listeners.size()==30);
+    assert(f.created==2 && f.listeners.size()==listeners.size()*2);
     callbackHits=0; staleListener(f.view,"stale-after-reload",staleUser); f.drain();
     assert(callbackHits==0);
     f.dom(f.view); f.drain();
-    assert(f.reloads==2 && f.listenerCountsAtReload.size()==2 && f.listenerCountsAtReload[1]==30);
+    assert(f.reloads==2 && f.listenerCountsAtReload.size()==2 && f.listenerCountsAtReload[1]==listeners.size()*2);
     f.dom(f.view); f.drain();
     assert(events.back()==UiHostEvent::DomReady && f.reloads==2);
     f.fire(MAGELIGHT_API::Event::RenderDead, 0); assert(events.back()==UiHostEvent::Unavailable && !h->IsAvailable());
@@ -681,6 +696,7 @@ public:
     bool expectedExitPending_=false;
     std::uint64_t slotPayloadGeneration_=0,fullStatePayloadGeneration_=0;
     std::string pendingFullState_,pendingSlotPayload_,pendingFullStatePayload_;
+    std::vector<std::pair<std::uint64_t,std::string>> pendingDirectorResults_;
     std::mutex mutex_,actionCacheMutex_; std::condition_variable pollCondition_;
     struct ActionParam {std::string name,description;std::vector<std::string> enumValues;};
     struct ActionMeta {std::string name,fileName,description;bool enabled=true;std::vector<ActionParam> params;};
@@ -696,9 +712,12 @@ public:
     static void OnToggleStoryTypeStatic(const char*); static void OnChangeSettingStatic(const char*); static void OnRemovePackagesStatic(const char*);
     static void OnDispatchStoryStatic(const char*); static void OnDispatchNpcSocialStatic(const char*); static void OnDispatchPoliticsStatic(const char*); static void OnExecuteActionStatic(const char*);
     static void OnChangePluginConfigStatic(const char*); static void OnToggleActionStatic(const char*);
+    static void OnGenerateDirectorStatic(const char*);
 };
 }
-''' + "namespace IntelEngine {\n" + "\n".join(callbacks) + r'''
+''' + "namespace IntelEngine {\n" + "\n".join(callbacks) + (
+    "\nvoid DashboardUIManager::OnGenerateDirectorStatic(const char*) {}\n" if not has_generate else ""
+) + r'''
 void testManager() {
     auto* m=DashboardUIManager::GetSingleton(); m->host_=std::make_unique<FakeHost>();
     eventCalls.clear();
@@ -715,6 +734,38 @@ void testManager() {
     m->OnHostEvent(UiHostEvent::DomReady);
     assert(eventCalls.size()==2 && eventCalls.back().name=="IntelEngine_DashboardRefresh");
     auto* host=static_cast<FakeHost*>(m->host_.get());
+    SkyrimNetAPI::SendCustomPromptToLLM = fakeDirectorSend;
+    const char* storyRequest = R"({"requestId":"bad","form":"story","fields":{"npcName":"Brey","storyType":"seek_player","narration":""},"touched":{},"schema":{"npcName":{"type":"text"},"storyType":{"type":"select","options":["seek_player"]},"narration":{"type":"text"}},"variants":{},"options":{"npcs":["Brey"],"factions":[]}})";
+    auto drainDirector = [&] { m->stopPolling_=false; stopOnForeground=&m->stopPolling_; m->HotkeyPollLoop(); stopOnForeground=nullptr; };
+    auto generate = [&] { DashboardUIManager::OnGenerateDirectorStatic(storyRequest); };
+    generate();
+    if (directorCompletion) directorCompletion("not-json",1);
+    drainDirector();
+    auto resultCount = [&] { return std::count_if(host->calls.begin(),host->calls.end(),
+        [](const auto& call){return call.first=="directorGenerateResult";}); };
+    assert(resultCount()==1);
+    auto failed=nlohmann::json::parse(host->calls.back().second);
+    assert(!failed["ok"] && failed["error"]=="Malformed generation result");
+    generate();
+    if (directorCompletion) directorCompletion("service unavailable",0);
+    drainDirector();
+    assert(resultCount()==2);
+    auto serviceFailure=nlohmann::json::parse(host->calls.back().second);
+    assert(!serviceFailure["ok"] && serviceFailure["error"]=="Generation failed");
+    const auto beforeStale=resultCount();
+    generate();
+    auto staleCompletion=std::move(directorCompletion);
+    m->RequestClose(); m->Toggle();
+    m->OnHostEvent(UiHostEvent::DomReady); m->OnHostEvent(UiHostEvent::Entered);
+    staleCompletion(R"({"narration":"late"})",1); drainDirector();
+    assert(resultCount()==beforeStale);
+    assert(std::none_of(eventCalls.begin(),eventCalls.end(),[](const auto& e) {
+        return e.name=="IntelEngine_DashboardDispatchStory" ||
+               e.name=="IntelEngine_DashboardDispatchNpcSocial" ||
+               e.name=="IntelEngine_DashboardDispatchPolitics";
+    }));
+    host->calls.clear(); m->stopPolling_=false;
+    std::cout << "PASS director_generate_failure_and_stale_close_reopen\n";
     const auto generation=m->generation_;
     m->PushSlotData(); assert(m->pendingFlush_); m->pendingFlush_=false;
     m->SendSlotData(generation); assert(m->pendingSlotPayloadSet_);
