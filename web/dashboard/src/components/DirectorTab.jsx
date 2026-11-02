@@ -357,7 +357,8 @@ function DirectorTab({ loadedNpcs, actions, factions = [], sendAction }) {
         .map(p => ({
           key: p.name,
           label: p.name,
-          type: Array.isArray(p.enum) && p.enum.length ? 'select' : 'text',
+          type: p.name === 'factionId' ? 'faction' : Array.isArray(p.enum) && p.enum.length ? 'select' : 'text',
+          required: selectedAction === 'ReportPlayerConduct' || p.required,
           options: p.enum || [],
           placeholder: p.description,
         }));
@@ -422,24 +423,35 @@ function DirectorTab({ loadedNpcs, actions, factions = [], sendAction }) {
     setPolDescription('');
   }, [polFactionA, polFactionB, polEventType, polDescription, polDelta, sendAction]);
 
+  const handleActionChange = useCallback((name) => {
+    setSelectedAction(name);
+    const action = executableActions.find(a => a.name === name);
+    setActionParams(Object.fromEntries((action?.params || [])
+      .filter(p => !HIDDEN_PARAMS.has(p.name) && Array.isArray(p.enum) && p.enum.length)
+      .map(p => [p.name, p.enum[0]])));
+  }, [executableActions]);
+  const requiredFieldsValid = currentActionFields.every(f => {
+    const value = actionParams[f.key] || '';
+    if (f.required && !value.trim()) return false;
+    if (f.type === 'faction' && value && !factions.some(faction => faction.id === value)) return false;
+    if (f.type === 'select' && value &&
+      !f.options.some(option => (typeof option === 'string' ? option : option.value) === value)) return false;
+    return true;
+  });
   const handleExecuteAction = useCallback(() => {
-    if (!actionNpc || !selectedAction) return;
+    if (!actionNpc || !selectedAction || !requiredFieldsValid) return;
     sendAction('executeAction', {
       npcFormId: Number(actionNpc),
       actionName: selectedAction,
       params: actionParams,
     });
-    setActionParams({});
-  }, [actionNpc, selectedAction, actionParams, sendAction]);
+    handleActionChange(selectedAction);
+  }, [actionNpc, selectedAction, actionParams, sendAction, requiredFieldsValid, handleActionChange]);
 
   const setParam = useCallback((key, value) => {
     setActionParams(prev => ({ ...prev, [key]: value }));
   }, []);
 
-  const handleActionChange = useCallback((name) => {
-    setSelectedAction(name);
-    setActionParams({});
-  }, []);
 
   return (
     <div className="p-3 space-y-4">
@@ -676,7 +688,14 @@ function DirectorTab({ loadedNpcs, actions, factions = [], sendAction }) {
                 {f.label}
                 {f.required && <span className="text-red-400 ml-0.5">*</span>}
               </label>
-              {f.type === 'select' ? (
+              {f.type === 'faction' ? (
+                <FactionInput
+                  value={actionParams[f.key] || ''}
+                  onChange={value => setParam(f.key, value)}
+                  factions={factions}
+                  placeholder="Select faction..."
+                />
+              ) : f.type === 'select' ? (
                 <select
                   value={actionParams[f.key] || ''}
                   onChange={e => setParam(f.key, e.target.value)}
@@ -706,7 +725,7 @@ function DirectorTab({ loadedNpcs, actions, factions = [], sendAction }) {
 
           <button
             onClick={handleExecuteAction}
-            disabled={!actionNpc || !selectedAction || !currentActionFields.every(f => !f.required || (actionParams[f.key] || '').trim())}
+            disabled={!actionNpc || !selectedAction || !requiredFieldsValid}
             className="w-full px-3 py-1.5 text-xs font-medium rounded transition-colors bg-emerald-500/20 text-emerald-400 hover:bg-emerald-500/30 disabled:opacity-30 disabled:cursor-not-allowed"
           >
             Execute Action

@@ -1480,9 +1480,13 @@ default_relations:
         return "";
     }
 
-    int FactionPolitics::ProcessPlayerConduct(RE::Actor* reporter, const std::string& factionId,
+    int FactionPolitics::ProcessPlayerConduct(RE::Actor* reporter, const std::string& factionInput,
                                                const std::string& sentiment, const std::string& reason) {
-        if (!initialized_.load()) return 0;
+        if (!initialized_.load()) {
+            RE::SendHUDMessage::ShowHUDMessage("Conduct report failed: politics is not initialized.");
+            return 0;
+        }
+        const std::string factionId = GetFaction(factionInput) ? factionInput : GetFactionIdByName(factionInput);
 
         // Map sentiment to delta
         int delta = 0;
@@ -1492,17 +1496,23 @@ default_relations:
         else if (sentiment == "strongly_negative") delta = -10;
         else {
             logger::warn("FactionPolitics: Invalid sentiment '{}'", sentiment);
+            RE::SendHUDMessage::ShowHUDMessage(("Conduct report failed: invalid sentiment '" + sentiment + "'.").c_str());
             return 0;
         }
 
         // Validate target faction
-        if (!GetFaction(factionId)) {
-            logger::warn("FactionPolitics: Unknown faction '{}' in conduct report", factionId);
+        const auto faction = GetFaction(factionId);
+        if (!faction) {
+            logger::warn("FactionPolitics: Unknown faction '{}' in conduct report", factionInput);
+            RE::SendHUDMessage::ShowHUDMessage(("Conduct report failed: unknown faction '" + factionInput + "'.").c_str());
             return 0;
         }
 
         auto* db = PoliticalDB::GetSingleton();
-        if (!db->IsReady()) return 0;
+        if (!db->IsReady()) {
+            RE::SendHUDMessage::ShowHUDMessage("Conduct report failed: political database is unavailable.");
+            return 0;
+        }
 
         auto* cal = RE::Calendar::GetSingleton();
         float gameTime = cal ? cal->GetCurrentGameTime() : 0.0f;
@@ -1557,6 +1567,7 @@ default_relations:
             }
         }
 
+        RE::SendHUDMessage::ShowHUDMessage(("Reported to " + faction->name + ": " + std::to_string(changes) + " standings changed.").c_str());
         return changes;
     }
 
