@@ -567,7 +567,7 @@ def run_director_lite_checks(files, history):
                     return json.loads(args[0]).get(args[1], "")
                 if method == "ProcessPoliticalDMResponse":
                     self.effects.append(("political-record", self.acted))
-                    return json.dumps({"acted": str(self.acted).lower(), "eventType": "trade_deal"})
+                    return json.dumps({"acted": str(self.acted).lower(), "event_type": "trade_deal"})
                 if method == "ResetManifestationCooldown": return None
                 return super().external(method, args, script)
 
@@ -592,7 +592,7 @@ def run_director_lite_checks(files, history):
             task = NoticeVM()
             task.acted = acted
             task.invoke("IntelEngine_Core", "OnDashboardDispatchPolitics",
-                        ("", '{"eventType":"trade_deal"}', 0.0, None))
+                        ("", '{"event_type":"trade_deal"}', 0.0, None))
             require([e for e in task.effects if e[0] == "Notification"] ==
                     ([("Notification", "Political event recorded: trade_deal.")] if acted else []),
                     "director_social_and_political_success_notice: Political acted=" + str(acted))
