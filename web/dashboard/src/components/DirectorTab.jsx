@@ -1,3 +1,4 @@
+import withSections from './Section';
 import { useState, useMemo, useCallback, useEffect, useRef } from 'react';
 import Select, { useDropdown, dropdownClass } from './Select';
 
@@ -840,4 +841,4 @@ function DirectorTab({ loadedNpcs, tasks = [], actions, factions = [], sendActio
   );
 }
 
-export default DirectorTab;
+export default withSections(DirectorTab);

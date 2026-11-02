@@ -1,3 +1,4 @@
+import withSections from './Section';
 import { useCallback } from 'react';
 
 const PKG_ICONS = {
@@ -60,4 +61,4 @@ function PackagesTab({ packages, sendAction, removingIds, onMarkRemoving }) {
   );
 }
 
-export default PackagesTab;
+export default withSections(PackagesTab);

@@ -1,3 +1,4 @@
+import withSections from './Section';
 import React from 'react';
 import SlotCard from './SlotCard';
 import GameTime from './GameTime';
@@ -130,4 +131,4 @@ function TasksTab({ tasks, scheduled, calendar, sendAction }) {
   );
 }
 
-export default TasksTab;
+export default withSections(TasksTab);

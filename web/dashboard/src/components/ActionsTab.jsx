@@ -1,3 +1,4 @@
+import withSections from './Section';
 import { useCallback } from 'react';
 
 // IntelEngine action names — filter out other mods' actions
@@ -25,6 +26,7 @@ function ActionsTab({ actions, sendAction }) {
 
   return (
     <div className="p-3 space-y-3">
+      <section>
       <div className="flex items-center justify-between mb-1">
         <h2 className="section-header">IntelEngine Actions</h2>
         <span className="text-xs text-gray-500">{intelActions.length} actions</span>
@@ -59,9 +61,10 @@ function ActionsTab({ actions, sendAction }) {
           </button>
         ))}
       </div>
+      </section>
 
       {otherActions.length > 0 && (
-        <>
+        <section>
           <div className="flex items-center justify-between mt-4 mb-1">
             <h2 className="section-header text-gray-500">Other Mod Actions</h2>
             <span className="text-xs text-gray-600">{otherActions.length} actions</span>
@@ -89,10 +92,10 @@ function ActionsTab({ actions, sendAction }) {
               </button>
             ))}
           </div>
-        </>
+        </section>
       )}
     </div>
   );
 }
 
-export default ActionsTab;
+export default withSections(ActionsTab);
