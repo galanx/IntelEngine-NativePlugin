@@ -97,7 +97,7 @@ def main():
                 if name == "FindSlotByAgent":
                     return 0 if self.slot_owner is args[0] else -1
                 if name == "AllocateSlot":
-                    slot, actor, task_type, target_name, speed = args
+                    slot, actor, task_type, target_name, speed, *_ = args
                     self.slot_owner = actor
                     self.properties["SlotStates"][slot] = 1
                     self.properties["SlotTaskTypes"][slot] = task_type

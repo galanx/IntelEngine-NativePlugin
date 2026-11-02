@@ -174,6 +174,7 @@ function App() {
             <TasksTab
               tasks={state.tasks || []}
               scheduled={state.scheduled || []}
+              calendar={state.calendar}
               sendAction={sendAction}
             />
           )}

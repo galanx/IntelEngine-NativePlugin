@@ -334,6 +334,8 @@ Change the dashboard hotkey in the dashboard's Settings tab or on the SkyrimNet 
 
 **Tasks** — Live view of all active and scheduled tasks. Cancel individual tasks, see agent names, destinations, task types, speeds, and scheduled meeting timing ("in ~3h", "very soon", "overdue").
 
+Task cards show recorded origin, in-game allocation time and existing dispatch reason. Scheduled cards retain their creation provenance; legacy missing times stay blank. SkyrimNet dialogue actions currently provide origin only: upstream action mappings do not forward the triggering dialogue response.
+
 **Story Engine** — Toggle the Story Engine and individual story types on/off. See the active dispatch, next DM check-in timer, NPC social activity, active quests, and a log of recent NPC-to-NPC interactions.
 
 Activity dates use the current save's in-game calendar and display to the nearest minute, including political events, war timelines, battle history and new NPC activity entries. Older entries without a timestamp remain undated; a recorded zero is a valid timestamp.
