@@ -271,6 +271,8 @@ class VM:
                 env[a[0][1]] = v(a[1])
                 if a[0][1].startswith("::") and a[0][1].endswith("_var"):
                     self.properties[a[0][1][2:-4]] = env[a[0][1]]
+                elif a[0][1] in self.properties:
+                    self.properties[a[0][1]] = env[a[0][1]]
                 if self.stop_on_dispatch_reset and script == "IntelEngine_StoryEngine" and name == "DispatchToTarget" and a[0][1] == "::ArrivalHandling_var" and not env[a[0][1]]:
                     self.dispatch_reset_seen = True
                     return None
