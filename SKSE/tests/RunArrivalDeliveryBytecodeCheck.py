@@ -4,6 +4,7 @@ Usage: python RunArrivalDeliveryBytecodeCheck.py <papyrus.exe> <Game Scripts> <h
 """
 import ast
 import pathlib
+import json
 import re
 import subprocess
 import sys
@@ -122,6 +123,8 @@ class VM:
             (self.agent, "Intel_TaskHistoryTime"): [], (self.agent, "Intel_TaskCooldown"): 0.0})
         self.stop_on_dispatch_reset = self.dispatch_reset_seen = False
         self.halt_before, self.halt_reached = None, False
+        self.arrival_interleave_method = self.arrival_interleave_action = None
+        self.replacement = None
 
     def val(self, operand, env):
         if not isinstance(operand, tuple): return operand
@@ -164,6 +167,30 @@ class VM:
         raise ValueError("unsupported StorageUtil native " + method)
 
     def external(self, method, args, script):
+        if method == self.arrival_interleave_method:
+            self.arrival_interleave_method = None
+            if self.arrival_interleave_action == "replace":
+                self.replacement = Actor("Replacement", "replacement-cell")
+                self.properties.update({"IsActive": True, "ArrivalHandling": False,
+                    "DispatchGeneration": self.properties["DispatchGeneration"] + 1,
+                    "ActiveStoryNPC": self.replacement, "ActiveStoryType": "seek_player"})
+            elif self.arrival_interleave_action == "phase":
+                self.properties["ActiveStoryType"] = "quest_guide"
+            else:
+                self.invoke("IntelEngine_StoryEngine", "CleanupStoryDispatch")
+            self.arrival_interleave_action = None
+        if method == "GetDistance":
+            self.effects.append(("GetDistance", tuple(args)))
+            require(args[0] is not None and args[1] is not None,
+                    "arrival check dereferenced a cleared NPC or target")
+            return 100.0
+        if method in ("RegisterEvent", "RegisterEventSchema"):
+            self.effects.append((method, tuple(args)))
+            return 0
+        if method == "StringEscapeJson":
+            return json.dumps(args[0], ensure_ascii=False)[1:-1]
+        if method == "IsPlayerInBlockedLocation": return False
+        if method == "IsPlayerInWhitelistedLocation": return True
         if method in ("HasStringValue", "HasIntValue", "HasFloatValue", "GetStringValue", "GetIntValue",
                       "GetFloatValue", "GetFormValue", "SetStringValue", "SetIntValue", "SetFloatValue",
                       "SetFormValue", "UnsetStringValue", "UnsetIntValue", "UnsetFloatValue",
@@ -179,7 +206,12 @@ class VM:
         if method == "Clear": args[0].actor = None; return None
         if method == "GetDisplayName": return args[0].name
         if method == "GetParentCell": return args[0].cell
+        if method == "IsPlayerInDangerousLocation": return False
+        if method == "CheckHoldRestriction": return True
         if method == "GetCurrentGameTime": return 123.0
+        if method == "GetArrivalThreshold":
+            self.effects.append(("GetArrivalThreshold", tuple(args)))
+            return 300.0
         if method == "GetCurrentRealTime": return 456.0
         if method == "BuildTaskHistoryDesc":
             self.effects.append(("formatter-args", tuple(args)))
@@ -281,7 +313,7 @@ class VM:
                 if method in self.scripts.get(target, {}):
                     value = self.invoke(target, method, call_args)
                 else:
-                    native_args = ([receiver] if isinstance(receiver, (Actor, ReferenceAlias)) else []) + call_args
+                    native_args = ([receiver] if isinstance(receiver, (Actor, ReferenceAlias)) or method == "GetDistance" else []) + call_args
                     value = self.external(method, native_args, script)
                 if isinstance(result, tuple): env[result[1]] = value
             else:
@@ -464,6 +496,75 @@ def main():
     require(story.dispatch_reset_seen and story.properties["ArrivalHandling"] is False,
             "actual new dispatch did not reset arrival latch")
     print("actual PEX delivery, absent-player return, and story arrival latch paths passed")
+    # Cleanup can run while the poll stack is suspended inside its location check.
+    interleaved = VM(files, history)
+    interleaved.properties.update({"SlotTaskTypes": ["story"] + [""] * 4,
+        "SlotTargetNames": ["Player"] + [""] * 4})
+    interleaved.player.cell = None
+    interleaved.arrival_interleave_method = "IsPlayerInBlockedLocation"
+    interleaved.invoke("IntelEngine_StoryEngine", "CheckStoryNPCArrival")
+    require(not any(e[0] == "GetDistance" for e in interleaved.effects),
+            "stale arrival poll continued to distance after callback cleanup")
+    require(interleaved.properties["ActiveStoryNPC"] is None and
+            not interleaved.properties["IsActive"],
+            "callback cleanup did not clear the dispatch")
+
+    cleared = VM(files, history)
+    cleared.properties.update({"IsActive": False, "ActiveStoryNPC": None})
+    cleared.invoke("IntelEngine_StoryEngine", "CheckStoryNPCArrival")
+    require(cleared.call_counts.get(("IntelEngine_StoryEngine", "CleanupStoryDispatch"), 0) == 0,
+            "cleared arrival entry performed redundant cleanup")
+
+    latched = VM(files, history)
+    latched.properties["ArrivalHandling"] = True
+    latched.player.cell = None
+    latched.invoke("IntelEngine_StoryEngine", "CheckStoryNPCArrival")
+    require(not any(e[0] == "GetDistance" for e in latched.effects) and
+            latched.call_counts.get(("IntelEngine_StoryEngine", "CleanupStoryDispatch"), 0) == 0,
+            "latched arrival entry ran a second poll")
+    print("actual PEX story arrival poll: callback cleanup, cleared entry, and latched entry passed")
+    missing_target = VM(files, history)
+    missing_target.properties.update({"ActiveStoryType": "npc_interaction",
+        "ActiveSecondNPC": None, "SlotTaskTypes": ["story"] + [""] * 4,
+        "SlotTargetNames": ["Recipient"] + [""] * 4})
+    missing_target.invoke("IntelEngine_StoryEngine", "CheckStoryNPCArrival")
+    require(not any(e[0] == "GetDistance" for e in missing_target.effects),
+            "NPC-to-NPC arrival fell back to the player when its target was cleared")
+
+    for interleave_at in ("GetDistance", "GetArrivalThreshold"):
+        for action in ("cleanup", "replace", "phase"):
+            raced = VM(files, history)
+            raced.properties.update({"SlotTaskTypes": ["story"] + [""] * 4,
+                "SlotTargetNames": ["Player"] + [""] * 4})
+            raced.player.cell = None
+            raced.arrival_interleave_method = interleave_at
+            raced.arrival_interleave_action = action
+            raced.invoke("IntelEngine_StoryEngine", "CheckStoryNPCArrival")
+            threshold_calls = sum(e[0] == "GetArrivalThreshold" for e in raced.effects)
+            require(threshold_calls == (0 if interleave_at == "GetDistance" else 1),
+                    f"stale poll continued past {action} at {interleave_at}")
+            require(raced.call_counts.get(("IntelEngine_StoryEngine", "OnStoryNPCArrived"), 0) == 0,
+                    f"stale poll handled arrival after {action} at {interleave_at}")
+            if action == "cleanup":
+                require(not raced.properties["IsActive"] and raced.properties["ActiveStoryNPC"] is None,
+                        f"{interleave_at} callback cleanup was overwritten")
+            elif action == "replace":
+                require(raced.properties["ActiveStoryNPC"] is raced.replacement and
+                        raced.properties["DispatchGeneration"] == 1 and raced.properties["IsActive"],
+                        f"stale {interleave_at} stack operated on a replacement dispatch")
+            else:
+                require(raced.properties["ActiveStoryNPC"] is raced.agent and
+                        raced.properties["ActiveStoryType"] == "quest_guide" and
+                        raced.properties["DispatchGeneration"] == 0,
+                        f"stale {interleave_at} stack operated on a changed dispatch phase")
+
+    combat = VM(files, history)
+    combat.properties.update({"ArrivalHandling": True, "ActiveStoryType": "ambush_combat"})
+    combat.halt_before = "CheckAmbushCombat"
+    combat.invoke("IntelEngine_StoryEngine", "CheckStoryNPCArrival")
+    require(combat.halt_reached,
+            "latched ambush-combat dispatch skipped ongoing combat monitoring")
+    print("actual PEX arrival poll: cleanup/replacement interleavings and latched combat monitor passed")
 
 
 if __name__ == "__main__":
