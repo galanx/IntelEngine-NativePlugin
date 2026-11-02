@@ -236,6 +236,8 @@ def main():
             f"gossip chain did not emit one typed event per stored exchange: {chain_events!r}")
 
     director = SocialVM(files, history)
+    director.properties["SlotStates"] = [0] * 5
+    director.properties.update({f"AgentAlias{i:02d}": runner.ReferenceAlias() for i in range(5)})
     director_response = json.dumps({"fact1": "found a map", "fact2": "likes ale",
                                     "gossip": "", "shouldAct": True})
     director_payload = json.dumps({"socialType": "npc_interaction", "npc1Name": "Courier",

@@ -323,6 +323,96 @@ class VM:
             pc = nextpc
 
 
+class DirectorVM(VM):
+    def __init__(self, functions, history):
+        super().__init__(functions, history)
+        self.agent.name = "Nazeem"
+        self.player.cell = None
+        self.storage.clear()
+        self.properties.update({"StoryEngine": "IntelEngine_StoryEngine", "NPCTasks": "IntelEngine_NPCTasks",
+            "SlotStates": [0] * 5, "SlotTaskTypes": [""] * 5, "SlotTargetNames": [""] * 5,
+            "IsActive": False, "ActiveStoryNPC": None, "ActiveStoryType": "", "ActiveNarration": ""})
+        self.properties.update({f"AgentAlias{i:02d}": ReferenceAlias() for i in range(5)})
+
+    def invoke(self, script, name, args=()):
+        if (script == "IntelEngine_Core" and name in
+                ("InjectFact", "InitializeStuckTrackingForSlot", "InitOffScreenTracking")) or (
+                script == "IntelEngine_StoryEngine" and name == "ReapplyTravelPackage"):
+            self.effects.append((name, tuple(args)))
+            return None
+        return super().invoke(script, name, args)
+
+    def external(self, method, args, script):
+        if method == "StoryResponseGetField": return json.loads(args[0]).get(args[1], "")
+        if method == "ResolveDirectorActor": return self.agent if args[0] == self.agent.name else self.target
+        if method == "ParseFormID": return int(args[0])
+        if method == "GetForm": return self.agent
+        if method == "IsDashboardOpen": return False
+        if method in ("UnregisterForUpdate", "UnregisterForUpdateGameTime"):
+            self.effects.append((method, tuple(args)))
+            return None
+        if method == "Notification":
+            self.effects.append(("Notification", args[0]))
+            return None
+        return super().external(method, args, script)
+
+    def seek(self, narration):
+        payload = json.dumps({"storyType": "seek_player", "npcName": self.agent.name,
+                              "narration": narration, "response": "{}"})
+        self.invoke("IntelEngine_Core", "OnDashboardDispatchStory", ("", payload, 0.0, None))
+
+    def task_snapshot(self):
+        return (dict(self.storage), tuple((self.properties[f"AgentAlias{i:02d}"].actor,
+            self.properties["SlotStates"][i], self.properties["SlotTaskTypes"][i],
+            self.properties["SlotTargetNames"][i]) for i in range(5)),
+            tuple(self.properties[k] for k in ("ActiveStoryNPC", "ActiveStoryType",
+                "ActiveSecondNPC", "ActiveNarration", "DispatchGeneration", "IsActive")))
+
+
+def run_director_lite_checks(files, history):
+    def first_seek():
+        task = DirectorVM(files, history)
+        task.seek("First seek")
+        require(sum(task.properties[f"AgentAlias{i:02d}"].actor is task.agent for i in range(5)) == 1,
+                "first Director seek did not allocate exactly one slot")
+        return task
+
+    def require_refused(task, snapshot, effects_at):
+        require(task.task_snapshot() == snapshot, "refused Director request changed the original task")
+        extra = task.effects[effects_at:]
+        require([e for e in extra if e[0] == "Notification"] ==
+                [("Notification", "Nazeem is already busy (story). Cancel it first.")],
+                "busy Director request did not notify exactly once")
+        require(all(e[0] in ("Notification", "Trace") for e in extra),
+                "refused Director request wrote facts, narrated, or changed travel")
+
+    def director_seek_then_seek_is_refused():
+        task = first_seek()
+        snapshot, effects_at = task.task_snapshot(), len(task.effects)
+        task.seek("Second seek")
+        require_refused(task, snapshot, effects_at)
+
+    def run6_seek_seek_fetch_arrival():
+        task = first_seek()
+        snapshot, effects_at = task.task_snapshot(), len(task.effects)
+        task.seek("Second seek")
+        require_refused(task, snapshot, effects_at)
+        effects_at = len(task.effects)
+        payload = json.dumps({"actionName": "FetchPerson", "npcFormId": "1234", "targetName": "Alva"})
+        task.invoke("IntelEngine_Core", "OnDashboardExecuteAction", ("", payload, 0.0, None))
+        require_refused(task, snapshot, effects_at)
+        task.halt_before = "EnsureBuildingAccess"
+        task.invoke("IntelEngine_StoryEngine", "OnProximityArrived", ("0",))
+        require(task.call_counts.get(("IntelEngine_Core", "ClearSlot"), 0) == 1 and
+                task.properties["SlotStates"] == [0] * 5 and
+                all(task.properties[f"AgentAlias{i:02d}"].actor is None for i in range(5)),
+                "run6 arrival failed to clear only the original seek slot")
+
+    for case in (director_seek_then_seek_is_refused, run6_seek_seek_fetch_arrival):
+        case()
+        print("actual PEX " + case.__name__ + " PASS")
+
+
 def main():
     if len(sys.argv) != 4:
         raise SystemExit(__doc__)
@@ -591,6 +681,7 @@ def main():
     require(combat.halt_reached,
             "latched ambush-combat dispatch skipped ongoing combat monitoring")
     print("actual PEX arrival poll: cleanup/replacement interleavings and latched combat monitor passed")
+    run_director_lite_checks(files, history)
 
 
 if __name__ == "__main__":
