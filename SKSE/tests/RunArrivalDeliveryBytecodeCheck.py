@@ -369,6 +369,11 @@ def main():
             if method == "GetDistance": return self.distance
             if method == "ClearPackageOverride": self.packages.clear()
             if method == "SetLinkedRef": self.link = args[1]
+            if method == "StoryResponseGetField":
+                return {"actionName": "CancelCurrentTask", "npcFormId": "1234"}[args[1]]
+            if method == "ParseFormID": return int(args[0])
+            if method == "GetForm": return self.agent
+            if method == "PushDashboardState": return None
             return super().external(method, args, script)
 
     # SkyrimNet requires one YAML mapping per reflected parameter; it supplies no defaults.
@@ -410,6 +415,22 @@ def main():
                 ("EvaluatePackage", (cancelled.agent,)) in cancelled.effects,
                 "Travel cancellation did not reset native tracking and resume AI")
     print("actual PEX Travel cancel: YAML-mapped nearby guarded; forced nearby and mapped distant cleanup passed")
+
+    director = CancelVM(100.0)
+    director.halt_before = "PushDashboardState"
+    director.invoke("IntelEngine_Core", "OnDashboardExecuteAction", ("", "{}", 0.0, None))
+    require(director.properties["SlotStates"][0] == 0,
+            "Director cancel did not clear nearby Travel task")
+    require(("Trace", "Courier's task was cancelled.") in director.effects,
+            "Director successful cancel did not notify player")
+    director.effects.clear()
+    director.invoke("IntelEngine_Core", "OnDashboardExecuteAction", ("", "{}", 0.0, None))
+    require(("Trace", "Courier has no task to cancel.") in director.effects,
+            "Director repeated cancel did not notify no active task")
+    require(not any(e[0] == "Trace" and ("task was cancelled" in e[1] or "no task to cancel" in e[1])
+                    for e in blocked.effects + cancelled.effects),
+            "automatic cancellation emitted Director-only feedback")
+    print("actual PEX Director cancel: success and repeated no-task feedback passed; automatic feedback unchanged")
 
     story = VM(files, history)
     story.properties["SlotTaskTypes"][0] = "story"
