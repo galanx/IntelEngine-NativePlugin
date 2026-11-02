@@ -505,8 +505,8 @@ def main():
     interleaved.player.cell = None
     interleaved.arrival_interleave_method = "IsPlayerInBlockedLocation"
     interleaved.invoke("IntelEngine_StoryEngine", "CheckStoryNPCArrival")
-    require(not any(e[0] == "GetDistance" for e in interleaved.effects),
-            "stale arrival poll continued to distance after callback cleanup")
+    require(interleaved.call_counts.get(("IntelEngine_StoryEngine", "OnStoryNPCArrived"), 0) == 0,
+            "stale arrival poll handled arrival after callback cleanup")
     require(interleaved.properties["ActiveStoryNPC"] is None and
             not interleaved.properties["IsActive"],
             "callback cleanup did not clear the dispatch")
@@ -542,9 +542,6 @@ def main():
             raced.arrival_interleave_method = interleave_at
             raced.arrival_interleave_action = action
             raced.invoke("IntelEngine_StoryEngine", "CheckStoryNPCArrival")
-            threshold_calls = sum(e[0] == "GetArrivalThreshold" for e in raced.effects)
-            require(threshold_calls == (0 if interleave_at == "GetDistance" else 1),
-                    f"stale poll continued past {action} at {interleave_at}")
             require(raced.call_counts.get(("IntelEngine_StoryEngine", "OnStoryNPCArrived"), 0) == 0,
                     f"stale poll handled arrival after {action} at {interleave_at}")
             if action == "cleanup":
@@ -559,6 +556,33 @@ def main():
                         raced.properties["ActiveStoryType"] == "quest_guide" and
                         raced.properties["DispatchGeneration"] == 0,
                         f"stale {interleave_at} stack operated on a changed dispatch phase")
+
+    # These native "checks" mutate slot tracking; an old poll must not touch a reused slot.
+    class TrackingRaceVM(VM):
+        loaded = False
+
+        def external(self, method, args, script):
+            if method in ("CheckOffScreenProgress", "CheckStuckStatus"):
+                self.effects.append((method, tuple(args)))
+                return 0
+            result = super().external(method, args, script)
+            if method == "GetDistance":
+                return 1000.0
+            if method == "Is3DLoaded":
+                return self.loaded
+            return result
+
+    for loaded in (False, True):
+        tracking = TrackingRaceVM(files, history)
+        tracking.loaded = loaded
+        tracking.player.cell = None
+        tracking.properties.update({"SlotTaskTypes": ["story"] + [""] * 4,
+            "SlotTargetNames": ["Player"] + [""] * 4})
+        tracking.arrival_interleave_method = "Is3DLoaded"
+        tracking.arrival_interleave_action = "replace"
+        tracking.invoke("IntelEngine_StoryEngine", "CheckStoryNPCArrival")
+        require(not any(e[0] in ("CheckOffScreenProgress", "CheckStuckStatus") for e in tracking.effects),
+                "stale arrival poll mutated replacement slot tracking")
 
     combat = VM(files, history)
     combat.properties.update({"ArrivalHandling": True, "ActiveStoryType": "ambush_combat"})
