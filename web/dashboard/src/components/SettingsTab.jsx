@@ -394,7 +394,7 @@ function SettingsTab({ config, onSettingChange, pluginConfig, onPluginConfigChan
           label="Debug Mode"
           value={config.debugMode}
           onChange={v => onSettingChange('debugMode', v)}
-          hint="Enable debug notifications and logging."
+          hint="Shows IE debug messages as in-game notifications (always logged to Papyrus.0.log)."
         />
       </Accordion>
 
