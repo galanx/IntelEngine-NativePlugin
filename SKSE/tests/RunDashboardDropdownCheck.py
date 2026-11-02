@@ -101,6 +101,9 @@ SCRIPT = r"""
       check(submit(3).disabled && missingIn(3) === 'Fill required fields: Faction B', 'same-faction validation lost its label');
       await fill('input[placeholder="Faction B (e.g. ThalmorFaction)"]', 'ThalmorFaction');
       check(!submit(3).disabled && !missingIn(3), 'valid Political form remains blocked');
+      [...section(3).querySelectorAll('button')].find(e=>e.textContent.trim()==='Dispatch Political Event').click(); await pause();
+      const politicalPayload = JSON.parse(payloads.find(([name])=>name==='dispatchPolitics')[1]);
+      check(politicalPayload.eventType==='trade_deal' && politicalPayload.eventLabel==='Trade Deal', 'political producer omitted option label or key');
       await choose('Action NPC', 'Nazeem'); await choose('Action', 'GoToLocation');
       check(submit(4).disabled && missingIn(4) === 'Fill required fields: Destination', 'Action missing destination not listed');
       check([...section(4).querySelectorAll('label')].some(e => e.textContent.replace(/\s/g, '') === 'Destination*'), 'required Action variant not marked');

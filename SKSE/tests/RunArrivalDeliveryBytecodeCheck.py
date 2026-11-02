@@ -589,12 +589,13 @@ def run_director_lite_checks(files, history):
                 require(task.properties["IsNPCStoryActive"] and task.properties["SlotTaskTypes"][0] == "npc_social",
                         "Social notice without queued travel")
         for acted in (True, False):
+          for event in ({"event_type":"trade_deal"}, {"event_type":"trade_deal","event_label":"Trade deal"}):
             task = NoticeVM()
             task.acted = acted
             task.invoke("IntelEngine_Core", "OnDashboardDispatchPolitics",
-                        ("", '{"event_type":"trade_deal"}', 0.0, None))
+                        ("", json.dumps(event), 0.0, None))
             require([e for e in task.effects if e[0] == "Notification"] ==
-                    ([("Notification", "Political event recorded: trade_deal.")] if acted else []),
+                    ([("Notification", "Political event recorded: " + event.get("event_label", event["event_type"]) + ".")] if acted else []),
                     "director_social_and_political_success_notice: Political acted=" + str(acted))
             require(("political-record", acted) in task.effects, "Political native boundary not reached")
 
