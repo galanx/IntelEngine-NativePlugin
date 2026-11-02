@@ -62,7 +62,7 @@ def main():
     unresolved.storage.update({(unresolved.agent, "Intel_TaskType"): "travel",
         (unresolved.agent, "Intel_Target"): "Old destination", (unresolved.agent, "Intel_Slot"): 0})
     result = unresolved.invoke("IntelEngine_NPCTasks", "DeliverMessage",
-                               (unresolved.agent, "Jarl Balgruff", "A message", "none", "none"))
+                               (unresolved.agent, "Jarl Balgruff", "A message", "none", "none", "SkyrimNet dialogue action"))
     require(result is False, "unresolved recipient was accepted")
     require(not any(event[0] == "SendTaskNarration" for event in unresolved.effects),
             "unresolved-recipient rejection emitted NPC DirectNarration")
@@ -78,7 +78,7 @@ def main():
             "unresolved recipient did not report target-first rejection to the player")
     suggested = DeliveryVM(None, "Jarl Balgruuf")
     require(suggested.invoke("IntelEngine_NPCTasks", "DeliverMessage",
-                             (suggested.agent, "Jarl Balgruff", "A message", "none", "none")) is False,
+                             (suggested.agent, "Jarl Balgruff", "A message", "none", "none", "SkyrimNet dialogue action")) is False,
             "delivery with a name suggestion was accepted")
     require(any(event[0] == "Trace" and
                 event[1].endswith("Jarl Balgruff could not be found. The closest known name is Jarl Balgruuf.")
@@ -91,7 +91,7 @@ def main():
         ("EscortTarget", ("Jarl Balgruff", "home", 0)),
     ):
         sibling = DeliveryVM(None)
-        require(sibling.invoke("IntelEngine_NPCTasks", method, (sibling.agent, *args)) is False,
+        require(sibling.invoke("IntelEngine_NPCTasks", method, (sibling.agent, *args, "SkyrimNet dialogue action")) is False,
                 f"unresolved {method} target was accepted")
         require(any(event[0] == "SendTaskNarration" and
                     event[1][0] == "Jarl Balgruff could not be found."
@@ -103,7 +103,7 @@ def main():
     resolved = DeliveryVM(recipient)
     resolved.halt_before = "SetLinkedRef"
     resolved.invoke("IntelEngine_NPCTasks", "DeliverMessage",
-                    (resolved.agent, "Jarl Balgruuf", "A message", "none", "none"))
+                    (resolved.agent, "Jarl Balgruuf", "A message", "none", "none", "SkyrimNet dialogue action"))
     require(resolved.halt_reached, "resolved delivery did not reach actor travel setup")
     require(resolved.storage[(resolved.agent, "Intel_TargetNPC")] is recipient and
             resolved.storage[(resolved.agent, "Intel_DestMarker")] is recipient,

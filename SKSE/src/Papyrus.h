@@ -215,7 +215,8 @@ namespace IntelEngine::Papyrus {
     // Push slot state from Papyrus to C++ SlotTracker.
     // Called by Core.AllocateSlot, Core.SetSlotState.
     void UpdateSlotState(RE::StaticFunctionTag*, int slot, RE::Actor* agent, int newState,
-                         RE::BSFixedString taskType, RE::BSFixedString targetName);
+                         RE::BSFixedString taskType, RE::BSFixedString targetName,
+                         RE::BSFixedString origin, float startTime, RE::BSFixedString reason);
 
     // Clear a slot in C++ SlotTracker.
     // Called by Core.ClearSlot.

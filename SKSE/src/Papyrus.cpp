@@ -1449,9 +1449,10 @@ namespace IntelEngine::Papyrus {
     // ==========================================================================
 
     void UpdateSlotState(RE::StaticFunctionTag*, int slot, RE::Actor* agent, int newState,
-                         RE::BSFixedString taskType, RE::BSFixedString targetName) {
+                         RE::BSFixedString taskType, RE::BSFixedString targetName,
+                         RE::BSFixedString origin, float startTime, RE::BSFixedString reason) {
         SlotTracker::GetSingleton()->UpdateSlot(slot, agent, newState,
-            taskType.c_str(), targetName.c_str());
+            taskType.c_str(), targetName.c_str(), origin.c_str(), startTime, reason.c_str());
     }
 
     void ClearSlotState(RE::StaticFunctionTag*, int slot) {

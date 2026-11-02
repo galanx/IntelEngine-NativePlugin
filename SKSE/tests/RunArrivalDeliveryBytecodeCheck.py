@@ -494,7 +494,7 @@ def main():
     story.properties.update({f"AgentAlias{i:02d}": ReferenceAlias() for i in range(5)})
     story.stop_on_dispatch_reset = True
     story.invoke("IntelEngine_StoryEngine", "DispatchToTarget",
-                 (story.agent, story.player, "A fresh arrival", "story"))
+                 (story.agent, story.player, "A fresh arrival", "story", "Story engine"))
     require(story.dispatch_reset_seen and story.properties["ArrivalHandling"] is False,
             "actual new dispatch did not reset arrival latch")
     print("actual PEX delivery, absent-player return, and story arrival latch paths passed")
