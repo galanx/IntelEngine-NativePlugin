@@ -5,6 +5,7 @@
  */
 
 #include "ProximityMonitor.h"
+#include "ProximityDistance.h"
 #include "AsyncDispatch.h"
 
 #include <chrono>
@@ -41,6 +42,7 @@ namespace IntelEngine {
 
         std::unique_lock lock(m_mutex);
         auto& w = m_slots[slot];
+        w = Watch{};
         w.armed = true;
         w.agentFormID = agent->GetFormID();
         w.targetFormID = target->GetFormID();
@@ -56,14 +58,25 @@ namespace IntelEngine {
                      w.threshold, w.zTolerance, scriptName, callbackFn);
     }
 
+    float ProximityMonitor::GetAcceptedThreshold(RE::FormID agentFormID,
+                                                  RE::FormID targetFormID) const {
+        std::shared_lock lock(m_mutex);
+        for (const auto& watch : m_slots) {
+            if (watch.agentFormID == agentFormID &&
+                watch.targetFormID == targetFormID &&
+                watch.acceptedThreshold > 0.0f) {
+                return watch.acceptedThreshold;
+            }
+        }
+        return 0.0f;
+    }
+
     void ProximityMonitor::Disarm(int slot) {
         if (slot < 0 || slot >= MAX_SLOTS) return;
 
         std::unique_lock lock(m_mutex);
         auto& w = m_slots[slot];
-        if (!w.armed) return;
-
-        logger::info("ProximityMonitor::Disarm slot={}", slot);
+        if (w.armed) logger::info("ProximityMonitor::Disarm slot={}", slot);
         w = Watch{};
     }
 
@@ -111,8 +124,9 @@ namespace IntelEngine {
      * 3. For each armed slot, resolve agent+target via FormID lookup (returns nullptr
      *    if the form was deleted). Skip until both references are 3D-loaded; off-screen
      *    arrival is handled by the Papyrus 3s poll's time-based estimator (OffScreenTracker).
-     * 4. Compute horizontal (XY) distance and absolute Z delta. Fire when both are
-     *    within the slot's threshold.
+     * 4. Check actor radial distance (matching Papyrus GetDistance) using
+     *    actual world velocity and the shared latency budget, or unchanged
+     *    marker XY distance, plus the separate Z tolerance.
      * 5. On fire: claim the slot by clearing its armed flag under unique_lock and
      *    capture the callback, then invoke the Papyrus VM synchronously. Clearing
      *    inside the lock makes this a single-shot per Arm without needing a separate
@@ -152,14 +166,22 @@ namespace IntelEngine {
             auto tPos = target->GetPosition();
             float dx = aPos.x - tPos.x;
             float dy = aPos.y - tPos.y;
-            float horiz = std::sqrt(dx * dx + dy * dy);
             float dz = std::fabs(aPos.z - tPos.z);
+            const bool actorTarget = target->As<RE::Actor>() != nullptr;
+            float threshold = w.threshold;
+            if (actorTarget) {
+                RE::NiPoint3 velocity{};
+                agent->GetLinearVelocity(velocity);
+                const float speed = std::sqrt(velocity.x * velocity.x +
+                                              velocity.y * velocity.y +
+                                              velocity.z * velocity.z);
+                threshold = GetActorArrivalThreshold(w.threshold, speed);
+            }
+            if (!IsWithinProximityDistance(dx, dy, dz, threshold, w.zTolerance,
+                                           actorTarget)) continue;
 
-            if (horiz > w.threshold || dz > w.zTolerance) continue;
-
-            // Claim + disarm atomically; a concurrent Arm on the same slot would
-            // have bumped the agentFormID, so we re-check to avoid firing a stale
-            // callback against the new watch's agent.
+            // Claim + disarm atomically; retain the accepted threshold until
+            // Papyrus completes its matching arrival recheck or disarms the watch.
             std::string qeid, script, fn;
             {
                 std::unique_lock lk(m_mutex);
@@ -171,12 +193,14 @@ namespace IntelEngine {
                 qeid = live.questEditorId;
                 script = live.scriptName;
                 fn = live.callbackFn;
-                live = Watch{};  // single-shot per Arm
+                live.acceptedThreshold = threshold;
+                live.armed = false;
             }
 
+            const float horiz = std::sqrt(dx * dx + dy * dy);
             logger::info("ProximityMonitor: slot {} arrived agent={:08X} target={:08X} "
-                         "horiz={:.1f}u dz={:.1f}u -> {}::{}",
-                         slot, w.agentFormID, w.targetFormID, horiz, dz, script, fn);
+                         "horiz={:.1f}u dz={:.1f}u threshold={:.1f}u -> {}::{}",
+                         slot, w.agentFormID, w.targetFormID, horiz, dz, threshold, script, fn);
 
             AsyncDispatch::ExecuteQuestFunctionString(qeid, script, fn, std::to_string(slot));
         }

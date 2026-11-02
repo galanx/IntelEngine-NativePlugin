@@ -1,4 +1,5 @@
 import React from 'react';
+import GameTime from './GameTime';
 
 const STATUS_COLORS = {
   Alliance: 'text-emerald-400',
@@ -31,7 +32,7 @@ function MoraleBar({ value, label }) {
   );
 }
 
-function PoliticsTab({ politics, sendAction }) {
+function PoliticsTab({ politics, calendar, sendAction }) {
   if (!politics || !politics.enabled) {
     return (
       <div className="p-3">
@@ -119,6 +120,7 @@ function PoliticsTab({ politics, sendAction }) {
                                   {victorName ? `${victorName} wins` : 'Draw'}
                                   {' · '}-{b.attacker_losses}/-{b.defender_losses}
                                 </span>
+                                <GameTime time={b.time} calendar={calendar} />
                               </div>
                             </div>
                           );
@@ -142,6 +144,7 @@ function PoliticsTab({ politics, sendAction }) {
                     </span>
                     <span className="text-xs text-gray-300 truncate">{e.description}</span>
                   </div>
+                  <GameTime time={e.time} calendar={calendar} />
                 </div>
               ))}
             </div>
@@ -213,6 +216,9 @@ function PoliticsTab({ politics, sendAction }) {
               <div className="text-[10px] text-gray-500">
                 {TYPE_LABELS[f.type] || f.type} &middot; {f.hold}
               </div>
+              {f.leaders?.length > 0 && (
+                <div className="text-[10px] text-gray-400 mt-0.5">Leaders: {f.leaders.join(', ')}</div>
+              )}
             </div>
           ))}
         </div>
@@ -240,6 +246,7 @@ function PoliticsTab({ politics, sendAction }) {
                   </span>
                 </div>
                 <div className="text-xs text-gray-300 leading-relaxed">{e.description}</div>
+                <GameTime time={e.time} calendar={calendar} />
                 <div className="text-[10px] text-gray-600 mt-0.5">
                   {factionNames[e.faction_a] || e.faction_a}
                   {e.faction_b ? ` \u2194 ${factionNames[e.faction_b] || e.faction_b}` : ''}

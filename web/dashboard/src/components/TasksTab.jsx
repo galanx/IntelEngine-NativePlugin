@@ -1,5 +1,6 @@
 import React from 'react';
 import SlotCard from './SlotCard';
+import GameTime from './GameTime';
 
 const SCHED_TASK_ICONS = {
   travel: '\u{1F5FA}',
@@ -7,7 +8,7 @@ const SCHED_TASK_ICONS = {
   deliver_message: '\u{1F4DC}',
 };
 
-function TasksTab({ tasks, scheduled, sendAction }) {
+function TasksTab({ tasks, scheduled, calendar, sendAction }) {
   const activeTasks = tasks.filter(s => s.state !== 0);
   const emptyTasks = tasks.filter(s => s.state === 0 && s.cooldownRemaining <= 0);
   const cooldownTasks = tasks.filter(s => s.state === 0 && s.cooldownRemaining > 0);
@@ -30,6 +31,7 @@ function TasksTab({ tasks, scheduled, sendAction }) {
               <SlotCard
                 key={slot.index}
                 slot={slot}
+                calendar={calendar}
                 onCancel={() => sendAction('cancelTask', { slot: slot.index })}
               />
             ))}
@@ -102,6 +104,9 @@ function TasksTab({ tasks, scheduled, sendAction }) {
                   {sched.destination ? ` \u2192 ${sched.destination}` : ''}
                   {sched.targetName ? ` (${sched.targetName})` : ''}
                 </div>
+                <div className="text-[10px] text-gray-500 mt-0.5">{sched.origin || 'Schedule'}</div>
+                <GameTime time={sched.startTime} calendar={calendar} />
+                {sched.reason && <div className="text-xs text-gray-400 mt-1 italic">{sched.reason}</div>}
                 {(sched.timeDesc || sched.schedStatus) && (
                   <div className="text-xs text-gray-500 mt-0.5">
                     {sched.timeDesc}
