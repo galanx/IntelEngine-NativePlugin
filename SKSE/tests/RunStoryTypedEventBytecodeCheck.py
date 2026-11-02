@@ -193,6 +193,8 @@ def main():
             "social arrival lost dialogue-driving DirectNarration")
 
     cancelled = SocialVM(files, history)
+    cancelled.properties.update({"IsActive": False, "ActiveStoryNPC": None,
+        "ActiveStoryType": "", "ActiveNarration": ""})
     cancelled.invoke("IntelEngine_StoryEngine", "OnNPCInteractionResponse",
                      (social_response(cancelled, "npc_interaction"), 1))
     cancelled.cancel_on_wait = True

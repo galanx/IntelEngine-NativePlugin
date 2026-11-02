@@ -522,8 +522,28 @@ def run_director_lite_checks(files, history):
                         for e in task.effects[task.resumed_effects_at:]),
                         "resumed cancelled dispatch re-armed tracking or stopped the new scheduler")
 
+    def cancel_story_injects_closing_fact():
+        for narration in ("set out to find Prisoner -- to say hi", ""):
+            task = DirectorVM(files, history)
+            task.seek(narration or "Initial seek")
+            task.properties["ActiveNarration"] = narration
+            effects_at = len(task.effects)
+            require(task.invoke("IntelEngine_Core", "CancelCurrentTask", (task.agent, True)),
+                    "active story cancellation failed")
+            require([e for e in task.effects[effects_at:] if e[0] == "InjectFact"] ==
+                    ([("InjectFact", (task.agent, "stopped before finishing: " + narration))]
+                     if narration else []),
+                    "story cancellation did not inject exactly one closing fact with the original narration")
+            require(not task.properties["IsActive"] and task.properties["ActiveNarration"] == "",
+                    "closing fact prevented story cleanup")
+            effects_at = len(task.effects)
+            require(not task.invoke("IntelEngine_Core", "CancelCurrentTask", (task.agent, True)) and
+                    not any(e[0] == "InjectFact" for e in task.effects[effects_at:]),
+                    "repeated cancellation injected a duplicate closing fact")
+
     for case in (director_seek_then_seek_is_refused, run6_seek_seek_fetch_arrival,
-                 director_story_while_story_active, cancel_story_task_ends_story):
+                 director_story_while_story_active, cancel_story_task_ends_story,
+                 cancel_story_injects_closing_fact):
         case()
         print("actual PEX " + case.__name__ + " PASS")
 
