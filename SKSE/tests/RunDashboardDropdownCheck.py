@@ -60,13 +60,67 @@ SCRIPT = r"""
     window.payloads = [];
     window.escapeCapture = [];
     window.magelight = { send: (name, value) => escapeCapture.push([name, value]) };
-    for (const name of ['dispatchStory','dispatchNpcSocial','dispatchPolitics','executeAction','cancelTask','changePluginConfig'])
+    for (const name of ['dispatchStory','dispatchNpcSocial','dispatchPolitics','executeAction','cancelTask','changePluginConfig','generateDirector'])
       window['onDashboard_' + name] = json => payloads.push([name, json]);
     window.updateFullState(JSON.stringify({config:{}, pluginConfig:{'ui.scale':1},
       loadedNpcs:Array.from({length:30},(_,i)=>({formId:108196+i,name:i?'Guard '+i:'Nazeem'})),
       actions:[{name:'GoToLocation',params:[]},{name:'ReportPlayerConduct',params:[{name:'sentiment',enum:['strongly_positive','positive','negative','strongly_negative']},{name:'factionId'},{name:'reason'}]},{name:'ChangeSpeed',params:[]}],
       politics:{factions:Array.from({length:5},(_,i)=>({id:i?'ThalmorFaction'+(i===1?'':i):'StormcloakFaction',name:i?'Thalmor '+i:'Stormcloaks'}))}}));
     await pause(); clickText('Director'); await pause();
+    if (location.hash === '#director_generate_merge_and_stop') {
+      payloads.length = 0;
+      check(button('Story type').placeholder==='(auto)' && button('Story type').value==='', 'untouched type is not auto');
+      await fill('input[placeholder="NPC name (e.g. Saadia)"]','Saadia');
+      await fill('section:nth-of-type(1) textarea','Wants to discuss a plan');
+      await choose('Story type','Quest');
+      await choose('Sub-type','rescue');
+      clickText('Generate');
+      await pause();
+      check(document.querySelector('section:nth-of-type(1) textarea').matches(':disabled') &&
+        [...document.querySelectorAll('section:nth-of-type(1) button')].find(e=>e.textContent.trim()==='Dispatch Story').matches(':disabled'),
+        'generating form remained editable');
+      const request = JSON.parse(payloads.at(-1)[1]);
+      check(payloads.at(-1)[0] === 'generateDirector' && request.fields.storyType === 'quest' &&
+        request.fields.questSubType === 'rescue' && request.fields.enemyType === '' &&
+        request.options.npcs.includes('Saadia'), 'generate omitted touched/auto/options contract');
+      window.directorGenerateResult(JSON.stringify({requestId:request.requestId,form:'story',ok:true,
+        fields:{storyType:'quest',npcName:'Other',narration:'Wants to discuss a careful plan',
+          questSubType:'rescue',enemyType:'bandit',questLocation:'Fort Greymoor'}}));
+      await pause();
+      check(document.querySelector('input[placeholder="NPC name (e.g. Saadia)"]').value==='Saadia' &&
+        document.querySelector('section:nth-of-type(1) textarea').value==='Wants to discuss a careful plan' &&
+        button('Story type').value==='Quest' && button('Sub-type').value==='rescue' &&
+        button('Enemy type').value==='bandit', 'generated merge changed identity/touched dropdown or lost text');
+      clickText('Generate'); await pause(); const stopped=JSON.parse(payloads.at(-1)[1]); clickText('Stop'); await pause();
+      window.directorGenerateResult(JSON.stringify({requestId:stopped.requestId,form:'story',ok:true,fields:{narration:'late'}}));
+      await pause();
+      check(document.querySelector('section:nth-of-type(1) textarea').value==='Wants to discuss a careful plan','Stop applied late result');
+      clickText('Clear'); await pause();
+      check(document.querySelector('input[placeholder="NPC name (e.g. Saadia)"]').value==='' &&
+        button('Story type').value==='' && !payloads.some(([name])=>name.startsWith('dispatch')),'Clear failed or Generate dispatched');
+      const formButton = (index, text) => [...document.querySelectorAll(`section:nth-of-type(${index}) button`)].find(e=>e.textContent.trim()===text);
+      for (const [index, form, fields, label, expected] of [
+        [2, 'social', {npc1Name:'Nazeem',npc2Name:'Guard 1',socialType:'npc_gossip',narration:'Discussed the missing shipment',gossip:'saw a suspicious shipment'}, 'Social type', 'Gossip'],
+        [3, 'political', {factionA:'StormcloakFaction',factionB:'ThalmorFaction',eventType:'insult',description:'A public diplomatic insult',relationDelta:-5}, 'Political event type', 'Insult']
+      ]) {
+        formButton(index,'Generate').click(); await pause();
+        const generated=JSON.parse(payloads.at(-1)[1]);
+        window.directorGenerateResult(JSON.stringify({requestId:generated.requestId,form,ok:true,fields}));
+        await pause();
+        check(button(label).value===expected && document.querySelector(`section:nth-of-type(${index}) textarea`).value===
+          (fields.narration || fields.description), `${form}: auto type and dependent draft did not merge`);
+        formButton(index,'Generate').click(); await pause();
+        const failed=JSON.parse(payloads.at(-1)[1]);
+        window.directorGenerateResult(JSON.stringify({requestId:failed.requestId,form,ok:false,fields:{},error:'Generation failed'}));
+        await pause();
+        check(button(label).value===expected && formButton(index,'Generate'), `${form}: failure damaged draft or blocked retry`);
+        formButton(index,'Clear').click(); await pause();
+        check(button(label).value==='' && document.querySelector(`section:nth-of-type(${index}) textarea`).value==='', `${form}: Clear did not reset`);
+      }
+      check(payloads.every(([name])=>name==='generateDirector'), 'generation dispatched an action');
+      document.getElementById('result').textContent=JSON.stringify({status:'PASS',checks:['director_generate_merge_and_stop'],payloads});
+      return;
+    }
     await busy_confirm_cancel_dispatch();
     if (location.hash === '#busy') {
       document.getElementById('result').textContent=JSON.stringify({status:'PASS',checks:['busy_confirm_cancel_dispatch'],payloads});
@@ -265,10 +319,11 @@ with tempfile.TemporaryDirectory(prefix='ie-dropdowns-') as directory:
     page = (folder / 'index.html').read_text(encoding='utf-8')
     page = page.replace('</body>', '<pre id="result">RUNNING</pre><script>' + SCRIPT + '</script></body>')
     (folder / 'index.html').write_text(page, encoding='utf-8')
+    scenario = next((arg.split('=',1)[1] for arg in sys.argv if arg.startswith('--scenario=')), '')
     completed = subprocess.run([str(CHROME), '--headless=new', '--no-sandbox', '--disable-gpu',
         '--allow-file-access-from-files', '--no-first-run', '--window-size=' + ('1600,3000' if '--busy-only' in sys.argv else '1600,1000'),
         '--user-data-dir=' + str(folder / 'profile'), '--virtual-time-budget=90000', '--dump-dom',
-        (folder / 'index.html').as_uri() + ('#busy' if '--busy-only' in sys.argv else '')], capture_output=True, text=True, encoding='utf-8', timeout=60)
+        (folder / 'index.html').as_uri() + ('#busy' if '--busy-only' in sys.argv else '#' + scenario if scenario else '')], capture_output=True, text=True, encoding='utf-8', timeout=60)
     start = completed.stdout.find('<pre id="result">')
     result = html.unescape(completed.stdout[start + len('<pre id="result">'):].split('</pre>', 1)[0]) if start >= 0 else ''
     if not result.startswith('{'):

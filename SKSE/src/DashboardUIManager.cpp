@@ -20,10 +20,12 @@
 #include <fstream>
 #include <nlohmann/json.hpp>
 #include <cstdint>
+#include <algorithm>
 #include <limits>
 #include <optional>
 #include <sstream>
 #include <utility>
+#include <stdexcept>
 
 namespace IntelEngine {
 
@@ -76,6 +78,7 @@ namespace IntelEngine {
             {"onDashboard_dispatchPolitics", OnDispatchPoliticsStatic},
             {"onDashboard_executeAction", OnExecuteActionStatic},
             {"onDashboard_toggleAction", OnToggleActionStatic},
+            {"onDashboard_generateDirector", OnGenerateDirectorStatic},
         };
 
         std::unique_ptr<IUiHost> host;
@@ -548,7 +551,7 @@ namespace IntelEngine {
             pollCondition_.wait_for(lock, kPollIntervalMs, [this] {
                 const bool ready = requestedOpen_ && isOpen_.load() && domReady_.load() && !shuttingDown_;
                 return stopPolling_.load() || pendingOpen_ || pendingClose_ ||
-                       pendingReload_ || (ready && !gameTaskQueued_ &&
+                       pendingReload_ || !pendingDirectorResults_.empty() || (ready && !gameTaskQueued_ &&
                            (pendingFlush_ || pendingFullStateSet_ ||
                             pendingSlotPayloadSet_ || pendingFullStatePayloadSet_));
             });
@@ -590,6 +593,8 @@ namespace IntelEngine {
             bool fullState = canProcessState && std::exchange(pendingFullStateSet_, false);
             std::string state;
             if (fullState) state = std::move(pendingFullState_);
+            auto directorResults = std::move(pendingDirectorResults_);
+            pendingDirectorResults_.clear();
             const bool queueGameTask = flush || fullState;
             if (queueGameTask) gameTaskQueued_ = true;
             lock.unlock();
@@ -654,6 +659,15 @@ namespace IntelEngine {
                               requestedOpen_ && isOpen_.load() && domReady_.load();
                 }
                 if (current && host_) host_->Call("updateFullState", fullStatePayload);
+            }
+            for (const auto& [resultGeneration, payload] : directorResults) {
+                bool current;
+                {
+                    std::lock_guard<std::mutex> resultLock(mutex_);
+                    current = !shuttingDown_ && generation_ == resultGeneration && requestedOpen_ &&
+                              isOpen_.load() && domReady_.load();
+                }
+                if (current && host_) host_->Call("directorGenerateResult", payload);
             }
             if (queueGameTask) {
                 auto* task = SKSE::GetTaskInterface();
@@ -960,6 +974,57 @@ namespace IntelEngine {
 
         logger::debug("[Dashboard] Sent ModEvent: {} str={} num={}",
                     eventName, strArg, numArg);
+    }
+
+    void DashboardUIManager::OnGenerateDirectorStatic(const char* jsonArg) {
+        auto* mgr = GetSingleton();
+        if (!mgr->acceptingCallbacks_.load()) return;
+        try {
+            auto request = nlohmann::json::parse(jsonArg ? jsonArg : "{}");
+            const auto id = request.at("requestId").get<std::string>();
+            const auto form = request.at("form").get<std::string>();
+            if (id.empty() || (form != "story" && form != "social" && form != "political")) return;
+            std::uint64_t generation;
+            { std::lock_guard<std::mutex> lock(mgr->mutex_);
+              if (mgr->shuttingDown_ || !mgr->requestedOpen_ || !mgr->isOpen_ || !mgr->domReady_) return;
+              generation = mgr->generation_; }
+            auto queue = [mgr, generation, id, form](nlohmann::json fields, std::string error) {
+                nlohmann::json result{{"requestId", id}, {"form", form}, {"ok", error.empty()},
+                                      {"fields", std::move(fields)}, {"error", std::move(error)}};
+                { std::lock_guard<std::mutex> lock(mgr->mutex_);
+                  if (mgr->generation_ != generation || mgr->shuttingDown_) return;
+                  mgr->pendingDirectorResults_.emplace_back(generation, result.dump()); }
+                mgr->pollCondition_.notify_one();
+            };
+            if (!SkyrimNetAPI::SendCustomPromptToLLM) { queue({}, "Generate unavailable"); return; }
+            const auto context = request.dump();
+            const bool queued = SkyrimNetAPI::SendCustomPromptToLLM("intel_director_generate", "", context.c_str(),
+                [queue, request](const char* response, int success) mutable {
+                    if (!success) { queue({}, "Generation failed"); return; }
+                    try {
+                        auto fields = nlohmann::json::parse(response ? response : "");
+                        auto schema = request.value("schema", nlohmann::json::object());
+                        const auto typeKey = request["form"] == "story" ? "storyType" :
+                                             request["form"] == "social" ? "socialType" : "eventType";
+                        auto type = fields.value(typeKey, request.value("fields", nlohmann::json::object()).value(typeKey, ""));
+                        auto variants = request.value("variants", nlohmann::json::object());
+                        if (variants.contains(type)) schema.update(variants[type]);
+                        if (!fields.is_object() || fields.empty()) throw std::runtime_error("invalid fields");
+                        for (auto& [key, value] : fields.items()) {
+                            if (!schema.contains(key)) throw std::runtime_error("unknown field");
+                            const auto& spec = schema[key];
+                            const auto kind = spec.value("type", "");
+                            if ((kind == "text" || kind == "select") != value.is_string() ||
+                                (kind == "number" && !value.is_number())) throw std::runtime_error("invalid type");
+                            if (spec.contains("options") &&
+                                std::find(spec["options"].begin(), spec["options"].end(), value) == spec["options"].end())
+                                throw std::runtime_error("invalid option");
+                        }
+                        queue(std::move(fields), "");
+                    } catch (...) { queue({}, "Malformed generation result"); }
+                });
+            if (!queued) queue({}, "Generation unavailable");
+        } catch (...) {}
     }
 
     // =========================================================================
