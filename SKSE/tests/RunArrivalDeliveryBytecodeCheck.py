@@ -169,6 +169,7 @@ class VM:
         raise ValueError("unsupported StorageUtil native " + method)
 
     def external(self, method, args, script):
+        if method == "IsDashboardOpen": return False
         if method == self.arrival_interleave_method:
             self.arrival_interleave_method = None
             if self.arrival_interleave_action == "replace":
@@ -349,7 +350,6 @@ class DirectorVM(VM):
         if method == "ResolveDirectorActor": return self.agent if args[0] == self.agent.name else self.target
         if method == "ParseFormID": return int(args[0])
         if method == "GetForm": return self.agent
-        if method == "IsDashboardOpen": return False
         if method in ("UnregisterForUpdate", "UnregisterForUpdateGameTime"):
             self.effects.append((method, tuple(args)))
             return None
