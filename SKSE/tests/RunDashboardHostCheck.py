@@ -116,6 +116,7 @@ with tempfile.TemporaryDirectory(prefix="dashboard-host-") as temp:
 #include <cstdint>
 #include <string>
 #include <vector>
+#include <sstream>
 namespace SKSE {
 using PluginHandle = std::uint32_t;
 struct TaskInterface { template<class F> void AddTask(F&& f) { f(); } };
@@ -124,7 +125,14 @@ inline TaskInterface* GetTaskInterface() { static TaskInterface task; return &ta
 #include "PrismaUI_API.h"
 namespace logger {
 inline std::vector<std::string> infoMessages;
-template<class... T> void info(const char* message, T&&...) { infoMessages.emplace_back(message); }
+inline std::vector<std::string> generateMessages;
+template<class... T> void info(const char* message, T&&... args) {
+    infoMessages.emplace_back(message);
+    if (std::string(message).find("[Dashboard] Generate ") == 0) {
+        std::ostringstream line; line << message; ((line << ' ' << args), ...);
+        generateMessages.push_back(line.str());
+    }
+}
 template<class... T> void warn(const char*, T&&...) {}
 template<class... T> void error(const char*, T&&...) {}
 template<class... T> void debug(const char*, T&&...) {}
@@ -738,6 +746,11 @@ void testManager() {
     const char* storyRequest = R"({"requestId":"bad","form":"story","fields":{"npcName":"Brey","storyType":"seek_player","narration":""},"touched":{},"schema":{"npcName":{"type":"text"},"storyType":{"type":"select","options":["seek_player"]},"narration":{"type":"text"}},"variants":{},"options":{"npcs":["Brey"],"factions":[]}})";
     auto drainDirector = [&] { m->stopPolling_=false; stopOnForeground=&m->stopPolling_; m->HotkeyPollLoop(); stopOnForeground=nullptr; };
     auto generate = [&] { DashboardUIManager::OnGenerateDirectorStatic(storyRequest); };
+    DashboardUIManager::OnGenerateDirectorStatic(R"({"requestId":"audit","form":"story","outcome":{"ok":true,"filled":["npcName"],"blank":["narration"],"applied":["narration"],"rejected":{"enemyType":"Invalid option"}}})");
+    assert(logger::generateMessages.size()==1);
+    assert(logger::generateMessages.back().find(R"("rejected":{"enemyType":"Invalid option"})") != std::string::npos);
+    assert(logger::generateMessages.back().find(R"("applied":["narration"])") != std::string::npos);
+    assert(!directorCompletion);
     generate();
     if (directorCompletion) directorCompletion("not-json",1);
     drainDirector();
