@@ -323,23 +323,21 @@ function DirectorTab({ loadedNpcs, tasks = [], actions, factions = [], sendActio
       const { form, draft: old, schema, variants, options } = request;
       const typeKey = form === 'story' ? 'storyType' : form === 'social' ? 'socialType' : 'eventType';
       const typeOptions = schema[typeKey]?.options || [];
-      const nextType = touched[typeKey] ? old[typeKey] : result.fields[typeKey] ?? old[typeKey];
-      if (typeOptions.length && !typeOptions.includes(nextType)) { setGenerateError('Invalid generated option; try again.'); return; }
+      const nextType = touched[typeKey] && typeOptions.includes(old[typeKey]) ? old[typeKey] : typeOptions.includes(result.fields[typeKey]) ? result.fields[typeKey] : old[typeKey];
       const allowed = { ...schema, ...(variants[nextType] || {}) };
       const next = { ...old };
       for (const [key, value] of Object.entries(result.fields)) {
         if (!allowed[key] || (['npcName','npc1Name','npc2Name','subject','sender','victimName','factionA','factionB'].includes(key) && old[key]) ||
-            (touched[key] && allowed[key].type === 'select')) continue;
-        if (allowed[key].type === 'number' ? typeof value !== 'number' : typeof value !== 'string') { setGenerateError('Invalid generated field; try again.'); return; }
-        if (allowed[key].type === 'select' && !allowed[key].options.includes(value)) { setGenerateError('Invalid generated option; try again.'); return; }
+            (touched[key] && old[key])) { audit.rejected[key] = !allowed[key] ? 'Unknown field' : 'Preserved or unchanged'; continue; }
+        if (allowed[key].type === 'number' ? typeof value !== 'number' : typeof value !== 'string') { audit.rejected[key] = 'Invalid type'; continue; }
+        if (allowed[key].type === 'select' && !allowed[key].options.includes(value)) { audit.rejected[key] = 'Invalid option'; continue; }
         if ((['npcName','npc1Name','npc2Name','subject','sender','victimName'].includes(key) && value && !options.npcs.includes(value)) ||
-            (['factionA','factionB'].includes(key) && value && !options.factions.some(f=>f.id===value))) { setGenerateError('Invalid generated identity; try again.'); return; }
-        if (key === 'relationDelta' && (!Number.isInteger(value) || value < -15 || value > 15)) { setGenerateError('Invalid relation change; try again.'); return; }
+            (['factionA','factionB'].includes(key) && value && !options.factions.some(f=>f.id===value))) { audit.rejected[key] = 'Invalid identity'; continue; }
+        if (key === 'relationDelta' && (!Number.isInteger(value) || value < -15 || value > 15)) { audit.rejected[key] = 'Invalid relation change'; continue; }
+        const other = {factionA:'factionB',factionB:'factionA',npc1Name:'npc2Name',npc2Name:'npc1Name'}[key]; if (other && value && value.trim().toLowerCase() === (next[other] || '').trim().toLowerCase()) { audit.rejected[key] = 'Identities must be distinct'; continue; }
         next[key] = value;
       }
       next[typeKey] = nextType;
-      if ((form === 'political' && next.factionA && next.factionA === next.factionB) ||
-          (form === 'social' && next.npc1Name && next.npc2Name && next.npc1Name.trim().toLowerCase() === next.npc2Name.trim().toLowerCase())) { setGenerateError('Generated identities must be distinct; try again.'); return; }
       if (form === 'story') { setStoryNpc(next.npcName); setStoryType(next.storyType); setStoryNarration(next.narration); setStoryFields(Object.fromEntries(Object.keys(allowed).filter(k => !['npcName','storyType','narration'].includes(k)).map(k => [k,next[k]]))); }
       if (form === 'social') { setSocialNpc1(next.npc1Name); setSocialNpc2(next.npc2Name); setSocialType(next.socialType); setSocialNarration(next.narration); setSocialFields(Object.fromEntries(Object.keys(allowed).filter(k => !['npc1Name','npc2Name','socialType','narration'].includes(k)).map(k => [k,next[k]]))); }
       setTouched(t=>({...t,[typeKey]:true}));
@@ -358,6 +356,7 @@ function DirectorTab({ loadedNpcs, tasks = [], actions, factions = [], sendActio
     const fields = story ? { npcName:storyNpc, storyType, narration:storyNarration, ...storyFields } :
       social ? { npc1Name:socialNpc1, npc2Name:socialNpc2, socialType, narration:socialNarration, ...socialFields } :
         { factionA:polFactionA, factionB:polFactionB, eventType:polEventType, description:polDescription, relationDelta:polDelta };
+    for (const f of defs) fields[f.key] ??= '';
     const draft = { ...fields };
     for (const f of defs) if (f.type === 'select' && !touched[f.key]) fields[f.key] = '';
     const typeKey = story ? 'storyType' : social ? 'socialType' : 'eventType';

@@ -121,25 +121,37 @@ SCRIPT = r"""
       check(button('Story type').placeholder==='(auto)' && button('Story type').value==='', 'untouched type is not auto');
       await fill('input[placeholder="NPC name (e.g. Saadia)"]','Saadia');
       await fill('section:nth-of-type(1) textarea','Wants to discuss a plan');
-      await choose('Story type','Quest');
+      await choose('Story type','Quest'); await filterPick('Story type','Quest');
       await choose('Sub-type','rescue');
       clickText('Generate');
       await pause();
       check(document.querySelector('section:nth-of-type(1) textarea').matches(':disabled') &&
         [...document.querySelectorAll('section:nth-of-type(1) button')].find(e=>e.textContent.trim()==='Dispatch Story').matches(':disabled'),
         'generating form remained editable');
-      const request = JSON.parse(payloads.at(-1)[1]);
+      let request = JSON.parse(payloads.at(-1)[1]);
       check(payloads.at(-1)[0] === 'generateDirector' && request.fields.storyType === 'quest' &&
         request.fields.questSubType === 'rescue' && request.fields.enemyType === '' &&
         request.options.npcs.includes('Saadia'), 'generate omitted touched/auto/options contract');
       window.directorGenerateResult(JSON.stringify({requestId:request.requestId,form:'story',ok:true,
+        fields:{narration:'Partial plan',enemyType:'not_an_enemy',unexpected:'ignore'}})); await pause();
+      check(document.querySelector('section:nth-of-type(1) textarea').value==='Partial plan' &&
+        button('Enemy type').value==='', 'one invalid field discarded valid narrative');
+      const partial = JSON.parse(payloads.at(-1)[1]).outcome;
+      check(partial.applied.includes('narration') && partial.rejected.enemyType==='Invalid option' &&
+        partial.rejected.unexpected==='Unknown field', 'partial validation reasons missing');
+      clickText('Generate'); await pause(); request = JSON.parse(payloads.at(-1)[1]);
+      check(Object.keys(request.variants.quest).every(key => key in request.fields), 'visible quest blanks omitted from request');
+      window.directorGenerateResult(JSON.stringify({requestId:request.requestId,form:'story',ok:true,
         fields:{storyType:'quest',npcName:'Other',narration:'Wants to discuss a careful plan',
-          questSubType:'rescue',enemyType:'bandit',questLocation:'Fort Greymoor'}}));
+          questSubType:'rescue',enemyType:'bandit',questLocation:'Fort Greymoor',sender:'Nazeem',
+          msgContent:'Rescue my friend',victimName:'Guard 1',itemName:'Iron sword',itemDesc:'An old family blade'}}));
       await pause();
       check(document.querySelector('input[placeholder="NPC name (e.g. Saadia)"]').value==='Saadia' &&
         document.querySelector('section:nth-of-type(1) textarea').value==='Wants to discuss a careful plan' &&
         button('Story type').value==='Quest' && button('Sub-type').value==='rescue' &&
         button('Enemy type').value==='bandit', 'generated merge changed identity/touched dropdown or lost text');
+      check([...document.querySelectorAll('section:nth-of-type(1) input:not([role=combobox]), section:nth-of-type(1) textarea')].every(e=>e.value.trim()),
+        'Generate left visible quest fields blank');
       const audit = JSON.parse(payloads.at(-1)[1]).outcome;
       check(audit?.ok && audit.filled.includes('npcName') && audit.blank.includes('narration') === false &&
         audit.applied.includes('questLocation') && audit.rejected.npcName === 'Preserved or unchanged', 'Generate outcome missing applied/preserved request audit');
@@ -152,6 +164,7 @@ SCRIPT = r"""
         button('Story type').value==='' && !payloads.some(([name])=>name.startsWith('dispatch')),'Clear failed or Generate dispatched');
       const formButton = (index, text) => [...document.querySelectorAll(`section:nth-of-type(${index}) button`)].find(e=>e.textContent.trim()===text);
       for (const [index, form, fields, label, expected] of [
+        [2, 'social', {npc1Name:'Nazeem',npc2Name:'Guard 1',socialType:'npc_interaction',narration:'Resolved a dispute',fact1:'settled the argument',fact2:'accepted the settlement'}, 'Social type', 'Interaction'],
         [2, 'social', {npc1Name:'Nazeem',npc2Name:'Guard 1',socialType:'npc_gossip',narration:'Discussed the missing shipment',gossip:'saw a suspicious shipment'}, 'Social type', 'Gossip'],
         [3, 'political', {factionA:'StormcloakFaction',factionB:'ThalmorFaction',eventType:'insult',description:'A public diplomatic insult',relationDelta:-5}, 'Political event type', 'Insult']
       ]) {
@@ -161,6 +174,17 @@ SCRIPT = r"""
         await pause();
         check(button(label).value===expected && document.querySelector(`section:nth-of-type(${index}) textarea`).value===
           (fields.narration || fields.description), `${form}: auto type and dependent draft did not merge`);
+        check([...document.querySelectorAll(`section:nth-of-type(${index}) input:not([role=combobox]), section:nth-of-type(${index}) textarea`)].every(e=>e.value.trim()),
+          `${form}: Generate left visible fields blank`);
+        if (form==='political') {
+          formButton(index,'Generate').click(); await pause(); const partial=JSON.parse(payloads.at(-1)[1]);
+          window.directorGenerateResult(JSON.stringify({requestId:partial.requestId,form,ok:true,
+            fields:{description:'A revised diplomatic account',relationDelta:99,factionA:'ThalmorFaction'}})); await pause();
+          check(document.querySelector('section:nth-of-type(3) textarea').value==='A revised diplomatic account' &&
+            document.querySelector('section:nth-of-type(3) input[type=number]').value==='-5' &&
+            JSON.parse(payloads.at(-1)[1]).outcome.rejected.relationDelta==='Invalid relation change',
+            'invalid relation delta discarded valid description or selected faction');
+        }
         formButton(index,'Generate').click(); await pause();
         const failed=JSON.parse(payloads.at(-1)[1]);
         window.directorGenerateResult(JSON.stringify({requestId:failed.requestId,form,ok:false,fields:{},error:'Generation failed'}));
@@ -169,7 +193,27 @@ SCRIPT = r"""
         formButton(index,'Clear').click(); await pause();
         check(button(label).value==='' && document.querySelector(`section:nth-of-type(${index}) textarea`).value==='', `${form}: Clear did not reset`);
       }
+      formButton(2,'Generate').click(); await pause(); const duplicate=JSON.parse(payloads.at(-1)[1]);
+      window.directorGenerateResult(JSON.stringify({requestId:duplicate.requestId,form:'social',ok:true,
+        fields:{npc1Name:'Nazeem',npc2Name:'Nazeem',socialType:'npc_interaction',narration:'A valid scene',fact1:42,fact2:'considered the proposal'}})); await pause();
+      const duplicateAudit=JSON.parse(payloads.at(-1)[1]).outcome;
+      check(document.querySelector('input[placeholder="NPC 1 (e.g. Mikael)"]').value==='Nazeem' &&
+        document.querySelector('input[placeholder="NPC 2 (e.g. Sven)"]').value==='' &&
+        document.querySelector('section:nth-of-type(2) textarea').value==='A valid scene' &&
+        duplicateAudit.rejected.npc2Name==='Identities must be distinct' && duplicateAudit.rejected.fact1==='Invalid type',
+        'duplicate identities or wrong-type field discarded valid fields');
+      await choose('Political event type','Insult');
+      document.querySelector('[aria-label="Clear Political event type"]').click(); await pause();
+      formButton(3,'Generate').click(); await pause(); const clearedType=JSON.parse(payloads.at(-1)[1]);
+      check(clearedType.touched.eventType && clearedType.fields.eventType==='', 'cleared type fixture is not touched and empty');
+      window.directorGenerateResult(JSON.stringify({requestId:clearedType.requestId,form:'political',ok:true,
+        fields:{eventType:'insult',factionA:'StormcloakFaction',factionB:'ThalmorFaction',description:'An insult',relationDelta:-5}})); await pause();
+      check(button('Political event type').value==='Insult' && document.querySelector('section:nth-of-type(3) textarea').value==='An insult',
+        'cleared touched type prevented a complete generated draft: '+JSON.stringify({display:button('Political event type').value,description:document.querySelector('section:nth-of-type(3) textarea').value,outcome:JSON.parse(payloads.at(-1)[1]).outcome}));
       check(payloads.every(([name])=>name==='generateDirector'), 'generation dispatched an action');
+      const messages=payloads.map(([,json])=>JSON.parse(json));
+      check(messages.filter(m=>!m.outcome).every(request=>messages.filter(m=>m.requestId===request.requestId && m.outcome).length===1),
+        'Generate emitted missing/duplicate outcome info records');
       document.getElementById('result').textContent=JSON.stringify({status:'PASS',checks:['director_generate_merge_and_stop'],payloads});
       return;
     }
