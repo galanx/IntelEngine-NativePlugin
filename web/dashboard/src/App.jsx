@@ -183,12 +183,14 @@ function App() {
               quest={state.quest}
               social={state.social}
               npcSocialLog={state.npcSocialLog}
+              calendar={state.calendar}
               sendAction={sendAction}
             />
           )}
           {activeTab === 'politics' && (
             <PoliticsTab
               politics={state.politics}
+              calendar={state.calendar}
               sendAction={sendAction}
             />
           )}

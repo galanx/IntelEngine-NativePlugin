@@ -167,6 +167,7 @@ namespace IntelEngine {
         e.description = SafeColumnText(stmt, 4);
         e.relationDelta = sqlite3_column_int(stmt, 5);
         e.gameTime = static_cast<float>(sqlite3_column_double(stmt, 6));
+        e.hasGameTime = sqlite3_column_type(stmt, 6) != SQLITE_NULL;
         e.instigatorNpc = SafeColumnText(stmt, 7);
         return e;
     }
@@ -1021,6 +1022,7 @@ namespace IntelEngine {
             b.warId = sqlite3_column_int(stmt, 1);
             b.locationName = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 2));
             b.gameTime = static_cast<float>(sqlite3_column_double(stmt, 3));
+            b.hasGameTime = sqlite3_column_type(stmt, 3) != SQLITE_NULL;
             b.attacker = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 4));
             b.defender = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 5));
             if (sqlite3_column_text(stmt, 6)) b.result = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 6));
