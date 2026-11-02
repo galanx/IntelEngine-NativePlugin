@@ -128,6 +128,8 @@ SCRIPT = r"""
         const section = document.querySelector(`section:nth-of-type(${index})`);
         const heading = section.querySelector('h2'), generate = [...section.querySelectorAll('button')].find(e=>e.textContent==='Generate');
         check(heading?.textContent === title, 'missing form title: '+title);
+        const markers = [...section.querySelectorAll('span')].filter(e=>e.textContent==='*');
+        check(markers.length > 0 && markers.every(e=>e.classList.contains('text-red-400')), 'required marker missing red class: '+title);
         const h=heading.getBoundingClientRect(), b=generate.getBoundingClientRect();
         check(b.left >= h.right && Math.abs(b.top-h.top)<10 && b.width<100, 'Generate is not a small right-hand header button');
       }
