@@ -201,11 +201,17 @@ add_executable(FormIDStringCheck EXCLUDE_FROM_ALL tests/FormIDStringCheck.cpp)
 target_include_directories(FormIDStringCheck PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 add_executable(DirectorActorResolutionCheck EXCLUDE_FROM_ALL tests/DirectorActorResolutionCheck.cpp)
 target_include_directories(DirectorActorResolutionCheck PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+add_executable(FactionPairValidationCheck EXCLUDE_FROM_ALL tests/FactionPairValidationCheck.cpp)
+target_include_directories(FactionPairValidationCheck PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+add_executable(TaskHistoryDescriptionCheck EXCLUDE_FROM_ALL tests/TaskHistoryDescriptionCheck.cpp)
+target_include_directories(TaskHistoryDescriptionCheck PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 # Offline synthetic engine vtables exercise the production CommonLib getter.
 add_executable(ReferenceGetterDispatchCheck EXCLUDE_FROM_ALL tests/ReferenceGetterDispatchCheck.cpp)
 target_compile_definitions(ReferenceGetterDispatchCheck PRIVATE ENABLE_COMMONLIBSSE_TESTING=1)
 target_link_libraries(ReferenceGetterDispatchCheck PRIVATE CommonLibSSE::CommonLibSSE)
 
+add_executable(ProximityDistanceCheck EXCLUDE_FROM_ALL tests/ProximityDistanceCheck.cpp)
+target_include_directories(ProximityDistanceCheck PRIVATE src)
 
 # =============================================================================
 # Output Configuration

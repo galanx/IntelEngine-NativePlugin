@@ -40,6 +40,7 @@ namespace IntelEngine {
         int relationDelta = 0;
         float gameTime = 0.0f;
         std::string instigatorNpc;
+        bool hasGameTime = false;
     };
 
     struct PlayerStanding {
@@ -74,6 +75,7 @@ namespace IntelEngine {
         int attackerLosses = 0;
         int defenderLosses = 0;
         std::string narrative;
+        bool hasGameTime = false;
     };
 
     class PoliticalDB {

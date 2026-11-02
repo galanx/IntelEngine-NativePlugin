@@ -22,6 +22,7 @@
 #include <cstdint>
 #include <limits>
 #include <optional>
+#include <sstream>
 #include <utility>
 
 namespace IntelEngine {
@@ -114,9 +115,11 @@ namespace IntelEngine {
     }
 
     void DashboardUIManager::Shutdown() {
+        bool logHostExit = false;
         {
             std::lock_guard<std::mutex> lock(mutex_);
             if (!initialized_ || shuttingDown_) return;
+            logHostExit = requestedOpen_ || isOpen_.load();
             shuttingDown_ = true;
             acceptingCallbacks_.store(false);
             available_.store(false);
@@ -129,6 +132,8 @@ namespace IntelEngine {
             pendingFullStatePayloadSet_ = false;
             pendingFullStatePayload_.clear();
         }
+        if (logHostExit)
+            logger::info("[Dashboard] Closed (cause=host exit; Esc/host reason unavailable)");
         stopPolling_.store(true);
         pollCondition_.notify_all();
         if (hotkeyThread_.joinable()) hotkeyThread_.join();
@@ -153,15 +158,48 @@ namespace IntelEngine {
     }
 
     void DashboardUIManager::Toggle() {
-        std::lock_guard<std::mutex> lock(mutex_);
-        if (shuttingDown_ || !host_ || !available_.load()) return;
-        requestedOpen_ = !requestedOpen_;
-        ++generation_;
-        ++intentGeneration_;
-        if (requestedOpen_) {
-            if (!isOpen_.load()) openedEventSent_ = false;
-            pendingOpen_ = true;
-        } else {
+        bool logClose = false;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (shuttingDown_ || !host_ || !available_.load()) return;
+            const bool wasRequestedOpen = requestedOpen_;
+            requestedOpen_ = !requestedOpen_;
+            ++generation_;
+            ++intentGeneration_;
+            if (requestedOpen_) {
+                if (!isOpen_.load()) openedEventSent_ = false;
+                pendingOpen_ = true;
+            } else {
+                logClose = wasRequestedOpen;
+                pendingClose_ = true;
+                pendingCloseIntentGeneration_ = intentGeneration_;
+                pendingOpen_ = false;
+                isOpen_.store(false);
+                openedEventSent_ = false;
+                pendingFlush_ = false;
+                pendingRefresh_ = false;
+                pendingFullStateSet_ = false;
+                pendingFullState_.clear();
+                pendingSlotPayloadSet_ = false;
+                pendingSlotPayload_.clear();
+                pendingFullStatePayloadSet_ = false;
+                pendingFullStatePayload_.clear();
+            }
+        }
+        if (logClose) logger::info("[Dashboard] Closed (cause=hotkey)");
+        pollCondition_.notify_one();
+    }
+
+
+    void DashboardUIManager::RequestClose() {
+        bool logClose = false;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (shuttingDown_ || !host_ || !available_.load()) return;
+            logClose = requestedOpen_;
+            requestedOpen_ = false;
+            ++generation_;
+            ++intentGeneration_;
             pendingClose_ = true;
             pendingCloseIntentGeneration_ = intentGeneration_;
             pendingOpen_ = false;
@@ -176,35 +214,16 @@ namespace IntelEngine {
             pendingFullStatePayloadSet_ = false;
             pendingFullStatePayload_.clear();
         }
-        pollCondition_.notify_one();
-    }
-
-
-    void DashboardUIManager::RequestClose() {
-        std::lock_guard<std::mutex> lock(mutex_);
-        if (shuttingDown_ || !host_ || !available_.load()) return;
-        requestedOpen_ = false;
-        ++generation_;
-        ++intentGeneration_;
-        pendingClose_ = true;
-        pendingCloseIntentGeneration_ = intentGeneration_;
-        pendingOpen_ = false;
-        isOpen_.store(false);
-        openedEventSent_ = false;
-        pendingFlush_ = false;
-        pendingRefresh_ = false;
-        pendingFullStateSet_ = false;
-        pendingFullState_.clear();
-        pendingSlotPayloadSet_ = false;
-        pendingSlotPayload_.clear();
-        pendingFullStatePayloadSet_ = false;
-        pendingFullStatePayload_.clear();
+        if (logClose) logger::info("[Dashboard] Closed (cause=page close)");
         pollCondition_.notify_one();
     }
 
     void DashboardUIManager::OnHostEvent(UiHostEvent event, std::uint64_t expectedIntentGeneration) {
         bool notifyOpened = false;
         bool notifyRefresh = false;
+        bool logOpened = false;
+        bool logHostExit = false;
+        bool logRefused = false;
         {
             std::lock_guard<std::mutex> lock(mutex_);
             if (expectedIntentGeneration != 0 && intentGeneration_ != expectedIntentGeneration) return;
@@ -229,15 +248,18 @@ namespace IntelEngine {
                     break;
                 }
                 expectedExitPending_ = false;
+                logOpened = !isOpen_.load();
                 isOpen_.store(true);
                 pendingFlush_ = true;
                 break;
             case UiHostEvent::Exited: {
+                logHostExit = requestedOpen_;
                 isOpen_.store(false);
                 const bool expectedReopen = expectedExitPending_ &&
                     requestedOpen_ && intentGeneration_ > expectedExitIntentGeneration_;
                 expectedExitPending_ = false;
                 if (expectedReopen) {
+                    logHostExit = false;
                     ++generation_;
                     pendingRefresh_ = false;
                     pendingFlush_ = false;
@@ -265,6 +287,7 @@ namespace IntelEngine {
                 break;
             }
             case UiHostEvent::Refused:
+                logRefused = requestedOpen_;
                 expectedExitPending_ = false;
                 isOpen_.store(false);
                 requestedOpen_ = false;
@@ -311,10 +334,15 @@ namespace IntelEngine {
                 }
             }
         }
+        if (logOpened) logger::info("[Dashboard] Opened");
+        if (logHostExit)
+            logger::info("[Dashboard] Closed (cause=host exit; Esc/host reason unavailable)");
+        if (logRefused) logger::info("[Dashboard] Open refused");
         pollCondition_.notify_one();
         if (notifyOpened) SendModEvent("IntelEngine_DashboardOpened");
         else if (notifyRefresh) SendModEvent("IntelEngine_DashboardRefresh");
     }
+
 
     void DashboardUIManager::FlushState(std::uint64_t generation) {
         bool ready;
@@ -392,6 +420,13 @@ namespace IntelEngine {
             replaceAll(fixed, "False", "false");
 
             auto parsed = nlohmann::json::parse(fixed);
+            if (auto* calendar = RE::Calendar::GetSingleton()) {
+                parsed["calendar"] = {
+                    {"time", calendar->GetCurrentGameTime()},
+                    {"year", calendar->GetYear()}, {"month", calendar->GetMonth()},
+                    {"day", calendar->GetDay()}, {"hour", calendar->GetHour()}
+                };
+            }
 
             // Inject plugin config values; politics comes from the live native settings state.
             nlohmann::json pc;
@@ -426,25 +461,39 @@ namespace IntelEngine {
             pc["politics.max_active_wars"] = politics->GetMaxActiveWars();
             parsed["pluginConfig"] = pc;
 
-            // Inject loaded NPCs for Director tab (same cell as player only)
+            // Include nearby actors across exterior cell borders, but never across worldspaces.
             {
                 nlohmann::json npcs = nlohmann::json::array();
                 auto* player = RE::PlayerCharacter::GetSingleton();
                 auto* playerCell = player ? player->GetParentCell() : nullptr;
-                ProcessUtils::ForEachLoadedActor([&](RE::Actor* actor) {
-                    if (!actor || actor == player) return false;
-                    if (actor->IsDead() || actor->IsDisabled()) return false;
-                    if (!actor->Is3DLoaded()) return false;
-                    if (actor->GetParentCell() != playerCell) return false;
-                    auto* base = actor->GetActorBase();
-                    if (!base) return false;
-                    if (!base->IsUnique()) return false;
-                    nlohmann::json entry;
-                    entry["formId"] = actor->GetFormID();
-                    entry["name"] = actor->GetDisplayFullName();
-                    npcs.push_back(entry);
-                    return false;
-                });
+                auto* playerWorld = player ? player->GetWorldspace() : nullptr;
+                if (player && playerCell) {
+                    const auto playerPos = player->GetPosition();
+                    ProcessUtils::ForEachLoadedActor([&](RE::Actor* actor) {
+                        if (!actor || actor == player) return false;
+                        if (actor->IsDead() || actor->IsDisabled()) return false;
+                        if (!actor->Is3DLoaded()) return false;
+                        auto* actorCell = actor->GetParentCell();
+                        if (!actorCell) return false;
+                        const bool sameLocation = playerCell->IsInteriorCell()
+                            ? actorCell == playerCell
+                            : !actorCell->IsInteriorCell() && playerWorld &&
+                                actor->GetWorldspace() == playerWorld;
+                        if (!sameLocation) return false;
+                        const auto actorPos = actor->GetPosition();
+                        const float dx = actorPos.x - playerPos.x;
+                        const float dy = actorPos.y - playerPos.y;
+                        const float dz = actorPos.z - playerPos.z;
+                        if (dx * dx + dy * dy + dz * dz > 4000.0f * 4000.0f) return false;
+                        auto* base = actor->GetActorBase();
+                        if (!base) return false;
+                        nlohmann::json entry;
+                        entry["formId"] = actor->GetFormID();
+                        entry["name"] = actor->GetDisplayFullName();
+                        npcs.push_back(entry);
+                        return false;
+                    });
+                }
                 parsed["loadedNpcs"] = npcs;
             }
 
@@ -461,7 +510,9 @@ namespace IntelEngine {
                     entry["enabled"] = a.enabled;
                     nlohmann::json params = nlohmann::json::array();
                     for (auto& p : a.params) {
-                        params.push_back({{"name", p.name}, {"description", p.description}});
+                        nlohmann::json param = {{"name", p.name}, {"description", p.description}};
+                        if (!p.enumValues.empty()) param["enum"] = p.enumValues;
+                        params.push_back(std::move(param));
                     }
                     entry["params"] = params;
                     acts.push_back(entry);
@@ -1247,6 +1298,18 @@ namespace IntelEngine {
                         std::string val = trimmed.substr(5);
                         auto vs = val.find_first_not_of(" \t");
                         currentParam.name = vs != std::string::npos ? val.substr(vs) : "";
+                    } else if (trimmed.rfind("enum:", 0) == 0 && hasCurrentParam) {
+                        auto start = trimmed.find('[');
+                        auto end = trimmed.find(']', start);
+                        if (start != std::string::npos && end != std::string::npos) {
+                            std::stringstream values(trimmed.substr(start + 1, end - start - 1));
+                            std::string value;
+                            while (std::getline(values, value, ',')) {
+                                auto first = value.find_first_not_of(" \t\"'");
+                                auto last = value.find_last_not_of(" \t\"'");
+                                if (first != std::string::npos) currentParam.enumValues.push_back(value.substr(first, last - first + 1));
+                            }
+                        }
                     } else if (trimmed.rfind("description:", 0) == 0 && hasCurrentParam) {
                         std::string val = trimmed.substr(12);
                         auto vs = val.find_first_not_of(" \t>");

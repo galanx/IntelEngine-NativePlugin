@@ -1,38 +1,45 @@
-import { useState, useMemo, useCallback, useRef, useEffect } from 'react';
+import { useState, useMemo, useCallback } from 'react';
+import Select, { useDropdown, dropdownClass } from './Select';
 
 /** Text input with dropdown suggestions. Works in Ultralight (no <datalist> needed). */
 function FactionInput({ value, onChange, factions, placeholder }) {
   const [open, setOpen] = useState(false);
-  const ref = useRef(null);
+  const [showAll, setShowAll] = useState(false);
+  const openDropdown = () => setOpen(true);
 
-  // Close dropdown on outside click
-  useEffect(() => {
-    const handler = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
-    document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
-  }, []);
-
-  // Filter suggestions based on current value (single source of truth)
   const filtered = useMemo(() => {
-    if (!value) return factions;
+    if (showAll || !value) return factions;
     const lc = value.toLowerCase();
-    // Hide suggestions if value exactly matches a faction ID (already selected)
-    if (factions.some(f => f.id === value)) return [];
     return factions.filter(f => f.id.toLowerCase().includes(lc) || f.name.toLowerCase().includes(lc));
-  }, [factions, value]);
+  }, [factions, value, showAll]);
+  const expanded = open && filtered.length > 0;
+  const { ref, menuRef, openUp, maxHeight } = useDropdown(expanded, setOpen, filtered.length);
 
   return (
     <div ref={ref} className="flex-1 relative">
       <input
         type="text"
         value={value}
-        onChange={e => { onChange(e.target.value); setOpen(true); }}
-        onFocus={() => setOpen(true)}
+        onChange={e => { onChange(e.target.value); setShowAll(false); openDropdown(); }}
+        onFocus={() => { setShowAll(true); openDropdown(); }}
+        onClick={() => { setShowAll(true); openDropdown(); }}
         placeholder={placeholder}
-        className="w-full bg-white/5 border border-white/10 rounded px-2 py-1.5 text-xs text-gray-200 outline-none placeholder:text-gray-600"
+        onKeyDown={e => { if (e.key === 'Escape' && expanded) { e.stopPropagation(); setOpen(false); } }}
+        className="w-full bg-white/5 border border-white/10 rounded px-2 py-1.5 pr-6 text-xs text-gray-200 outline-none placeholder:text-gray-600"
       />
-      {open && filtered.length > 0 && (
-        <div className="absolute z-50 top-full left-0 right-0 mt-0.5 max-h-32 overflow-y-auto bg-[#1a1a2e] border border-white/10 rounded shadow-lg">
+      {value && (
+        <button
+          type="button"
+          aria-label="Clear faction"
+          onMouseDown={e => e.preventDefault()}
+          onClick={() => { onChange(''); setShowAll(true); openDropdown(); }}
+          className="absolute right-1 top-1/2 -translate-y-1/2 px-1 text-xs text-gray-500 hover:text-gray-200"
+        >
+          ×
+        </button>
+      )}
+      {expanded && (
+        <div ref={menuRef} style={{ maxHeight }} className={`${dropdownClass} ${openUp ? 'bottom-full mb-0.5' : 'top-full mt-0.5'}`}>
           {filtered.map(f => (
             <div
               key={f.id}
@@ -305,11 +312,11 @@ function DirectorTab({ loadedNpcs, actions, factions = [], sendAction }) {
   // Only show IntelEngine actions in the Director tab
   const INTEL_ACTIONS = new Set([
     'GoToLocation', 'FetchPerson', 'DeliverMessage', 'EscortTarget', 'SearchForActor',
-    'ScheduleFetch', 'ScheduleDelivery', 'ScheduleMeeting',
-    'CancelCurrentTask', 'ChangeSpeed', 'ReportPlayerConduct',
+    'ScheduleFetch', 'ScheduleDelivery', 'ScheduleMeeting', 'ReportPlayerConduct',
+    'CancelCurrentTask', 'ChangeSpeed',
   ]);
   const executableActions = useMemo(
-    () => (actions || []).filter(a => a.params && a.params.length > 0 && INTEL_ACTIONS.has(a.name)),
+    () => (actions || []).filter(a => INTEL_ACTIONS.has(a.name)),
     [actions],
   );
 
@@ -323,14 +330,24 @@ function DirectorTab({ loadedNpcs, actions, factions = [], sendAction }) {
     if (!selectedAction) return [];
     if (ACTION_FIELDS[selectedAction]) return ACTION_FIELDS[selectedAction];
     if (currentAction) {
-      return currentAction.params
+      return (currentAction.params || [])
         .filter(p => !HIDDEN_PARAMS.has(p.name))
-        .map(p => ({ key: p.name, label: p.name, type: 'text', placeholder: p.description }));
+        .map(p => ({
+          key: p.name,
+          label: p.name,
+          type: p.name === 'factionId' ? 'faction' : Array.isArray(p.enum) && p.enum.length ? 'select' : 'text',
+          required: selectedAction === 'ReportPlayerConduct' || p.required,
+          options: p.enum || [],
+          placeholder: p.description,
+        }));
     }
     return [];
   }, [selectedAction, currentAction]);
 
   const currentFields = STORY_TYPE_FIELDS[storyType] || [];
+  const storyTypeValid = DIRECTOR_STORY_TYPES.some(type => type.key === storyType);
+  const socialTypeValid = SOCIAL_TYPES.some(type => type.key === socialType);
+  const polEventTypeValid = POLITICAL_EVENT_TYPES.some(type => type.key === polEventType);
 
   const handleStoryTypeChange = useCallback((type) => {
     setStoryType(type);
@@ -338,7 +355,7 @@ function DirectorTab({ loadedNpcs, actions, factions = [], sendAction }) {
   }, []);
 
   const handleDispatchStory = useCallback(() => {
-    if (!storyNpc.trim() || !storyNarration.trim()) return;
+    if (!storyTypeValid || !storyNpc.trim() || !storyNarration.trim()) return;
     sendAction('dispatchStory', {
       npcName: storyNpc.trim(),
       storyType,
@@ -347,7 +364,7 @@ function DirectorTab({ loadedNpcs, actions, factions = [], sendAction }) {
     });
     setStoryNarration('');
     setStoryFields({});
-  }, [storyNpc, storyType, storyNarration, storyFields, sendAction]);
+  }, [storyNpc, storyType, storyTypeValid, storyNarration, storyFields, sendAction]);
 
   const currentSocialFields = SOCIAL_TYPE_FIELDS[socialType] || [];
 
@@ -357,7 +374,7 @@ function DirectorTab({ loadedNpcs, actions, factions = [], sendAction }) {
   }, []);
 
   const handleDispatchSocial = useCallback(() => {
-    if (!socialNpc1.trim() || !socialNpc2.trim() || !socialNarration.trim()) return;
+    if (!socialTypeValid || !socialNpc1.trim() || !socialNpc2.trim() || !socialNarration.trim()) return;
     sendAction('dispatchNpcSocial', {
       npc1Name: socialNpc1.trim(),
       npc2Name: socialNpc2.trim(),
@@ -367,7 +384,7 @@ function DirectorTab({ loadedNpcs, actions, factions = [], sendAction }) {
     });
     setSocialNarration('');
     setSocialFields({});
-  }, [socialNpc1, socialNpc2, socialType, socialNarration, socialFields, sendAction]);
+  }, [socialNpc1, socialNpc2, socialType, socialTypeValid, socialNarration, socialFields, sendAction]);
 
   const handlePolEventTypeChange = useCallback((type) => {
     setPolEventType(type);
@@ -376,7 +393,7 @@ function DirectorTab({ loadedNpcs, actions, factions = [], sendAction }) {
   }, []);
 
   const handleDispatchPolitics = useCallback(() => {
-    if (!polFactionA.trim() || !polFactionB.trim() || !polDescription.trim()) return;
+    if (!polEventTypeValid || !polFactionA.trim() || !polFactionB.trim() || !polDescription.trim()) return;
     sendAction('dispatchPolitics', {
       factionA: polFactionA.trim(),
       factionB: polFactionB.trim(),
@@ -385,26 +402,38 @@ function DirectorTab({ loadedNpcs, actions, factions = [], sendAction }) {
       relationDelta: polDelta,
     });
     setPolDescription('');
-  }, [polFactionA, polFactionB, polEventType, polDescription, polDelta, sendAction]);
+  }, [polFactionA, polFactionB, polEventType, polEventTypeValid, polDescription, polDelta, sendAction]);
 
+  const handleActionChange = useCallback((name) => {
+    setSelectedAction(name);
+    const action = executableActions.find(a => a.name === name);
+    setActionParams(Object.fromEntries((action?.params || [])
+      .filter(p => !HIDDEN_PARAMS.has(p.name) && Array.isArray(p.enum) && p.enum.length)
+      .map(p => [p.name, p.enum[0]])));
+  }, [executableActions]);
+  const requiredFieldsValid = currentActionFields.every(f => {
+    const value = actionParams[f.key] || '';
+    if (f.required && !value.trim()) return false;
+    if (f.type === 'faction' && value && !factions.some(faction => faction.id === value)) return false;
+    if (f.type === 'select' && value &&
+      !f.options.some(option => (typeof option === 'string' ? option : option.value) === value)) return false;
+    return true;
+  });
+  const actionNpcValid = npcs.some(npc => String(npc.formId) === actionNpc);
   const handleExecuteAction = useCallback(() => {
-    if (!actionNpc || !selectedAction) return;
+    if (!actionNpcValid || !selectedAction || !requiredFieldsValid) return;
     sendAction('executeAction', {
       npcFormId: Number(actionNpc),
       actionName: selectedAction,
       params: actionParams,
     });
-    setActionParams({});
-  }, [actionNpc, selectedAction, actionParams, sendAction]);
+    handleActionChange(selectedAction);
+  }, [actionNpc, actionNpcValid, selectedAction, actionParams, sendAction, requiredFieldsValid, handleActionChange]);
 
   const setParam = useCallback((key, value) => {
     setActionParams(prev => ({ ...prev, [key]: value }));
   }, []);
 
-  const handleActionChange = useCallback((name) => {
-    setSelectedAction(name);
-    setActionParams({});
-  }, []);
 
   return (
     <div className="p-3 space-y-4">
@@ -420,15 +449,15 @@ function DirectorTab({ loadedNpcs, actions, factions = [], sendAction }) {
               placeholder="NPC name (e.g. Saadia)"
               className="flex-1 bg-white/5 border border-white/10 rounded px-2 py-1.5 text-xs text-gray-200 outline-none placeholder:text-gray-600"
             />
-            <select
+            <Select aria-label="Story type" containerClassName="w-[130px]"
               value={storyType}
               onChange={e => handleStoryTypeChange(e.target.value)}
-              className="w-[130px] bg-white/5 border border-white/10 rounded px-2 py-1.5 text-xs text-gray-200 outline-none"
+              className="bg-white/5 border border-white/10 rounded px-2 py-1.5 text-xs text-gray-200 outline-none"
             >
               {DIRECTOR_STORY_TYPES.map(t => (
                 <option key={t.key} value={t.key}>{t.label}</option>
               ))}
-            </select>
+            </Select>
           </div>
           <textarea
             value={storyNarration}
@@ -446,7 +475,7 @@ function DirectorTab({ loadedNpcs, actions, factions = [], sendAction }) {
                 {f.required && <span className="text-red-400 ml-0.5">*</span>}
               </label>
               {f.type === 'select' ? (
-                <select
+                <Select aria-label={f.label}
                   value={storyFields[f.key] || ''}
                   onChange={e => setStoryFields(prev => ({ ...prev, [f.key]: e.target.value }))}
                   className="bg-white/5 border border-white/10 rounded px-2 py-1.5 text-xs text-gray-200 outline-none"
@@ -455,7 +484,7 @@ function DirectorTab({ loadedNpcs, actions, factions = [], sendAction }) {
                   {f.options.map(o => (
                     <option key={o} value={o}>{o}</option>
                   ))}
-                </select>
+                </Select>
               ) : (
                 <input
                   type="text"
@@ -473,7 +502,7 @@ function DirectorTab({ loadedNpcs, actions, factions = [], sendAction }) {
 
           <button
             onClick={handleDispatchStory}
-            disabled={!storyNpc.trim() || !storyNarration.trim()}
+            disabled={!storyTypeValid || !storyNpc.trim() || !storyNarration.trim()}
             className="w-full px-3 py-1.5 text-xs font-medium rounded transition-colors bg-blue-500/20 text-blue-400 hover:bg-blue-500/30 disabled:opacity-30 disabled:cursor-not-allowed"
           >
             Dispatch Story
@@ -502,15 +531,15 @@ function DirectorTab({ loadedNpcs, actions, factions = [], sendAction }) {
             />
           </div>
           <div className="flex gap-2">
-            <select
+            <Select aria-label="Social type" containerClassName="w-[130px]"
               value={socialType}
               onChange={e => handleSocialTypeChange(e.target.value)}
-              className="w-[130px] bg-white/5 border border-white/10 rounded px-2 py-1.5 text-xs text-gray-200 outline-none"
+              className="bg-white/5 border border-white/10 rounded px-2 py-1.5 text-xs text-gray-200 outline-none"
             >
               {SOCIAL_TYPES.map(t => (
                 <option key={t.key} value={t.key}>{t.label}</option>
               ))}
-            </select>
+            </Select>
             <textarea
               value={socialNarration}
               onChange={e => setSocialNarration(e.target.value)}
@@ -541,7 +570,7 @@ function DirectorTab({ loadedNpcs, actions, factions = [], sendAction }) {
 
           <button
             onClick={handleDispatchSocial}
-            disabled={!socialNpc1.trim() || !socialNpc2.trim() || !socialNarration.trim()}
+            disabled={!socialTypeValid || !socialNpc1.trim() || !socialNpc2.trim() || !socialNarration.trim()}
             className="w-full px-3 py-1.5 text-xs font-medium rounded transition-colors bg-purple-500/20 text-purple-400 hover:bg-purple-500/30 disabled:opacity-30 disabled:cursor-not-allowed"
           >
             Dispatch Social
@@ -568,15 +597,15 @@ function DirectorTab({ loadedNpcs, actions, factions = [], sendAction }) {
             />
           </div>
           <div className="flex gap-2">
-            <select
+            <Select aria-label="Political event type" containerClassName="flex-1"
               value={polEventType}
               onChange={e => handlePolEventTypeChange(e.target.value)}
-              className="flex-1 bg-white/5 border border-white/10 rounded px-2 py-1.5 text-xs text-gray-200 outline-none"
+              className="bg-white/5 border border-white/10 rounded px-2 py-1.5 text-xs text-gray-200 outline-none"
             >
               {POLITICAL_EVENT_TYPES.map(t => (
                 <option key={t.key} value={t.key}>{t.label}</option>
               ))}
-            </select>
+            </Select>
             <div className="flex items-center gap-1">
               <label className="text-[10px] text-gray-500">Δ</label>
               <input
@@ -598,7 +627,8 @@ function DirectorTab({ loadedNpcs, actions, factions = [], sendAction }) {
           />
           <button
             onClick={handleDispatchPolitics}
-            disabled={!polFactionA.trim() || !polFactionB.trim() || !polDescription.trim()}
+            disabled={!polEventTypeValid || !polFactionA.trim() || !polFactionB.trim() ||
+              polFactionA.trim() === polFactionB.trim() || !polDescription.trim()}
             className="w-full px-3 py-1.5 text-xs font-medium rounded transition-colors bg-amber-500/20 text-amber-400 hover:bg-amber-500/30 disabled:opacity-30 disabled:cursor-not-allowed"
           >
             Dispatch Political Event
@@ -611,26 +641,26 @@ function DirectorTab({ loadedNpcs, actions, factions = [], sendAction }) {
         <h2 className="section-header mb-2">Action Execution</h2>
         <div className="space-y-2">
           <div className="flex gap-2">
-            <select
+            <Select aria-label="Action NPC" containerClassName="flex-1"
               value={actionNpc}
               onChange={e => setActionNpc(e.target.value)}
-              className="flex-1 bg-white/5 border border-white/10 rounded px-2 py-1.5 text-xs text-gray-200 outline-none"
+              className="bg-white/5 border border-white/10 rounded px-2 py-1.5 text-xs text-gray-200 outline-none"
             >
               <option value="">Select NPC...</option>
               {npcs.map(n => (
                 <option key={n.formId} value={n.formId}>{n.name}</option>
               ))}
-            </select>
-            <select
+            </Select>
+            <Select aria-label="Action" containerClassName="w-[150px]"
               value={selectedAction}
               onChange={e => handleActionChange(e.target.value)}
-              className="w-[150px] bg-white/5 border border-white/10 rounded px-2 py-1.5 text-xs text-gray-200 outline-none"
+              className="bg-white/5 border border-white/10 rounded px-2 py-1.5 text-xs text-gray-200 outline-none"
             >
               <option value="">Select Action...</option>
               {executableActions.map(a => (
                 <option key={a.name} value={a.name}>{a.name}</option>
               ))}
-            </select>
+            </Select>
           </div>
 
           {/* Dynamic param fields for selected action */}
@@ -640,8 +670,15 @@ function DirectorTab({ loadedNpcs, actions, factions = [], sendAction }) {
                 {f.label}
                 {f.required && <span className="text-red-400 ml-0.5">*</span>}
               </label>
-              {f.type === 'select' ? (
-                <select
+              {f.type === 'faction' ? (
+                <FactionInput
+                  value={actionParams[f.key] || ''}
+                  onChange={value => setParam(f.key, value)}
+                  factions={factions}
+                  placeholder="Select faction..."
+                />
+              ) : f.type === 'select' ? (
+                <Select aria-label={f.label}
                   value={actionParams[f.key] || ''}
                   onChange={e => setParam(f.key, e.target.value)}
                   className="bg-white/5 border border-white/10 rounded px-2 py-1.5 text-xs text-gray-200 outline-none"
@@ -652,7 +689,7 @@ function DirectorTab({ loadedNpcs, actions, factions = [], sendAction }) {
                   ) : (
                     <option key={o.value} value={o.value}>{o.label}</option>
                   ))}
-                </select>
+                </Select>
               ) : (
                 <input
                   type="text"
@@ -670,7 +707,7 @@ function DirectorTab({ loadedNpcs, actions, factions = [], sendAction }) {
 
           <button
             onClick={handleExecuteAction}
-            disabled={!actionNpc || !selectedAction || !currentActionFields.every(f => !f.required || (actionParams[f.key] || '').trim())}
+            disabled={!actionNpcValid || !selectedAction || !requiredFieldsValid}
             className="w-full px-3 py-1.5 text-xs font-medium rounded transition-colors bg-emerald-500/20 text-emerald-400 hover:bg-emerald-500/30 disabled:opacity-30 disabled:cursor-not-allowed"
           >
             Execute Action

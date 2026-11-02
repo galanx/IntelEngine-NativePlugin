@@ -174,6 +174,7 @@ function App() {
             <TasksTab
               tasks={state.tasks || []}
               scheduled={state.scheduled || []}
+              calendar={state.calendar}
               sendAction={sendAction}
             />
           )}
@@ -183,12 +184,14 @@ function App() {
               quest={state.quest}
               social={state.social}
               npcSocialLog={state.npcSocialLog}
+              calendar={state.calendar}
               sendAction={sendAction}
             />
           )}
           {activeTab === 'politics' && (
             <PoliticsTab
               politics={state.politics}
+              calendar={state.calendar}
               sendAction={sendAction}
             />
           )}

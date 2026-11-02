@@ -7,7 +7,9 @@
 #include "Papyrus.h"
 #include "FormIDString.h"
 #include "FactionLeaderNameMatch.h"
+#include "FactionPairValidation.h"
 #include "Utf8Truncate.h"
+#include "TaskHistoryDescription.h"
 #include "NPCIndex.h"
 #include "ItemIndex.h"
 #include <random>
@@ -24,6 +26,7 @@
 #include "StuckDetector.h"
 #include "OffScreenTracker.h"
 #include "ProximityMonitor.h"
+#include "ProximityDistance.h"
 #include "SlotTracker.h"
 #include "MemoryDB.h"
 #include "Settings.h"
@@ -296,6 +299,7 @@ namespace IntelEngine::Papyrus {
         // Distance / Math Utility Functions
         a_vm->RegisterFunction("GetDistance3D", SCRIPT_NAME, GetDistance3D); ++count;
         a_vm->RegisterFunction("GetDistance2D", SCRIPT_NAME, GetDistance2D); ++count;
+        a_vm->RegisterFunction("GetArrivalThreshold", SCRIPT_NAME, GetArrivalThreshold); ++count;
         a_vm->RegisterFunction("CalculateDeadlineFromDistance", SCRIPT_NAME, CalculateDeadlineFromDistance); ++count;
         a_vm->RegisterFunction("GetOffsetBehind", SCRIPT_NAME, GetOffsetBehind); ++count;
 
@@ -367,6 +371,7 @@ namespace IntelEngine::Papyrus {
         a_vm->RegisterFunction("IsPlayerInWhitelistedLocation", SCRIPT_NAME, IsPlayerInWhitelistedLocation); ++count;
         a_vm->RegisterFunction("StoryResponseShouldAct", SCRIPT_NAME, StoryResponseShouldAct); ++count;
         a_vm->RegisterFunction("StoryResponseGetField", SCRIPT_NAME, StoryResponseGetField); ++count;
+        a_vm->RegisterFunction("StoryResponseGetOptionalField", SCRIPT_NAME, StoryResponseGetOptionalField); ++count;
         a_vm->RegisterFunction("BuildActorContextJson", SCRIPT_NAME, BuildActorContextJson); ++count;
         a_vm->RegisterFunction("BuildDungeonMasterContext", SCRIPT_NAME, BuildDungeonMasterContext); ++count;
         a_vm->RegisterFunction("BuildNPCInteractionContext", SCRIPT_NAME, BuildNPCInteractionContext); ++count;
@@ -1038,6 +1043,26 @@ namespace IntelEngine::Papyrus {
         return ref1->GetPosition().GetDistance(ref2->GetPosition());
     }
 
+    float GetArrivalThreshold(RE::StaticFunctionTag*, RE::Actor* agent, RE::TESObjectREFR* target) {
+        if (!target || !target->As<RE::Actor>()) {
+            return ProximityMonitor::DEFAULT_MARKER_THRESHOLD;
+        }
+        if (!agent) return ProximityMonitor::DEFAULT_ACTOR_THRESHOLD;
+        // Keep the native floor gate when Papyrus polls the speed-expanded radius.
+        if (std::fabs(agent->GetPosition().z - target->GetPosition().z) >
+            ProximityMonitor::DEFAULT_ACTOR_Z_TOLERANCE) return 0.0f;
+
+        RE::NiPoint3 velocity{};
+        if (agent->Is3DLoaded()) agent->GetLinearVelocity(velocity);
+        const float speed = std::sqrt(velocity.x * velocity.x +
+                                      velocity.y * velocity.y +
+                                      velocity.z * velocity.z);
+        const float acceptedThreshold = ProximityMonitor::GetSingleton()->GetAcceptedThreshold(
+            agent->GetFormID(), target->GetFormID());
+        return GetActorArrivalThreshold(ProximityMonitor::DEFAULT_ACTOR_THRESHOLD, speed,
+                                        acceptedThreshold);
+    }
+
     float GetDistance2D(RE::StaticFunctionTag*, RE::TESObjectREFR* ref1, RE::TESObjectREFR* ref2) {
         if (!ref1 || !ref2) return 0.0f;
         auto p1 = ref1->GetPosition();
@@ -1424,9 +1449,10 @@ namespace IntelEngine::Papyrus {
     // ==========================================================================
 
     void UpdateSlotState(RE::StaticFunctionTag*, int slot, RE::Actor* agent, int newState,
-                         RE::BSFixedString taskType, RE::BSFixedString targetName) {
+                         RE::BSFixedString taskType, RE::BSFixedString targetName,
+                         RE::BSFixedString origin, float startTime, RE::BSFixedString reason) {
         SlotTracker::GetSingleton()->UpdateSlot(slot, agent, newState,
-            taskType.c_str(), targetName.c_str());
+            taskType.c_str(), targetName.c_str(), origin.c_str(), startTime, reason.c_str());
     }
 
     void ClearSlotState(RE::StaticFunctionTag*, int slot) {
@@ -1858,8 +1884,8 @@ namespace IntelEngine::Papyrus {
     static std::string s_cachedJsonStr;
     static std::unordered_map<std::string, std::string> s_cachedFields;  // lowercased key -> value
 
-    RE::BSFixedString StoryResponseGetField(RE::StaticFunctionTag*, RE::BSFixedString json,
-                                            RE::BSFixedString fieldName) {
+    static RE::BSFixedString GetStoryResponseField(RE::BSFixedString json,
+                                                  RE::BSFixedString fieldName, bool required) {
         std::string jsonStr(json.c_str());
         std::string field(fieldName.c_str());
 
@@ -1872,7 +1898,7 @@ namespace IntelEngine::Papyrus {
 
         std::string fieldLower = field;
         std::transform(fieldLower.begin(), fieldLower.end(), fieldLower.begin(),
-                       [](unsigned char c) { return std::tolower(c); });
+                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
 
         // Result copied out of cache under lock; BSFixedString constructed outside
         // to avoid lock-ordering with BSStringPool's internal lock.
@@ -1904,7 +1930,7 @@ namespace IntelEngine::Papyrus {
                     for (auto& [key, value] : j.items()) {
                         std::string keyLower = key;
                         std::transform(keyLower.begin(), keyLower.end(), keyLower.begin(),
-                                       [](unsigned char c) { return std::tolower(c); });
+                                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
 
                         if (value.is_string()) {
                             s_cachedFields[keyLower] = value.get<std::string>();
@@ -1943,9 +1969,22 @@ namespace IntelEngine::Papyrus {
             return RE::BSFixedString(result.c_str());
         }
 
-        logger::warn("[StoryDM] GetField('{}') NOT FOUND in parsed JSON — keys: {}",
-                     field, warnKeys);
+        if (required) {
+            logger::warn("[StoryDM] GetField('{}') NOT FOUND in parsed JSON — keys: {}", field, warnKeys);
+        } else {
+            logger::debug("[StoryDM] GetField('{}') NOT FOUND in parsed JSON — keys: {}", field, warnKeys);
+        }
         return "";
+    }
+
+    RE::BSFixedString StoryResponseGetField(RE::StaticFunctionTag*, RE::BSFixedString json,
+                                            RE::BSFixedString fieldName) {
+        return GetStoryResponseField(json, fieldName, true);
+    }
+
+    RE::BSFixedString StoryResponseGetOptionalField(RE::StaticFunctionTag*, RE::BSFixedString json,
+                                                    RE::BSFixedString fieldName) {
+        return GetStoryResponseField(json, fieldName, false);
     }
 
     RE::BSFixedString BuildActorContextJson(RE::StaticFunctionTag*, RE::Actor* actor,
@@ -3886,6 +3925,11 @@ namespace IntelEngine::Papyrus {
                                RE::BSFixedString factionB, int delta) {
         auto* db = PoliticalDB::GetSingleton();
         if (!db->IsReady()) return 0;
+        if (IsSameFactionPair(factionA.c_str(), factionB.c_str())) {
+            logger::warn("FactionPolitics: Rejected relation adjustment with same faction on both sides: {}",
+                         factionA.c_str());
+            return db->GetRelation(factionA.c_str(), factionB.c_str());
+        }
         return db->AdjustRelation(factionA.c_str(), factionB.c_str(), delta);
     }
 
@@ -4803,39 +4847,8 @@ namespace IntelEngine::Papyrus {
                                             RE::BSFixedString taskType, RE::BSFixedString target,
                                             RE::BSFixedString result, RE::BSFixedString msgContent,
                                             RE::BSFixedString meetLocation) {
-        std::string type = taskType.c_str();
-        std::string tgt = target.c_str();
-        std::string res = result.c_str();
-        std::string msg = msgContent.c_str();
-        std::string loc = meetLocation.c_str();
-        std::string desc;
-
-        if (type == "travel") {
-            desc = (res == "timeout") ? "Went to " + tgt + " but gave up waiting" : "Traveled to " + tgt;
-        } else if (type == "fetch_npc") {
-            desc = (res == "success") ? "Found " + tgt + " and brought them back"
-                                      : "Looked for " + tgt + " but couldn't bring them";
-        } else if (type == "deliver_message") {
-            if (res == "delivered") {
-                desc = "Delivered a message to " + tgt;
-                if (!msg.empty()) {
-                    if (msg.size() > 80) msg = TruncateUtf8Bytes(msg, 80, "...");
-                    desc += ": '" + msg + "'";
-                }
-                if (!loc.empty()) desc += " (meeting at " + loc + ")";
-            } else {
-                desc = "Tried to deliver a message to " + tgt;
-            }
-        } else if (type == "search_for_actor") {
-            desc = "Searched for " + tgt;
-        } else if (type == "story") {
-            desc = "Sought out " + tgt;
-        } else if (type == "story_npc") {
-            desc = "Went to talk with " + tgt;
-        } else {
-            desc = "Completed a task involving " + tgt;
-        }
-        return RE::BSFixedString(desc);
+        return RE::BSFixedString(BuildTaskHistoryDescription(taskType.c_str(), target.c_str(),
+            result.c_str(), msgContent.c_str(), meetLocation.c_str()));
     }
 
     RE::BSFixedString GetSlotStatusNative(RE::StaticFunctionTag*,

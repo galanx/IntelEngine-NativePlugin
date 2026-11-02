@@ -95,6 +95,7 @@ callbacks = [method(manager, sig) for sig in (
     "    void DashboardUIManager::OnDispatchPoliticsStatic(",
     "    void DashboardUIManager::OnExecuteActionStatic(",
     "    void DashboardUIManager::OnToggleActionStatic(",
+    "    void DashboardUIManager::LoadActionYAMLs()",
     "    void DashboardUIManager::ReloadView()",
     "    void DashboardUIManager::SendModEvent(",
     "    void DashboardUIManager::HotkeyPollLoop()",
@@ -102,11 +103,15 @@ callbacks = [method(manager, sig) for sig in (
 
 with tempfile.TemporaryDirectory(prefix="dashboard-host-") as temp:
     work = pathlib.Path(temp)
+    (work / "actions").mkdir()
+    (work / "actions/report.yaml").write_bytes(
+        (ROOT / "SKSE/Plugins/SkyrimNet/external/galanx.intelengine/actions/reportplayerconduct.yaml").read_bytes())
     (work / "UiHostTestSupport.h").write_text(r'''#pragma once
 #define INTELENGINE_VERSION "3.6.2"
 #include "Windows.h"
 #include <cstdint>
 #include <string>
+#include <vector>
 namespace SKSE {
 using PluginHandle = std::uint32_t;
 struct TaskInterface { template<class F> void AddTask(F&& f) { f(); } };
@@ -114,7 +119,8 @@ inline TaskInterface* GetTaskInterface() { static TaskInterface task; return &ta
 }
 #include "PrismaUI_API.h"
 namespace logger {
-template<class... T> void info(const char*, T&&...) {}
+inline std::vector<std::string> infoMessages;
+template<class... T> void info(const char* message, T&&...) { infoMessages.emplace_back(message); }
 template<class... T> void warn(const char*, T&&...) {}
 template<class... T> void error(const char*, T&&...) {}
 template<class... T> void debug(const char*, T&&...) {}
@@ -199,6 +205,7 @@ extern "C" short GetAsyncKeyState(int);
 #include <vector>
 #include <filesystem>
 #include <fstream>
+#include <sstream>
 #include <iterator>
 
 #include <chrono>
@@ -628,11 +635,32 @@ class FactionPolitics { public: static PoliticsStub* GetSingleton(){static Polit
 class SlotTracker { public: static SlotStub* GetSingleton(){static SlotStub s;return &s;} };
 namespace SkyrimNetAPI { inline std::string (*GetPluginConfigValue)(const char*,const char*,const char*)=nullptr; }
 namespace RE {
-class Actor { public: bool IsDead()const{return false;} bool IsDisabled()const{return false;} bool Is3DLoaded()const{return true;} void* GetParentCell()const{return nullptr;} struct Base{bool IsUnique()const{return true;}}; Base* GetActorBase()const{return nullptr;} unsigned GetFormID()const{return 0;} const char* GetDisplayFullName()const{return "";} };
-class PlayerCharacter : public Actor { public: static PlayerCharacter* GetSingleton(){return nullptr;} };
+struct Calendar {
+    static Calendar* GetSingleton(){static Calendar c;return &c;}
+    float GetCurrentGameTime() const{return 3.5f;}
+    unsigned GetYear() const{return 201;} unsigned GetMonth() const{return 7;}
+    float GetDay() const{return 20.f;}
+    float GetHour() const{return 12.f;}
+};
+struct Worldspace {};
+struct Cell { bool interior=false; bool IsInteriorCell() const { return interior; } };
+class Actor { public:
+    struct NiPoint3 { float x=0,y=0,z=0; };
+    struct Base { bool unique=false; bool IsUnique()const{return unique;} } base;
+    bool dead=false,disabled=false,loaded=true; Cell* cell=nullptr; Worldspace* world=nullptr;
+    unsigned id=0; const char* name=""; NiPoint3 position{};
+    bool IsDead()const{return dead;} bool IsDisabled()const{return disabled;} bool Is3DLoaded()const{return loaded;}
+    Cell* GetParentCell()const{return cell;} Worldspace* GetWorldspace()const{return world;}
+    NiPoint3 GetPosition()const{return position;} Base* GetActorBase(){return &base;}
+    unsigned GetFormID()const{return id;} const char* GetDisplayFullName()const{return name;}
+};
+class PlayerCharacter : public Actor { public: static PlayerCharacter* GetSingleton(){static PlayerCharacter p;return &p;} };
 class UI { public: static UI* GetSingleton(){return nullptr;} bool GameIsPaused()const{return false;} };
 }
-namespace ProcessUtils { template<class F> void ForEachLoadedActor(F&&) {} }
+namespace ProcessUtils {
+inline std::vector<RE::Actor*> actors;
+template<class F> void ForEachLoadedActor(F&& callback) { for(auto* actor:actors) callback(actor); }
+}
 namespace SKSE {
 using ::SKSE::GetTaskInterface;
 struct ModCallbackEvent { std::string eventName,strArg; float numArg=0; void* sender=nullptr; };
@@ -654,10 +682,10 @@ public:
     std::uint64_t slotPayloadGeneration_=0,fullStatePayloadGeneration_=0;
     std::string pendingFullState_,pendingSlotPayload_,pendingFullStatePayload_;
     std::mutex mutex_,actionCacheMutex_; std::condition_variable pollCondition_;
-    struct ActionParam {std::string name,description;};
+    struct ActionParam {std::string name,description;std::vector<std::string> enumValues;};
     struct ActionMeta {std::string name,fileName,description;bool enabled=true;std::vector<ActionParam> params;};
     std::vector<ActionMeta> actionCache_; bool actionCacheLoaded_=true;
-    void LoadActionYAMLs() {}
+    void LoadActionYAMLs();
     void SendModEvent(const std::string&,const std::string& = "",float=0.f);
     void Toggle(); void RequestClose(); void OnHostEvent(UiHostEvent,std::uint64_t=0);
     void PushSlotData(); void PushFullState(const std::string&); void SendSlotData(std::uint64_t); void ProcessFullState(const std::string&,std::uint64_t);
@@ -694,6 +722,50 @@ void testManager() {
     assert(m->pendingFullStateSet_ && m->pendingFullState_=="{\"ready\":true}");
     m->pendingFullStateSet_=false;
     m->ProcessFullState("{\"ready\":TRUE}",generation); assert(m->pendingFullStatePayloadSet_);
+    RE::Cell exterior, neighboringExterior, distantExterior, interior{true}, otherInterior{true};
+    RE::Worldspace world, otherWorld;
+    auto* player=RE::PlayerCharacter::GetSingleton();
+    player->cell=&exterior; player->world=&world; player->position={0,0,0};
+    RE::Actor guard, citizen, named, dead, disabled, unloaded, neighboring, boundary, distant, remoteWorld, interiorActor, otherCellActor, noCell;
+    guard.id=0xFF000001; guard.name="Whiterun Guard"; guard.cell=&exterior; guard.world=&world; guard.position={1,0,0};
+    citizen.id=0xFE000801; citizen.name="Mod Citizen"; citizen.cell=&exterior; citizen.world=&world;
+    named.id=0x4E013BF1; named.name="Brey"; named.base.unique=true; named.cell=&exterior; named.world=&world;
+    dead.dead=true; dead.cell=&exterior; dead.world=&world;
+    disabled.disabled=true; disabled.cell=&exterior; disabled.world=&world;
+    unloaded.loaded=false; unloaded.cell=&exterior; unloaded.world=&world;
+    neighboring.id=0x10000001; neighboring.name="Neighbor"; neighboring.cell=&neighboringExterior; neighboring.world=&world; neighboring.position={3999,0,0};
+    boundary.id=0x10000002; boundary.name="Boundary"; boundary.cell=&neighboringExterior; boundary.world=&world; boundary.position={4000,0,0};
+    distant.id=0x10000003; distant.name="Distant"; distant.cell=&distantExterior; distant.world=&world; distant.position={4001,0,0};
+    remoteWorld.id=0x10000004; remoteWorld.name="Other World"; remoteWorld.cell=&exterior; remoteWorld.world=&otherWorld; remoteWorld.position={2,0,0};
+    interiorActor.id=0x10000005; interiorActor.name="Interior"; interiorActor.cell=&interior; interiorActor.world=&world;
+    otherCellActor.id=0x10000006; otherCellActor.name="Other Interior Cell"; otherCellActor.cell=&otherInterior; otherCellActor.world=&world;
+    ProcessUtils::actors={nullptr,player,&guard,&citizen,&named,&dead,&disabled,&unloaded,&neighboring,&boundary,&distant,&remoteWorld,&interiorActor,&otherCellActor,&noCell};
+    m->ProcessFullState("{\"ready\":true}",generation);
+    const auto actorPayload=nlohmann::json::parse(m->pendingFullStatePayload_)["loadedNpcs"];
+    assert(actorPayload==nlohmann::json::array({
+        {{"formId",0xFF000001u},{"name","Whiterun Guard"}},
+        {{"formId",0xFE000801u},{"name","Mod Citizen"}},
+        {{"formId",0x4E013BF1u},{"name","Brey"}},
+        {{"formId",0x10000001u},{"name","Neighbor"}},
+        {{"formId",0x10000002u},{"name","Boundary"}}}));
+    m->LoadActionYAMLs();
+    m->ProcessFullState("{\"ready\":true}",generation);
+    const auto actionsPayload=nlohmann::json::parse(m->pendingFullStatePayload_)["actions"];
+    assert(actionsPayload[0]["name"]=="ReportPlayerConduct");
+    assert(actionsPayload[0]["params"][1]["enum"]==nlohmann::json::array({"strongly_positive","positive","negative","strongly_negative"}));
+    player->cell=&interior;
+    RE::Actor sameInterior, differentInterior;
+    sameInterior.id=0x10000007; sameInterior.name="Same Interior"; sameInterior.cell=&interior; sameInterior.position={4000,0,0};
+    differentInterior.id=0x10000008; differentInterior.name="Different Interior"; differentInterior.cell=&otherInterior;
+    ProcessUtils::actors={&sameInterior,&differentInterior};
+    m->ProcessFullState("{\"ready\":true}",generation);
+    const auto interiorPayload=nlohmann::json::parse(m->pendingFullStatePayload_)["loadedNpcs"];
+    assert(interiorPayload==nlohmann::json::array({{{"formId",0x10000007u},{"name","Same Interior"}}}));
+    player->cell=nullptr;
+    ProcessUtils::actors={&guard};
+    m->ProcessFullState("{\"ready\":true}",generation);
+    assert(nlohmann::json::parse(m->pendingFullStatePayload_)["loadedNpcs"].empty());
+    ProcessUtils::actors.clear();
     stopOnForeground=&m->stopPolling_;
     m->HotkeyPollLoop();
     stopOnForeground=nullptr;
@@ -789,11 +861,53 @@ void testManager() {
     assert(eventCalls.size()==1 && eventCalls[0].name=="IntelEngine_DashboardRefresh");
     m->acceptingCallbacks_=false; eventCalls.clear(); DashboardUIManager::OnCancelQuestStatic(nullptr); assert(eventCalls.empty());
 }
+void testLifecycleLogs() {
+    auto* m=DashboardUIManager::GetSingleton();
+    m->host_=std::make_unique<FakeHost>();
+    m->shuttingDown_=false; m->available_=true; m->requestedOpen_=false;
+    m->isOpen_=false; m->domReady_=true; m->openedEventSent_=false;
+    m->expectedExitPending_=false;
+    logger::infoMessages.clear();
+    auto countLog=[](std::string_view expected) {
+        return std::count_if(logger::infoMessages.begin(),logger::infoMessages.end(),
+            [expected](const std::string& message){return message==expected;});
+    };
+
+    m->Toggle(); m->OnHostEvent(UiHostEvent::Entered);
+    assert(countLog("[Dashboard] Opened")==1);
+    m->OnHostEvent(UiHostEvent::Entered);
+    assert(countLog("[Dashboard] Opened")==1);
+
+    logger::infoMessages.clear();
+    m->Toggle();
+    assert(countLog("[Dashboard] Closed (cause=hotkey)")==1);
+
+    logger::infoMessages.clear();
+    m->requestedOpen_=true; m->isOpen_=true;
+    DashboardUIManager::OnCloseStatic(nullptr);
+    assert(countLog("[Dashboard] Closed (cause=page close)")==1);
+    DashboardUIManager::OnCloseStatic(nullptr);
+    assert(countLog("[Dashboard] Closed (cause=page close)")==1);
+
+    logger::infoMessages.clear();
+    m->requestedOpen_=true; m->isOpen_=true;
+    m->OnHostEvent(UiHostEvent::Exited);
+    assert(countLog("[Dashboard] Closed (cause=host exit; Esc/host reason unavailable)")==1);
+    m->OnHostEvent(UiHostEvent::Exited);
+    assert(countLog("[Dashboard] Closed (cause=host exit; Esc/host reason unavailable)")==1);
+
+    logger::infoMessages.clear();
+    m->requestedOpen_=true;
+    m->OnHostEvent(UiHostEvent::Refused);
+    assert(countLog("[Dashboard] Open refused")==1);
+    m->OnHostEvent(UiHostEvent::Refused);
+    assert(countLog("[Dashboard] Open refused")==1);
+}
 }
 int main() {
     for (std::size_t i=0; i<listeners.size(); ++i)
         assert(listeners[i].name == expectedNames[i]);
-    selectTest(); prismaTest(); magelightTest(); materializationTest(); failCleanupTest(); IntelEngine::testManager();
+    selectTest(); prismaTest(); magelightTest(); materializationTest(); failCleanupTest(); IntelEngine::testManager(); IntelEngine::testLifecycleLogs();
     std::cout << "PASS dashboard host selection, adapters, lifecycle, routing, and manager callbacks\n";
 }
 ''', encoding="utf-8")
