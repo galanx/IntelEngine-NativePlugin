@@ -169,6 +169,7 @@ class VM:
         raise ValueError("unsupported StorageUtil native " + method)
 
     def external(self, method, args, script):
+        if method == "IsDashboardOpen": return False
         if method == self.arrival_interleave_method:
             self.arrival_interleave_method = None
             if self.arrival_interleave_action == "replace":
@@ -349,7 +350,6 @@ class DirectorVM(VM):
         if method == "ResolveDirectorActor": return self.agent if args[0] == self.agent.name else self.target
         if method == "ParseFormID": return int(args[0])
         if method == "GetForm": return self.agent
-        if method == "IsDashboardOpen": return False
         if method in ("UnregisterForUpdate", "UnregisterForUpdateGameTime"):
             self.effects.append((method, tuple(args)))
             return None
@@ -541,9 +541,87 @@ def run_director_lite_checks(files, history):
                     not any(e[0] == "InjectFact" for e in task.effects[effects_at:]),
                     "repeated cancellation injected a duplicate closing fact")
 
+    def director_action_success_notice():
+        for state, expected in ((1, [("Notification", "Nazeem: ChangeSpeed started.")]), (0, [])):
+            task = DirectorVM(files, history)
+            task.properties["AgentAlias00"].actor = task.agent
+            task.properties["SlotStates"][0] = state
+            payload = json.dumps({"actionName": "ChangeSpeed", "npcFormId": "1234", "newSpeed": 0})
+            task.invoke("IntelEngine_Core", "OnDashboardExecuteAction", ("", payload, 0.0, None))
+            require([e for e in task.effects if e[0] == "Notification"] == expected,
+                    "director_action_success_notice: Bool-true must notify once; Bool-false must not notify")
+
+    def director_social_and_political_success_notice():
+        class NoticeVM(DirectorVM):
+            def __init__(self):
+                super().__init__(files, history)
+                self.scripts["IntelEngine_Politics"] = files[3]
+                self.properties["Politics"] = "IntelEngine_Politics"
+                self.distance, self.acted = 1000.0, True
+
+            def external(self, method, args, script):
+                if method == "GetDistance": return self.distance
+                if method == "GetActorHoldName": return "Whiterun"
+                if method == "GetLength": return len(args[0])
+                if method in ("StoryResponseGetOptionalField", "ExtractJsonField"):
+                    return json.loads(args[0]).get(args[1], "")
+                if method == "ProcessPoliticalDMResponse":
+                    self.effects.append(("political-record", self.acted))
+                    return json.dumps({"acted": str(self.acted).lower(), "event_type": "trade_deal"})
+                if method == "ResetManifestationCooldown": return None
+                return super().external(method, args, script)
+
+        for mode in ("travel", "no-slot", "off-screen", "refused"):
+            task = NoticeVM()
+            if mode == "no-slot": task.properties["SlotStates"] = [1] * 5
+            if mode == "off-screen": task.distance = 100.0
+            if mode == "refused":
+                task.properties["AgentAlias00"].actor = task.agent
+                task.properties["SlotStates"][0] = 1
+            payload = json.dumps({"npc1Name": task.agent.name, "npc2Name": task.target.name,
+                "socialType": "npc_interaction", "narration": "A meeting", "response": "{}"})
+            task.invoke("IntelEngine_Core", "OnDashboardDispatchNpcSocial", ("", payload, 0.0, None))
+            notices = [e for e in task.effects if e[0] == "Notification" and e[1].endswith("started.")]
+            require(notices == ([] if mode == "refused" else
+                [("Notification", "Nazeem and Recipient: npc_interaction started.")]),
+                "director_social_and_political_success_notice: Social " + mode)
+            if mode == "travel":
+                require(task.properties["IsNPCStoryActive"] and task.properties["SlotTaskTypes"][0] == "npc_social",
+                        "Social notice without queued travel")
+        for acted in (True, False):
+            task = NoticeVM()
+            task.acted = acted
+            task.invoke("IntelEngine_Core", "OnDashboardDispatchPolitics",
+                        ("", '{"event_type":"trade_deal"}', 0.0, None))
+            require([e for e in task.effects if e[0] == "Notification"] ==
+                    ([("Notification", "Political event recorded: trade_deal.")] if acted else []),
+                    "director_social_and_political_success_notice: Political acted=" + str(acted))
+            require(("political-record", acted) in task.effects, "Political native boundary not reached")
+
+    def director_message_generation_success_notice():
+        class MessageVM(DirectorVM):
+            def external(self, method, args, script):
+                if method == "FindMessengerForSender": return self.target
+                if method == "CalculateDeadlineFromDistance": return 124.0
+                if method == "SetSlotOffscreenArrival": return None
+                return super().external(method, args, script)
+        for full in (False, True):
+            task = MessageVM(files, history)
+            if full: task.properties["SlotStates"] = [1] * 5
+            generation = task.properties["DispatchGeneration"]
+            payload = json.dumps({"storyType": "message", "npcName": task.agent.name,
+                "narration": "A message", "response": '{"msgContent":"Hello"}'})
+            task.invoke("IntelEngine_Core", "OnDashboardDispatchStory", ("", payload, 0.0, None))
+            require([e for e in task.effects if e[0] == "Notification"] ==
+                    ([] if full else [("Notification", "Recipient sets out (message).")]),
+                    "director_message_generation_success_notice: accepted courier once, refused none")
+            require(task.properties["DispatchGeneration"] == generation + (0 if full else 1),
+                    "message generation did not match dispatch admission")
+
     for case in (director_seek_then_seek_is_refused, run6_seek_seek_fetch_arrival,
                  director_story_while_story_active, cancel_story_task_ends_story,
-                 cancel_story_injects_closing_fact):
+                 cancel_story_injects_closing_fact, director_action_success_notice,
+                 director_social_and_political_success_notice, director_message_generation_success_notice):
         case()
         print("actual PEX " + case.__name__ + " PASS")
 
@@ -563,7 +641,7 @@ def main():
             capture_output=True, text=True).stdout)
 
     files = (disassemble("IntelEngine_NPCTasks.pex"), disassemble("IntelEngine_Core.pex"),
-             disassemble("IntelEngine_StoryEngine.pex"))
+             disassemble("IntelEngine_StoryEngine.pex"), disassemble("IntelEngine_Politics.pex"))
     vm = VM(files, history)
     vm.invoke("IntelEngine_NPCTasks", "OnArrivedToDeliver", (0, vm.agent, vm.target))
     events = vm.effects

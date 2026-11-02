@@ -135,7 +135,7 @@ const STORY_TYPE_FIELDS = {
   message: [
     { key: 'msgContent', label: 'Message content', type: 'text', required: true,
       placeholder: 'e.g. I need to speak with you about a private matter',
-      hint: 'Required. The actual message text. A messenger NPC is auto-selected.' },
+      hint: 'Required. The message text. The NPC you pick is the sender; IE picks a nearby courier.' },
     { key: 'destination', label: 'Meeting place', type: 'text',
       placeholder: 'e.g. The Bee and Barb, Dragonsreach',
       hint: 'Optional. If set with meetTime, creates a meeting invitation.' },
@@ -281,7 +281,7 @@ const SOCIAL_TYPE_FIELDS = {
   ],
 };
 
-function DirectorTab({ loadedNpcs, actions, factions = [], sendAction }) {
+function DirectorTab({ loadedNpcs, tasks = [], actions, factions = [], sendAction }) {
   // Story dispatch state
   const [storyNpc, setStoryNpc] = useState('');
   const [storyType, setStoryType] = useState('seek_player');
@@ -307,7 +307,21 @@ function DirectorTab({ loadedNpcs, actions, factions = [], sendAction }) {
   const [selectedAction, setSelectedAction] = useState('');
   const [actionParams, setActionParams] = useState({});
 
+  const [busyConfirm, setBusyConfirm] = useState('');
+  const send = sendAction;
+  sendAction = (action, payload) => { send(action, payload); if (action === 'cancelTask') return; const sent = `sent:${action}:${Date.now()}`; setBusyConfirm(sent); setTimeout(() => setBusyConfirm(current => current === sent ? '' : current), 2000); };
   const npcs = loadedNpcs || [];
+  const busySlots = names => tasks.filter(slot => slot.state && names.some(name => slot.agentName?.toLowerCase() === name.trim().toLowerCase()));
+  const storyBusy = busySlots([storyNpc]);
+  const socialBusy = busySlots([socialNpc1, socialNpc2]);
+  const actionBusy = tasks.filter(slot => slot.state && String(slot.agentFormId >>> 0) === actionNpc);
+  const confirmBusy = (kind, slots) => {
+    if (!slots.length) { setBusyConfirm(''); return true; }
+    if (busyConfirm !== kind) { setBusyConfirm(kind); return false; }
+    slots.forEach(slot => sendAction('cancelTask', { slot: slot.index }));
+    setBusyConfirm('');
+    return true;
+  };
 
   // Only show IntelEngine actions in the Director tab
   const INTEL_ACTIONS = new Set([
@@ -339,6 +353,7 @@ function DirectorTab({ loadedNpcs, actions, factions = [], sendAction }) {
           required: selectedAction === 'ReportPlayerConduct' || p.required,
           options: p.enum || [],
           placeholder: p.description,
+          hint: p.description,
         }));
     }
     return [];
@@ -356,6 +371,7 @@ function DirectorTab({ loadedNpcs, actions, factions = [], sendAction }) {
 
   const handleDispatchStory = useCallback(() => {
     if (!storyTypeValid || !storyNpc.trim() || !storyNarration.trim()) return;
+    if (!confirmBusy('story', storyBusy)) return;
     sendAction('dispatchStory', {
       npcName: storyNpc.trim(),
       storyType,
@@ -364,7 +380,7 @@ function DirectorTab({ loadedNpcs, actions, factions = [], sendAction }) {
     });
     setStoryNarration('');
     setStoryFields({});
-  }, [storyNpc, storyType, storyTypeValid, storyNarration, storyFields, sendAction]);
+  }, [storyNpc, storyType, storyTypeValid, storyNarration, storyFields, sendAction, confirmBusy, storyBusy]);
 
   const currentSocialFields = SOCIAL_TYPE_FIELDS[socialType] || [];
 
@@ -375,6 +391,7 @@ function DirectorTab({ loadedNpcs, actions, factions = [], sendAction }) {
 
   const handleDispatchSocial = useCallback(() => {
     if (!socialTypeValid || !socialNpc1.trim() || !socialNpc2.trim() || !socialNarration.trim()) return;
+    if (!confirmBusy('social', socialBusy)) return;
     sendAction('dispatchNpcSocial', {
       npc1Name: socialNpc1.trim(),
       npc2Name: socialNpc2.trim(),
@@ -384,7 +401,7 @@ function DirectorTab({ loadedNpcs, actions, factions = [], sendAction }) {
     });
     setSocialNarration('');
     setSocialFields({});
-  }, [socialNpc1, socialNpc2, socialType, socialTypeValid, socialNarration, socialFields, sendAction]);
+  }, [socialNpc1, socialNpc2, socialType, socialTypeValid, socialNarration, socialFields, sendAction, confirmBusy, socialBusy]);
 
   const handlePolEventTypeChange = useCallback((type) => {
     setPolEventType(type);
@@ -422,13 +439,14 @@ function DirectorTab({ loadedNpcs, actions, factions = [], sendAction }) {
   const actionNpcValid = npcs.some(npc => String(npc.formId) === actionNpc);
   const handleExecuteAction = useCallback(() => {
     if (!actionNpcValid || !selectedAction || !requiredFieldsValid) return;
+    if (!confirmBusy('action', actionBusy)) return;
     sendAction('executeAction', {
       npcFormId: Number(actionNpc),
       actionName: selectedAction,
       params: actionParams,
     });
     handleActionChange(selectedAction);
-  }, [actionNpc, actionNpcValid, selectedAction, actionParams, sendAction, requiredFieldsValid, handleActionChange]);
+  }, [actionNpc, actionNpcValid, selectedAction, actionParams, sendAction, requiredFieldsValid, handleActionChange, confirmBusy, actionBusy]);
 
   const setParam = useCallback((key, value) => {
     setActionParams(prev => ({ ...prev, [key]: value }));
@@ -445,7 +463,7 @@ function DirectorTab({ loadedNpcs, actions, factions = [], sendAction }) {
             <input
               type="text"
               value={storyNpc}
-              onChange={e => setStoryNpc(e.target.value)}
+              onChange={e => { setStoryNpc(e.target.value); setBusyConfirm(''); }}
               placeholder="NPC name (e.g. Saadia)"
               className="flex-1 bg-white/5 border border-white/10 rounded px-2 py-1.5 text-xs text-gray-200 outline-none placeholder:text-gray-600"
             />
@@ -459,6 +477,7 @@ function DirectorTab({ loadedNpcs, actions, factions = [], sendAction }) {
               ))}
             </Select>
           </div>
+          <p className="text-[9px] text-gray-600 leading-tight">NPC: exact display name. Story type: what they will do.</p>
           <textarea
             value={storyNarration}
             onChange={e => setStoryNarration(e.target.value)}
@@ -466,6 +485,7 @@ function DirectorTab({ loadedNpcs, actions, factions = [], sendAction }) {
             rows={2}
             className="w-full bg-white/5 border border-white/10 rounded px-2 py-1.5 text-xs text-gray-200 outline-none resize-none placeholder:text-gray-600"
           />
+          <p className="text-[9px] text-gray-600 leading-tight">Narration: why the NPC acts; used as story context.</p>
 
           {/* Type-specific fields */}
           {currentFields.map(f => (
@@ -505,7 +525,7 @@ function DirectorTab({ loadedNpcs, actions, factions = [], sendAction }) {
             disabled={!storyTypeValid || !storyNpc.trim() || !storyNarration.trim()}
             className="w-full px-3 py-1.5 text-xs font-medium rounded transition-colors bg-blue-500/20 text-blue-400 hover:bg-blue-500/30 disabled:opacity-30 disabled:cursor-not-allowed"
           >
-            Dispatch Story
+            {busyConfirm.startsWith('sent:dispatchStory:') ? 'Sent' : storyBusy.length && busyConfirm === 'story' ? 'Busy — you sure?' : 'Dispatch Story'}
           </button>
         </div>
       </section>
@@ -518,18 +538,19 @@ function DirectorTab({ loadedNpcs, actions, factions = [], sendAction }) {
             <input
               type="text"
               value={socialNpc1}
-              onChange={e => setSocialNpc1(e.target.value)}
+              onChange={e => { setSocialNpc1(e.target.value); setBusyConfirm(''); }}
               placeholder="NPC 1 (e.g. Mikael)"
               className="flex-1 bg-white/5 border border-white/10 rounded px-2 py-1.5 text-xs text-gray-200 outline-none placeholder:text-gray-600"
             />
             <input
               type="text"
               value={socialNpc2}
-              onChange={e => setSocialNpc2(e.target.value)}
+              onChange={e => { setSocialNpc2(e.target.value); setBusyConfirm(''); }}
               placeholder="NPC 2 (e.g. Sven)"
               className="flex-1 bg-white/5 border border-white/10 rounded px-2 py-1.5 text-xs text-gray-200 outline-none placeholder:text-gray-600"
             />
           </div>
+          <p className="text-[9px] text-gray-600 leading-tight">{socialType === 'npc_gossip' ? 'NPC 1 tells, NPC 2 listens' : 'NPC 1: the traveler. NPC 2: the counterpart they meet.'}</p>
           <div className="flex gap-2">
             <Select aria-label="Social type" containerClassName="w-[130px]"
               value={socialType}
@@ -548,6 +569,7 @@ function DirectorTab({ loadedNpcs, actions, factions = [], sendAction }) {
               className="flex-1 bg-white/5 border border-white/10 rounded px-2 py-1.5 text-xs text-gray-200 outline-none resize-none placeholder:text-gray-600"
             />
           </div>
+          <p className="text-[9px] text-gray-600 leading-tight">Social type: interaction or gossip. Narration: what happens between them.</p>
 
           {currentSocialFields.map(f => (
             <div key={f.key} className="flex flex-col gap-0.5">
@@ -573,7 +595,7 @@ function DirectorTab({ loadedNpcs, actions, factions = [], sendAction }) {
             disabled={!socialTypeValid || !socialNpc1.trim() || !socialNpc2.trim() || !socialNarration.trim()}
             className="w-full px-3 py-1.5 text-xs font-medium rounded transition-colors bg-purple-500/20 text-purple-400 hover:bg-purple-500/30 disabled:opacity-30 disabled:cursor-not-allowed"
           >
-            Dispatch Social
+            {busyConfirm.startsWith('sent:dispatchNpcSocial:') ? 'Sent' : socialBusy.length && busyConfirm === 'social' ? 'Busy — you sure?' : 'Dispatch Social'}
           </button>
         </div>
       </section>
@@ -596,6 +618,7 @@ function DirectorTab({ loadedNpcs, actions, factions = [], sendAction }) {
               placeholder="Faction B (e.g. ThalmorFaction)"
             />
           </div>
+          <p className="text-[9px] text-gray-600 leading-tight">Faction A: first side. Faction B: other side. Pick two different faction IDs.</p>
           <div className="flex gap-2">
             <Select aria-label="Political event type" containerClassName="flex-1"
               value={polEventType}
@@ -618,6 +641,7 @@ function DirectorTab({ loadedNpcs, actions, factions = [], sendAction }) {
               />
             </div>
           </div>
+          <p className="text-[9px] text-gray-600 leading-tight">Event: what happened. Δ: relation change, from -15 to 15.</p>
           <textarea
             value={polDescription}
             onChange={e => setPolDescription(e.target.value)}
@@ -625,13 +649,14 @@ function DirectorTab({ loadedNpcs, actions, factions = [], sendAction }) {
             rows={2}
             className="w-full bg-white/5 border border-white/10 rounded px-2 py-1.5 text-xs text-gray-200 outline-none resize-none placeholder:text-gray-600"
           />
+          <p className="text-[9px] text-gray-600 leading-tight">Description: a short account of the political event.</p>
           <button
             onClick={handleDispatchPolitics}
             disabled={!polEventTypeValid || !polFactionA.trim() || !polFactionB.trim() ||
               polFactionA.trim() === polFactionB.trim() || !polDescription.trim()}
             className="w-full px-3 py-1.5 text-xs font-medium rounded transition-colors bg-amber-500/20 text-amber-400 hover:bg-amber-500/30 disabled:opacity-30 disabled:cursor-not-allowed"
           >
-            Dispatch Political Event
+            {busyConfirm.startsWith('sent:dispatchPolitics:') ? 'Sent' : 'Dispatch Political Event'}
           </button>
         </div>
       </section>
@@ -643,7 +668,7 @@ function DirectorTab({ loadedNpcs, actions, factions = [], sendAction }) {
           <div className="flex gap-2">
             <Select aria-label="Action NPC" containerClassName="flex-1"
               value={actionNpc}
-              onChange={e => setActionNpc(e.target.value)}
+              onChange={e => { setActionNpc(e.target.value); setBusyConfirm(''); }}
               className="bg-white/5 border border-white/10 rounded px-2 py-1.5 text-xs text-gray-200 outline-none"
             >
               <option value="">Select NPC...</option>
@@ -662,6 +687,7 @@ function DirectorTab({ loadedNpcs, actions, factions = [], sendAction }) {
               ))}
             </Select>
           </div>
+          <p className="text-[9px] text-gray-600 leading-tight">NPC: nearby actor who performs the action. Action: command to run.</p>
 
           {/* Dynamic param fields for selected action */}
           {currentActionFields.map(f => (
@@ -710,7 +736,7 @@ function DirectorTab({ loadedNpcs, actions, factions = [], sendAction }) {
             disabled={!actionNpcValid || !selectedAction || !requiredFieldsValid}
             className="w-full px-3 py-1.5 text-xs font-medium rounded transition-colors bg-emerald-500/20 text-emerald-400 hover:bg-emerald-500/30 disabled:opacity-30 disabled:cursor-not-allowed"
           >
-            Execute Action
+            {busyConfirm.startsWith('sent:executeAction:') ? 'Sent' : actionBusy.length && busyConfirm === 'action' ? 'Busy — you sure?' : 'Execute Action'}
           </button>
         </div>
       </section>

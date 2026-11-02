@@ -300,7 +300,7 @@ View all pending scheduled tasks with times and targets. Cancel individually or 
 
 | Setting | Default | Range | Description |
 |---|---|---|---|
-| Debug Mode | Off | On/Off | Verbose logging for troubleshooting |
+| Debug Mode | Off | On/Off | Shows IE debug messages as in-game notifications (always logged to Papyrus.0.log). |
 | Max Concurrent Tasks | 5 | 1-5 | How many NPCs can be active at once |
 | Default Wait Hours | 48 | 6-168 | How long NPCs wait at destinations |
 | Task Confirmation | On | On/Off | Prompt before executing tasks |
@@ -333,6 +333,7 @@ Change the dashboard hotkey in the dashboard's Settings tab or on the SkyrimNet 
 ### Tabs
 
 **Tasks** — Live view of all active and scheduled tasks. Cancel individual tasks, see agent names, destinations, task types, speeds, and scheduled meeting timing ("in ~3h", "very soon", "overdue"). A successful task-card cancellation shows `<Name>'s task cancelled.`. Cancelling the active story NPC's task also ends the story and its tracking, clearing the Story tab.
+Slot allocation and clearing refresh the open dashboard immediately; a closed dashboard skips snapshot building.
 
 Cancelled stories with narration add a `stopped before finishing: ...` NPC fact before cleanup. Generic load abandonment and the six-hour watchdog add `never finished: ...` facts; this is source/compiled-bytecode behavior, not live-verified.
 
@@ -346,9 +347,11 @@ Activity dates use the current save's in-game calendar and display to the neares
 
 **Director** — Manual Dungeon Master controls. Dispatch any story type to any NPC with full parameter fields (informant gossip, quest locations, message content, etc.). Execute any of the 11 player-driven actions, including ReportPlayerConduct, with guided field hints and YAML enum choices. Action Execution's NPC combobox filters the existing loaded-NPC list (within 4000 units in the same exterior worldspace or interior cell) while typing; Enter/click picks the actor's unchanged FormID. Unpicked/free text cannot execute, and × clears the pick. Manual CancelCurrentTask stops the current task even beside the player; SkyrimNet-driven cancellation retains its proximity guard.
 
-Director Story, NPC Social and task-creating Action Execution requests refuse actors already bound to an IE task slot, keeping the task and showing a busy notification. Cancellation, speed changes and conduct reports remain available; automatic requests retain their existing behavior.
+Director Story, NPC Social and Action Execution require a second click when a selected NPC owns an active slot: the first click changes the button to `Busy — you sure?`; the second sends the existing slot cancellation(s), then dispatches. Changing an NPC resets confirmation. Papyrus still refuses busy task-creating requests if cancellation has not completed; automatic requests retain their existing behavior.
 
 Director Story also refuses a new story while the story engine is active, even for a different NPC. Finish or cancel the active story before dispatching another; the notification identifies its NPC and story type.
+
+Director Action Execution shows `<Name>: <action> started.` only when one of its nine Bool-returning actions succeeds; cancellation and conduct reports retain their existing feedback. Story shows `<ActiveStoryNPC name> sets out (<type>).` only while active after its dispatch generation advances, including message couriers rather than senders; road encounters do not advance that generation and are skipped. NPC Social notifies after queued travel or an applied off-screen outcome; Politics notifies only when its existing `acted` signal is true. Automatic paths receive no new success notices. Director submit buttons show `Sent` for about two seconds after sending; this is submission feedback, not proof the game accepted the request.
 
 All eight dashboard dropdown sites use the same type-to-filter, pick-from-list combobox in both hosts; no plain-select variant remains. Each filters its existing choices while typing, picks with Enter/click and clears with ×; free text is never submitted. Director dispatch requires picked story/social/political types and Action Execution requires a picked nearby actor and valid action parameters. Clearing/filtering the Settings hotkey only edits its search draft; only a list pick commits a numeric key. Comboboxes and Director faction suggestions measure their displayed list height (up to 128 CSS pixels, including UI scale) within the viewport and clipping containers: down when it fits, otherwise up when it fits, otherwise the larger side with a clamped scrollable height. Comboboxes support arrow keys, Escape, outside-click/focus dismissal, current-value highlighting and disabled state. Containing-pane scroll/resize dismisses open lists; list scrolling stays open. Magelight Escape capture is held only while a list is open, including when focus is on its clear button.
 
@@ -443,6 +446,8 @@ IntelEngine is under active development. The following features are planned for 
 > SkyrimNet presents ALL registered actions to its AI when choosing what an NPC should do. If another mod provides its own travel, fetch, or cancel actions, the AI will see **duplicate options** — for example, two different "go to location" actions. It may pick IntelEngine's travel but the other mod's cancel, which won't work because each mod's cancel only affects its own tasks.
 >
 > **If you use another SkyrimNet mod that provides similar actions** (travel, fetch, deliver, cancel, etc.), you must **disable the overlapping actions** in either IntelEngine or the other mod. Each action YAML has an `enabled: true/false` flag — set conflicting actions to `enabled: false` in whichever mod you want to defer.
+>
+> **SeverActions:** its travel overlaps IntelEngine's `GoToLocation` (and related travel actions). Keep travel enabled in only one of the two — turn off IntelEngine's travel actions in the dashboard **Actions** tab, or turn off SeverActions' travel — so NPCs never get two competing travel orders.
 
 > **SkyrimNet Beta 25 / IntelEngine 3.5.1 migration:** IntelEngine content now loads from external plugin id `galanx.intelengine`. After upgrading, review its enablement and priority in SkyrimNet. Existing action names are unchanged, so per-action settings retain their keys, but should still be reviewed after the content-layer migration. Do not move or delete `config/plugins/IntelEngine`; it continues to own IntelEngine settings and faction configuration.
 
