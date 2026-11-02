@@ -1,11 +1,14 @@
-import { useState, useMemo, useCallback, useRef, useEffect } from 'react';
+import { useState, useMemo, useCallback, useRef, useEffect, useLayoutEffect } from 'react';
 
 /** Text input with dropdown suggestions. Works in Ultralight (no <datalist> needed). */
 function FactionInput({ value, onChange, factions, placeholder }) {
   const [open, setOpen] = useState(false);
+  const [openUp, setOpenUp] = useState(false);
   const [showAll, setShowAll] = useState(false);
   const ref = useRef(null);
 
+  const menuRef = useRef(null);
+  const openDropdown = () => setOpen(true);
   // Close dropdown on outside click
   useEffect(() => {
     const handler = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
@@ -19,14 +22,30 @@ function FactionInput({ value, onChange, factions, placeholder }) {
     return factions.filter(f => f.id.toLowerCase().includes(lc) || f.name.toLowerCase().includes(lc));
   }, [factions, value, showAll]);
 
+  useLayoutEffect(() => {
+    if (!open || !menuRef.current) return;
+    const input = ref.current.getBoundingClientRect();
+    const height = menuRef.current.getBoundingClientRect().height +
+      2 * input.height / ref.current.offsetHeight;
+    let top = 0, bottom = window.innerHeight;
+    for (let parent = ref.current.parentElement; parent; parent = parent.parentElement) {
+      if (/(auto|scroll|hidden|clip)/.test(getComputedStyle(parent).overflowY)) {
+        const bounds = parent.getBoundingClientRect();
+        top = Math.max(top, bounds.top);
+        bottom = Math.min(bottom, bounds.bottom);
+      }
+    }
+    setOpenUp(bottom - input.bottom < height && input.top - top > bottom - input.bottom);
+  }, [open, filtered]);
+
   return (
     <div ref={ref} className="flex-1 relative">
       <input
         type="text"
         value={value}
-        onChange={e => { onChange(e.target.value); setShowAll(false); setOpen(true); }}
-        onFocus={() => { setShowAll(true); setOpen(true); }}
-        onClick={() => { setShowAll(true); setOpen(true); }}
+        onChange={e => { onChange(e.target.value); setShowAll(false); openDropdown(); }}
+        onFocus={() => { setShowAll(true); openDropdown(); }}
+        onClick={() => { setShowAll(true); openDropdown(); }}
         placeholder={placeholder}
         className="w-full bg-white/5 border border-white/10 rounded px-2 py-1.5 pr-6 text-xs text-gray-200 outline-none placeholder:text-gray-600"
       />
@@ -35,14 +54,14 @@ function FactionInput({ value, onChange, factions, placeholder }) {
           type="button"
           aria-label="Clear faction"
           onMouseDown={e => e.preventDefault()}
-          onClick={() => { onChange(''); setShowAll(true); setOpen(true); }}
+          onClick={() => { onChange(''); setShowAll(true); openDropdown(); }}
           className="absolute right-1 top-1/2 -translate-y-1/2 px-1 text-xs text-gray-500 hover:text-gray-200"
         >
           ×
         </button>
       )}
       {open && filtered.length > 0 && (
-        <div className="absolute z-50 top-full left-0 right-0 mt-0.5 max-h-32 overflow-y-auto bg-[#1a1a2e] border border-white/10 rounded shadow-lg">
+        <div ref={menuRef} className={`absolute z-50 left-0 right-0 max-h-32 overflow-y-auto bg-[#1a1a2e] border border-white/10 rounded shadow-lg ${openUp ? 'bottom-full mb-0.5' : 'top-full mt-0.5'}`}>
           {filtered.map(f => (
             <div
               key={f.id}
