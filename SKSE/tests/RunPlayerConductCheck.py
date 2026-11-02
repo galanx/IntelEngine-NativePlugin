@@ -91,10 +91,13 @@ int main() {
  reporter.faction = ally.id;
  call(target.id, "strongly_negative", 2, "Reported to the Thalmor: 2 standings changed.");
  require(db->GetPlayerStanding(target.id) == 0 && db->GetPlayerStanding(ally.id) == -5);
+ reporter.faction = target.id;
+ call(target.id, "positive", 1, "Reported to the Thalmor: 1 standings changed.");
+ require(db->GetPlayerStanding(target.id) == 5 && db->GetPlayerStanding(rival.id) == -5);
  call("Missing", "positive", 0, "Conduct report failed: unknown faction 'Missing'.");
- require(db->GetPlayerStanding(target.id) == 0);
+ require(db->GetPlayerStanding(target.id) == 5);
  db->Shutdown();
- std::cout << "PASS: production conduct ID/name lookup, four sentiments, primary/rival/ally standing changes and exact success/error notifications\\n";
+ std::cout << "PASS: production conduct ID/name lookup, same-faction handling, four sentiments, primary/rival/ally changes and notifications\\n";
 }
 ''', encoding='utf-8')
     executable = work / 'check.exe'
