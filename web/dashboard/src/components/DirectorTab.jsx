@@ -501,6 +501,7 @@ function DirectorTab({ loadedNpcs, tasks = [], actions, factions = [], sendActio
       factionA: polFactionA.trim(),
       factionB: polFactionB.trim(),
       eventType: polEventType,
+      eventLabel: POLITICAL_EVENT_TYPES.find(e => e.key === polEventType)?.label || polEventType,
       description: polDescription.trim(),
       relationDelta: polDelta,
     });

@@ -1139,6 +1139,7 @@ namespace IntelEngine {
             std::string factionA = j.value("factionA", "");
             std::string factionB = j.value("factionB", "");
             std::string eventType = j.value("eventType", "");
+            std::string eventLabel = j.value("eventLabel", eventType);
             std::string description = j.value("description", "");
             int delta = j.value("relationDelta", 0);
             if (factionA.empty() || factionB.empty() || eventType.empty() || description.empty() || delta == 0) return;
@@ -1149,6 +1150,7 @@ namespace IntelEngine {
             response["faction_a"] = factionA;
             response["faction_b"] = factionB;
             response["event_type"] = eventType;
+            response["event_label"] = eventLabel;
             response["description"] = description;
             response["relation_delta"] = delta;
         
