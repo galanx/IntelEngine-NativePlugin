@@ -408,7 +408,47 @@ def run_director_lite_checks(files, history):
                 all(task.properties[f"AgentAlias{i:02d}"].actor is None for i in range(5)),
                 "run6 arrival failed to clear only the original seek slot")
 
-    for case in (director_seek_then_seek_is_refused, run6_seek_seek_fetch_arrival):
+    def director_story_while_story_active():
+        class CourierVM(DirectorVM):
+            def __init__(self):
+                super().__init__(files, history)
+                self.agent.name, self.target.name = "Gundarsting [Servant]", "Amren"
+                self.saadia = Actor("Saadia", "player-cell")
+
+            def external(self, method, args, script):
+                if method == "FindMessengerForSender": return self.agent
+                if method == "ResolveDirectorActor" and args[0] == "Saadia": return self.saadia
+                return super().external(method, args, script)
+
+        task = CourierVM()
+        message = json.dumps({"msgContent": "Please come see me", "destination": "", "meetTime": ""})
+        payload = json.dumps({"storyType": "message", "npcName": "Amren",
+                              "narration": "Deliver Amren's message", "response": message})
+        task.invoke("IntelEngine_Core", "OnDashboardDispatchStory", ("", payload, 0.0, None))
+        require(task.properties["ActiveStoryNPC"] is task.agent and
+                task.properties["ActiveStoryType"] == "message" and
+                task.storage[(task.agent, "Intel_MessageContent")] == "Please come see me",
+                "first Director message did not establish the courier task")
+        snapshot, effects_at = task.task_snapshot(), len(task.effects)
+        payload = json.dumps({"storyType": "seek_player", "npcName": "Saadia",
+                              "narration": "A second story", "response": "{}"})
+        task.invoke("IntelEngine_Core", "OnDashboardDispatchStory", ("", payload, 0.0, None))
+        require(task.task_snapshot() == snapshot, "second Director story displaced the active courier")
+        extra = task.effects[effects_at:]
+        require([e for e in extra if e[0] == "Notification"] == [("Notification",
+                "Story engine is busy with Gundarsting [Servant] (message). Cancel it first.")],
+                "active Story engine did not notify exactly once")
+        require(all(e[0] in ("Notification", "Trace") for e in extra),
+                "refused story wrote facts, narrated, or changed travel")
+        task.halt_before = "EnsureBuildingAccess"
+        task.invoke("IntelEngine_StoryEngine", "OnProximityArrived", ("0",))
+        require(task.call_counts.get(("IntelEngine_Core", "ClearSlot"), 0) == 1 and
+                task.properties["SlotStates"] == [0] * 5 and
+                all(task.properties[f"AgentAlias{i:02d}"].actor is None for i in range(5)),
+                "preserved courier arrival did not release its original slot")
+
+    for case in (director_seek_then_seek_is_refused, run6_seek_seek_fetch_arrival,
+                 director_story_while_story_active):
         case()
         print("actual PEX " + case.__name__ + " PASS")
 
