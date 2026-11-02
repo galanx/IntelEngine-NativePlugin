@@ -2,6 +2,8 @@
 // Production relation/war/event code and SQLite; only game clock/log/output are stubbed.
 #include "FactionPolitics.h"
 #include "FactionPoliticsMethods.inc"
+#include <sqlite3.h>
+#include <algorithm>
 #include <iostream>
 #include <stdexcept>
 
@@ -48,8 +50,29 @@ int main() try {
     politics->RecalculateRelationScores();
     Require(db->GetRelation("A", "B") == -45 && db->GetRelation("C", "D") == -60,
             "loading earlier save must remove future battle and peace deltas");
+    Require(db->SetRelation("A", "A", 99) == false, "self relation must not be set");
+    Require(db->AdjustRelation("A", "A", 99) == 0, "self relation must not be adjusted");
+    Require(db->SeedDefaultRelation("A", "A", 99) == false, "self relation must not be seeded");
+    Require(db->RecordEvent("A", "A", "insult", "self event", -5, 2.f) == -1,
+            "self political event must not be recorded");
+    Require(db->StartWar("A", "A", 2.f) == -1, "self war must not start");
+    Require(db->RecordEvent("A", "", "player_combat", "one-sided event", 0, 2.f) >= 0,
+            "one-sided political event must remain valid");
     db->Shutdown();
-    std::cout << "PASS: battle and peace survive reopen/rebuild, hidden bookkeeping, rejected repeats and timeline rollback\n";
+    sqlite3* raw = nullptr;
+    Require(sqlite3_open("./relations.db", &raw) == SQLITE_OK, "open fixture DB for legacy self relation");
+    Require(sqlite3_exec(raw,
+        "INSERT INTO faction_relations (faction_a, faction_b, relation_score) VALUES ('A', 'A', 0)",
+        nullptr, nullptr, nullptr) == SQLITE_OK, "insert legacy self relation fixture");
+    sqlite3_close(raw);
+    Require(db->Initialize("./relations.db"), "reopen DB with legacy self relation");
+    const auto relations = db->GetAllRelations();
+    Require(std::none_of(relations.begin(), relations.end(),
+        [](const FactionRelation& relation) { return relation.factionA == relation.factionB; }),
+        "legacy self relation must be hidden from relation reads");
+    Require(db->GetRelation("A", "A") == 0, "legacy self relation must not be returned");
+    db->Shutdown();
+    std::cout << "PASS: battle/peace persistence, rejected self pairs, one-sided events and legacy relation filtering\n";
 }
 catch (const std::exception& error) {
     std::cerr << "FAIL: " << error.what() << '\n';
