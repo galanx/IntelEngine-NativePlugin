@@ -333,6 +333,7 @@ Change the dashboard hotkey in the dashboard's Settings tab or on the SkyrimNet 
 ### Tabs
 
 **Tasks** — Live view of all active and scheduled tasks. Cancel individual tasks, see agent names, destinations, task types, speeds, and scheduled meeting timing ("in ~3h", "very soon", "overdue"). A successful task-card cancellation shows `<Name>'s task cancelled.`. Cancelling the active story NPC's task also ends the story and its tracking, clearing the Story tab.
+Slot allocation and clearing refresh the open dashboard immediately; a closed dashboard skips snapshot building.
 
 Cancelled stories with narration add a `stopped before finishing: ...` NPC fact before cleanup. Generic load abandonment and the six-hour watchdog add `never finished: ...` facts; this is source/compiled-bytecode behavior, not live-verified.
 
