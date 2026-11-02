@@ -370,7 +370,7 @@ function DirectorTab({ loadedNpcs, tasks = [], actions, factions = [], sendActio
       factions:factions.map(f=>({id:f.id,name:f.name})) };
     const request = { id, form, fields, draft, schema, variants, options };
     pendingRef.current = request; setPending(request); setGenerateError('');
-    send('generateDirector', { requestId:id, form, fields, touched, schema, variants, options });
+    send('generateDirector', { requestId:id, form, fields, blank:Object.keys(fields).filter(k=>fields[k] === ''), touched, schema, variants, options });
   };
   const clear = form => {
     const keys = form === 'story' ? ['storyType', ...Object.keys(STORY_TYPE_FIELDS).flatMap(t=>(STORY_TYPE_FIELDS[t]||[]).map(f=>f.key))] :
@@ -571,7 +571,7 @@ function DirectorTab({ loadedNpcs, tasks = [], actions, factions = [], sendActio
               ))}
             </Select>
           </div>
-          <p className="text-[9px] text-gray-600 leading-tight">NPC *: exact display name. Story type *: what they will do.</p>
+          <p className="text-[9px] text-gray-600 leading-tight">NPC <span className="text-red-400">*</span>: exact display name. Story type <span className="text-red-400">*</span>: what they will do.</p>
           <textarea
             value={storyNarration}
             onChange={e => setStoryNarration(e.target.value)}
@@ -579,7 +579,7 @@ function DirectorTab({ loadedNpcs, tasks = [], actions, factions = [], sendActio
             rows={2}
             className="w-full bg-white/5 border border-white/10 rounded px-2 py-1.5 text-xs text-gray-200 outline-none resize-none placeholder:text-gray-600"
           />
-          <p className="text-[9px] text-gray-600 leading-tight">Narration *: why the NPC acts; used as story context.</p>
+          <p className="text-[9px] text-gray-600 leading-tight">Narration <span className="text-red-400">*</span>: why the NPC acts; used as story context.</p>
 
           {/* Type-specific fields */}
           {currentFields.map(f => (
@@ -644,7 +644,7 @@ function DirectorTab({ loadedNpcs, tasks = [], actions, factions = [], sendActio
               className="flex-1 bg-white/5 border border-white/10 rounded px-2 py-1.5 text-xs text-gray-200 outline-none placeholder:text-gray-600"
             />
           </div>
-          <p className="text-[9px] text-gray-600 leading-tight">NPC 1 *: the traveler/teller. NPC 2 *: the counterpart/listener.</p>
+          <p className="text-[9px] text-gray-600 leading-tight">NPC 1 <span className="text-red-400">*</span>: the traveler/teller. NPC 2 <span className="text-red-400">*</span>: the counterpart/listener.</p>
           <div className="flex gap-2">
             <Select aria-label="Social type" containerClassName="w-[130px]"
               value={touched.socialType ? socialType : ''}
@@ -664,7 +664,7 @@ function DirectorTab({ loadedNpcs, tasks = [], actions, factions = [], sendActio
               className="flex-1 bg-white/5 border border-white/10 rounded px-2 py-1.5 text-xs text-gray-200 outline-none resize-none placeholder:text-gray-600"
             />
           </div>
-          <p className="text-[9px] text-gray-600 leading-tight">Social type *: interaction or gossip. Narration *: what happens between them.</p>
+          <p className="text-[9px] text-gray-600 leading-tight">Social type <span className="text-red-400">*</span>: interaction or gossip. Narration <span className="text-red-400">*</span>: what happens between them.</p>
 
           {currentSocialFields.map(f => (
             <div key={f.key} className="flex flex-col gap-0.5">
@@ -713,7 +713,7 @@ function DirectorTab({ loadedNpcs, tasks = [], actions, factions = [], sendActio
               placeholder="Faction B (e.g. ThalmorFaction)"
             />
           </div>
-          <p className="text-[9px] text-gray-600 leading-tight">Faction A *: first side. Faction B *: other side. Pick two different faction IDs.</p>
+          <p className="text-[9px] text-gray-600 leading-tight">Faction A <span className="text-red-400">*</span>: first side. Faction B <span className="text-red-400">*</span>: other side. Pick two different faction IDs.</p>
           <div className="flex gap-2">
             <Select aria-label="Political event type" containerClassName="flex-1"
               value={touched.eventType ? polEventType : ''}
@@ -737,7 +737,7 @@ function DirectorTab({ loadedNpcs, tasks = [], actions, factions = [], sendActio
               />
             </div>
           </div>
-          <p className="text-[9px] text-gray-600 leading-tight">Event *: what happened. Δ: relation change, from -15 to 15.</p>
+          <p className="text-[9px] text-gray-600 leading-tight">Event <span className="text-red-400">*</span>: what happened. Δ: relation change, from -15 to 15.</p>
           <textarea
             value={polDescription}
             onChange={e => setPolDescription(e.target.value)}
@@ -745,7 +745,7 @@ function DirectorTab({ loadedNpcs, tasks = [], actions, factions = [], sendActio
             rows={2}
             className="w-full bg-white/5 border border-white/10 rounded px-2 py-1.5 text-xs text-gray-200 outline-none resize-none placeholder:text-gray-600"
           />
-          <p className="text-[9px] text-gray-600 leading-tight">Description *: a short account of the political event.</p>
+          <p className="text-[9px] text-gray-600 leading-tight">Description <span className="text-red-400">*</span>: a short account of the political event.</p>
           <button
             onClick={handleDispatchPolitics}
             disabled={politicalRequired.some(([, valid]) => !valid)}

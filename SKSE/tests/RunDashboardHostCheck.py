@@ -752,17 +752,26 @@ void testManager() {
     assert(logger::generateMessages.back().find(R"("applied":["narration"])") != std::string::npos);
     assert(!directorCompletion);
     generate();
+    for (const char* reply : {"```json\n{\"narration\":\"Wrapped narrative\"}\n```",
+                              "Here is the draft:\n{\"narration\":\"Wrapped narrative\"}"}) {
+        directorCompletion(reply,1); drainDirector();
+        auto wrapped=nlohmann::json::parse(host->calls.back().second);
+        assert(wrapped["ok"] && wrapped["fields"]["narration"]=="Wrapped narrative");
+        assert(logger::generateMessages.back().find(reply) != std::string::npos);
+        generate();
+    }
     if (directorCompletion) directorCompletion("not-json",1);
     drainDirector();
     auto resultCount = [&] { return std::count_if(host->calls.begin(),host->calls.end(),
         [](const auto& call){return call.first=="directorGenerateResult";}); };
-    assert(resultCount()==1);
+    assert(resultCount()==3);
     auto failed=nlohmann::json::parse(host->calls.back().second);
-    assert(!failed["ok"] && failed["error"]=="Malformed generation result");
+    assert(!failed["ok"] && failed["error"].get<std::string>().find("not-json") != std::string::npos);
+    assert(logger::generateMessages.back().find("not-json") != std::string::npos);
     generate();
     if (directorCompletion) directorCompletion("service unavailable",0);
     drainDirector();
-    assert(resultCount()==2);
+    assert(resultCount()==4);
     auto serviceFailure=nlohmann::json::parse(host->calls.back().second);
     assert(!serviceFailure["ok"] && serviceFailure["error"]=="Generation failed");
     generate();

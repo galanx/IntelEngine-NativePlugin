@@ -26,6 +26,7 @@
 #include <sstream>
 #include <utility>
 #include <stdexcept>
+#include <string_view>
 
 namespace IntelEngine {
 
@@ -1000,13 +1001,16 @@ namespace IntelEngine {
             if (!SkyrimNetAPI::SendCustomPromptToLLM) { queue({}, "Generate unavailable"); return; }
             const auto context = request.dump();
             const bool queued = SkyrimNetAPI::SendCustomPromptToLLM("intel_director_generate", "", context.c_str(),
-                [queue](const char* response, int success) mutable {
+                [queue, form, id](const char* response, int success) mutable {
+                    std::string_view raw = response ? response : "";
+                    logger::info("[Dashboard] Generate form={} request={} raw={}", form, id, raw.substr(0, 600));
                     if (!success) { queue({}, "Generation failed"); return; }
                     try {
-                        auto fields = nlohmann::json::parse(response ? response : "");
+                        const auto first = raw.find('{'), last = raw.rfind('}');
+                        auto fields = nlohmann::json::parse(first != raw.npos && last != raw.npos ? raw.substr(first, last - first + 1) : raw);
                         if (!fields.is_object() || fields.empty()) throw std::runtime_error("invalid fields");
                         queue(std::move(fields), "");
-                    } catch (...) { queue({}, "Malformed generation result"); }
+                    } catch (...) { queue({}, "Malformed generation result: " + std::string(raw.substr(0, 120))); }
                 });
             if (!queued) queue({}, "Generation unavailable");
         } catch (...) {}
