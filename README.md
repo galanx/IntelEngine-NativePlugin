@@ -340,6 +340,8 @@ Change the dashboard hotkey in the dashboard's Settings tab or on the SkyrimNet 
 
 Director faction suggestions measure their rendered height (including UI scale) and open above their input when the viewport or a clipping scroll container has insufficient space below. NPC and enum pickers retain native `<select>` behavior.
 
+ReportPlayerConduct uses the faction suggestion picker (submitting its ID), initializes YAML enums to their first choice, and requires a valid faction, sentiment and nonempty reason before Execute is enabled. Conduct reports notify their standing-change count or the failure reason; native processing also accepts configured display names case-insensitively.
+
 **Active Packages** — See which NPCs are currently running IntelEngine AI packages (travel, sandbox, stalk). Remove packages from stuck NPCs directly.
 
 **Settings** — Shared settings behavior with the MCM. Politics settings are read from `settings.yaml` and saved there by both interfaces; plugin configuration includes blocklists and LLM overrides.
@@ -355,6 +357,8 @@ DeliverMessage targets the resolved recipient actor, including across cells. An 
 Offline host checks (Clang and existing nlohmann_json headers required): `python SKSE/tests/RunDashboardHostCheck.py <vcpkg-triplet-dir>`. Build and stage only the dashboard with `pwsh -NoProfile -File build.ps1 -DashboardOnly -DataDir <GamePlugin-worktree>`, then compare both trees with `pwsh -NoProfile -File SKSE/tests/RunDashboardAssetCheck.ps1 -DataDir <GamePlugin-worktree>`. Dashboard-only mode does not install or publish.
 
 Compiled arrival/history smoke: `python SKSE/tests/RunArrivalDeliveryBytecodeCheck.py <papyrus.exe> <GamePlugin-worktree>/Scripts <native-build>/TaskHistoryDescriptionCheck.exe`. This executes the staged PEX delivery/cleanup and common story-arrival paths through a bounded interpreter with modeled engine/storage boundaries and the real native formatter. It checks no-meeting delivery, case-equivalent boundary outcomes, player-absent return, guarded/forced Travel cancellation, forced arrival reentry and dispatch latch reset. `RunDeliverMessageRejectionCheck.py` takes the same arguments and checks unresolved-recipient rejection preserves an existing Travel task while distant resolved recipients remain actor targets. Neither check reproduces Skyrim scheduling or model behavior.
+
+Conduct processing smoke (VS developer shell): `python SKSE/tests/RunPlayerConductCheck.py <vcpkg-triplet-dir>`. It executes production conduct/name-lookup methods with real isolated SQLite and modeled game notification/reporter/clock boundaries, covering primary/rival/ally changes and success/error messages.
 
 ---
 
