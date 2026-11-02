@@ -129,6 +129,8 @@ class VM:
     def val(self, operand, env):
         if not isinstance(operand, tuple): return operand
         name = operand[1]
+        if name.startswith("::") and name.endswith("_var"):
+            return self.properties.get(name[2:-4], env.get(name))
         if name in env: return env[name]
         return self.properties.get(name.removeprefix("::").removesuffix("_var"))
 
@@ -447,8 +449,81 @@ def run_director_lite_checks(files, history):
                 all(task.properties[f"AgentAlias{i:02d}"].actor is None for i in range(5)),
                 "preserved courier arrival did not release its original slot")
 
+    def cancel_story_task_ends_story():
+        class CancelStoryVM(DirectorVM):
+            def __init__(self, route, during_wait):
+                super().__init__(files, history)
+                self.agent.name, self.target.name = "Jon Battle-Born", "Amren"
+                self.route, self.cancel_at_wait = route, during_wait
+                self.resumed_snapshot = self.resumed_effects_at = None
+
+            def invoke(self, script, name, args=()):
+                if (script == "IntelEngine_StoryEngine" and name == "ReapplyTravelPackage") or (
+                        script == "IntelEngine_Core" and name in
+                        ("InitializeStuckTrackingForSlot", "InitOffScreenTracking")):
+                    return VM.invoke(self, script, name, args)
+                return super().invoke(script, name, args)
+
+            def message(self, content):
+                message = json.dumps({"msgContent": content, "destination": "", "meetTime": ""})
+                payload = json.dumps({"storyType": "message", "npcName": "Amren",
+                                      "narration": content, "response": message})
+                self.invoke("IntelEngine_Core", "OnDashboardDispatchStory", ("", payload, 0.0, None))
+
+            def cancel_and_replace(self):
+                if self.route == "dashboard":
+                    self.invoke("IntelEngine_Core", "OnDashboardCancelTask", ("", "", 0, None))
+                else:
+                    payload = json.dumps({"actionName": "CancelCurrentTask", "npcFormId": "1234"})
+                    self.invoke("IntelEngine_Core", "OnDashboardExecuteAction", ("", payload, 0.0, None))
+                require(not self.properties["IsActive"] and self.properties["ActiveStoryNPC"] is None and
+                        self.properties["ActiveStoryType"] == "" and self.properties["ActiveNarration"] == "",
+                        "message courier cancellation left shared story active")
+                require(self.properties["SlotStates"] == [0] * 5 and
+                        all(self.properties[f"AgentAlias{i:02d}"].actor is None for i in range(5)) and
+                        all((self.agent, key) not in self.storage for key in
+                            ("Intel_IsStoryDispatch", "Intel_OffscreenArrival", "Intel_MessageContent")),
+                        "message courier cancellation retained its slot or tracking payload")
+                snapshot, effects_at = self.task_snapshot(), len(self.effects)
+                self.invoke("IntelEngine_StoryEngine", "CheckStoryNPCArrival")
+                self.invoke("IntelEngine_StoryEngine", "OnProximityArrived", ("0",))
+                require(self.task_snapshot() == snapshot and self.effects[effects_at:] == [],
+                        "queued courier poll or arrival re-armed cancelled work")
+                self.message("Replacement message")
+                require(self.properties["IsActive"] and self.properties["ActiveStoryNPC"] is self.agent and
+                        self.properties["ActiveStoryType"] == "message" and
+                        self.storage[(self.agent, "Intel_MessageContent")] == "Replacement message" and
+                        self.properties["SlotStates"][0] == 1,
+                        "new Director Story was not admitted after courier cancellation")
+                self.resumed_snapshot, self.resumed_effects_at = self.task_snapshot(), len(self.effects)
+
+            def external(self, method, args, script):
+                if method == "FindMessengerForSender": return self.agent
+                if method == "CalculateDeadlineFromDistance": return 124.0
+                if method == "SetSlotOffscreenArrival":
+                    self.effects.append((method, tuple(args)))
+                    return None
+                if method == "Wait" and self.cancel_at_wait:
+                    self.cancel_at_wait = False
+                    self.cancel_and_replace()
+                return super().external(method, args, script)
+
+        for route in ("dashboard", "director"):
+            for during_wait in (False, True):
+                task = CancelStoryVM(route, during_wait)
+                task.message("Initial message")
+                if not during_wait:
+                    task.cancel_and_replace()
+                require(task.task_snapshot() == task.resumed_snapshot,
+                        "resumed cancelled dispatch changed its replacement's tracking")
+                require(not any(e[0] in ("InitializeStuckTrackingForSlot", "InitOffScreenTracking",
+                        "ResetStuckSlot", "InitOffScreenTravel", "ArmProximityArrival",
+                        "UnregisterForUpdate", "UnregisterForUpdateGameTime")
+                        for e in task.effects[task.resumed_effects_at:]),
+                        "resumed cancelled dispatch re-armed tracking or stopped the new scheduler")
+
     for case in (director_seek_then_seek_is_refused, run6_seek_seek_fetch_arrival,
-                 director_story_while_story_active):
+                 director_story_while_story_active, cancel_story_task_ends_story):
         case()
         print("actual PEX " + case.__name__ + " PASS")
 

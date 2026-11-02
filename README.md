@@ -332,7 +332,7 @@ Change the dashboard hotkey in the dashboard's Settings tab or on the SkyrimNet 
 
 ### Tabs
 
-**Tasks** — Live view of all active and scheduled tasks. Cancel individual tasks, see agent names, destinations, task types, speeds, and scheduled meeting timing ("in ~3h", "very soon", "overdue"). A successful task-card cancellation shows `<Name>'s task cancelled.`.
+**Tasks** — Live view of all active and scheduled tasks. Cancel individual tasks, see agent names, destinations, task types, speeds, and scheduled meeting timing ("in ~3h", "very soon", "overdue"). A successful task-card cancellation shows `<Name>'s task cancelled.`. Cancelling the active story NPC's task also ends the story and its tracking, clearing the Story tab.
 
 Task cards show recorded origin, in-game allocation time and existing dispatch reason. Scheduled cards retain their creation provenance; legacy missing times stay blank. SkyrimNet dialogue actions currently provide origin only: upstream action mappings do not forward the triggering dialogue response.
 
