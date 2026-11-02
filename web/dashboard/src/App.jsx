@@ -198,6 +198,7 @@ function App() {
           {activeTab === 'director' && (
             <DirectorTab
               loadedNpcs={state.loadedNpcs || []}
+              tasks={state.tasks || []}
               actions={state.actions || []}
               factions={state.politics?.factions || []}
               sendAction={sendAction}

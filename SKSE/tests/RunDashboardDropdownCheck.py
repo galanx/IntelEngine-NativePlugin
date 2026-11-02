@@ -1,5 +1,5 @@
 """Exercise the built dashboard in isolated headless Chrome; stdlib only.
-Usage: python SKSE/tests/RunDashboardDropdownCheck.py [chrome.exe] [dashboard-tree]
+Usage: python SKSE/tests/RunDashboardDropdownCheck.py [chrome.exe] [dashboard-tree] [--busy-only]
 """
 import html
 import json
@@ -21,7 +21,9 @@ SCRIPT = r"""
   const clickText = text => [...document.querySelectorAll('button')].find(e => e.textContent.trim() === text).click();
   const choose = async (label, text) => {
     const control = button(label);
+    control.scrollIntoView({ block: 'nearest' }); await pause();
     control.dispatchEvent(new MouseEvent('mousedown', { bubbles: true })); control.focus({ preventScroll: true });
+    await pause(); // Focus/scroll dismissal must settle before opening the next control.
     if (control.getAttribute('aria-expanded') !== 'true') control.click();
     await pause();
     const option = [...document.querySelectorAll('[role=option]')].find(e => e.textContent.trim() === text);
@@ -29,8 +31,10 @@ SCRIPT = r"""
   };
   const fill = async (selector, value) => {
     const element = document.querySelector(selector);
+    element.scrollIntoView({ block: 'nearest' }); await pause();
     element.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
     element.focus({ preventScroll: true });
+    await pause();
     Object.getOwnPropertyDescriptor(element.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype, 'value').set.call(element, value);
     element.dispatchEvent(new Event('input', { bubbles: true })); await pause();
   };
@@ -56,13 +60,19 @@ SCRIPT = r"""
     window.payloads = [];
     window.escapeCapture = [];
     window.magelight = { send: (name, value) => escapeCapture.push([name, value]) };
-    for (const name of ['dispatchStory','dispatchNpcSocial','dispatchPolitics','executeAction','changePluginConfig'])
+    for (const name of ['dispatchStory','dispatchNpcSocial','dispatchPolitics','executeAction','cancelTask','changePluginConfig'])
       window['onDashboard_' + name] = json => payloads.push([name, json]);
     window.updateFullState(JSON.stringify({config:{}, pluginConfig:{'ui.scale':1},
       loadedNpcs:Array.from({length:30},(_,i)=>({formId:108196+i,name:i?'Guard '+i:'Nazeem'})),
       actions:[{name:'GoToLocation',params:[]},{name:'ReportPlayerConduct',params:[{name:'sentiment',enum:['strongly_positive','positive','negative','strongly_negative']},{name:'factionId'},{name:'reason'}]},{name:'ChangeSpeed',params:[]}],
       politics:{factions:Array.from({length:5},(_,i)=>({id:i?'ThalmorFaction'+(i===1?'':i):'StormcloakFaction',name:i?'Thalmor '+i:'Stormcloaks'}))}}));
     await pause(); clickText('Director'); await pause();
+    await busy_confirm_cancel_dispatch();
+    if (location.hash === '#busy') {
+      document.getElementById('result').textContent=JSON.stringify({status:'PASS',checks:['busy_confirm_cancel_dispatch'],payloads});
+      return;
+    }
+    payloads.length = 0;
     check(!document.querySelector('select'), 'native selects remain');
     await fill('input[placeholder="NPC name (e.g. Saadia)"]','Saadia');
     await fill('section:nth-of-type(1) textarea','Story proof');
@@ -93,6 +103,7 @@ SCRIPT = r"""
     check(JSON.stringify(payloads) === JSON.stringify(expected), 'prechange payload bytes differ: '+JSON.stringify(payloads));
     const measurements = [];
     const geometry = async (control, label) => {
+      document.activeElement?.blur(); await pause();
       const wrapper = control.parentElement, parent = wrapper.parentElement, next = wrapper.nextSibling;
       const originalStyle = wrapper.getAttribute('style');
       const placeholder = document.createElement('div');
@@ -183,6 +194,55 @@ SCRIPT = r"""
     factionInput.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}));
     document.removeEventListener('keydown', uncapturedEscape);
     check(escaped,'invisible faction list swallowed Escape');
+    async function busy_confirm_cancel_dispatch() {
+      window.updateSlots(JSON.stringify([
+        {index:2,state:1,agentName:'Nazeem',agentFormId:108196},
+        {index:4,state:1,agentName:'Guard 1',agentFormId:108197}
+      ])); await pause();
+      const submit = section => document.querySelector(`section:nth-of-type(${section}) button.w-full`);
+      const arm = async (section, expectedLabel) => {
+        const count = payloads.length;
+        submit(section).click(); await pause();
+        check(payloads.length === count && submit(section).textContent.trim() === 'Busy — you sure?',
+          `busy_confirm_cancel_dispatch: first ${expectedLabel} click dispatched instead of confirming`);
+      };
+      const confirm = async (section, expected) => {
+        const count = payloads.length;
+        submit(section).click(); await pause();
+        check(JSON.stringify(payloads.slice(count).map(([name,json])=>[name,JSON.parse(json)])) === JSON.stringify(expected),
+          'busy_confirm_cancel_dispatch: cancel/dispatch order or payload changed: '+JSON.stringify(payloads.slice(count)));
+      };
+      await choose('Story type','Seek Player');
+      await fill('input[placeholder="NPC name (e.g. Saadia)"]',' nazeem ');
+      await fill('section:nth-of-type(1) textarea','Busy story');
+      await arm(1,'Story');
+      await fill('input[placeholder="NPC name (e.g. Saadia)"]','Saadia');
+      check(submit(1).textContent.trim()==='Dispatch Story','busy_confirm_cancel_dispatch: Story NPC change retained confirmation');
+      await fill('input[placeholder="NPC name (e.g. Saadia)"]',' nazeem ');
+      await arm(1,'Story');
+      await confirm(1,[['cancelTask',{slot:2}],['dispatchStory',{npcName:'nazeem',storyType:'seek_player',narration:'Busy story'}]]);
+      await choose('Social type','Gossip');
+      for (const [first,second,slots] of [['Nazeem','Sven',[2]],['Mikael','Nazeem',[2]],['Nazeem','Guard 1',[2,4]]]) {
+        await fill('input[placeholder="NPC 1 (e.g. Mikael)"]',first);
+        await fill('input[placeholder="NPC 2 (e.g. Sven)"]',second);
+        await fill('section:nth-of-type(2) textarea','Busy social');
+        await arm(2,'Social');
+        await fill('input[placeholder="NPC 2 (e.g. Sven)"]','Saadia');
+        check(submit(2).textContent.trim()==='Dispatch Social','busy_confirm_cancel_dispatch: Social NPC change retained confirmation');
+        await fill('input[placeholder="NPC 2 (e.g. Sven)"]',second);
+        await arm(2,'Social');
+        await confirm(2,[...slots.map(slot=>['cancelTask',{slot}]),['dispatchNpcSocial',{npc1Name:first,npc2Name:second,socialType:'npc_gossip',narration:'Busy social'}]]);
+      }
+      await choose('Action NPC','Nazeem'); await choose('Action','ChangeSpeed');
+      await choose('New speed','Jog');
+      await arm(4,'Action');
+      await choose('Action NPC','Guard 2');
+      check(submit(4).textContent.trim()==='Execute Action','busy_confirm_cancel_dispatch: Action NPC change retained confirmation');
+      await choose('Action NPC','Nazeem');
+      await arm(4,'Action');
+      await confirm(4,[['cancelTask',{slot:2}],['executeAction',{npcFormId:108196,actionName:'ChangeSpeed',params:{newSpeed:'1'}}]]);
+      window.updateSlots('[]'); await pause();
+    }
     clickText('Settings'); await pause();
     clickText('Dashboard▼'); await pause();
     await geometry(button('Dashboard hotkey'),'Dashboard hotkey');
@@ -206,9 +266,9 @@ with tempfile.TemporaryDirectory(prefix='ie-dropdowns-') as directory:
     page = page.replace('</body>', '<pre id="result">RUNNING</pre><script>' + SCRIPT + '</script></body>')
     (folder / 'index.html').write_text(page, encoding='utf-8')
     completed = subprocess.run([str(CHROME), '--headless=new', '--no-sandbox', '--disable-gpu',
-        '--allow-file-access-from-files', '--no-first-run', '--window-size=1600,1000',
-        '--user-data-dir=' + str(folder / 'profile'), '--virtual-time-budget=60000', '--dump-dom',
-        (folder / 'index.html').as_uri()], capture_output=True, text=True, encoding='utf-8', timeout=60)
+        '--allow-file-access-from-files', '--no-first-run', '--window-size=' + ('1600,3000' if '--busy-only' in sys.argv else '1600,1000'),
+        '--user-data-dir=' + str(folder / 'profile'), '--virtual-time-budget=90000', '--dump-dom',
+        (folder / 'index.html').as_uri() + ('#busy' if '--busy-only' in sys.argv else '')], capture_output=True, text=True, encoding='utf-8', timeout=60)
     start = completed.stdout.find('<pre id="result">')
     result = html.unescape(completed.stdout[start + len('<pre id="result">'):].split('</pre>', 1)[0]) if start >= 0 else ''
     if not result.startswith('{'):
