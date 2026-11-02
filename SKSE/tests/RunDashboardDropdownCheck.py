@@ -140,6 +140,9 @@ SCRIPT = r"""
         document.querySelector('section:nth-of-type(1) textarea').value==='Wants to discuss a careful plan' &&
         button('Story type').value==='Quest' && button('Sub-type').value==='rescue' &&
         button('Enemy type').value==='bandit', 'generated merge changed identity/touched dropdown or lost text');
+      const audit = JSON.parse(payloads.at(-1)[1]).outcome;
+      check(audit?.ok && audit.filled.includes('npcName') && audit.blank.includes('narration') === false &&
+        audit.applied.includes('questLocation') && audit.rejected.npcName === 'Preserved or unchanged', 'Generate outcome missing applied/preserved request audit');
       clickText('Generate'); await pause(); const stopped=JSON.parse(payloads.at(-1)[1]); clickText('Stop'); await pause();
       window.directorGenerateResult(JSON.stringify({requestId:stopped.requestId,form:'story',ok:true,fields:{narration:'late'}}));
       await pause();

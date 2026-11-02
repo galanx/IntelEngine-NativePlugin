@@ -351,6 +351,7 @@ Story, NPC Social and Political forms have Generate and Clear controls. Generate
 
 Director section titles remain left-aligned with small Generate/Clear/Stop controls on the right. Required markers sit in each field's hint; missing-field lists remain beneath Dispatch.
 Political Director notices use the dashboard's event label, falling back to the event key for older producers.
+Each completed Generate reports its request's filled/blank field names and the dashboard's applied/rejected outcome (with reasons) in one IntelEngine info log line; it logs no field text.
 
 Director Story, NPC Social and Action Execution require a second click when a selected NPC owns an active slot: the first click changes the button to `Busy — you sure?`; the second sends the existing slot cancellation(s), then dispatches. Changing an NPC resets confirmation. Papyrus still refuses busy task-creating requests if cancellation has not completed; automatic requests retain their existing behavior.
 

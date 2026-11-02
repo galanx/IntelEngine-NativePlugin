@@ -306,7 +306,8 @@ function DirectorTab({ loadedNpcs, tasks = [], actions, factions = [], sendActio
   const [generateError, setGenerateError] = useState('');
   const pendingRef = useRef(null);
   const requestId = useRef(0);
-  const stopGenerate = () => { requestId.current++; pendingRef.current = null; setPending(null); setGenerateError(''); };
+  const reportGenerate = (request, outcome) => send('generateDirector', {requestId:request.id,form:request.form,outcome:{filled:Object.keys(request.fields).filter(k=>request.fields[k] !== ''),blank:Object.keys(request.fields).filter(k=>request.fields[k] === ''),...outcome}});
+  const stopGenerate = () => { if (pendingRef.current) reportGenerate(pendingRef.current, {ok:false,applied:[],rejected:{$response:'Stopped'}}); requestId.current++; pendingRef.current = null; setPending(null); setGenerateError(''); };
   useEffect(() => {
     window.directorGenerateResult = json => {
       const request = pendingRef.current;
@@ -314,6 +315,7 @@ function DirectorTab({ loadedNpcs, tasks = [], actions, factions = [], sendActio
       let result;
       try { result = JSON.parse(json); } catch { pendingRef.current = null; setPending(null); setGenerateError('Invalid response; try again.'); return; }
       if (result.requestId !== request.id || result.form !== request.form) return;
+      const audit = {ok:false,applied:[],rejected:{$response:result.error || 'Invalid result'}}; try {
       pendingRef.current = null; setPending(null);
       if (!result.ok || !result.fields || typeof result.fields !== 'object' || Array.isArray(result.fields)) {
         setGenerateError(String(result.error || 'Generation failed; try again.').slice(0,120)); return;
@@ -342,7 +344,9 @@ function DirectorTab({ loadedNpcs, tasks = [], actions, factions = [], sendActio
       if (form === 'social') { setSocialNpc1(next.npc1Name); setSocialNpc2(next.npc2Name); setSocialType(next.socialType); setSocialNarration(next.narration); setSocialFields(Object.fromEntries(Object.keys(allowed).filter(k => !['npc1Name','npc2Name','socialType','narration'].includes(k)).map(k => [k,next[k]]))); }
       setTouched(t=>({...t,[typeKey]:true}));
       if (form === 'political') { setPolFactionA(next.factionA); setPolFactionB(next.factionB); setPolEventType(next.eventType); setPolDescription(next.description); setPolDelta(next.relationDelta); }
+      audit.ok = true; delete audit.rejected.$response; audit.applied = Object.keys(result.fields).filter(k=>next[k] !== old[k]); for (const k of Object.keys(result.fields)) if (!audit.applied.includes(k)) audit.rejected[k] ??= 'Preserved or unchanged';
       setGenerateError('');
+      } finally { reportGenerate(request, audit); }
     };
     return () => { delete window.directorGenerateResult; };
   }, [pending, touched]);

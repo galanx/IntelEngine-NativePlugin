@@ -984,6 +984,7 @@ namespace IntelEngine {
             const auto id = request.at("requestId").get<std::string>();
             const auto form = request.at("form").get<std::string>();
             if (id.empty() || (form != "story" && form != "social" && form != "political")) return;
+            if (request.contains("outcome")) { logger::info("[Dashboard] Generate form={} request={} outcome={}", form, id, request["outcome"].dump()); return; }
             std::uint64_t generation;
             { std::lock_guard<std::mutex> lock(mgr->mutex_);
               if (mgr->shuttingDown_ || !mgr->requestedOpen_ || !mgr->isOpen_ || !mgr->domReady_) return;
