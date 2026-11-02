@@ -20,9 +20,10 @@ def main():
         ("IntelEngine_NPCTasks.pex", "IntelEngine_Core.pex", "IntelEngine_StoryEngine.pex"))
 
     class DeliveryVM(VM):
-        def __init__(self, recipient):
+        def __init__(self, recipient, suggestion=""):
             super().__init__(files, history)
             self.recipient = recipient
+            self.suggestion = suggestion
             self.properties.update({"SlotStates": [0] * 5, "SlotTaskTypes": [""] * 5,
                 "SlotTargetNames": [""] * 5, "SlotSpeeds": [0] * 5,
                 "SlotDeadlines": [0.0] * 5})
@@ -41,7 +42,7 @@ def main():
 
         def external(self, method, args, script):
             if method == "FindNPCByNameNear": return self.recipient
-            if method == "GetNPCNameSuggestion": return ""
+            if method == "GetNPCNameSuggestion": return self.suggestion
             if method == "IsPlayerTeammate": return False
             if method == "IsInFaction": return bool(args[0] is self.agent and self.active_task)
             if method == "SetHomeDoorAccess": return None
@@ -72,9 +73,31 @@ def main():
             unresolved.storage[(unresolved.agent, "Intel_TaskType")] == "travel" and
             unresolved.call_counts.get(("IntelEngine_Core", "ClearSlot"), 0) == 0,
             "unresolved delivery modified the agent's existing Travel task")
-    require(any(event[0] == "Trace" and "could not locate 'Jarl Balgruff'" in event[1]
+    require(any(event[0] == "Trace" and event[1].endswith("Jarl Balgruff could not be found.")
                 for event in unresolved.effects),
-            "unresolved recipient did not report rejection to the player")
+            "unresolved recipient did not report target-first rejection to the player")
+    suggested = DeliveryVM(None, "Jarl Balgruuf")
+    require(suggested.invoke("IntelEngine_NPCTasks", "DeliverMessage",
+                             (suggested.agent, "Jarl Balgruff", "A message", "none", "none")) is False,
+            "delivery with a name suggestion was accepted")
+    require(any(event[0] == "Trace" and
+                event[1].endswith("Jarl Balgruff could not be found. The closest known name is Jarl Balgruuf.")
+                for event in suggested.effects),
+            "delivery suggestion did not lead with the requested target name")
+
+    for method, args in (
+        ("FetchNPC", ("Jarl Balgruff", "none")),
+        ("SearchForActor", ("Jarl Balgruff", 0)),
+        ("EscortTarget", ("Jarl Balgruff", "home", 0)),
+    ):
+        sibling = DeliveryVM(None)
+        require(sibling.invoke("IntelEngine_NPCTasks", method, (sibling.agent, *args)) is False,
+                f"unresolved {method} target was accepted")
+        require(any(event[0] == "SendTaskNarration" and
+                    event[1][0] == "Jarl Balgruff could not be found."
+                    for event in sibling.effects),
+                f"unresolved {method} did not narrate target-first rejection")
+
 
     recipient = Actor("Jarl Balgruuf", "far-cell")
     resolved = DeliveryVM(recipient)
