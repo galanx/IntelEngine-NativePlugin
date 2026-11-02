@@ -216,6 +216,9 @@ function PoliticsTab({ politics, calendar, sendAction }) {
               <div className="text-[10px] text-gray-500">
                 {TYPE_LABELS[f.type] || f.type} &middot; {f.hold}
               </div>
+              {f.leaders?.length > 0 && (
+                <div className="text-[10px] text-gray-400 mt-0.5">Leaders: {f.leaders.join(', ')}</div>
+              )}
             </div>
           ))}
         </div>
