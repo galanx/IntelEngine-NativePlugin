@@ -308,6 +308,8 @@ function DirectorTab({ loadedNpcs, tasks = [], actions, factions = [], sendActio
   const [actionParams, setActionParams] = useState({});
 
   const [busyConfirm, setBusyConfirm] = useState('');
+  const send = sendAction;
+  sendAction = (action, payload) => { send(action, payload); if (action === 'cancelTask') return; const sent = `sent:${action}:${Date.now()}`; setBusyConfirm(sent); setTimeout(() => setBusyConfirm(current => current === sent ? '' : current), 2000); };
   const npcs = loadedNpcs || [];
   const busySlots = names => tasks.filter(slot => slot.state && names.some(name => slot.agentName?.toLowerCase() === name.trim().toLowerCase()));
   const storyBusy = busySlots([storyNpc]);
@@ -523,7 +525,7 @@ function DirectorTab({ loadedNpcs, tasks = [], actions, factions = [], sendActio
             disabled={!storyTypeValid || !storyNpc.trim() || !storyNarration.trim()}
             className="w-full px-3 py-1.5 text-xs font-medium rounded transition-colors bg-blue-500/20 text-blue-400 hover:bg-blue-500/30 disabled:opacity-30 disabled:cursor-not-allowed"
           >
-            {storyBusy.length && busyConfirm === 'story' ? 'Busy — you sure?' : 'Dispatch Story'}
+            {busyConfirm.startsWith('sent:dispatchStory:') ? 'Sent' : storyBusy.length && busyConfirm === 'story' ? 'Busy — you sure?' : 'Dispatch Story'}
           </button>
         </div>
       </section>
@@ -593,7 +595,7 @@ function DirectorTab({ loadedNpcs, tasks = [], actions, factions = [], sendActio
             disabled={!socialTypeValid || !socialNpc1.trim() || !socialNpc2.trim() || !socialNarration.trim()}
             className="w-full px-3 py-1.5 text-xs font-medium rounded transition-colors bg-purple-500/20 text-purple-400 hover:bg-purple-500/30 disabled:opacity-30 disabled:cursor-not-allowed"
           >
-            {socialBusy.length && busyConfirm === 'social' ? 'Busy — you sure?' : 'Dispatch Social'}
+            {busyConfirm.startsWith('sent:dispatchNpcSocial:') ? 'Sent' : socialBusy.length && busyConfirm === 'social' ? 'Busy — you sure?' : 'Dispatch Social'}
           </button>
         </div>
       </section>
@@ -654,7 +656,7 @@ function DirectorTab({ loadedNpcs, tasks = [], actions, factions = [], sendActio
               polFactionA.trim() === polFactionB.trim() || !polDescription.trim()}
             className="w-full px-3 py-1.5 text-xs font-medium rounded transition-colors bg-amber-500/20 text-amber-400 hover:bg-amber-500/30 disabled:opacity-30 disabled:cursor-not-allowed"
           >
-            Dispatch Political Event
+            {busyConfirm.startsWith('sent:dispatchPolitics:') ? 'Sent' : 'Dispatch Political Event'}
           </button>
         </div>
       </section>
@@ -734,7 +736,7 @@ function DirectorTab({ loadedNpcs, tasks = [], actions, factions = [], sendActio
             disabled={!actionNpcValid || !selectedAction || !requiredFieldsValid}
             className="w-full px-3 py-1.5 text-xs font-medium rounded transition-colors bg-emerald-500/20 text-emerald-400 hover:bg-emerald-500/30 disabled:opacity-30 disabled:cursor-not-allowed"
           >
-            {actionBusy.length && busyConfirm === 'action' ? 'Busy — you sure?' : 'Execute Action'}
+            {busyConfirm.startsWith('sent:executeAction:') ? 'Sent' : actionBusy.length && busyConfirm === 'action' ? 'Busy — you sure?' : 'Execute Action'}
           </button>
         </div>
       </section>
