@@ -67,6 +67,45 @@ SCRIPT = r"""
       actions:[{name:'GoToLocation',params:[]},{name:'ReportPlayerConduct',params:[{name:'sentiment',enum:['strongly_positive','positive','negative','strongly_negative']},{name:'factionId'},{name:'reason'}]},{name:'ChangeSpeed',params:[]}],
       politics:{factions:Array.from({length:5},(_,i)=>({id:i?'ThalmorFaction'+(i===1?'':i):'StormcloakFaction',name:i?'Thalmor '+i:'Stormcloaks'}))}}));
     await pause(); clickText('Director'); await pause();
+    if (location.hash === '#director_required_fields') {
+      const story = () => document.querySelector('section:nth-of-type(1)');
+      const dispatch = () => [...story().querySelectorAll('button')].find(e => e.textContent.trim() === 'Dispatch Story');
+      const labels = () => [...story().querySelectorAll('label')].map(e => e.textContent.trim());
+      const missing = () => [...story().querySelectorAll('p')].find(e => e.textContent.startsWith('Fill required fields:'));
+      check(['NPC *', 'Story type *', 'Narration *'].every(text => labels().includes(text)), 'Story required labels are not marked');
+      check(dispatch().disabled && missing()?.textContent === 'Fill required fields: NPC, Narration', 'Story missing list does not match initial validation');
+      await fill('input[placeholder="NPC name (e.g. Saadia)"]', 'Saadia');
+      check(dispatch().disabled && missing()?.textContent === 'Fill required fields: Narration', 'filled NPC remained missing');
+      await choose('Story type', 'Message');
+      check(!labels().some(text => text.includes('Message content') && text.includes('*')), 'optional Dispatch field marked required');
+      await fill('section:nth-of-type(1) textarea', 'Requests a private meeting');
+      check(!dispatch().disabled && !missing(), 'valid Story remains disabled or shows missing fields');
+      const section = index => document.querySelector(`section:nth-of-type(${index})`);
+      const submit = index => [...section(index).querySelectorAll('button')].at(-1);
+      const missingIn = index => [...section(index).querySelectorAll('p')].find(e => e.textContent.startsWith('Fill required fields:'))?.textContent;
+      await fill('input[placeholder="NPC 1 (e.g. Mikael)"]', 'Mikael');
+      await fill('input[placeholder="NPC 2 (e.g. Sven)"]', 'Sven');
+      await fill('section:nth-of-type(2) textarea', 'Discussed a shipment');
+      await choose('Social type', 'Gossip');
+      check(!submit(2).disabled && !missingIn(2) && ![...section(2).querySelectorAll('label')].some(e => e.textContent.includes('Gossip') && e.textContent.includes('*')), 'Social optional variant marked required');
+      await fill('input[placeholder="Faction A (e.g. StormcloakFaction)"]', 'StormcloakFaction');
+      await fill('input[placeholder="Faction B (e.g. ThalmorFaction)"]', 'StormcloakFaction');
+      await fill('section:nth-of-type(3) textarea', 'A diplomatic exchange');
+      check(submit(3).disabled && missingIn(3) === 'Fill required fields: Faction B', 'same-faction validation lost its label');
+      await fill('input[placeholder="Faction B (e.g. ThalmorFaction)"]', 'ThalmorFaction');
+      check(!submit(3).disabled && !missingIn(3), 'valid Political form remains blocked');
+      await choose('Action NPC', 'Nazeem'); await choose('Action', 'GoToLocation');
+      check(submit(4).disabled && missingIn(4) === 'Fill required fields: Destination', 'Action missing destination not listed');
+      check([...section(4).querySelectorAll('label')].some(e => e.textContent.replace(/\s/g, '') === 'Destination*'), 'required Action variant not marked');
+      await fill('input[placeholder="e.g. Whiterun, Bannered Mare, home"]', 'Whiterun');
+      check(!submit(4).disabled && !missingIn(4), 'valid Action remains blocked');
+      await choose('Action', 'ChangeSpeed');
+      check(submit(4).disabled && missingIn(4) === 'Fill required fields: New speed', 'Action requirements did not change with variant');
+      await choose('New speed', 'Jog');
+      check(!submit(4).disabled && !missingIn(4), 'picked speed remains blocked');
+      document.getElementById('result').textContent=JSON.stringify({status:'PASS',checks:['director_required_fields']});
+      return;
+    }
     if (location.hash === '#director_generate_merge_and_stop') {
       payloads.length = 0;
       check(button('Story type').placeholder==='(auto)' && button('Story type').value==='', 'untouched type is not auto');
@@ -321,7 +360,7 @@ with tempfile.TemporaryDirectory(prefix='ie-dropdowns-') as directory:
     (folder / 'index.html').write_text(page, encoding='utf-8')
     scenario = next((arg.split('=',1)[1] for arg in sys.argv if arg.startswith('--scenario=')), '')
     completed = subprocess.run([str(CHROME), '--headless=new', '--no-sandbox', '--disable-gpu',
-        '--allow-file-access-from-files', '--no-first-run', '--window-size=' + ('1600,3000' if '--busy-only' in sys.argv else '1600,1000'),
+        '--allow-file-access-from-files', '--no-first-run', '--window-size=' + ('1600,3000' if '--busy-only' in sys.argv or scenario == 'director_required_fields' else '1600,1000'),
         '--user-data-dir=' + str(folder / 'profile'), '--virtual-time-budget=90000', '--dump-dom',
         (folder / 'index.html').as_uri() + ('#busy' if '--busy-only' in sys.argv else '#' + scenario if scenario else '')], capture_output=True, text=True, encoding='utf-8', timeout=60)
     start = completed.stdout.find('<pre id="result">')

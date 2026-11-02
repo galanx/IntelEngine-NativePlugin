@@ -440,6 +440,11 @@ function DirectorTab({ loadedNpcs, tasks = [], actions, factions = [], sendActio
   const storyTypeValid = DIRECTOR_STORY_TYPES.some(type => type.key === storyType);
   const socialTypeValid = SOCIAL_TYPES.some(type => type.key === socialType);
   const polEventTypeValid = POLITICAL_EVENT_TYPES.some(type => type.key === polEventType);
+  const storyRequired = [['NPC', !!storyNpc.trim()], ['Story type', storyTypeValid], ['Narration', !!storyNarration.trim()]];
+  const socialRequired = [['NPC 1', !!socialNpc1.trim()], ['NPC 2', !!socialNpc2.trim()], ['Social type', socialTypeValid], ['Narration', !!socialNarration.trim()]];
+  const politicalRequired = [['Faction A', !!polFactionA.trim()], ['Faction B', !!polFactionB.trim() && polFactionA.trim() !== polFactionB.trim()], ['Political event type', polEventTypeValid], ['Description', !!polDescription.trim()]];
+  const requiredLabels = fields => <div className="flex flex-wrap gap-x-3 text-[10px] text-gray-500">{fields.map(([label]) => <label key={label}>{label} *</label>)}</div>;
+  const missingFields = fields => fields.some(([, valid]) => !valid) && <p className="text-[10px] text-gray-400">Fill required fields: {fields.filter(([, valid]) => !valid).map(([label]) => label).join(', ')}</p>;
   const generateControls = form => <div className="flex gap-2">
     <button onClick={() => generate(form)} disabled={!!pending}
       className="flex-1 rounded px-2 py-1 text-xs text-gray-300 bg-white/10 disabled:opacity-40">{pending?.form === form ? 'Generating…' : 'Generate'}</button>
@@ -510,7 +515,7 @@ function DirectorTab({ loadedNpcs, tasks = [], actions, factions = [], sendActio
       .filter(p => !HIDDEN_PARAMS.has(p.name) && Array.isArray(p.enum) && p.enum.length)
       .map(p => [p.name, p.enum[0]])));
   }, [executableActions]);
-  const requiredFieldsValid = currentActionFields.every(f => {
+  const validActionFields = currentActionFields.filter(f => {
     const value = actionParams[f.key] || '';
     if (f.required && !value.trim()) return false;
     if (f.type === 'faction' && value && !factions.some(faction => faction.id === value)) return false;
@@ -519,6 +524,8 @@ function DirectorTab({ loadedNpcs, tasks = [], actions, factions = [], sendActio
     return true;
   });
   const actionNpcValid = npcs.some(npc => String(npc.formId) === actionNpc);
+  const requiredFieldsValid = validActionFields.length === currentActionFields.length;
+  const actionRequired = [['NPC', actionNpcValid], ['Action', !!selectedAction], ...currentActionFields.filter(f => !validActionFields.includes(f)).map(f => [f.label, false])];
   const handleExecuteAction = useCallback(() => {
     if (!actionNpcValid || !selectedAction || !requiredFieldsValid) return;
     if (!confirmBusy('action', actionBusy)) return;
@@ -541,6 +548,7 @@ function DirectorTab({ loadedNpcs, tasks = [], actions, factions = [], sendActio
       <section>
         {generateControls('story')}{pending?.form === 'story' && <small>Generating…</small>}{generateError && !pending && <small>{generateError}</small>}
         <fieldset disabled={pending?.form === 'story'} className="space-y-2 border-0 p-0 m-0 min-w-0" inert={pending?.form === 'story' ? '' : undefined}>
+          {requiredLabels(storyRequired)}
           <div className="flex gap-2">
             <input
               type="text"
@@ -575,7 +583,6 @@ function DirectorTab({ loadedNpcs, tasks = [], actions, factions = [], sendActio
             <div key={f.key} className="flex flex-col gap-0.5">
               <label className="text-[10px] text-gray-500">
                 {f.label}
-                {f.required && <span className="text-red-400 ml-0.5">*</span>}
               </label>
               {f.type === 'select' ? (
                 <Select aria-label={f.label}
@@ -605,11 +612,12 @@ function DirectorTab({ loadedNpcs, tasks = [], actions, factions = [], sendActio
 
           <button
             onClick={handleDispatchStory}
-            disabled={!storyTypeValid || !storyNpc.trim() || !storyNarration.trim()}
+            disabled={storyRequired.some(([, valid]) => !valid)}
             className="w-full px-3 py-1.5 text-xs font-medium rounded transition-colors bg-blue-500/20 text-blue-400 hover:bg-blue-500/30 disabled:opacity-30 disabled:cursor-not-allowed"
           >
             {busyConfirm.startsWith('sent:dispatchStory:') ? 'Sent' : storyBusy.length && busyConfirm === 'story' ? 'Busy — you sure?' : 'Dispatch Story'}
           </button>
+          {missingFields(storyRequired)}
         </fieldset>
       </section>
 
@@ -617,6 +625,7 @@ function DirectorTab({ loadedNpcs, tasks = [], actions, factions = [], sendActio
       <section>
         {generateControls('social')}{pending?.form === 'social' && <small>Generating…</small>}{generateError && !pending && <small>{generateError}</small>}
         <fieldset disabled={pending?.form === 'social'} className="space-y-2 border-0 p-0 m-0 min-w-0" inert={pending?.form === 'social' ? '' : undefined}>
+          {requiredLabels(socialRequired)}
           <div className="flex gap-2">
             <input
               type="text"
@@ -659,7 +668,6 @@ function DirectorTab({ loadedNpcs, tasks = [], actions, factions = [], sendActio
             <div key={f.key} className="flex flex-col gap-0.5">
               <label className="text-[10px] text-gray-500">
                 {f.label}
-                {f.required && <span className="text-red-400 ml-0.5">*</span>}
               </label>
               <input
                 type="text"
@@ -676,11 +684,12 @@ function DirectorTab({ loadedNpcs, tasks = [], actions, factions = [], sendActio
 
           <button
             onClick={handleDispatchSocial}
-            disabled={!socialTypeValid || !socialNpc1.trim() || !socialNpc2.trim() || !socialNarration.trim()}
+            disabled={socialRequired.some(([, valid]) => !valid)}
             className="w-full px-3 py-1.5 text-xs font-medium rounded transition-colors bg-purple-500/20 text-purple-400 hover:bg-purple-500/30 disabled:opacity-30 disabled:cursor-not-allowed"
           >
             {busyConfirm.startsWith('sent:dispatchNpcSocial:') ? 'Sent' : socialBusy.length && busyConfirm === 'social' ? 'Busy — you sure?' : 'Dispatch Social'}
           </button>
+          {missingFields(socialRequired)}
         </fieldset>
       </section>
 
@@ -688,6 +697,7 @@ function DirectorTab({ loadedNpcs, tasks = [], actions, factions = [], sendActio
       <section>
         {generateControls('political')}{pending?.form === 'political' && <small>Generating…</small>}{generateError && !pending && <small>{generateError}</small>}
         <fieldset disabled={pending?.form === 'political'} className="space-y-2 border-0 p-0 m-0 min-w-0" inert={pending?.form === 'political' ? '' : undefined}>
+          {requiredLabels(politicalRequired)}
           <div className="flex gap-2">
             <FactionInput
               value={polFactionA}
@@ -737,12 +747,12 @@ function DirectorTab({ loadedNpcs, tasks = [], actions, factions = [], sendActio
           <p className="text-[9px] text-gray-600 leading-tight">Description: a short account of the political event.</p>
           <button
             onClick={handleDispatchPolitics}
-            disabled={!polEventTypeValid || !polFactionA.trim() || !polFactionB.trim() ||
-              polFactionA.trim() === polFactionB.trim() || !polDescription.trim()}
+            disabled={politicalRequired.some(([, valid]) => !valid)}
             className="w-full px-3 py-1.5 text-xs font-medium rounded transition-colors bg-amber-500/20 text-amber-400 hover:bg-amber-500/30 disabled:opacity-30 disabled:cursor-not-allowed"
           >
             {busyConfirm.startsWith('sent:dispatchPolitics:') ? 'Sent' : 'Dispatch Political Event'}
           </button>
+          {missingFields(politicalRequired)}
         </fieldset>
       </section>
 
@@ -750,6 +760,7 @@ function DirectorTab({ loadedNpcs, tasks = [], actions, factions = [], sendActio
       <section>
         <h2 className="section-header mb-2">Action Execution</h2>
         <div className="space-y-2">
+          {requiredLabels(actionRequired.slice(0, 2))}
           <div className="flex gap-2">
             <Select aria-label="Action NPC" containerClassName="flex-1"
               value={actionNpc}
@@ -818,11 +829,12 @@ function DirectorTab({ loadedNpcs, tasks = [], actions, factions = [], sendActio
 
           <button
             onClick={handleExecuteAction}
-            disabled={!actionNpcValid || !selectedAction || !requiredFieldsValid}
+            disabled={actionRequired.some(([, valid]) => !valid)}
             className="w-full px-3 py-1.5 text-xs font-medium rounded transition-colors bg-emerald-500/20 text-emerald-400 hover:bg-emerald-500/30 disabled:opacity-30 disabled:cursor-not-allowed"
           >
             {busyConfirm.startsWith('sent:executeAction:') ? 'Sent' : actionBusy.length && busyConfirm === 'action' ? 'Busy — you sure?' : 'Execute Action'}
           </button>
+          {missingFields(actionRequired)}
         </div>
       </section>
     </div>
