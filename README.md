@@ -300,7 +300,7 @@ View all pending scheduled tasks with times and targets. Cancel individually or 
 
 | Setting | Default | Range | Description |
 |---|---|---|---|
-| Debug Mode | Off | On/Off | Verbose logging for troubleshooting |
+| Debug Mode | Off | On/Off | Shows IE debug messages as in-game notifications (always logged to Papyrus.0.log). |
 | Max Concurrent Tasks | 5 | 1-5 | How many NPCs can be active at once |
 | Default Wait Hours | 48 | 6-168 | How long NPCs wait at destinations |
 | Task Confirmation | On | On/Off | Prompt before executing tasks |

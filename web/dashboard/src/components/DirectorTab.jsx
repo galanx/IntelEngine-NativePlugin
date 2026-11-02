@@ -135,7 +135,7 @@ const STORY_TYPE_FIELDS = {
   message: [
     { key: 'msgContent', label: 'Message content', type: 'text', required: true,
       placeholder: 'e.g. I need to speak with you about a private matter',
-      hint: 'Required. The actual message text. A messenger NPC is auto-selected.' },
+      hint: 'Required. The message text. The NPC you pick is the sender; IE picks a nearby courier.' },
     { key: 'destination', label: 'Meeting place', type: 'text',
       placeholder: 'e.g. The Bee and Barb, Dragonsreach',
       hint: 'Optional. If set with meetTime, creates a meeting invitation.' },
@@ -351,6 +351,7 @@ function DirectorTab({ loadedNpcs, tasks = [], actions, factions = [], sendActio
           required: selectedAction === 'ReportPlayerConduct' || p.required,
           options: p.enum || [],
           placeholder: p.description,
+          hint: p.description,
         }));
     }
     return [];
@@ -474,6 +475,7 @@ function DirectorTab({ loadedNpcs, tasks = [], actions, factions = [], sendActio
               ))}
             </Select>
           </div>
+          <p className="text-[9px] text-gray-600 leading-tight">NPC: exact display name. Story type: what they will do.</p>
           <textarea
             value={storyNarration}
             onChange={e => setStoryNarration(e.target.value)}
@@ -481,6 +483,7 @@ function DirectorTab({ loadedNpcs, tasks = [], actions, factions = [], sendActio
             rows={2}
             className="w-full bg-white/5 border border-white/10 rounded px-2 py-1.5 text-xs text-gray-200 outline-none resize-none placeholder:text-gray-600"
           />
+          <p className="text-[9px] text-gray-600 leading-tight">Narration: why the NPC acts; used as story context.</p>
 
           {/* Type-specific fields */}
           {currentFields.map(f => (
@@ -545,6 +548,7 @@ function DirectorTab({ loadedNpcs, tasks = [], actions, factions = [], sendActio
               className="flex-1 bg-white/5 border border-white/10 rounded px-2 py-1.5 text-xs text-gray-200 outline-none placeholder:text-gray-600"
             />
           </div>
+          <p className="text-[9px] text-gray-600 leading-tight">{socialType === 'npc_gossip' ? 'NPC 1 tells, NPC 2 listens' : 'NPC 1: the traveler. NPC 2: the counterpart they meet.'}</p>
           <div className="flex gap-2">
             <Select aria-label="Social type" containerClassName="w-[130px]"
               value={socialType}
@@ -563,6 +567,7 @@ function DirectorTab({ loadedNpcs, tasks = [], actions, factions = [], sendActio
               className="flex-1 bg-white/5 border border-white/10 rounded px-2 py-1.5 text-xs text-gray-200 outline-none resize-none placeholder:text-gray-600"
             />
           </div>
+          <p className="text-[9px] text-gray-600 leading-tight">Social type: interaction or gossip. Narration: what happens between them.</p>
 
           {currentSocialFields.map(f => (
             <div key={f.key} className="flex flex-col gap-0.5">
@@ -611,6 +616,7 @@ function DirectorTab({ loadedNpcs, tasks = [], actions, factions = [], sendActio
               placeholder="Faction B (e.g. ThalmorFaction)"
             />
           </div>
+          <p className="text-[9px] text-gray-600 leading-tight">Faction A: first side. Faction B: other side. Pick two different faction IDs.</p>
           <div className="flex gap-2">
             <Select aria-label="Political event type" containerClassName="flex-1"
               value={polEventType}
@@ -633,6 +639,7 @@ function DirectorTab({ loadedNpcs, tasks = [], actions, factions = [], sendActio
               />
             </div>
           </div>
+          <p className="text-[9px] text-gray-600 leading-tight">Event: what happened. Δ: relation change, from -15 to 15.</p>
           <textarea
             value={polDescription}
             onChange={e => setPolDescription(e.target.value)}
@@ -640,6 +647,7 @@ function DirectorTab({ loadedNpcs, tasks = [], actions, factions = [], sendActio
             rows={2}
             className="w-full bg-white/5 border border-white/10 rounded px-2 py-1.5 text-xs text-gray-200 outline-none resize-none placeholder:text-gray-600"
           />
+          <p className="text-[9px] text-gray-600 leading-tight">Description: a short account of the political event.</p>
           <button
             onClick={handleDispatchPolitics}
             disabled={!polEventTypeValid || !polFactionA.trim() || !polFactionB.trim() ||
@@ -677,6 +685,7 @@ function DirectorTab({ loadedNpcs, tasks = [], actions, factions = [], sendActio
               ))}
             </Select>
           </div>
+          <p className="text-[9px] text-gray-600 leading-tight">NPC: nearby actor who performs the action. Action: command to run.</p>
 
           {/* Dynamic param fields for selected action */}
           {currentActionFields.map(f => (
