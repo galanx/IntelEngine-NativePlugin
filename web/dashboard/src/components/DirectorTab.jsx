@@ -347,6 +347,7 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
       const next = { ...old }, skipped = new Set(), npcKeys = ['npcName','npc1Name','npc2Name','subject','sender','victimName'];
       for (const [key, rawValue] of Object.entries(result.fields)) {
         let value = rawValue;
+        if (value === null && allowed[key] && !allowed[key].required) { skipped.add(key); continue; }
         if (npcKeys.includes(key) && typeof value === 'string' && (!value.trim() || /^(?:none|placeholder|e\.g\..*|.*\(e\.g\..*\))$/i.test(value.trim()))) { skipped.add(key); continue; }
         if (!allowed[key] || (touched[key] === true && old[key])) { audit.rejected[key] = !allowed[key] ? 'Unknown field' : 'Preserved or unchanged'; continue; }
         if (['factionA','factionB'].includes(key) && typeof value === 'string') value = options.factions.find(f=>f.id===value || f.name===value)?.id || '';
@@ -379,6 +380,7 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
     const draft = { ...fields };
     for (const key of Object.keys(fields)) if (touched[key] !== true) fields[key] = '';
     const schema = Object.fromEntries(Object.entries(draft).filter(([k])=>!defs.some(f=>f.key===k)).map(([k,v]) => [k, { type: typeof v === 'number' ? 'number' : k === (story?'storyType':social?'socialType':'eventType') ? 'select' : 'text',
+      required: k !== 'relationDelta',
       ...((k === (story?'storyType':social?'socialType':'eventType')) ? { options:enumTypes.map(x=>x.key) } : {}) }]));
     if (story && storyGuidance) schema.narration.hint = `${storyGuidance.hint} ${storyGuidance.narration}`;
     const variants = Object.fromEntries(enumTypes.map(t => [t.key, Object.fromEntries((story ? (STORY_TYPE_FIELDS[t.key]?.fields||[]) : social ? (SOCIAL_TYPE_FIELDS[t.key]||[]) : []).map(f=>[f.key,Object.fromEntries(Object.entries(f).filter(([key])=>key!=='placeholder'))]))]));
@@ -462,11 +464,13 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
   }, [selectedAction, currentAction]);
 
   const storyGuidance = touched.storyType ? STORY_TYPE_FIELDS[storyType] : null, currentFields = STORY_TYPE_FIELDS[storyType]?.fields || [];
+  const currentSocialFields = SOCIAL_TYPE_FIELDS[socialType] || [];
+  const variantRequired = (defs, values) => defs.filter(f => f.required).map(f => [f.label, !!(values[f.key] || '').trim()]);
   const storyTypeValid = DIRECTOR_STORY_TYPES.some(type => type.key === storyType);
   const socialTypeValid = SOCIAL_TYPES.some(type => type.key === socialType);
   const polEventTypeValid = POLITICAL_EVENT_TYPES.some(type => type.key === polEventType);
-  const storyRequired = [['NPC', !!storyNpc.trim()], ['Story type', storyTypeValid], ['Narration', !!storyNarration.trim()]];
-  const socialRequired = [['NPC 1', !!socialNpc1.trim()], ['NPC 2', !!socialNpc2.trim()], ['Social type', socialTypeValid], ['Narration', !!socialNarration.trim()]];
+  const storyRequired = [['NPC', !!storyNpc.trim()], ['Story type', storyTypeValid], ['Narration', !!storyNarration.trim()], ...variantRequired(currentFields, storyFields)];
+  const socialRequired = [['NPC 1', !!socialNpc1.trim()], ['NPC 2', !!socialNpc2.trim()], ['Social type', socialTypeValid], ['Narration', !!socialNarration.trim()], ...variantRequired(currentSocialFields, socialFields)];
   const politicalRequired = [['Faction A', !!polFactionA.trim()], ['Faction B', !!polFactionB.trim() && polFactionA.trim() !== polFactionB.trim()], ['Political event type', polEventTypeValid], ['Description', !!polDescription.trim()]];
   const missingFields = fields => fields.some(([, valid]) => !valid) && <p className="text-[10px] text-gray-400">Fill required fields: {fields.filter(([, valid]) => !valid).map(([label]) => label).join(', ')}</p>;
   const busyHeader = form => {
@@ -488,7 +492,7 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
   }, []);
 
   const handleDispatchStory = useCallback(() => {
-    if (!storyTypeValid || !storyNpc.trim() || !storyNarration.trim()) return;
+    if (storyRequired.some(([, valid]) => !valid)) return;
     if (!confirmBusy('story', storyBusy)) return;
     sendAction('dispatchStory', {
       npcName: storyNpc.trim(),
@@ -498,9 +502,8 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
     });
     setStoryNarration('');
     setStoryFields({});
-  }, [storyNpc, storyType, storyTypeValid, storyNarration, storyFields, factions, sendAction, confirmBusy, storyBusy]);
+  }, [storyNpc, storyType, storyRequired, storyNarration, storyFields, factions, sendAction, confirmBusy, storyBusy]);
 
-  const currentSocialFields = SOCIAL_TYPE_FIELDS[socialType] || [];
 
   const handleSocialTypeChange = useCallback((type) => {
     setSocialType(type);
@@ -508,7 +511,7 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
   }, []);
 
   const handleDispatchSocial = useCallback(() => {
-    if (!socialTypeValid || !socialNpc1.trim() || !socialNpc2.trim() || !socialNarration.trim()) return;
+    if (socialRequired.some(([, valid]) => !valid)) return;
     if (!confirmBusy('social', socialBusy)) return;
     sendAction('dispatchNpcSocial', {
       npc1Name: socialNpc1.trim(),
@@ -519,7 +522,7 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
     });
     setSocialNarration('');
     setSocialFields({});
-  }, [socialNpc1, socialNpc2, socialType, socialTypeValid, socialNarration, socialFields, sendAction, confirmBusy, socialBusy]);
+  }, [socialNpc1, socialNpc2, socialType, socialRequired, socialNarration, socialFields, sendAction, confirmBusy, socialBusy]);
 
   const handlePolEventTypeChange = useCallback((type) => {
     setPolEventType(type);
@@ -618,10 +621,7 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
 
           {/* Type-specific fields */}
           {currentFields.map(f => (
-            <div key={f.key} className="flex flex-col gap-0.5">
-              <label className="text-[10px] text-gray-500">
-                {f.label}
-              </label>
+            <Field key={f.key} label={f.label} required={f.required}>
               {f.type === 'select' ? (
                 <Select aria-label={f.label}
                   value={storyFields[f.key] || ''}
@@ -646,7 +646,7 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
               {f.hint && (
                 <span className="director-hint">{f.hint}</span>
               )}
-            </div>
+            </Field>
           ))}
 
           <button
@@ -712,10 +712,7 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
           </div>
 
           {currentSocialFields.map(f => (
-            <div key={f.key} className="flex flex-col gap-0.5">
-              <label className="text-[10px] text-gray-500">
-                {f.label}
-              </label>
+            <Field key={f.key} label={f.label} required={f.required}>
               <input
                 type="text"
                 value={socialFields[f.key] || ''}
@@ -726,7 +723,7 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
               {f.hint && (
                 <span className="director-hint">{f.hint}</span>
               )}
-            </div>
+            </Field>
           ))}
 
           <button
