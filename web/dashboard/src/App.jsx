@@ -202,6 +202,8 @@ function App() {
               tasks={state.tasks || []}
               actions={state.actions || []}
               factions={state.politics?.factions || []}
+              story={state.story}
+              social={state.social}
               sendAction={sendAction}
             />
           )}

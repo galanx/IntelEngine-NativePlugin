@@ -70,6 +70,43 @@ SCRIPT = r"""
       actions:[{name:'GoToLocation',enabled:true},{name:'ReportPlayerConduct',params:[{name:'sentiment',enum:['strongly_positive','positive','negative','strongly_negative']},{name:'factionId'},{name:'reason'}]},{name:'ChangeSpeed',enabled:true}],
       politics:{enabled:true,factions:[{id:'ImperialFaction',name:'Imperial Legion'},{id:'StormcloakFaction',name:'Stormcloaks'},...Array.from({length:3},(_,i)=>({id:'ThalmorFaction'+i,name:'Thalmor '+i}))],relations:[],wars:[],player_standings:[],events:[]}}));
     await pause(); clickText('Director'); await pause();
+    if (location.hash === '#director_busy_line') {
+      const section = index => document.querySelector(`section:nth-of-type(${index})`);
+      const line = index => [...section(index).querySelectorAll('p')].find(e=>e.textContent.includes('engine busy with'));
+      const dispatch = index => [...section(index).querySelectorAll('button')].find(e=>e.textContent.trim() === (index===1?'Dispatch Story':'Dispatch Social'));
+      const update = async (storyActive, socialActive) => {
+        window.updateFullState(JSON.stringify({config:{},pluginConfig:{'ui.scale':1},tasks:[],
+          story:{enabled:true,isActive:storyActive,activeNPC:'Delphine',activeType:'seek_player'},
+          social:{enabled:true,isActive:socialActive,traveler:'Mikael',target:'Sven',type:'npc_interaction'}}));
+        await pause();
+      };
+      check(!line(1) && !line(2), 'busy lines shown without active engine state');
+      await update(true,true);
+      const expected = ['Story engine busy with Delphine (Seek Player). Cancel it on the Tasks tab first.',
+        'NPC Social engine busy with Mikael → Sven. Cancel it on the Tasks tab first.'];
+      for (const index of [1,2]) {
+        const hint = line(index);
+        check(hint?.textContent === expected[index-1], `missing or incorrect busy line: ${expected[index-1]}`);
+        const style = getComputedStyle(hint.querySelector('span') || hint);
+        check(style.color === 'rgb(251, 191, 36)' && style.fontSize === '11px', 'busy line is not an amber hint');
+        check(hint.getBoundingClientRect().top >= dispatch(index).getBoundingClientRect().bottom, 'busy line is not beneath Dispatch');
+      }
+      check(payloads.length===0, 'busy advisory dispatched an action');
+      await fill('input[placeholder="NPC name (e.g. Saadia)"]','Saadia');
+      await fill('section:nth-of-type(1) textarea','came to repay a debt');
+      await fill('input[placeholder="NPC 1 (e.g. Mikael)"]','Mikael');
+      await fill('input[placeholder="NPC 2 (e.g. Sven)"]','Sven');
+      await fill('section:nth-of-type(2) textarea','discussed a shipment');
+      check(!dispatch(1).disabled && !dispatch(2).disabled, 'busy engine disabled a valid Dispatch');
+      await update(false,true);
+      check(!line(1) && line(2)?.textContent===expected[1], 'Story inactivity did not independently remove its busy line');
+      await update(true,false);
+      check(line(1)?.textContent===expected[0] && !line(2), 'Social inactivity did not independently remove its busy line');
+      await update(false,false);
+      check(!line(1) && !line(2), 'inactive engines retained busy lines');
+      document.getElementById('result').textContent=JSON.stringify({status:'PASS',checks:['director_busy_line'],lines:expected,dispatchEnabledWhileBusy:true,inactiveLinesAbsent:true});
+      return;
+    }
     if (location.hash === '#generate_reroll') {
       const story = () => document.querySelector('section');
       const narration = () => story().querySelector('textarea');
