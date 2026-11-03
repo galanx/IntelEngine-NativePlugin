@@ -81,6 +81,84 @@ SCRIPT = r"""
     await pause();
     const reloadReady = location.hash === '#director_live_polish2' && localStorage.getItem('__directorLivePolish2Reload') === 'ready';
     if (!reloadReady) { clickText('Director'); await pause(); }
+    if (location.hash === '#action_generate') {
+      window.updateFullState(JSON.stringify({config:{},pluginConfig:{'ui.scale':1},tasks:[],scheduled:[],
+        story:{enabled:true},social:{enabled:true},loadedNpcs:[
+          {formId:1,name:'Natch [Merchant]'},{formId:2,name:'Twin [Guard]'},{formId:3,name:'Twin [Merchant]'}],
+        knownNpcs:['Distant Person'],actions:[
+          {name:'GoToLocation'},{name:'FetchPerson'},{name:'ChangeSpeed'},{name:'CancelCurrentTask'},
+          {name:'ReportPlayerConduct',params:[{name:'factionId'},{name:'reason'},{name:'sentiment',enum:['positive','negative']}]}],
+        politics:{factions:[{id:'GuildFaction',name:'Guild [Faction]'}]}})); await pause();
+      const host = index => document.querySelector(`section:nth-of-type(${index})`);
+      const control = (index,label) => [...host(index).querySelectorAll('button')].find(e=>e.textContent.trim()===label);
+      const requests = () => payloads.filter(([name,json])=>name==='generateDirector' && !JSON.parse(json).outcome).map(([,json])=>JSON.parse(json));
+      const reply = async (form, fields) => { const request=requests().at(-1); window.directorGenerateResult(JSON.stringify({requestId:request.requestId,form,ok:true,fields})); await pause(); return request; };
+      check(control(4,'Generate') && control(4,'Clear'),'Action Generate/Clear controls missing');
+      control(1,'Generate').click(); await pause();
+      await reply('story',{npcName:'nAtCh',storyType:'seek_player',narration:'Wanted to discuss trade'});
+      check(document.querySelector('input[placeholder="e.g. Saadia"]').value==='Natch [Merchant]','unique trailing-tag name was not snapped');
+      control(1,'Clear').click(); await pause(); control(1,'Generate').click(); await pause();
+      await reply('story',{npcName:'Twin',storyType:'seek_player',narration:'Wanted to discuss trade'});
+      check(document.querySelector('input[placeholder="e.g. Saadia"]').value==='Twin','ambiguous trailing-tag name was changed');
+      control(1,'Clear').click(); await pause(); control(1,'Generate').click(); await pause();
+      await reply('story',{npcName:'Twin [Guard]',storyType:'seek_player',narration:'Wanted to discuss trade'});
+      check(document.querySelector('input[placeholder="e.g. Saadia"]').value==='Twin [Guard]','exact tagged name changed');
+      control(4,'Generate').click(); await pause();
+      let request=requests().at(-1);
+      check(request.form==='action' && !request.schema.actionName.options.includes('CancelCurrentTask') &&
+        !request.schema.actionName.options.includes('ChangeSpeed') && request.options.npcs.includes('Natch [Merchant]') &&
+        !request.options.npcs.includes('Distant Person'),'Action options were not restricted');
+      check(button('Action NPC').matches(':disabled'),'Action was editable while generating');
+      await reply('action',{npcName:'Distant Person',actionName:'GoToLocation',destination:'Whiterun',speed:'bogus'});
+      check(requests().at(-1).followUp && button('Action NPC').value==='' &&
+        host(4).querySelector('input[placeholder="e.g. Whiterun, Bannered Mare, home"]').value==='Whiterun',
+        'Action invalid actor/select discarded valid params or skipped required follow-up');
+      await reply('action',{npcName:'Natch',destination:'Riften'});
+      check(button('Action NPC').value==='Natch [Merchant]' && button('Action').value==='GoToLocation' &&
+        host(4).querySelector('input[placeholder="e.g. Whiterun, Bannered Mare, home"]').value==='Whiterun',
+        'Action follow-up failed to snap nearby actor or preserve filled destination');
+      control(4,'Generate').click(); await pause(); request=requests().at(-1);
+      check(request.fields.npcName==='Natch [Merchant]' && request.fields.actionName==='GoToLocation' &&
+        request.fields.destination==='','Action re-roll lost identities/type or retained generated text');
+      await reply('action',{npcName:'Twin [Guard]',actionName:'FetchPerson',destination:'Riften'});
+      check(button('Action NPC').value==='Natch [Merchant]' && button('Action').value==='GoToLocation' &&
+        host(4).querySelector('input[placeholder="e.g. Whiterun, Bannered Mare, home"]').value==='Riften',
+        'Action re-roll changed identity/type or failed to rewrite text');
+      await fill('input[placeholder="e.g. Whiterun, Bannered Mare, home"]','Solitude',host(4));
+      control(4,'Generate').click(); await pause();
+      check(requests().at(-1).touched.destination===true,'Action manual param ownership missing');
+      await reply('action',{destination:'Whiterun'});
+      check(host(4).querySelector('input[placeholder="e.g. Whiterun, Bannered Mare, home"]').value==='Solitude',
+        'Action generated result replaced manual param');
+      check(JSON.parse(localStorage.getItem('intelengine.director.drafts')).action[2].destination==='Solitude',
+        'Action generated draft was not persisted');
+      control(4,'Generate').click(); await pause(); const stopped=requests().at(-1);
+      control(4,'Stop').click(); await pause();
+      window.directorGenerateResult(JSON.stringify({requestId:stopped.requestId,form:'action',ok:true,fields:{destination:'late'}})); await pause();
+      check(host(4).querySelector('input[placeholder="e.g. Whiterun, Bannered Mare, home"]').value==='Solitude','Action Stop applied late result');
+      control(4,'Clear').click(); await pause();
+      check(button('Action NPC').value==='' && button('Action').value==='' &&
+        !JSON.parse(localStorage.getItem('intelengine.director.drafts')).action,'Action Clear left fields or persisted draft');
+      for (const action of ['CancelCurrentTask','ChangeSpeed']) {
+        await choose('Action',action); const before=requests().length;
+        control(4,'Generate').click(); await pause();
+        check(requests().length===before && host(4).textContent.includes('Generate does not fill') &&
+          button('Action NPC').value==='',`${action}: Generate did not refuse without filling`);
+      }
+      control(4,'Clear').click(); await pause();
+      await choose('Action NPC','Natch [Merchant]'); await choose('Action','ReportPlayerConduct');
+      control(4,'Generate').click(); await pause(); request=requests().at(-1);
+      check(request.variants.ReportPlayerConduct.reason.required && request.variants.ReportPlayerConduct.factionId,
+        'Action YAML fallback omitted params');
+      await reply('action',{factionId:'GuildFaction',reason:'Helped local merchants',sentiment:'positive'});
+      check(!control(4,'Execute Action').disabled,'Action YAML params did not satisfy required fields');
+      check(payloads.every(([name])=>name==='generateDirector'),'Generate dispatched gameplay');
+      control(4,'Execute Action').click(); await pause();
+      check(payloads.at(-1)[0]==='executeAction' && JSON.parse(payloads.at(-1)[1]).npcFormId===1 &&
+        JSON.parse(payloads.at(-1)[1]).params.reason==='Helped local merchants','Action generated draft dispatched wrong actor/params');
+      document.getElementById('result').textContent=JSON.stringify({status:'PASS',checks:['action_generate','name_snapping'],requests:requests().length});
+      return;
+    }
     if (location.hash === '#actions_grouped') {
       const actions = [
         {name:'FetchPerson',fileName:'fetch.yaml',description:'Find {{ npc.name }}',enabled:true,params:[],category:'intel_travel',isCategory:false},
@@ -1373,7 +1451,7 @@ with tempfile.TemporaryDirectory(prefix='ie-dropdowns-') as directory:
             chrome.wait(timeout=10)
         raise SystemExit(0)
     completed = subprocess.run([str(CHROME), '--headless=new', '--no-sandbox', '--disable-gpu',
-        '--allow-file-access-from-files', '--no-first-run', '--window-size=' + ('1600,3000' if not scenario or '--busy-only' in sys.argv or scenario in ['busy','director_required_fields','npc_picker_consistent','director_polish','director_field_layout','director_live_polish'] else '1600,1000'),
+        '--allow-file-access-from-files', '--no-first-run', '--window-size=' + ('1600,3000' if not scenario or '--busy-only' in sys.argv or scenario in ['busy','director_required_fields','npc_picker_consistent','director_polish','director_field_layout','director_live_polish','action_generate'] else '1600,1000'),
         '--user-data-dir=' + str(folder / 'profile'), '--virtual-time-budget=90000', '--dump-dom',
         (folder / 'index.html').as_uri() + ('#busy' if '--busy-only' in sys.argv else '#' + scenario if scenario else '')], capture_output=True, text=True, encoding='utf-8', timeout=60)
     start = completed.stdout.find('<pre id="result">')

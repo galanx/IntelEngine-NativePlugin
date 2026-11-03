@@ -799,6 +799,13 @@ void testManager() {
                e.name=="IntelEngine_DashboardDispatchNpcSocial" ||
                e.name=="IntelEngine_DashboardDispatchPolitics";
     }));
+    directorCompletion = {};
+    DashboardUIManager::OnGenerateDirectorStatic(R"({"requestId":"action1","form":"action","fields":{"npcName":"Brey","actionName":"GoToLocation","destination":""}})");
+    assert(directorCompletion);
+    directorCompletion(R"({"npcName":"Brey","actionName":"GoToLocation","destination":"Whiterun"})",1); drainDirector();
+    auto actionResult=nlohmann::json::parse(host->calls.back().second);
+    assert(actionResult["ok"] && actionResult["form"]=="action" && actionResult["requestId"]=="action1" &&
+           actionResult["fields"]["destination"]=="Whiterun");
     host->calls.clear(); m->stopPolling_=false;
     std::cout << "PASS director_generate_failure_and_stale_close_reopen\n";
     const auto generation=m->generation_;

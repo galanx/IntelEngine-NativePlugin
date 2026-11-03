@@ -342,6 +342,9 @@ class DirectorVM(VM):
         self.properties.update({f"AgentAlias{i:02d}": ReferenceAlias() for i in range(5)})
 
     def invoke(self, script, name, args=()):
+        if script == "IntelEngine_Core" and name == "PushDashboardState":
+            self.effects.append(("PushDashboardState", ()))
+            return None
         if (script == "IntelEngine_Core" and name in
                 ("InjectFact", "InitializeStuckTrackingForSlot", "InitOffScreenTracking")) or (
                 script == "IntelEngine_StoryEngine" and name == "ReapplyTravelPackage"):
@@ -379,6 +382,8 @@ def run_director_lite_checks(files, history):
     def first_seek():
         task = DirectorVM(files, history)
         task.seek("First seek")
+        require(("PushDashboardState", ()) in task.effects,
+                "Director story dispatch did not push dashboard state")
         require(("Notification", "Nazeem sets out (Seek Player).") in task.effects,
                 "Director story notice must use friendly story type: " + repr(task.effects))
         require(sum(task.properties[f"AgentAlias{i:02d}"].actor is task.agent for i in range(5)) == 1,
@@ -587,6 +592,9 @@ def run_director_lite_checks(files, history):
             payload = json.dumps({"npc1Name": task.agent.name, "npc2Name": task.target.name,
                 "socialType": "npc_interaction", "narration": "A meeting", "response": "{}"})
             task.invoke("IntelEngine_Core", "OnDashboardDispatchNpcSocial", ("", payload, 0.0, None))
+            if mode != "refused":
+                require(("PushDashboardState", ()) in task.effects,
+                        "Director social dispatch did not push dashboard state: " + mode)
             notices = [e for e in task.effects if e[0] == "Notification" and e[1].endswith("started.")]
             require(notices == ([] if mode == "refused" else
                 [("Notification", "Nazeem and Recipient: Npc Interaction started.")]),
