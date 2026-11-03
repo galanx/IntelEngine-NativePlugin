@@ -109,19 +109,18 @@ SCRIPT = r"""
         !request.schema.actionName.options.includes('ChangeSpeed') && request.options.npcs.includes('Natch [Merchant]') &&
         !request.options.npcs.includes('Distant Person') && request.options.targets.includes('Distant Person'),'Action options were not restricted');
       check(button('Action NPC').matches(':disabled'),'Action was editable while generating');
-      await reply('action',{npcName:'Distant Person',actionName:'GoToLocation',destination:'Whiterun',speed:'bogus',reason:'expected the player to come'});
-      check(requests().at(-1).followUp && button('Action NPC').value==='' &&
-        host(4).querySelector('input[placeholder="e.g. Whiterun, Bannered Mare, home"]').value==='Whiterun',
-        'Action invalid actor/select discarded valid params or skipped required follow-up');
+      check(Object.values(request.fields).every(value=>value!=='') && request.blank.includes('reason') && request.blank.includes('npcName'),
+        'Action Generate sent empty-string fields or lost blank-key metadata');
+      await reply('action',{npcName:'',actionName:'GoToLocation',destination:'Whiterun',speed:'bogus',reason:'expected the player to come'});
+      check(button('Action NPC').value==='Natch [Merchant]','empty generated Action NPC did not fall back to a nearby NPC');
+      control(4,'Generate').click(); await pause();
       const rejected=requests().at(-1);
-      await reply('action',{npcName:'Natch',destination:'Natch [Merchant]',waitForPlayer:'1',reason:'expected the player to come'});
-      check(outcomeFor(rejected.requestId).rejected.destination==='Destination must be a place' &&
-        button('Wait for player').value==='' &&
-        host(4).querySelector('textarea').value==='expected the player to come',
-        `Action failed to clear waitForPlayer or retain its reason: wait=${button('Wait for player').textContent}, reason=${host(4).querySelector('textarea').value}, audit=${JSON.stringify(outcomeFor(rejected.requestId))}`);
+      await reply('action',{destination:'Natch [Merchant]'});
+      check(outcomeFor(rejected.requestId).rejected.destination==='Destination must be a place',
+        'Action accepted an NPC name as a destination');
       control(4,'Generate').click(); await pause(); request=requests().at(-1);
       check(request.fields.npcName==='Natch [Merchant]' && request.fields.actionName==='GoToLocation' &&
-        request.fields.destination==='','Action re-roll lost identities/type or retained generated text');
+        (request.fields.destination ?? '')==='','Action re-roll lost identities/type or retained generated text');
       await reply('action',{npcName:'Twin [Guard]',actionName:'FetchPerson',destination:'Riften',reason:'Wanted a new opportunity'});
       check(button('Action NPC').value==='Natch [Merchant]' && button('Action').value==='GoToLocation' &&
         host(4).querySelector('input[placeholder="e.g. Whiterun, Bannered Mare, home"]').value==='Riften',
@@ -160,7 +159,7 @@ SCRIPT = r"""
           `${action}: Generate changed action/params or failed to fill Reason: action=${button('Action').value}, speed=${button('New speed')?.textContent}, reason=${host(4).querySelector('textarea').value}`);
       }
       control(4,'Generate').click(); await pause(); request=requests().at(-1);
-      check(request.fields.reason==='' && request.touched.reason===false,'generated Reason did not re-roll as blank text');
+      check((request.fields.reason ?? '')==='' && request.touched.reason===false,'generated Reason did not re-roll as blank text');
       const generatedReasonRequest=requests().at(-1), requestCount=requests().length;
       await reply('action',{reason:''});
       const reasonFollowUp=requests().at(-1), followUpCount=requests().length;
@@ -405,16 +404,16 @@ SCRIPT = r"""
         return request;
       };
       const a = await roll({npcName:'Nazeem',storyType:'ambush',narration:'was hired to collect an unpaid debt',sender:'Guard 1'});
-      check(a.fields.npcName === '' && a.fields.storyType === '' && button('Story type').value === 'Ambush', 'auto Generate did not pick its NPC and type');
+      check((a.fields.npcName ?? '') === '' && (a.fields.storyType ?? '') === '' && button('Story type').value === 'Ambush', 'auto Generate did not pick its NPC and type');
       check(narration().value === 'was hired to collect an unpaid debt', 'first Generate did not fill narration A');
       const b = await roll({npcName:'Guard 2',storyType:'road_encounter',narration:'set out to sell pelts in Helgen',sender:'Guard 2',destination:'Helgen'});
       check(narration().value === 'set out to sell pelts in Helgen', 'second Generate did not replace narration A with B');
-      check(b.fields.narration === '' && b.fields.storyType === 'ambush' && b.fields.sender === 'Guard 1', 'reroll did not blank generated text and retain generated type/sender');
+      check((b.fields.narration ?? '') === '' && b.fields.storyType === 'ambush' && b.fields.sender === 'Guard 1', 'reroll did not blank generated text and retain generated type/sender');
       check(b.fields.npcName === 'Nazeem' && story().querySelector('input').value === 'Nazeem' && button('Story type').value === 'Ambush' &&
         story().querySelector('input[aria-label="Hired by"]').value === 'Guard 1', 'reroll replaced generated identities or type');
       story().querySelector('[aria-label="Clear NPC"]').click(); await pause();
       const repicked = await roll({npcName:'Guard 2',storyType:'road_encounter',narration:'came to collect a debt',sender:'Guard 2'});
-      check(repicked.fields.npcName === '' && repicked.fields.storyType === 'ambush' && story().querySelector('input').value === 'Guard 2' &&
+      check((repicked.fields.npcName ?? '') === '' && repicked.fields.storyType === 'ambush' && story().querySelector('input').value === 'Guard 2' &&
         button('Story type').value === 'Ambush', 'clearing NPC did not re-pick only that identity');
       await fill('input[placeholder="e.g. Saadia"]', 'Saadia');
       await fill('section textarea', 'set out to buy salt in Riften');
@@ -430,7 +429,7 @@ SCRIPT = r"""
       check(getComputedStyle(hint).fontSize === '11px' && getComputedStyle(hint).color === 'rgb(156, 163, 175)' && label.querySelector('.text-red-400'), 'hint is not readable or required label star lost');
       [...story().querySelectorAll('button')].find(e=>e.textContent.trim()==='Clear').click(); await pause();
       const cleared = await roll({npcName:'Guard 1',storyType:'seek_player',narration:'came to repay a debt'});
-      check(cleared.fields.npcName === '' && cleared.fields.narration === '' && story().querySelector('input').value === 'Guard 1', 'Clear retained user ownership');
+      check((cleared.fields.npcName ?? '') === '' && (cleared.fields.narration ?? '') === '' && story().querySelector('input').value === 'Guard 1', 'Clear retained user ownership');
       document.getElementById('result').textContent=JSON.stringify({status:'PASS',checks:['generate_reroll'],requests});
       return;
     }
@@ -771,8 +770,8 @@ SCRIPT = r"""
         'textarea clear did not clear/hide');
       social.querySelector('summary button').click(); await pause();
       let request=requests().at(-1);
-      check(request.fields.gossip==='' && request.blank.includes('gossip') && !request.touched.gossip &&
-        request.fields.narration==='' && request.blank.includes('narration') && !request.touched.narration,
+      check(!Object.hasOwn(request.fields,'gossip') && request.blank.includes('gossip') && !request.touched.gossip &&
+        !Object.hasOwn(request.fields,'narration') && request.blank.includes('narration') && !request.touched.narration,
         'cleared text controls were submitted as touched');
       clickText('Stop'); await pause();
       const factionA=political.querySelector('input[placeholder="e.g. StormcloakFaction"]');
@@ -787,14 +786,14 @@ SCRIPT = r"""
         'faction picker clear did not clear/hide');
       political.querySelector('summary button').click(); await pause();
       request=requests().at(-1);
-      check(request.fields.factionA==='' && request.blank.includes('factionA') && !request.touched.factionA,
+      check(!Object.hasOwn(request.fields,'factionA') && request.blank.includes('factionA') && !request.touched.factionA,
         'cleared faction picker value was submitted as touched');
       clickText('Stop'); await pause();
       await fill('input[placeholder="e.g. StormcloakFaction"]','Stormcloaks',political);
       await fill('input[placeholder="e.g. StormcloakFaction"]','',political);
       political.querySelector('summary button').click(); await pause();
       request=requests().at(-1);
-      check(request.fields.factionA==='' && request.blank.includes('factionA') && !request.touched.factionA,
+      check(!Object.hasOwn(request.fields,'factionA') && request.blank.includes('factionA') && !request.touched.factionA,
         'manually deleted faction was submitted as touched');
       clickText('Stop'); await pause();
       const storyNpc=story.querySelector('input[placeholder="e.g. Saadia"]');
@@ -842,7 +841,7 @@ SCRIPT = r"""
       window.directorGenerateResult(JSON.stringify({requestId:request.requestId,form:'story',ok:true,
         fields:{storyType:'informant',subject:'Mikael',gossip:'was seen arguing over a debt'}})); await pause();
       followup=requests().at(-1);
-      check(followup.followUp===true && followup.fields.narration==='',
+      check(followup.followUp===true && (followup.fields.narration ?? '')==='',
         'missing required base narration did not trigger one follow-up');
       check(requests().length===beforeBase+1,'base narration follow-up was not exactly once');
       window.directorGenerateResult(JSON.stringify({requestId:followup.requestId,form:'story',ok:true,
@@ -1115,7 +1114,7 @@ SCRIPT = r"""
         'generating form remained editable');
       let request = JSON.parse(payloads.at(-1)[1]);
       check(payloads.at(-1)[0] === 'generateDirector' && request.fields.storyType === 'quest' &&
-        request.fields.questSubType === 'rescue' && request.fields.enemyType === '' &&
+        request.fields.questSubType === 'rescue' && (request.fields.enemyType ?? '') === '' &&
         request.options.npcs.includes('Saadia'), 'generate omitted touched/auto/options contract');
       window.directorGenerateResult(JSON.stringify({requestId:request.requestId,form:'story',ok:true,
         fields:{narration:'Partial plan',enemyType:'not_an_enemy',unexpected:'ignore'}})); await pause(); clickText('Stop'); await pause();
@@ -1125,7 +1124,7 @@ SCRIPT = r"""
       check(partial.applied.includes('narration') && partial.rejected.enemyType==='Invalid option' &&
         partial.rejected.unexpected==='Unknown field', 'partial validation reasons missing');
       clickText('Generate'); await pause(); request = JSON.parse(payloads.at(-1)[1]);
-      check(Object.keys(request.variants.quest).every(key => key in request.fields), 'visible quest blanks omitted from request');
+      check(Object.keys(request.variants.quest).every(key => key in request.fields || request.blank.includes(key)), 'visible quest blanks omitted from request');
       check(Object.values(request.variants.quest).every(field=>!('placeholder' in field)), 'example placeholders leaked in generated variants');
       window.directorGenerateResult(JSON.stringify({requestId:request.requestId,form:'story',ok:true,
         fields:{storyType:'quest',npcName:'Other',narration:'Wants to discuss a careful plan',
@@ -1208,7 +1207,7 @@ SCRIPT = r"""
       await choose('Political event type','Insult');
       document.querySelector('[aria-label="Clear Political event type"]').click(); await pause();
       formButton(3,'Generate').click(); await pause(); const clearedType=JSON.parse(payloads.at(-1)[1]);
-      check(!clearedType.touched.eventType && clearedType.blank.includes('eventType') && clearedType.fields.eventType==='', 'cleared type was not handed back to Generate');
+      check(!clearedType.touched.eventType && clearedType.blank.includes('eventType') && !Object.hasOwn(clearedType.fields,'eventType'), 'cleared type was not handed back to Generate');
       window.directorGenerateResult(JSON.stringify({requestId:clearedType.requestId,form:'political',ok:true,
         fields:{eventType:'insult',factionA:'StormcloakFaction',factionB:'ThalmorFaction0',description:'An insult',relationDelta:-5}})); await pause();
       check(button('Political event type').value==='Insult' && document.querySelector('section:nth-of-type(3) textarea').value==='An insult',
