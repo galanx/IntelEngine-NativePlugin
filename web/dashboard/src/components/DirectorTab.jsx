@@ -127,12 +127,12 @@ const STORY_TYPE_FIELDS = {
   ambush: { example: 'e.g. was hired by the Thieves Guild to rough you up', hint: 'A combat-capable hostile NPC approaches to attack you (outdoors only).', narration: 'Why they want to attack you, and who hired them if anyone.', fields: [
     { key: 'sender', label: 'Hired by', type: 'text',
       placeholder: 'e.g. Maven Black-Briar',
-      hint: 'Optional. NPC who ordered the ambush. Gets a fact about hiring.' },
+      hint: 'Optional. An NPC or a faction (its leaders learn they ordered it).' },
   ] },
   stalker: { example: 'e.g. confessed to following you out of jealousy', hint: 'Secretly follows you out of romance, jealousy or obsession; flees when caught (outdoors only).', narration: 'The confrontation when you catch them, not their hiding; include their motive.', fields: [
     { key: 'sender', label: 'Encouraged by', type: 'text',
       placeholder: 'e.g. Faendal',
-      hint: 'Optional. NPC who encouraged the stalking. Gets a fact.' },
+      hint: 'Optional. An NPC or a faction (its leaders learn they ordered it).' },
   ] },
   message: { example: 'e.g. wanted to arrange a private meeting about a debt', hint: 'Sends a nearby courier to deliver a message from the selected NPC.', narration: 'Why the sender wants to contact you.', fields: [
     { key: 'msgContent', label: 'Message content', type: 'text', required: true,
@@ -467,11 +467,11 @@ function DirectorTab({ loadedNpcs, tasks = [], actions, factions = [], sendActio
       npcName: storyNpc.trim(),
       storyType,
       narration: storyNarration.trim(),
-      ...storyFields,
+      ...storyFields, ...(['ambush','stalker'].includes(storyType) && storyFields.sender ? {sender:factions.find(f=>f.id===storyFields.sender || f.name===storyFields.sender)?.id || storyFields.sender} : {}),
     });
     setStoryNarration('');
     setStoryFields({});
-  }, [storyNpc, storyType, storyTypeValid, storyNarration, storyFields, sendAction, confirmBusy, storyBusy]);
+  }, [storyNpc, storyType, storyTypeValid, storyNarration, storyFields, factions, sendAction, confirmBusy, storyBusy]);
 
   const currentSocialFields = SOCIAL_TYPE_FIELDS[socialType] || [];
 
@@ -602,7 +602,7 @@ function DirectorTab({ loadedNpcs, tasks = [], actions, factions = [], sendActio
                     <option key={o} value={o}>{o}</option>
                   ))}
                 </Select>
-              ) : (
+              ) : f.key === 'sender' && ['ambush','stalker'].includes(storyType) ? <FactionInput value={storyFields.sender || ''} onChange={value => { setTouched(t=>({...t,sender:true})); setStoryFields(prev => ({...prev,sender:value})); }} factions={factions} placeholder={f.placeholder} /> : (
                 <input
                   type="text"
                   value={storyFields[f.key] || ''}

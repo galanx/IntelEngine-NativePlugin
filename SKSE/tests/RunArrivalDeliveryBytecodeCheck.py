@@ -306,6 +306,7 @@ class VM:
             elif op == "propset":
                 prop = a[0][1].removeprefix("::").removesuffix("_var")
                 self.properties[prop] = v(a[2])
+            elif op == "array_length": env[a[0][1]] = len(v(a[1]))
             elif op == "array_getelement": env[a[0][1]] = v(a[1])[v(a[2])]
             elif op == "array_setelement":
                 prop = a[0][1].removeprefix("::").removesuffix("_var")
@@ -653,12 +654,40 @@ def run_director_lite_checks(files, history):
             require(task.properties["DispatchGeneration"] == generation + (0 if full else 1),
                     "message generation did not match dispatch admission")
 
+    def ambush_faction_hirer_injects_leader_fact():
+        class HirerVM(DirectorVM):
+            def external(self, method, args, script):
+                if method == "FindNPCByName":
+                    return self.target if args[0] == self.target.name else None
+                if method == "GetFactionLeaderFormIds":
+                    require(args == ["ImperialFaction"], "faction lookup did not receive its id")
+                    self.effects.append((method, tuple(args)))
+                    return [13276, 0]
+                if method == "GetForm": return self.target if args[0] == 13276 else None
+                return super().external(method, args, script)
+
+        for story_type, verb in (("ambush", "sent Nazeem to ambush Player"),
+                                 ("stalker", "encouraged Nazeem to follow Player")):
+            for sender in ("Recipient", "ImperialFaction", ""):
+                task = HirerVM(files, history)
+                task.halt_before = "RandomInt" if story_type == "ambush" else "DispatchToTarget"
+                task.invoke("IntelEngine_StoryEngine", "HandleAmbushStalkerDispatch",
+                            (task.agent, "had a grudge", json.dumps({"sender": sender}), story_type, "Director"))
+                expected = ("ImperialFaction " if sender == "ImperialFaction" else "") + verb
+                require([e for e in task.effects if e[0] == "InjectFact"] ==
+                        [("InjectFact", (task.agent, "had a grudge"))] +
+                        ([("InjectFact", (task.target, expected))] if sender else []),
+                        "hirer facts differ for " + story_type + "/" + sender + ": " + repr(task.effects))
+                require(any(e[0] == "GetFactionLeaderFormIds" for e in task.effects) ==
+                        (sender == "ImperialFaction"), "NPC/empty sender used faction fallback")
+                require(task.halt_reached, "hirer check did not reach the dispatch boundary")
+
     failures = []
     for case in (director_seek_then_seek_is_refused, run6_seek_seek_fetch_arrival,
                  director_story_while_story_active, cancel_story_task_ends_story,
                  cancel_story_injects_closing_fact, director_action_success_notice,
                  director_social_and_political_success_notice, director_message_generation_success_notice,
-                 director_story_not_found_notifies):
+                 director_story_not_found_notifies, ambush_faction_hirer_injects_leader_fact):
         try:
             case()
             print("actual PEX " + case.__name__ + " PASS")

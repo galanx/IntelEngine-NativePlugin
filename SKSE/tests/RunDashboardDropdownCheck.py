@@ -335,6 +335,38 @@ SCRIPT = r"""
       document.getElementById('result').textContent=JSON.stringify({status:'PASS',checks:['director_required_fields']});
       return;
     }
+    if (location.hash === '#ambush_faction_hirer') {
+      const story = document.querySelector('section:nth-of-type(1)');
+      const button = text => [...story.querySelectorAll('button')].find(e=>e.textContent.trim()===text);
+      await fill('input[placeholder="NPC name (e.g. Saadia)"]','Saadia');
+      await choose('Story type','Ambush');
+      await fill('section:nth-of-type(1) textarea','was hired by the Imperial Legion');
+      await fill('input[placeholder="e.g. Maven Black-Briar"]','Imperial Legion');
+      button('Dispatch Story').click(); await pause();
+      check(JSON.parse(payloads.at(-1)[1]).sender==='ImperialFaction','typed faction name was not dispatched as producer faction ID');
+      button('Clear').click(); await pause();
+      await fill('input[placeholder="NPC name (e.g. Saadia)"]','Saadia');
+      await choose('Story type','Stalker');
+      button('Generate').click(); await pause();
+      const request=JSON.parse(payloads.at(-1)[1]);
+      window.directorGenerateResult(JSON.stringify({requestId:request.requestId,form:'story',ok:true,
+        fields:{npcName:'Nazeem',storyType:'stalker',narration:'confessed to following you for the Imperial Legion',sender:'Imperial Legion'}})); await pause();
+      check(story.querySelector('input[placeholder="NPC name (e.g. Saadia)"]').value==='Saadia','generation replaced the typed NPC identity');
+      button('Dispatch Story').click(); await pause();
+      const generated=JSON.parse(payloads.at(-1)[1]);
+      check(generated.sender==='ImperialFaction' && generated.npcName==='Saadia','generated faction sender or preserved NPC was dispatched incorrectly');
+      for (const sender of ['ImperialFaction', 'Maven Black-Briar']) {
+        button('Clear').click(); await pause();
+        await fill('input[placeholder="NPC name (e.g. Saadia)"]','Saadia');
+        await choose('Story type','Ambush');
+        await fill('section:nth-of-type(1) textarea','had an unpaid debt');
+        await fill('input[placeholder="e.g. Maven Black-Briar"]',sender);
+        button('Dispatch Story').click(); await pause();
+        check(JSON.parse(payloads.at(-1)[1]).sender===sender,'faction ID or NPC sender changed: '+sender);
+      }
+      document.getElementById('result').textContent=JSON.stringify({status:'PASS',checks:['ambush_faction_hirer'],typed:JSON.parse(payloads.find(([name])=>name==='dispatchStory')[1]),generated});
+      return;
+    }
     if (location.hash === '#director_generate_identities') {
       const failures = [];
       const control = (index, text) => [...document.querySelectorAll(`section:nth-of-type(${index}) button`)].find(e=>e.textContent.trim()===text);
