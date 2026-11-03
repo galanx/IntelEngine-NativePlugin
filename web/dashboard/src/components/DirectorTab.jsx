@@ -353,7 +353,7 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
     request.touched = Object.fromEntries(Object.keys(request.fields).map(k => [k, request.fields[k] !== '' && (request.followUp || touched[k] === true)]));
     setTouched(t => ({...t, ...Object.fromEntries(Object.keys(request.draft).filter(k => request.draft[k] === '').map(k => [k, false]))}));
     pendingRef.current = request; setPending(request); setGenerateError('');
-    send('generateDirector', { requestId:request.id, form:request.form, fields:request.fields, blank:Object.keys(request.fields).filter(k=>request.fields[k] === ''), touched:request.touched, schema:request.schema, variants:request.variants, options:request.options, followUp:!!request.followUp });
+    send('generateDirector', { requestId:request.id, form:request.form, fields:Object.fromEntries(Object.entries(request.fields).filter(([, v]) => v !== '')), blank:Object.keys(request.fields).filter(k=>request.fields[k] === ''), touched:request.touched, schema:request.schema, variants:request.variants, options:request.options, followUp:!!request.followUp });
   };
   useEffect(() => {
     window.directorGenerateResult = json => {
@@ -395,6 +395,7 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
         const other = {factionA:'factionB',factionB:'factionA',npc1Name:'npc2Name',npc2Name:'npc1Name'}[key]; if (other && value && value.trim().toLowerCase() === (next[other] || '').trim().toLowerCase()) { audit.rejected[key] = 'Identities must be distinct'; continue; }
         next[key] = value;
       }
+      if (form === 'action' && !next.npcName && nearby.length) next.npcName = nearby[Math.floor(Math.random() * nearby.length)].name;
       next[typeKey] = nextType;
       if (form === 'story') { setStoryNpc(next.npcName); setStoryType(next.storyType); setStoryNarration(next.narration); setStoryFields(Object.fromEntries(Object.keys(allowed).filter(k => !['npcName','storyType','narration'].includes(k)).map(k => [k,next[k]]))); }
       if (form === 'social') { setSocialNpc1(next.npc1Name); setSocialNpc2(next.npc2Name); setSocialType(next.socialType); setSocialNarration(next.narration); setSocialFields(Object.fromEntries(Object.keys(allowed).filter(k => !['npc1Name','npc2Name','socialType','narration'].includes(k)).map(k => [k,next[k]]))); }
