@@ -345,8 +345,11 @@ class DirectorVM(VM):
         if script == "IntelEngine_Core" and name == "PushDashboardState":
             self.effects.append(("PushDashboardState", ()))
             return None
+        if script == "IntelEngine_Core" and name == "InjectFact":
+            if args[1] != "": self.effects.append((name, tuple(args)))
+            return None
         if (script == "IntelEngine_Core" and name in
-                ("InjectFact", "InitializeStuckTrackingForSlot", "InitOffScreenTracking")) or (
+                ("InitializeStuckTrackingForSlot", "InitOffScreenTracking")) or (
                 script == "IntelEngine_StoryEngine" and name == "ReapplyTravelPackage"):
             self.effects.append((name, tuple(args)))
             return None
@@ -557,10 +560,17 @@ def run_director_lite_checks(files, history):
             task = DirectorVM(files, history)
             task.properties["AgentAlias00"].actor = task.agent
             task.properties["SlotStates"][0] = state
-            payload = json.dumps({"actionName": "ChangeSpeed", "npcFormId": "1234", "newSpeed": 0})
+            payload = json.dumps({"actionName": "ChangeSpeed", "npcFormId": "1234", "newSpeed": 0, "reason":"wanted to help Player"})
             task.invoke("IntelEngine_Core", "OnDashboardExecuteAction", ("", payload, 0.0, None))
+            require(("InjectFact", (task.agent, "wanted to help Player")) in task.effects,
+                    "Director action reason was not injected into the acting NPC")
             require([e for e in task.effects if e[0] == "Notification"] == expected,
-                    "director_action_success_notice: Bool-true must notify once; Bool-false must not notify")
+                    "director_action_success_notice: Bool-true must notify once; Bool-false must not")
+        task = DirectorVM(files, history)
+        payload = json.dumps({"actionName": "ChangeSpeed", "npcFormId": "1234", "newSpeed": 0})
+        task.invoke("IntelEngine_Core", "OnDashboardExecuteAction", ("", payload, 0.0, None))
+        require(not any(e[0] == "InjectFact" for e in task.effects),
+                "Director action without a reason injected a fact")
 
     def director_social_and_political_success_notice():
         class NoticeVM(DirectorVM):
@@ -798,7 +808,7 @@ def main():
             if method == "ClearPackageOverride": self.packages.clear()
             if method == "SetLinkedRef": self.link = args[1]
             if method == "StoryResponseGetField":
-                return {"actionName": "CancelCurrentTask", "npcFormId": "1234"}[args[1]]
+                return {"actionName": "CancelCurrentTask", "npcFormId": "1234"}.get(args[1], "")
             if method == "ParseFormID": return int(args[0])
             if method == "GetForm": return self.agent
             if method == "PushDashboardState": return None

@@ -114,10 +114,11 @@ SCRIPT = r"""
         host(4).querySelector('input[placeholder="e.g. Whiterun, Bannered Mare, home"]').value==='Whiterun',
         'Action invalid actor/select discarded valid params or skipped required follow-up');
       const rejected=requests().at(-1);
-      await reply('action',{npcName:'Natch',destination:'Natch [Merchant]',waitForPlayer:'Yes'});
+      await reply('action',{npcName:'Natch',destination:'Natch [Merchant]',waitForPlayer:'1',reason:'expected the player to come'});
       check(outcomeFor(rejected.requestId).rejected.destination==='Destination must be a place' &&
-        host(4).querySelector('[role="combobox"][aria-label="Wait for player"]').textContent.trim()==='',
-        'Action accepted an NPC destination or retained waitForPlayer');
+        button('Wait for player').value==='Yes' &&
+        host(4).querySelector('textarea').value==='expected the player to come',
+        `Action rejected a justified waitForPlayer or failed to retain its reason: wait=${button('Wait for player').textContent}, reason=${host(4).querySelector('textarea').value}, audit=${JSON.stringify(outcomeFor(rejected.requestId))}`);
       control(4,'Generate').click(); await pause(); request=requests().at(-1);
       check(request.fields.npcName==='Natch [Merchant]' && request.fields.actionName==='GoToLocation' &&
         request.fields.destination==='','Action re-roll lost identities/type or retained generated text');
@@ -140,12 +141,36 @@ SCRIPT = r"""
       control(4,'Clear').click(); await pause();
       check(button('Action NPC').value==='' && button('Action').value==='' &&
         !JSON.parse(localStorage.getItem('intelengine.director.drafts')).action,'Action Clear left fields or persisted draft');
+      await choose('Action NPC','Natch [Merchant]');
       for (const action of ['CancelCurrentTask','ChangeSpeed']) {
-        await choose('Action',action); const before=requests().length;
-        control(4,'Generate').click(); await pause();
-        check(requests().length===before && host(4).textContent.includes('Generate does not fill') &&
-          button('Action NPC').value==='',`${action}: Generate did not refuse without filling`);
+        await choose('Action',action);
+        if (action==='ChangeSpeed') await choose('New speed','Jog');
+        const before=requests().length; control(4,'Generate').click(); await pause(); request=requests().at(-1);
+        check(requests().length===before+1 && request.fields.actionName===action && request.schema.reason &&
+          Object.keys(request.fields).every(key=>['npcName','actionName','reason'].includes(key)),
+          `${action}: Generate did not request only the action reason: ${JSON.stringify(request)}`);
+        await reply('action',{reason:'Wanted to help the player'});
+        check(button('Action').value===action && (action!=='ChangeSpeed' || button('New speed').value==='Jog') &&
+          host(4).querySelector('textarea').value==='Wanted to help the player',
+          `${action}: Generate changed action/params or failed to fill Reason: action=${button('Action').value}, speed=${button('New speed')?.textContent}, reason=${host(4).querySelector('textarea').value}`);
       }
+      control(4,'Generate').click(); await pause(); request=requests().at(-1);
+      check(request.fields.reason==='' && request.touched.reason===false,'generated Reason did not re-roll as blank text');
+      await reply('action',{reason:'Rerolled motive'});
+      await fill('section:nth-of-type(4) textarea','Typed motive');
+      control(4,'Generate').click(); await pause(); request=requests().at(-1);
+      check(request.fields.reason==='Typed motive' && request.touched.reason===true,'typed Reason was not preserved as user-owned');
+      await reply('action',{reason:'Generated replacement'});
+      check(host(4).querySelector('textarea').value==='Typed motive','Generate replaced a typed Reason');
+      check(host(4).querySelector('textarea') && host(4).textContent.includes('Optional. Why the NPC does this; they remember it and can explain it.'),
+        'Action Reason field/hint missing');
+      control(4,'Clear').click(); await pause();
+      check(host(4).querySelector('textarea').value==='', 'Action Clear did not wipe Reason');
+      await choose('Action NPC','Natch [Merchant]'); await choose('Action','CancelCurrentTask');
+      control(4,'Execute Action').click(); await pause();
+      check(!Object.hasOwn(JSON.parse(payloads.at(-1)[1]).params,'reason'),'empty Action Reason was sent');
+      control(4,'Clear').click(); await pause();
+      await choose('Action NPC','Natch [Merchant]');
       control(4,'Clear').click(); await pause();
       await choose('Action NPC','Natch [Merchant]'); await choose('Action','ReportPlayerConduct');
       control(4,'Generate').click(); await pause(); request=requests().at(-1);
@@ -153,7 +178,7 @@ SCRIPT = r"""
         'Action YAML fallback omitted params');
       await reply('action',{factionId:'GuildFaction',reason:'Helped local merchants',sentiment:'positive'});
       check(!control(4,'Execute Action').disabled,'Action YAML params did not satisfy required fields');
-      check(payloads.every(([name])=>name==='generateDirector'),'Generate dispatched gameplay');
+      check(payloads.filter(([name])=>name==='executeAction').length===1,'Generate dispatched gameplay');
       control(4,'Execute Action').click(); await pause();
       check(payloads.at(-1)[0]==='executeAction' && JSON.parse(payloads.at(-1)[1]).npcFormId===1 &&
         JSON.parse(payloads.at(-1)[1]).params.reason==='Helped local merchants','Action generated draft dispatched wrong actor/params');
@@ -1212,7 +1237,7 @@ SCRIPT = r"""
     await filterPick('Political event type','Insult'); clickText('Dispatch Political Event'); await pause();
     await filterPick('Action NPC','Nazeem'); await filterPick('Action','ReportPlayerConduct');
     await fill('input[placeholder="Select faction..."]','ThalmorFaction');
-    await fill('section:nth-of-type(4) input:not([role=combobox]):not([placeholder="Select faction..."])','praised Legion');
+    await fill('section:nth-of-type(4) textarea','praised Legion');
     await filterPick('sentiment','positive');
     await choose('Action','ReportPlayerConduct'); // Same action must preserve all parameters.
     clickText('Execute Action'); await pause();
