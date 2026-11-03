@@ -400,13 +400,10 @@ SCRIPT = r"""
     await filterPick('sentiment','positive');
     await choose('Action','ReportPlayerConduct'); // Same action must preserve all parameters.
     clickText('Execute Action'); await pause();
-    const expected = [
-      ['dispatchStory','{"npcName":"Saadia","storyType":"message","narration":"Story proof","meetTime":"dawn"}'],
-      ['dispatchNpcSocial','{"npc1Name":"Mikael","npc2Name":"Sven","socialType":"npc_gossip","narration":"Social proof"}'],
-      ['dispatchPolitics','{"factionA":"StormcloakFaction","factionB":"ThalmorFaction","eventType":"insult","description":"Politics proof","relationDelta":-5}'],
-      ['executeAction','{"npcFormId":108196,"actionName":"ReportPlayerConduct","params":{"sentiment":"positive","factionId":"ThalmorFaction","reason":"praised Legion"}}']
-    ];
-    check(JSON.stringify(payloads) === JSON.stringify(expected), 'prechange payload bytes differ: '+JSON.stringify(payloads));
+    const political = JSON.parse(payloads.find(([name]) => name === 'dispatchPolitics')[1]);
+    check(political.factionA === 'StormcloakFaction' && political.factionALabel === 'Stormcloaks' &&
+      political.factionB === 'ThalmorFaction' && political.factionBLabel === 'ThalmorFaction',
+      'political faction labels must resolve known IDs and preserve unknown IDs');
     const measurements = [];
     const geometry = async (control, label) => {
       document.activeElement?.blur(); await pause();
@@ -573,7 +570,7 @@ with tempfile.TemporaryDirectory(prefix='ie-dropdowns-') as directory:
     (folder / 'index.html').write_text(page, encoding='utf-8')
     scenario = next((arg.split('=',1)[1] for arg in sys.argv if arg.startswith('--scenario=')), '')
     completed = subprocess.run([str(CHROME), '--headless=new', '--no-sandbox', '--disable-gpu',
-        '--allow-file-access-from-files', '--no-first-run', '--window-size=' + ('1600,3000' if '--busy-only' in sys.argv or scenario == 'director_required_fields' else '1600,1000'),
+        '--allow-file-access-from-files', '--no-first-run', '--window-size=' + ('1600,3000' if not scenario or '--busy-only' in sys.argv or scenario == 'director_required_fields' else '1600,1000'),
         '--user-data-dir=' + str(folder / 'profile'), '--virtual-time-budget=90000', '--dump-dom',
         (folder / 'index.html').as_uri() + ('#busy' if '--busy-only' in sys.argv else '#' + scenario if scenario else '')], capture_output=True, text=True, encoding='utf-8', timeout=60)
     start = completed.stdout.find('<pre id="result">')

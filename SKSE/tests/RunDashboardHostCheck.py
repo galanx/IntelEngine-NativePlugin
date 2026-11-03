@@ -906,7 +906,7 @@ void testManager() {
     eventCalls.clear();
     DashboardUIManager::OnDispatchStoryStatic(R"({"npcName":"A","storyType":"rumor","narration":"hi","subject":"x"})");
     DashboardUIManager::OnDispatchNpcSocialStatic(R"({"npc1Name":"A","npc2Name":"B","socialType":"chat","narration":"hi"})");
-    DashboardUIManager::OnDispatchPoliticsStatic(R"({"factionA":"A","factionB":"B","eventType":"pact","eventLabel":"Alliance pact","description":"x","relationDelta":-4})");
+    DashboardUIManager::OnDispatchPoliticsStatic(R"({"factionA":"A","factionB":"B","factionALabel":"Imperial Legion","factionBLabel":"Stormcloaks","eventType":"pact","eventLabel":"Alliance pact","description":"x","relationDelta":-4})");
     DashboardUIManager::OnExecuteActionStatic(R"({"npcFormId":4294967295,"actionName":"follow","params":{"n":4,"s":"x"}})");
     assert(eventCalls.size()==4);
     assert(eventCalls[0].name=="IntelEngine_DashboardDispatchStory");
@@ -916,8 +916,12 @@ void testManager() {
     assert(eventCalls[2].name=="IntelEngine_DashboardDispatchPolitics");
     assert(nlohmann::json::parse(eventCalls[2].str)["event_label"]=="Alliance pact");
     assert(nlohmann::json::parse(eventCalls[2].str)["event_type"]=="pact");
+    assert(nlohmann::json::parse(eventCalls[2].str)["faction_a_label"]=="Imperial Legion");
+    assert(nlohmann::json::parse(eventCalls[2].str)["faction_b_label"]=="Stormcloaks");
     DashboardUIManager::OnDispatchPoliticsStatic(R"({"factionA":"A","factionB":"B","eventType":"pact","description":"x","relationDelta":-4})");
     assert(nlohmann::json::parse(eventCalls.back().str)["event_label"]=="pact");
+    assert(nlohmann::json::parse(eventCalls.back().str)["faction_a_label"]=="A");
+    assert(nlohmann::json::parse(eventCalls.back().str)["faction_b_label"]=="B");
     assert(eventCalls[3].name=="IntelEngine_DashboardExecuteAction");
     assert(nlohmann::json::parse(eventCalls[3].str)["npcFormId"]=="4294967295");
     eventCalls.clear();

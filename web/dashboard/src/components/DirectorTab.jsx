@@ -300,7 +300,7 @@ function DirectorTab({ loadedNpcs, tasks = [], actions, factions = [], sendActio
   // Political dispatch state
   const [polFactionA, setPolFactionA] = useState('');
   const [polFactionB, setPolFactionB] = useState('');
-  const [polEventType, setPolEventType] = useState('trade_deal');
+  const [polEventType, setPolEventType] = useState('');
   const [polDescription, setPolDescription] = useState('');
   const [polDelta, setPolDelta] = useState(8);
   const [touched, setTouched] = useState({});
@@ -384,7 +384,7 @@ function DirectorTab({ loadedNpcs, tasks = [], actions, factions = [], sendActio
     setGenerateError('');
     if (form === 'story') { setStoryNpc(''); setStoryType('seek_player'); setStoryNarration(''); setStoryFields({}); }
     if (form === 'social') { setSocialNpc1(''); setSocialNpc2(''); setSocialType('npc_interaction'); setSocialNarration(''); setSocialFields({}); }
-    if (form === 'political') { setPolFactionA(''); setPolFactionB(''); setPolEventType('trade_deal'); setPolDescription(''); setPolDelta(8); }
+    if (form === 'political') { setPolFactionA(''); setPolFactionB(''); setPolEventType(''); setPolDescription(''); setPolDelta(8); }
   };
 
   // Action execution state
@@ -508,13 +508,14 @@ function DirectorTab({ loadedNpcs, tasks = [], actions, factions = [], sendActio
     sendAction('dispatchPolitics', {
       factionA: polFactionA.trim(),
       factionB: polFactionB.trim(),
+      factionALabel: factions.find(f => f.id === polFactionA.trim())?.name || polFactionA.trim(), factionBLabel: factions.find(f => f.id === polFactionB.trim())?.name || polFactionB.trim(),
       eventType: polEventType,
       eventLabel: POLITICAL_EVENT_TYPES.find(e => e.key === polEventType)?.label || polEventType,
       description: polDescription.trim(),
       relationDelta: polDelta,
     });
     setPolDescription('');
-  }, [polFactionA, polFactionB, polEventType, polEventTypeValid, polDescription, polDelta, sendAction]);
+  }, [polFactionA, polFactionB, polEventType, polEventTypeValid, polDescription, polDelta, sendAction, factions]);
 
   const handleActionChange = useCallback((name) => {
     setSelectedAction(name);

@@ -1138,6 +1138,7 @@ namespace IntelEngine {
             response["should_act"] = true;
             response["faction_a"] = factionA;
             response["faction_b"] = factionB;
+            response["faction_a_label"] = j.value("factionALabel", factionA); response["faction_b_label"] = j.value("factionBLabel", factionB);
             response["event_type"] = eventType;
             response["event_label"] = eventLabel;
             response["description"] = description;
