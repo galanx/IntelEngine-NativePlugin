@@ -218,6 +218,72 @@ SCRIPT = r"""
       location.reload();
       return;
     }
+    if (location.hash === '#director_polish') {
+      const failures = [];
+      const expect = (condition, message, details) => {
+        if (!condition) failures.push({message, ...(details || {})});
+      };
+      const section = index => document.querySelector(`section:nth-of-type(${index})`);
+      const hint = (host, prefix) => [...host.querySelectorAll('p')].find(p=>p.textContent.trim().startsWith(prefix));
+      const paired = (host, specs, name) => {
+        const found = specs.map(([selector, prefix]) => [host.querySelector(selector), hint(host, prefix)]);
+        const nodes = found.map(([,p])=>p);
+        const parent = nodes[0]?.parentElement;
+        const geometries = found.map(([control,p]) => {
+          const a=control?.getBoundingClientRect(), b=p?.getBoundingClientRect();
+          return {control:control?.outerHTML?.slice(0,100),hint:p?.textContent.trim(),controlRect:a&&{x:a.x,y:a.y,width:a.width,bottom:a.bottom},hintRect:b&&{x:b.x,y:b.y,width:b.width,bottom:b.bottom}};
+        });
+        expect(found.every(([control,p])=>control && p?.tagName==='P') &&
+          new Set(nodes).size===nodes.length && nodes.every(p=>p.parentElement===parent),
+          `${name}: paired hints are not distinct paragraphs in one hint row`, {geometries});
+        expect(found.every(([control,p])=>{
+          if (!control || !p) return false;
+          const a=control.getBoundingClientRect(), b=p.getBoundingClientRect();
+          return b.y>=a.bottom-1 && Math.abs(a.x-b.x)<=2 && Math.abs(a.width-b.width)<=2;
+        }), `${name}: hints are not below and aligned to their respective controls`, {geometries});
+      };
+      const story = section(1), social = section(2), politics = section(3), action = section(4);
+      const starSpans = [...document.querySelectorAll('section .text-red-400')];
+      const badStars = starSpans.filter(s=>getComputedStyle(s).color!=='rgb(248, 113, 113)');
+      const rules = badStars.map(star=>{
+        const matched=[];
+        for (const sheet of document.styleSheets) {
+          try { for (const rule of sheet.cssRules || []) if (rule.selectorText && star.matches(rule.selectorText)) matched.push({selector:rule.selectorText,style:rule.style?.cssText}); }
+          catch (_) {}
+        }
+        return {text:star.parentElement?.textContent,computed:getComputedStyle(star).color,matches:matched};
+      });
+      expect(starSpans.length>0 && !badStars.length, 'required stars do not compute to red-400', {starCount:starSpans.length,badStars:rules});
+      paired(story, [['input[placeholder="NPC name (e.g. Saadia)"]','NPC '],['[aria-label="Story type"]','Story type ']], 'Story NPC/Story type');
+      paired(social, [['input[placeholder="NPC 1 (e.g. Mikael)"]','NPC 1 '],['input[placeholder="NPC 2 (e.g. Sven)"]','NPC 2 ']], 'Social NPC1/NPC2');
+      paired(social, [['[aria-label="Social type"]','Social type '],['textarea','Narration ']], 'Social type/Narration');
+      paired(politics, [['input[placeholder="Faction A (e.g. StormcloakFaction)"]','Faction A '],['input[placeholder="Faction B (e.g. ThalmorFaction)"]','Faction B ']], 'Political factions');
+      paired(politics, [['[aria-label="Political event type"]','Event '],['div:has(> input[type=number])','Δ:']], 'Political Event/Δ');
+      paired(action, [['[aria-label="Action NPC"]','NPC *'],['[aria-label="Action"]','Action *']], 'Action NPC/Action');
+      const textareas = [...document.querySelectorAll('section textarea')];
+      const badTextareas=textareas.filter(t=>getComputedStyle(t).resize!=='vertical' || parseFloat(getComputedStyle(t).minHeight)<48);
+      expect(textareas.length>0 && !badTextareas.length, 'Director textareas lack vertical resize or sensible minimum height',
+        {textareas:textareas.map(t=>({placeholder:t.placeholder,resize:getComputedStyle(t).resize,minHeight:getComputedStyle(t).minHeight}))});
+      const storyHint = hint(story,'Narration ');
+      const storyStyle = storyHint && getComputedStyle(storyHint);
+      const storyContract = element => element?.classList.contains('director-hint') &&
+        getComputedStyle(element).fontSize===storyStyle?.fontSize &&
+        getComputedStyle(element).color===storyStyle?.color &&
+        storyStyle?.fontSize==='11px' && storyStyle?.color==='rgb(156, 163, 175)';
+      const actionBaseHint=hint(action,'NPC *');
+      expect(storyContract(storyHint) && storyContract(actionBaseHint),
+        'Story and Action Execution base hints do not share the readable director-hint style',
+        {story:storyHint&&{className:storyHint.className,fontSize:storyStyle.fontSize,color:storyStyle.color},
+          action:actionBaseHint&&{className:actionBaseHint.className,fontSize:getComputedStyle(actionBaseHint).fontSize,color:getComputedStyle(actionBaseHint).color}});
+      await choose('Action','GoToLocation');
+      const dynamicHint=[...action.querySelectorAll('span,p')].find(e=>e.textContent.includes('Named location') && e.textContent.includes('Required.'));
+      expect(storyContract(dynamicHint), 'Action Execution dynamic hint does not share the readable director-hint style with Story',
+        {dynamic:dynamicHint&&{tag:dynamicHint.tagName,className:dynamicHint.className,fontSize:getComputedStyle(dynamicHint).fontSize,color:getComputedStyle(dynamicHint).color},
+          story:storyHint&&{className:storyHint.className,fontSize:storyStyle.fontSize,color:storyStyle.color}});
+      document.getElementById('result').textContent=JSON.stringify({status:failures.length?'FAIL':'PASS',
+        checks:['director_polish'],starColors:starSpans.map(s=>({text:s.parentElement?.textContent.trim(),className:s.className,color:getComputedStyle(s).color})),failures});
+      return;
+    }
     if (location.hash === '#director_required_fields') {
       const story = () => document.querySelector('section:nth-of-type(1)');
       const dispatch = () => [...story().querySelectorAll('button')].find(e => e.textContent.trim() === 'Dispatch Story');
