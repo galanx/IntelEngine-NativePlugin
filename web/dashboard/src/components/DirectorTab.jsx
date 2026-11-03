@@ -375,6 +375,8 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
       const next = { ...old }, skipped = new Set(), npcKeys = ['npcName','npc1Name','npc2Name','subject','sender','victimName'];
       for (const [key, rawValue] of Object.entries(result.fields)) {
         let value = rawValue;
+        if (form === 'action' && key === 'waitForPlayer') value = '';
+        if (form === 'action' && key === 'destination' && typeof value === 'string' && options.npcs.some(name => name.toLowerCase() === value.trim().toLowerCase())) { audit.rejected[key] = 'Destination must be a place'; continue; }
         if (value === null && allowed[key] && !allowed[key].required) { skipped.add(key); continue; }
         if (npcKeys.includes(key) && typeof value === 'string' && (!value.trim() || /^(?:none|placeholder|e\.g\..*|.*\(e\.g\..*\))$/i.test(value.trim()))) { skipped.add(key); continue; }
         if (!allowed[key] || ((touched[key] === true || request.followUp || IDENTITY_KEYS.includes(key)) && old[key])) { audit.rejected[key] = !allowed[key] ? 'Unknown field' : 'Preserved or unchanged'; continue; }
@@ -544,11 +546,11 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
     const type = (form === 'story' ? engine.activeType : engine.type) || '';
     return <span className="text-amber-400 italic normal-case"> — busy: {who} ({type.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())})</span>;
   };
-  const generateControls = form => <div className="flex items-center justify-between mb-2"><h2 className="section-header">{{story:'Story Dispatch',social:'NPC Social Dispatch',political:'Political Dispatch',action:'Action Execution'}[form]}{queued === (form === 'story' ? 'dispatchStory' : 'dispatchNpcSocial') && ['story','social'].includes(form) ? ' — queued: starts when you close the dashboard' : ''}{busyHeader(form)}</h2><div className="flex gap-2">
+  const generateControls = form => { const isQueued = queued === (form === 'story' ? 'dispatchStory' : 'dispatchNpcSocial') && ['story','social'].includes(form); return <div className="flex items-center justify-between mb-2"><h2 className="section-header">{{story:'Story Dispatch',social:'NPC Social Dispatch',political:'Political Dispatch',action:'Action Execution'}[form]}{isQueued ? ' — queued: starts on dashboard close' : busyHeader(form)}</h2><div className="flex gap-2">
     <button data-expand-section onClick={() => generate(form)} disabled={!!pending}
       className="rounded px-2 py-1 text-xs text-gray-300 bg-white/10 disabled:opacity-40">{pending?.form === form ? 'Generating…' : 'Generate'}</button>
     <button onClick={() => pending?.form === form ? stopGenerate() : clear(form)} className="rounded px-2 py-1 text-xs text-gray-400">{pending?.form === form ? 'Stop' : 'Clear'}</button>
-  </div></div>;
+  </div></div>; };
 
   const handleStoryTypeChange = useCallback((type) => {
     setStoryType(type);

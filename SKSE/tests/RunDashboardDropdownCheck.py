@@ -113,10 +113,11 @@ SCRIPT = r"""
       check(requests().at(-1).followUp && button('Action NPC').value==='' &&
         host(4).querySelector('input[placeholder="e.g. Whiterun, Bannered Mare, home"]').value==='Whiterun',
         'Action invalid actor/select discarded valid params or skipped required follow-up');
-      await reply('action',{npcName:'Natch',destination:'Riften'});
-      check(button('Action NPC').value==='Natch [Merchant]' && button('Action').value==='GoToLocation' &&
-        host(4).querySelector('input[placeholder="e.g. Whiterun, Bannered Mare, home"]').value==='Whiterun',
-        'Action follow-up failed to snap nearby actor or preserve filled destination');
+      const rejected=requests().at(-1);
+      await reply('action',{npcName:'Natch',destination:'Natch [Merchant]',waitForPlayer:'Yes'});
+      check(outcomeFor(rejected.requestId).rejected.destination==='Destination must be a place' &&
+        host(4).querySelector('[role="combobox"][aria-label="Wait for player"]').textContent.trim()==='',
+        'Action accepted an NPC destination or retained waitForPlayer');
       control(4,'Generate').click(); await pause(); request=requests().at(-1);
       check(request.fields.npcName==='Natch [Merchant]' && request.fields.actionName==='GoToLocation' &&
         request.fields.destination==='','Action re-roll lost identities/type or retained generated text');
@@ -327,7 +328,7 @@ SCRIPT = r"""
       const nativeTimeout=window.setTimeout; let queuedTimeout;
       window.setTimeout=(fn,delay,...args)=>delay===30000?(queuedTimeout=fn,0):nativeTimeout(fn,delay,...args);
       dispatch(1).click(); await pause();
-      check(dispatch(1).textContent.trim()==='Queued' && heading(1).textContent.includes(' — queued: starts when you close the dashboard'),
+      check(dispatch(1).textContent.trim()==='Queued' && heading(1).textContent.includes(' — queued: starts on dashboard close'),
         'Story dispatch did not show queued state');
       check(typeof queuedTimeout==='function', 'queued timeout was not armed');
       await update(true,false);
