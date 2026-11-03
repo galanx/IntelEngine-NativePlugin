@@ -1628,7 +1628,7 @@ with tempfile.TemporaryDirectory(prefix='ie-dropdowns-') as directory:
             chrome.wait(timeout=10)
         raise SystemExit(0)
     completed = subprocess.run([str(CHROME), '--headless=new', '--no-sandbox', '--disable-gpu',
-        '--allow-file-access-from-files', '--no-first-run', '--window-size=' + ('1600,3000' if not scenario or '--busy-only' in sys.argv or scenario in ['busy','director_required_fields','npc_picker_consistent','director_polish','director_field_layout','director_live_polish','action_generate'] else '1600,1000'),
+        '--allow-file-access-from-files', '--no-first-run', '--window-size=' + ('1600,3000' if not scenario or '--busy-only' in sys.argv or scenario in ['busy','nearby_picks','director_required_fields','npc_picker_consistent','director_polish','director_field_layout','director_live_polish','action_generate'] else '1600,1000'),
         '--user-data-dir=' + str(folder / 'profile'), '--virtual-time-budget=90000', '--dump-dom',
         (folder / 'index.html').as_uri() + ('#busy' if '--busy-only' in sys.argv else '#' + scenario if scenario else '')], capture_output=True, text=True, encoding='utf-8', timeout=60)
     start = completed.stdout.find('<pre id="result">')
