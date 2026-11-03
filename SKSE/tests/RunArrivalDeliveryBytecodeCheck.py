@@ -556,16 +556,17 @@ def run_director_lite_checks(files, history):
                     "repeated cancellation injected a duplicate closing fact")
 
     def director_action_success_notice():
-        for state, expected in ((1, [("Notification", "Nazeem: ChangeSpeed started.")]), (0, [])):
+        for state, expected in ((1, [("Notification", "Nazeem: ChangeSpeed started.")]),
+                                (0, [("Notification", "Nazeem: ChangeSpeed failed.")])):
             task = DirectorVM(files, history)
             task.properties["AgentAlias00"].actor = task.agent
             task.properties["SlotStates"][0] = state
             payload = json.dumps({"actionName": "ChangeSpeed", "npcFormId": "1234", "newSpeed": 0, "reason":"wanted to help Player"})
             task.invoke("IntelEngine_Core", "OnDashboardExecuteAction", ("", payload, 0.0, None))
-            require(("InjectFact", (task.agent, "wanted to help Player")) in task.effects,
-                    "Director action reason was not injected into the acting NPC")
+            require((("InjectFact", (task.agent, "wanted to help Player")) in task.effects) == (state == 1),
+                    "Director action reason injection did not match action success")
             require([e for e in task.effects if e[0] == "Notification"] == expected,
-                    "director_action_success_notice: Bool-true must notify once; Bool-false must not")
+                    "director_action_success_notice: execution outcome notice mismatch")
         task = DirectorVM(files, history)
         payload = json.dumps({"actionName": "ChangeSpeed", "npcFormId": "1234", "newSpeed": 0})
         task.invoke("IntelEngine_Core", "OnDashboardExecuteAction", ("", payload, 0.0, None))
