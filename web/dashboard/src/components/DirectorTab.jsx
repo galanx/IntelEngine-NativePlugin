@@ -161,7 +161,7 @@ const STORY_TYPE_FIELDS = {
       placeholder: 'e.g. Falkreath, Solitude, Old Hroldan',
       hint: 'Where they are heading. Required: a real Skyrim location.' },
   ] },
-  ambush: { example: 'e.g. was hired by the Thieves Guild to collect a debt', hint: 'A combat-capable hostile NPC approaches to attack you (outdoors only).', narration: 'Why they wanted to attack the named character, and who hired them if anyone.', fields: [
+  ambush: { example: 'e.g. was hired by the Thieves Guild to collect a debt', hint: 'The NPC above turns hostile and attacks you (outdoors only). Pick someone who can fight.', narration: 'Why they wanted to attack the named character, and who hired them if anyone.', fields: [
     { key: 'sender', label: 'Hired by', type: 'text',
       placeholder: 'e.g. Maven Black-Briar',
       hint: 'Optional. An NPC or a faction (its leaders learn they ordered it).' },

@@ -1005,6 +1005,7 @@ SCRIPT = r"""
       const button = text => [...story.querySelectorAll('button')].find(e=>e.textContent.trim()===text || text==='Dispatch Story' && e.textContent.trim()==='Queued');
       await fill('input[placeholder="e.g. Saadia"]','Saadia');
       await choose('Story type','Ambush');
+      check([...story.querySelectorAll('.director-hint')].some(e=>e.textContent.trim()==='The NPC above turns hostile and attacks you (outdoors only). Pick someone who can fight.'), 'ambush hint does not identify the selected NPC as the attacker');
       await fill('section:nth-of-type(1) textarea','was hired by the Imperial Legion');
       await fill('input[placeholder="e.g. Maven Black-Briar"]','Imperial Legion');
       button('Dispatch Story').click(); await pause();
