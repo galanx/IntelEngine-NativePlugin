@@ -93,7 +93,7 @@ SCRIPT = r"""
       const control = (index,label) => [...host(index).querySelectorAll('button')].find(e=>e.textContent.trim()===label);
       const requests = () => payloads.filter(([name,json])=>name==='generateDirector' && !JSON.parse(json).outcome).map(([,json])=>JSON.parse(json));
       const reply = async (form, fields) => { const request=requests().at(-1); window.directorGenerateResult(JSON.stringify({requestId:request.requestId,form,ok:true,fields})); await pause(); return request; };
-      check(control(4,'Generate') && control(4,'Clear'),'Action Generate/Clear controls missing');
+      check(control(4,'Generate') && control(4,'Clear') && host(4).textContent.includes('NPC (nearby only)'),'Action Generate/Clear controls or nearby-only label missing');
       control(1,'Generate').click(); await pause();
       await reply('story',{npcName:'nAtCh',storyType:'seek_player',narration:'Wanted to discuss trade'});
       check(document.querySelector('input[placeholder="e.g. Saadia"]').value==='Natch [Merchant]','unique trailing-tag name was not snapped');
@@ -109,7 +109,7 @@ SCRIPT = r"""
         !request.schema.actionName.options.includes('ChangeSpeed') && request.options.npcs.includes('Natch [Merchant]') &&
         !request.options.npcs.includes('Distant Person') && request.options.targets.includes('Distant Person'),'Action options were not restricted');
       check(button('Action NPC').matches(':disabled'),'Action was editable while generating');
-      await reply('action',{npcName:'Distant Person',actionName:'GoToLocation',destination:'Whiterun',speed:'bogus'});
+      await reply('action',{npcName:'Distant Person',actionName:'GoToLocation',destination:'Whiterun',speed:'bogus',reason:'expected the player to come'});
       check(requests().at(-1).followUp && button('Action NPC').value==='' &&
         host(4).querySelector('input[placeholder="e.g. Whiterun, Bannered Mare, home"]').value==='Whiterun',
         'Action invalid actor/select discarded valid params or skipped required follow-up');
@@ -122,14 +122,14 @@ SCRIPT = r"""
       control(4,'Generate').click(); await pause(); request=requests().at(-1);
       check(request.fields.npcName==='Natch [Merchant]' && request.fields.actionName==='GoToLocation' &&
         request.fields.destination==='','Action re-roll lost identities/type or retained generated text');
-      await reply('action',{npcName:'Twin [Guard]',actionName:'FetchPerson',destination:'Riften'});
+      await reply('action',{npcName:'Twin [Guard]',actionName:'FetchPerson',destination:'Riften',reason:'Wanted a new opportunity'});
       check(button('Action NPC').value==='Natch [Merchant]' && button('Action').value==='GoToLocation' &&
         host(4).querySelector('input[placeholder="e.g. Whiterun, Bannered Mare, home"]').value==='Riften',
         'Action re-roll changed identity/type or failed to rewrite text');
       await fill('input[placeholder="e.g. Whiterun, Bannered Mare, home"]','Solitude',host(4));
       control(4,'Generate').click(); await pause();
       check(requests().at(-1).touched.destination===true,'Action manual param ownership missing');
-      await reply('action',{destination:'Whiterun'});
+      await reply('action',{destination:'Whiterun',reason:'Wanted to visit Whiterun'});
       check(host(4).querySelector('input[placeholder="e.g. Whiterun, Bannered Mare, home"]').value==='Solitude',
         'Action generated result replaced manual param');
       check(JSON.parse(localStorage.getItem('intelengine.director.drafts')).action[2].destination==='Solitude',
@@ -143,7 +143,7 @@ SCRIPT = r"""
         !JSON.parse(localStorage.getItem('intelengine.director.drafts')).action,'Action Clear left fields or persisted draft');
       await choose('Action NPC','Natch [Merchant]'); await choose('Action','FetchPerson');
       control(4,'Generate').click(); await pause(); request=requests().at(-1);
-      await reply('action',{targetName:'Distant Person'});
+      await reply('action',{targetName:'Distant Person',reason:'Wanted to find them'});
       check(host(4).querySelector('input[placeholder="e.g. Camilla Valerius, Alvor"]').value==='Distant Person',
         'Generated non-nearby target was not applied');
       await choose('Action NPC','Natch [Merchant]');
@@ -161,13 +161,18 @@ SCRIPT = r"""
       }
       control(4,'Generate').click(); await pause(); request=requests().at(-1);
       check(request.fields.reason==='' && request.touched.reason===false,'generated Reason did not re-roll as blank text');
+      const generatedReasonRequest=requests().at(-1), requestCount=requests().length;
+      await reply('action',{reason:''});
+      const reasonFollowUp=requests().at(-1), followUpCount=requests().length;
+      check(followUpCount===requestCount+1 && reasonFollowUp.followUp && reasonFollowUp.schema.reason.required,'empty generated Action reason did not trigger exactly one required-field follow-up');
       await reply('action',{reason:'Rerolled motive'});
+      check(requests().length===followUpCount && generatedReasonRequest!==reasonFollowUp,'empty generated Action reason triggered more than one follow-up');
       await fill('section:nth-of-type(4) textarea','Typed motive');
       control(4,'Generate').click(); await pause(); request=requests().at(-1);
       check(request.fields.reason==='Typed motive' && request.touched.reason===true,'typed Reason was not preserved as user-owned');
       await reply('action',{reason:'Generated replacement'});
       check(host(4).querySelector('textarea').value==='Typed motive','Generate replaced a typed Reason');
-      check(host(4).querySelector('textarea') && host(4).textContent.includes('Optional. Why the NPC does this; they remember it and can explain it.'),
+      check(host(4).querySelector('textarea') && host(4).textContent.includes('Why the NPC does this; they remember it and can explain it.'),
         'Action Reason field/hint missing');
       control(4,'Clear').click(); await pause();
       check(host(4).querySelector('textarea').value==='', 'Action Clear did not wipe Reason');

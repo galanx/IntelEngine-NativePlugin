@@ -269,8 +269,9 @@ inline bool (*SendCustomPromptToLLM)(const char*, const char*, const char*,
     std::function<void(const char*, int)>) = nullptr;
 }
 std::function<void(const char*, int)> directorCompletion;
-bool fakeDirectorSend(const char*, const char*, const char*, std::function<void(const char*, int)> cb) {
-    directorCompletion = std::move(cb); return true;
+std::string directorContext;
+bool fakeDirectorSend(const char*, const char*, const char* context, std::function<void(const char*, int)> cb) {
+    directorContext = context ? context : ""; directorCompletion = std::move(cb); return true;
 }
 const std::array<UiListener, ''' + str(listener_count) + r'''> listeners{{
 ''' + listener_entries + r'''
@@ -674,14 +675,15 @@ struct Calendar {
     float GetHour() const{return 12.f;}
 };
 struct Worldspace {};
-struct Cell { bool interior=false; bool IsInteriorCell() const { return interior; } };
+struct Location { const char* GetFullName() const { return ""; } };
+struct Cell { bool interior=false; const char* GetName() const { return ""; } bool IsInteriorCell() const { return interior; } };
 class Actor { public:
     struct NiPoint3 { float x=0,y=0,z=0; };
     struct Base { bool unique=false; bool IsUnique()const{return unique;} } base;
-    bool dead=false,disabled=false,loaded=true; Cell* cell=nullptr; Worldspace* world=nullptr;
+    bool dead=false,disabled=false,loaded=true; Cell* cell=nullptr; Worldspace* world=nullptr; Location* location=nullptr;
     unsigned id=0; const char* name=""; NiPoint3 position{};
     bool IsDead()const{return dead;} bool IsDisabled()const{return disabled;} bool Is3DLoaded()const{return loaded;}
-    Cell* GetParentCell()const{return cell;} Worldspace* GetWorldspace()const{return world;}
+    Cell* GetParentCell()const{return cell;} Worldspace* GetWorldspace()const{return world;} Location* GetCurrentLocation()const{return location;}
     NiPoint3 GetPosition()const{return position;} Base* GetActorBase(){return &base;}
     unsigned GetFormID()const{return id;} const char* GetDisplayFullName()const{return name;}
 };
@@ -801,7 +803,7 @@ void testManager() {
     }));
     directorCompletion = {};
     DashboardUIManager::OnGenerateDirectorStatic(R"({"requestId":"action1","form":"action","fields":{"npcName":"Brey","actionName":"GoToLocation","destination":""}})");
-    assert(directorCompletion);
+    assert(directorCompletion && nlohmann::json::parse(directorContext).contains("currentLocation"));
     directorCompletion(R"({"npcName":"Brey","actionName":"GoToLocation","destination":"Whiterun"})",1); drainDirector();
     auto actionResult=nlohmann::json::parse(host->calls.back().second);
     assert(actionResult["ok"] && actionResult["form"]=="action" && actionResult["requestId"]=="action1" &&
