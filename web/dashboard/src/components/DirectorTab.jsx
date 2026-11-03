@@ -2,16 +2,29 @@ import withSections from './Section';
 import { Children, cloneElement, useState, useMemo, useCallback, useEffect, useRef } from 'react';
 import Select, { useDropdown, dropdownClass } from './Select';
 
-function Field({ label, required, hint, children }) {
+function resizeTextarea(event) {
+  if (event.button !== 0) return;
+  event.preventDefault();
+  const handle = event.currentTarget, textarea = handle.parentElement.querySelector('textarea');
+  const startY = event.clientY, height = textarea.offsetHeight, scale = textarea.getBoundingClientRect().height / height;
+  const style = getComputedStyle(textarea), min = Math.max(parseFloat(style.minHeight) || 0, textarea.rows * parseFloat(style.lineHeight) + parseFloat(style.paddingTop) + parseFloat(style.paddingBottom) + parseFloat(style.borderTopWidth) + parseFloat(style.borderBottomWidth));
+  handle.setPointerCapture(event.pointerId);
+  handle.onpointermove = move => { textarea.style.height = `${Math.min(400, Math.max(min, height + (move.clientY - startY) / scale))}px`; };
+  handle.onlostpointercapture = () => { handle.onpointermove = null; };
+  handle.onpointerup = up => handle.releasePointerCapture(up.pointerId);
+}
+
+function Field({ label, required, hint, children, className = 'flex-1' }) {
   return (
-    <div className="flex flex-1 min-w-0 flex-col gap-0.5">
+    <div className={`flex ${className} min-w-0 flex-col gap-0.5`}>
       <label className="text-[10px] text-gray-500">{label} {required && <span className="text-red-400 ml-0.5">*</span>}</label>
       {Children.map(children, child => ['input', 'textarea'].includes(child?.type) && child.props.type !== 'number' ? (
         <div className="director-text-field relative min-w-0">
           {cloneElement(child, { 'aria-label': child.props['aria-label'] || label })}
           {child.props.value && <button type="button" aria-label={`Clear ${label}`}
             onMouseDown={e => e.preventDefault()} onClick={() => child.props.onChange({ target: { value: '' } })}
-            className="absolute right-1 top-1/2 -translate-y-1/2 px-1 text-xs text-gray-500 hover:text-gray-200">×</button>}
+            className={`absolute right-1 ${child.type === 'textarea' ? 'top-1' : 'top-1/2 -translate-y-1/2'} px-1 text-xs text-gray-500 hover:text-gray-200`}>×</button>}
+          {child.type === 'textarea' && <span className="director-resize-handle" aria-label={`Resize ${label}`} onPointerDown={resizeTextarea} />}
         </div>
       ) : child)}
       {hint && <span className="director-hint">{hint}</span>}
@@ -427,6 +440,25 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
   const [actionNpc, setActionNpc] = useState('');
   const [selectedAction, setSelectedAction] = useState('');
   const [actionParams, setActionParams] = useState({});
+  const draftBindings = {
+    story: [[storyNpc, setStoryNpc, ''], [storyType, setStoryType, 'seek_player'], [storyNarration, setStoryNarration, ''], [storyFields, setStoryFields, {}]],
+    social: [[socialNpc1, setSocialNpc1, ''], [socialNpc2, setSocialNpc2, ''], [socialType, setSocialType, 'npc_interaction'], [socialNarration, setSocialNarration, ''], [socialFields, setSocialFields, {}]],
+    political: [[polFactionA, setPolFactionA, ''], [polFactionB, setPolFactionB, ''], [polEventType, setPolEventType, ''], [polDescription, setPolDescription, ''], [polDelta, setPolDelta, 8]],
+    action: [[actionNpc, setActionNpc, ''], [selectedAction, setSelectedAction, ''], [actionParams, setActionParams, {}]],
+  };
+  const draftSnapshot = JSON.stringify({ ...Object.fromEntries(Object.entries(draftBindings).filter(([, bindings]) => bindings.some(([value,, initial]) => JSON.stringify(value) !== JSON.stringify(initial))).map(([form, bindings]) => [form, bindings.map(([value]) => value)])), touched });
+  const restoredDrafts = useRef(false);
+  useEffect(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem('intelengine.director.drafts') || '{}');
+      for (const [form, bindings] of Object.entries(draftBindings)) if (Array.isArray(saved[form]) && saved[form].length === bindings.length) bindings.forEach(([, set, initial], i) => {
+        const value = saved[form][i];
+        if (typeof initial === 'object' ? value && !Array.isArray(value) && typeof value === 'object' && Object.values(value).every(v => typeof v === 'string') : typeof value === typeof initial) set(value);
+      });
+      if (saved.touched && typeof saved.touched === 'object' && !Array.isArray(saved.touched)) setTouched(Object.fromEntries(Object.entries(saved.touched).filter(([, value]) => typeof value === 'boolean' || value === 'generated')));
+    } catch {}
+  }, []);
+  useEffect(() => { if (!restoredDrafts.current) { restoredDrafts.current = true; return; } try { localStorage.setItem('intelengine.director.drafts', draftSnapshot); } catch {} }, [draftSnapshot]);
 
   const [busyConfirm, setBusyConfirm] = useState('');
   const send = sendAction;
@@ -705,9 +737,7 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
               className="flex-1 bg-white/5 border border-white/10 rounded px-2 py-1.5 text-xs text-gray-200 outline-none placeholder:text-gray-600"
             />
             </Field>
-          </div>
-          <div className="flex gap-2">
-            <Field label="Social type" required hint="Interaction or gossip.">
+            <Field label="Social type" required hint="Interaction or gossip." className="w-[130px] shrink-0">
             <Select aria-label="Social type" containerClassName="w-[130px]"
               value={touched.socialType ? socialType : ''}
               onChange={e => { setTouched(t => ({...t,socialType:true})); handleSocialTypeChange(e.target.value); }}

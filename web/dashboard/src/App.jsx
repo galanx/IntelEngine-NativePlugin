@@ -16,7 +16,8 @@ const TABS = [
 ];
 
 function App() {
-  const [activeTab, setActiveTab] = useState('tasks');
+  const [activeTab, setActiveTab] = useState(() => { try { const saved = localStorage.getItem('intelengine.activeTab'); return TABS.some(tab => tab.id === saved) ? saved : 'tasks'; } catch { return 'tasks'; } });
+  useEffect(() => { try { localStorage.setItem('intelengine.activeTab', activeTab); } catch {} }, [activeTab]);
   const [state, setState] = useState({
     tasks: [],
     scheduled: [],
