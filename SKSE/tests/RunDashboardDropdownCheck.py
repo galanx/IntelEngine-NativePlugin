@@ -30,8 +30,8 @@ SCRIPT = r"""
     const option = [...document.querySelectorAll('[role=option]')].find(e => optionText(e) === text);
     check(option, `missing option ${label}: ${text}`); option.click(); await pause();
   };
-  const fill = async (selector, value) => {
-    const element = document.querySelector(selector);
+  const fill = async (selector, value, root=document) => {
+    const element = root.querySelector(selector);
     check(element, `missing input ${selector}`);
     element.scrollIntoView({ block: 'nearest' }); await pause();
     element.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
@@ -72,41 +72,71 @@ SCRIPT = r"""
       actions:[{name:'GoToLocation',enabled:true},{name:'FetchPerson',enabled:true},{name:'ReportPlayerConduct',params:[{name:'sentiment',enum:['strongly_positive','positive','negative','strongly_negative']},{name:'factionId'},{name:'reason'}]},{name:'ChangeSpeed',enabled:true}],
       politics:{enabled:true,factions:[{id:'ImperialFaction',name:'Imperial Legion'},{id:'StormcloakFaction',name:'Stormcloaks'},...Array.from({length:3},(_,i)=>({id:'ThalmorFaction'+i,name:'Thalmor '+i}))],relations:[],wars:[],player_standings:[],events:[]}}));
     await pause(); clickText('Director'); await pause();
+    if (location.hash === '#director_draft_persistence') {
+      await fill('input[placeholder="e.g. Saadia"]', 'Saadia draft');
+      clickText('Tasks'); await pause();
+      check(!document.querySelector('.director-tab')?.checkVisibility(), 'inactive Director remains visible');
+      clickText('Director'); await pause();
+      check(document.querySelector('input[placeholder="e.g. Saadia"]').value === 'Saadia draft',
+        'Story field was lost switching to Tasks and back');
+      document.getElementById('result').textContent=JSON.stringify({status:'PASS',checks:['director_draft_persistence']});
+      return;
+    }
     if (location.hash === '#director_busy_line') {
-      const section = index => document.querySelector(`section:nth-of-type(${index})`);
-      const line = index => [...section(index).querySelectorAll('p')].find(e=>e.textContent.includes('engine busy with'));
-      const dispatch = index => [...section(index).querySelectorAll('button')].find(e=>e.textContent.trim() === (index===1?'Dispatch Story':'Dispatch Social'));
+      const director = () => [...document.querySelectorAll('.director-tab')].find(e => e.checkVisibility());
+      const section = index => director().querySelectorAll('section')[index-1];
+      const heading = index => section(index).querySelector('h2');
+      const suffix = index => [...heading(index).querySelectorAll('span')].find(e => e.textContent.includes('— busy:'));
+      const oldLine = index => [...section(index).querySelectorAll('p')].find(e=>e.textContent.includes('engine busy with'));
+      const dispatch = index => section(index).querySelector('fieldset > button');
       const update = async (storyActive, socialActive) => {
         window.updateFullState(JSON.stringify({config:{},pluginConfig:{'ui.scale':1},tasks:[],
           story:{enabled:true,isActive:storyActive,activeNPC:'Delphine',activeType:'seek_player'},
           social:{enabled:true,isActive:socialActive,traveler:'Mikael',target:'Sven',type:'npc_interaction'}}));
         await pause();
       };
-      check(!line(1) && !line(2), 'busy lines shown without active engine state');
+      check(!oldLine(1) && !oldLine(2), 'busy paragraphs shown without active engine state');
       await update(true,true);
-      const expected = ['Story engine busy with Delphine (Seek Player). Cancel it on the Tasks tab first.',
-        'NPC Social engine busy with Mikael → Sven. Cancel it on the Tasks tab first.'];
+      const expected = [' — busy: Delphine (Seek Player)', ' — busy: Mikael → Sven (Npc Interaction)'];
       for (const index of [1,2]) {
-        const hint = line(index);
-        check(hint?.textContent === expected[index-1], `missing or incorrect busy line: ${expected[index-1]}`);
-        const style = getComputedStyle(hint.querySelector('span') || hint);
-        check(style.color === 'rgb(251, 191, 36)' && style.fontSize === '11px', 'busy line is not an amber hint');
-        check(hint.getBoundingClientRect().top >= dispatch(index).getBoundingClientRect().bottom, 'busy line is not beneath Dispatch');
+        check(heading(index).textContent.includes(index===1?'Story Dispatch':'NPC Social Dispatch'),
+          `busy suffix attached to wrong heading ${index}`);
+        check(!oldLine(index), 'busy paragraph remains below Director heading');
+        const marker = suffix(index), style = marker && getComputedStyle(marker);
+        check(marker && style.fontStyle === 'italic' && style.color === 'rgb(251, 191, 36)',
+          `missing italic amber busy suffix in heading ${index}`);
+        check(marker.textContent === expected[index-1], `incorrect busy identity/type in heading ${index}`);
+        const details = heading(index).closest('details');
+        details.open = false; await pause();
+        check(details.open === false && suffix(index)?.checkVisibility(), `busy suffix hidden when section ${index} collapsed`);
+        details.open = true; await pause();
       }
       check(payloads.length===0, 'busy advisory dispatched an action');
-      await fill('input[placeholder="e.g. Saadia"]','Saadia');
-      await fill('section:nth-of-type(1) textarea','came to repay a debt');
-      await fill('input[placeholder="e.g. Mikael"]','Mikael');
-      await fill('input[placeholder="e.g. Sven"]','Sven');
-      await fill('section:nth-of-type(2) textarea','discussed a shipment');
-      check(!dispatch(1).disabled && !dispatch(2).disabled, 'busy engine disabled a valid Dispatch');
+      await fill('section:nth-of-type(1) input[placeholder="e.g. Saadia"]','Saadia',director());
+      await fill('section:nth-of-type(1) textarea','came to repay a debt',director());
+      await fill('section:nth-of-type(2) input[placeholder="e.g. Mikael"]','Mikael',director());
+      await fill('section:nth-of-type(2) input[placeholder="e.g. Sven"]','Sven',director());
+      await fill('section:nth-of-type(2) textarea','discussed a shipment',director());
+      check(dispatch(1)?.disabled && dispatch(1).textContent.trim()==='Story engine busy',
+        'active Story did not disable dispatch with busy label');
+      check(!dispatch(2)?.disabled && dispatch(2).textContent.trim()==='NPC social busy',
+        'active Social should show busy label while remaining dispatchable');
+      const storyInput = () => section(1).querySelector('input[placeholder="e.g. Saadia"]');
+      clickText('Tasks'); await pause(); clickText('Director'); await pause();
+      check(storyInput()?.value==='Saadia', 'Story field was lost switching to Tasks and back');
+      check(dispatch(1)?.disabled && dispatch(1).textContent.trim()==='Story engine busy' &&
+        !dispatch(2)?.disabled && dispatch(2).textContent.trim()==='NPC social busy',
+        'busy dispatch states changed after tab switch');
+      dispatch(2).click(); await pause();
+      check(payloads.length===1 && payloads[0][0]==='dispatchNpcSocial',
+        'active Social busy button did not dispatch');
       await update(false,true);
-      check(!line(1) && line(2)?.textContent===expected[1], 'Story inactivity did not independently remove its busy line');
+      check(!suffix(1) && suffix(2) && !oldLine(1) && !oldLine(2), 'Story inactivity did not independently remove its heading suffix');
       await update(true,false);
-      check(line(1)?.textContent===expected[0] && !line(2), 'Social inactivity did not independently remove its busy line');
+      check(suffix(1) && !suffix(2) && !oldLine(1) && !oldLine(2), 'Social inactivity did not independently remove its heading suffix');
       await update(false,false);
-      check(!line(1) && !line(2), 'inactive engines retained busy lines');
-      document.getElementById('result').textContent=JSON.stringify({status:'PASS',checks:['director_busy_line'],lines:expected,dispatchEnabledWhileBusy:true,inactiveLinesAbsent:true});
+      check(!suffix(1) && !suffix(2) && !oldLine(1) && !oldLine(2), 'inactive engines retained busy suffixes or paragraphs');
+      document.getElementById('result').textContent=JSON.stringify({status:'PASS',checks:['director_busy_line'],headers:expected,storyDispatchDisabledWhileBusy:true,socialDispatchEnabledWhileBusy:true,inactiveSuffixesAbsent:true,storyDraftPreservedAcrossTabs:true});
       return;
     }
     if (location.hash === '#generate_reroll') {
@@ -215,7 +245,7 @@ SCRIPT = r"""
         await pause();
         for (const [tab, expected] of [['Director',4],['Actions',2],['Politics',5],['Story',5],['Tasks',4]]) {
           clickText(tab); await pause();
-          const headers = [...document.querySelectorAll('.section-header')];
+          const headers = [...document.querySelectorAll('.section-header')].filter(e => e.checkVisibility());
           check(headers.length === expected, `${tab}: expected ${expected} section headings, found ${headers.length}`);
           for (const heading of headers) {
             const summary = heading.closest('summary'), section = summary?.parentElement;

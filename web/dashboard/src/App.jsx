@@ -197,7 +197,7 @@ function App() {
               sendAction={sendAction}
             />
           )}
-          {activeTab === 'director' && (
+          <div hidden={activeTab !== 'director'}>
             <DirectorTab
               loadedNpcs={state.loadedNpcs || []}
               knownNpcs={state.knownNpcs || []}
@@ -208,7 +208,7 @@ function App() {
               social={state.social}
               sendAction={sendAction}
             />
-          )}
+          </div>
           {activeTab === 'actions' && (
             <ActionsTab
               actions={state.actions || []}
