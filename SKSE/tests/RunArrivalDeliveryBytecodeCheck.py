@@ -575,6 +575,7 @@ def run_director_lite_checks(files, history):
 
     def director_conduct_report_success_notice():
         class ConductVM(DirectorVM):
+            changed = 1
             def __init__(self):
                 super().__init__(files, history)
                 self.scripts["IntelEngine_Politics"] = files[3]
@@ -585,7 +586,7 @@ def run_director_lite_checks(files, history):
                     return json.loads(args[0]).get(args[1], "")
                 if method == "ProcessPlayerConduct":
                     self.effects.append(("conduct-record", tuple(args)))
-                    return 1
+                    return self.changed
                 if method == "WritePoliticalStateFile":
                     self.effects.append(("political-state-write", ()))
                     return None
@@ -603,6 +604,11 @@ def run_director_lite_checks(files, history):
         require([e for e in task.effects if e[0] == "Notification"] ==
                 [("Notification", "Nazeem: conduct reported.")],
                 "Director conduct report did not emit only the reported notice")
+        rejected = ConductVM()
+        rejected.changed = 0
+        rejected.invoke("IntelEngine_Core", "OnDashboardExecuteAction", ("", payload, 0.0, None))
+        require(not [e for e in rejected.effects if e[0] in ("InjectFact", "Notification")],
+                "Rejected Director conduct report still injected a fact or notified")
 
     def director_social_and_political_success_notice():
         class NoticeVM(DirectorVM):
