@@ -373,16 +373,14 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
       const typeOptions = schema[typeKey]?.options || [];
       const nextType = typeOptions.includes(old[typeKey]) ? old[typeKey] : typeOptions.includes(result.fields[typeKey]) ? result.fields[typeKey] : old[typeKey];
       const allowed = { ...schema, ...(variants[nextType] || {}) };
-      const next = { ...old }, skipped = new Set(), npcKeys = ['npcName','npc1Name','npc2Name','subject','sender','victimName'];
+      const next = { ...old }, skipped = new Set(), npcKeys = ['npcName','npc1Name','npc2Name','targetName','subject','sender','victimName'];
       for (const [key, rawValue] of Object.entries(result.fields)) {
         let value = rawValue;
         if (form === 'action' && key === 'waitForPlayer') value = '';
-        if (form === 'action' && key === 'targetName' && typeof value === 'string' && value.trim().toLowerCase() === String(old.npcName || '').trim().toLowerCase()) { audit.rejected[key] = 'Target is the actor'; continue; }
-        if (form === 'action' && key === 'targetName' && !options.targets.includes(value)) { audit.rejected[key] = 'Invalid target NPC'; continue; }
         if (form === 'action' && key === 'destination' && typeof value === 'string' && options.targets.some(name => name.toLowerCase() === value.trim().toLowerCase())) { audit.rejected[key] = 'Destination must be a place'; continue; }
         if (value === null && allowed[key] && !allowed[key].required) { skipped.add(key); continue; }
         if (npcKeys.includes(key) && typeof value === 'string' && (!value.trim() || /^(?:none|placeholder|e\.g\..*|.*\(e\.g\..*\))$/i.test(value.trim()))) { skipped.add(key); continue; }
-        if (!allowed[key] || ((touched[key] === true || request.followUp || IDENTITY_KEYS.includes(key)) && old[key])) { audit.rejected[key] = !allowed[key] ? 'Unknown field' : 'Preserved or unchanged'; continue; }
+        if (!allowed[key]) { audit.rejected[key] = 'Unknown field'; continue; }
         if (IDENTITY_KEYS.includes(key) && typeof value === 'string') {
           const names = key === 'targetName' ? options.targets : [...options.npcs, ...options.factions.map(f => f.name)];
           const matches = names.filter(name => name.replace(/ \[[^\]]*\]$/, '').toLowerCase() === value.toLowerCase());
@@ -390,11 +388,15 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
         }
         if (['factionA','factionB','factionId'].includes(key) && typeof value === 'string') value = options.factions.find(f=>f.id===value || f.name===value)?.id || '';
         if (allowed[key].type === 'number' ? typeof value !== 'number' : typeof value !== 'string') { audit.rejected[key] = 'Invalid type'; continue; }
+        if (npcKeys.includes(key) && value.trim() && npcKeys.some(other => other !== key && value.trim().toLowerCase() === String(next[other] || '').trim().toLowerCase())) { audit.rejected[key] = 'Duplicate NPC'; continue; }
+        if (((touched[key] === true || request.followUp || IDENTITY_KEYS.includes(key)) && old[key])) { audit.rejected[key] = 'Preserved or unchanged'; continue; }
+        if (allowed[key].type === 'text' && !IDENTITY_KEYS.includes(key) && /\[[^\]]+\]/.test(value)) { audit.rejected[key] = 'Placeholder text'; continue; }
+        if (form === 'action' && key === 'targetName' && !options.targets.includes(value)) { audit.rejected[key] = 'Invalid target NPC'; continue; }
         if (allowed[key].type === 'select' && !allowed[key].options.includes(value)) { audit.rejected[key] = 'Invalid option'; continue; }
         if (['factionA','factionB','factionId'].includes(key) && !value) { audit.rejected[key] = 'Invalid identity'; continue; }
         if (form === 'action' && key === 'npcName' && !options.npcs.includes(value)) { audit.rejected[key] = 'Invalid nearby NPC'; continue; }
         if (key === 'relationDelta' && (!Number.isInteger(value) || value < -15 || value > 15)) { audit.rejected[key] = 'Invalid relation change'; continue; }
-        const other = {factionA:'factionB',factionB:'factionA',npc1Name:'npc2Name',npc2Name:'npc1Name'}[key]; if (other && value && value.trim().toLowerCase() === (next[other] || '').trim().toLowerCase()) { audit.rejected[key] = 'Identities must be distinct'; continue; }
+        const other = {factionA:'factionB',factionB:'factionA'}[key]; if (other && value && value.trim().toLowerCase() === (next[other] || '').trim().toLowerCase()) { audit.rejected[key] = 'Identities must be distinct'; continue; }
         next[key] = value;
       }
       next[typeKey] = nextType;
@@ -419,15 +421,13 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
     const typeKey = action ? 'actionName' : story ? 'storyType' : social ? 'socialType' : 'eventType';
     let actionNpcName = nearby.find(n => n.id === actionNpc)?.name || '';
     let actionName = selectedAction;
-    if (action && !actionNpcName && nearby.length) { const npc = nearby[Math.floor(Math.random() * nearby.length)]; actionNpcName = npc.name; setActionNpc(npc.id); }
+    if (action && !actionNpcName) { const choices = nearby.filter(n => n.name.toLowerCase() !== String(actionParams.targetName || '').trim().toLowerCase()); if (choices.length) { const npc = choices[Math.floor(Math.random() * choices.length)]; actionNpcName = npc.name; setActionNpc(npc.id); } }
     if (action && !actionName && enumTypes.length) { actionName = enumTypes[Math.floor(Math.random() * enumTypes.length)].key; setSelectedAction(actionName); }
     const reasonOnly = action && ['CancelCurrentTask','ChangeSpeed'].includes(actionName);
     const defs = story ? currentFields : social ? currentSocialFields : action ? (actionFieldDefs[actionName] || []) : [];
     let params = actionParams;
     if (action && defs.some(f => f.key === 'targetName') && !String(params.targetName || '').trim()) {
-      const targets = [...new Set([...npcs.map(n => n.name), ...knownNpcs])].filter(name => name.toLowerCase() !== actionNpcName.toLowerCase());
-      const nonNearby = targets.filter(name => !npcs.some(n => n.name === name));
-      const choices = nonNearby.length ? nonNearby : targets;
+      const choices = [...new Set(nearby.map(n => n.name))].filter(name => name.toLowerCase() !== actionNpcName.toLowerCase());
       if (choices.length) { params = { ...params, targetName:choices[Math.floor(Math.random() * choices.length)] }; setActionParams(params); }
     }
     let fields = story ? { npcName:storyNpc, storyType:touched.storyType ? storyType : '', narration:storyNarration, ...storyFields } :
@@ -436,7 +436,7 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
           { factionA:polFactionA, factionB:polFactionB, eventType:polEventType, description:polDescription, relationDelta:polDelta };
     if (reasonOnly) fields = { npcName:fields.npcName, actionName, reason:actionParams.reason || '' };
     if (action && !reasonOnly) fields.reason ??= ''; if (!reasonOnly) for (const f of defs) fields[f.key] ??= '';
-    const npcPool = [...new Set([...npcs.map(n => n.name), ...knownNpcs, ...['npcName','npc1Name','npc2Name','subject','sender','victimName'].map(k => fields[k]).filter(Boolean)])];
+    const npcPool = [...new Set(nearby.map(n => n.name))];
     const requiredNpcKeys = [...(story ? ['npcName'] : social ? ['npc1Name','npc2Name'] : []), ...defs.filter(f => f.required && ['npcName','npc1Name','npc2Name','subject'].includes(f.key)).map(f => f.key)];
     for (const key of requiredNpcKeys) if (!String(fields[key] || '').trim()) { const choices = npcPool.filter(name => !Object.values(fields).some(value => typeof value === 'string' && value.trim().toLowerCase() === name.toLowerCase())); if (choices.length) fields[key] = choices[Math.floor(Math.random() * choices.length)]; }
     if (story) { setStoryNpc(fields.npcName); if (fields.subject) setStoryFields(prev => ({...prev,subject:fields.subject})); }

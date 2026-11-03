@@ -81,6 +81,55 @@ SCRIPT = r"""
     await pause();
     const reloadReady = location.hash === '#director_live_polish2' && localStorage.getItem('__directorLivePolish2Reload') === 'ready';
     if (!reloadReady) { clickText('Director'); await pause(); }
+    if (location.hash === '#nearby_picks') {
+      Math.random=()=>0.999;
+      const fixture = {config:{},pluginConfig:{'ui.scale':1},tasks:[],scheduled:[],story:{enabled:true},social:{enabled:true},
+        loadedNpcs:[{formId:1,name:'Natch [Merchant]'},{formId:2,name:'Nearby Guard'}],knownNpcs:['Distant Person'],actions:[{name:'FetchPerson'}]};
+      const host = index => document.querySelector(`section:nth-of-type(${index})`);
+      const control = (index,label) => [...host(index).querySelectorAll('button')].find(e=>e.textContent.trim()===label);
+      const requests = () => payloads.filter(([name,json])=>name==='generateDirector' && !JSON.parse(json).outcome).map(([,json])=>JSON.parse(json));
+      const reply = async fields => { const r=requests().at(-1); window.directorGenerateResult(JSON.stringify({requestId:r.requestId,form:r.form,ok:true,fields})); await pause(); return outcomeFor(r.requestId); };
+      const stopClear = async index => { control(index,'Stop')?.click(); await pause(); control(index,'Clear').click(); await pause(); };
+      window.updateFullState(JSON.stringify(fixture)); await pause();
+      await choose('Story type','Informant');
+      for (const [index,keys] of [[1,['npcName','subject']],[2,['npc1Name','npc2Name']],[4,['npcName','targetName']]]) {
+        control(index,'Generate').click(); await pause(); const r=requests().at(-1), names=keys.map(k=>r.fields[k]);
+        check(names.every(n=>fixture.loadedNpcs.some(npc=>npc.name===n)) && new Set(names).size===2, `${r.form}: pre-picks escaped nearby distinct pool: ${JSON.stringify(names)}`);
+        await stopClear(index);
+      }
+      await choose('Action','FetchPerson'); await fill('[aria-label="Person to fetch"]','Nearby Guard',host(4));
+      control(4,'Generate').click(); await pause();
+      check(requests().at(-1).fields.npcName==='Natch [Merchant]' && requests().at(-1).fields.targetName==='Nearby Guard','actor pre-pick duplicated a typed target');
+      await stopClear(4);
+      window.updateFullState(JSON.stringify({...fixture,loadedNpcs:[fixture.loadedNpcs[0]]})); await pause();
+      await choose('Story type','Informant'); control(1,'Generate').click(); await pause();
+      check(requests().at(-1).fields.npcName==='Natch [Merchant]' && requests().at(-1).blank.includes('subject'),'exhausted nearby pool fell back to known NPCs');
+      let audit=await reply({subject:'nAtCh',narration:'An individual known as [Subject NPC] was seen',gossip:'[Subject NPC] argued'});
+      check(audit.rejected.subject==='Duplicate NPC' && audit.rejected.narration==='Placeholder text' && audit.rejected.gossip==='Placeholder text','duplicate or placeholder rejection missing: '+JSON.stringify(audit));
+      check(host(1).querySelector('textarea').value==='' && requests().at(-1).followUp && requests().at(-1).blank.includes('gossip'),'rejected text was applied or follow-up missing');
+      await reply({subject:'Distant Person',narration:'Wanted to share news',gossip:'argued over a debt'});
+      check(host(1).querySelector('textarea').value==='Wanted to share news','follow-up did not refill rejected text');
+      await stopClear(1);
+      control(2,'Generate').click(); await pause();
+      check(requests().at(-1).blank.includes('npc2Name'),'Social exhausted pool did not stay blank');
+      audit=await reply({npc2Name:'nAtCh',socialType:'npc_interaction',narration:'Met over a debt',fact1:'asked about a debt',fact2:'discussed repayment'});
+      check(audit.rejected.npc2Name==='Duplicate NPC','Social duplicate was accepted');
+      await stopClear(2);
+      control(4,'Generate').click(); await pause();
+      check(requests().at(-1).blank.includes('targetName'),'Action exhausted pool did not stay blank');
+      audit=await reply({targetName:'Natch [Merchant]',reason:'Wanted help'});
+      check(audit.rejected.targetName==='Duplicate NPC','Action duplicate was accepted');
+      await stopClear(4);
+      window.updateFullState(JSON.stringify({...fixture,loadedNpcs:[]})); await pause();
+      control(2,'Generate').click(); await pause();
+      check(requests().at(-1).blank.includes('npc1Name') && requests().at(-1).blank.includes('npc2Name'),'empty nearby pool used known names');
+      audit=await reply({npc2Name:'Natch [Merchant]',npc1Name:'natch [merchant]',socialType:'npc_interaction',narration:'Discussed trade',fact1:'offered wares',fact2:'considered buying'});
+      check(audit.applied.includes('npc2Name') && audit.rejected.npc1Name==='Duplicate NPC' && host(2).querySelector('input[placeholder="e.g. Sven"]').value==='Natch [Merchant]','same-result duplicate or tagged NPC handling failed');
+      await stopClear(2);
+      await fill('input[placeholder="e.g. Saadia"]','Distant Person',host(1)); control(1,'Generate').click(); await pause();
+      check(requests().at(-1).fields.npcName==='Distant Person' && requests().at(-1).options.npcs.includes('Distant Person'),'typed known NPC was lost');
+      document.getElementById('result').textContent=JSON.stringify({status:'PASS',checks:['nearby_picks','duplicate_npc','placeholder_text','tagged_npc','single_follow_up']}); return;
+    }
     if (location.hash === '#story_social_identity') {
       Math.random=()=>0;
       const story=()=>document.querySelector('section:nth-of-type(1)'), social=()=>document.querySelector('section:nth-of-type(2)');
@@ -192,11 +241,11 @@ SCRIPT = r"""
       control(4,'Stop').click(); await pause(); control(4,'Clear').click(); await pause();
       await choose('Action NPC','Natch [Merchant]'); await choose('Action','FetchPerson');
       control(4,'Generate').click(); await pause(); request=requests().at(-1);
-      check(request.fields.targetName==='Distant Person' && request.fields.npcName==='Natch [Merchant]' &&
-        button('Person to fetch').value==='Distant Person',`Action Generate did not preselect a non-nearby target: ${JSON.stringify({target:request.fields.targetName,blank:request.blank,action:request.fields.actionName,actor:request.fields.npcName,targets:request.options.targets,shown:button('Person to fetch').value})}`);
+      check(request.fields.targetName==='Twin [Guard]' && request.fields.npcName==='Natch [Merchant]' &&
+        button('Person to fetch').value==='Twin [Guard]',`Action Generate did not preselect a distinct nearby target: ${JSON.stringify({target:request.fields.targetName,blank:request.blank,action:request.fields.actionName,actor:request.fields.npcName,targets:request.options.targets,shown:button('Person to fetch').value})}`);
       await reply('action',{targetName:'Natch [Merchant]',reason:'Found a lead'});
-      check(outcomeFor(request.requestId).rejected.targetName==='Target is the actor' &&
-        button('Person to fetch').value==='Distant Person','Action accepted its actor as target or lost preselection');
+      check(outcomeFor(request.requestId).rejected.targetName==='Duplicate NPC' &&
+        button('Person to fetch').value==='Twin [Guard]','Action accepted its actor as target or lost preselection');
       await fill('section:nth-of-type(4) input[aria-label="Person to fetch"]','Twin [Guard]',host(4));
       control(4,'Generate').click(); await pause(); request=requests().at(-1);
       check(request.fields.targetName==='Twin [Guard]','Action Generate replaced a user-set target');
@@ -1264,7 +1313,7 @@ SCRIPT = r"""
         document.querySelector('input[placeholder="e.g. Mikael"]').value===duplicate.fields.npc1Name &&
         document.querySelector('input[placeholder="e.g. Sven"]').value===duplicate.fields.npc2Name &&
         document.querySelector('section:nth-of-type(2) textarea').value==='A valid scene' &&
-        duplicateAudit.rejected.npc1Name==='Preserved or unchanged' && duplicateAudit.rejected.npc2Name==='Preserved or unchanged' && duplicateAudit.rejected.fact1==='Invalid type',
+        duplicateAudit.rejected.npc1Name===(duplicate.fields.npc2Name==='Nazeem' ? 'Duplicate NPC' : 'Preserved or unchanged') && duplicateAudit.rejected.npc2Name===(duplicate.fields.npc1Name==='Nazeem' ? 'Duplicate NPC' : 'Preserved or unchanged') && duplicateAudit.rejected.fact1==='Invalid type',
         'duplicate identities or wrong-type field discarded valid fields');
       await choose('Political event type','Insult');
       document.querySelector('[aria-label="Clear Political event type"]').click(); await pause();
