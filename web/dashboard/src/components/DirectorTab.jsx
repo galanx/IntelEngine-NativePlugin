@@ -326,14 +326,16 @@ function DirectorTab({ loadedNpcs, tasks = [], actions, factions = [], sendActio
       const typeOptions = schema[typeKey]?.options || [];
       const nextType = touched[typeKey] && typeOptions.includes(old[typeKey]) ? old[typeKey] : typeOptions.includes(result.fields[typeKey]) ? result.fields[typeKey] : old[typeKey];
       const allowed = { ...schema, ...(variants[nextType] || {}) };
-      const next = { ...old };
-      for (const [key, value] of Object.entries(result.fields)) {
-        if (!allowed[key] || (['npcName','npc1Name','npc2Name','subject','sender','victimName','factionA','factionB'].includes(key) && old[key]) ||
+      const next = { ...old }, skipped = new Set(), npcKeys = ['npcName','npc1Name','npc2Name','subject','sender','victimName'];
+      for (const [key, rawValue] of Object.entries(result.fields)) {
+        let value = rawValue;
+        if (npcKeys.includes(key) && typeof value === 'string' && (!value.trim() || /^(?:none|placeholder|e\.g\..*|.*\(e\.g\..*\))$/i.test(value.trim()))) { skipped.add(key); continue; }
+        if (!allowed[key] || (['factionA','factionB',...npcKeys].includes(key) && old[key]) ||
             (touched[key] && old[key])) { audit.rejected[key] = !allowed[key] ? 'Unknown field' : 'Preserved or unchanged'; continue; }
+        if (['factionA','factionB'].includes(key) && typeof value === 'string') value = options.factions.find(f=>f.id===value || f.name===value)?.id || '';
         if (allowed[key].type === 'number' ? typeof value !== 'number' : typeof value !== 'string') { audit.rejected[key] = 'Invalid type'; continue; }
         if (allowed[key].type === 'select' && !allowed[key].options.includes(value)) { audit.rejected[key] = 'Invalid option'; continue; }
-        if ((['npcName','npc1Name','npc2Name','subject','sender','victimName'].includes(key) && value && !options.npcs.includes(value)) ||
-            (['factionA','factionB'].includes(key) && value && !options.factions.some(f=>f.id===value))) { audit.rejected[key] = 'Invalid identity'; continue; }
+        if (['factionA','factionB'].includes(key) && !value) { audit.rejected[key] = 'Invalid identity'; continue; }
         if (key === 'relationDelta' && (!Number.isInteger(value) || value < -15 || value > 15)) { audit.rejected[key] = 'Invalid relation change'; continue; }
         const other = {factionA:'factionB',factionB:'factionA',npc1Name:'npc2Name',npc2Name:'npc1Name'}[key]; if (other && value && value.trim().toLowerCase() === (next[other] || '').trim().toLowerCase()) { audit.rejected[key] = 'Identities must be distinct'; continue; }
         next[key] = value;
@@ -343,7 +345,7 @@ function DirectorTab({ loadedNpcs, tasks = [], actions, factions = [], sendActio
       if (form === 'social') { setSocialNpc1(next.npc1Name); setSocialNpc2(next.npc2Name); setSocialType(next.socialType); setSocialNarration(next.narration); setSocialFields(Object.fromEntries(Object.keys(allowed).filter(k => !['npc1Name','npc2Name','socialType','narration'].includes(k)).map(k => [k,next[k]]))); }
       setTouched(t=>({...t,[typeKey]:true}));
       if (form === 'political') { setPolFactionA(next.factionA); setPolFactionB(next.factionB); setPolEventType(next.eventType); setPolDescription(next.description); setPolDelta(next.relationDelta); }
-      audit.ok = true; delete audit.rejected.$response; audit.applied = Object.keys(result.fields).filter(k=>next[k] !== old[k]); for (const k of Object.keys(result.fields)) if (!audit.applied.includes(k)) audit.rejected[k] ??= 'Preserved or unchanged';
+      audit.ok = true; delete audit.rejected.$response; audit.applied = Object.keys(result.fields).filter(k=>next[k] !== old[k]); for (const k of Object.keys(result.fields)) if (!skipped.has(k) && !audit.applied.includes(k)) audit.rejected[k] ??= 'Preserved or unchanged';
       setGenerateError('');
       } finally { reportGenerate(request, audit); }
     };
@@ -364,7 +366,7 @@ function DirectorTab({ loadedNpcs, tasks = [], actions, factions = [], sendActio
     fields[typeKey] = touched[typeKey] ? type : '';
     const schema = Object.fromEntries(Object.entries(fields).filter(([k])=>!defs.some(f=>f.key===k)).map(([k,v]) => [k, { type: typeof v === 'number' ? 'number' : k === (story?'storyType':social?'socialType':'eventType') ? 'select' : 'text',
       ...((k === (story?'storyType':social?'socialType':'eventType')) ? { options:enumTypes.map(x=>x.key) } : {}) }]));
-    const variants = Object.fromEntries(enumTypes.map(t => [t.key, Object.fromEntries((story ? (STORY_TYPE_FIELDS[t.key]||[]) : social ? (SOCIAL_TYPE_FIELDS[t.key]||[]) : []).map(f=>[f.key,{...f}]))]));
+    const variants = Object.fromEntries(enumTypes.map(t => [t.key, Object.fromEntries((story ? (STORY_TYPE_FIELDS[t.key]||[]) : social ? (SOCIAL_TYPE_FIELDS[t.key]||[]) : []).map(f=>[f.key,Object.fromEntries(Object.entries(f).filter(([key])=>key!=='placeholder'))]))]));
     const id = String(++requestId.current);
     const options = { npcs:[...new Set([...npcs.map(n=>n.name), ...['npcName','npc1Name','npc2Name','subject','sender','victimName'].map(k=>draft[k]).filter(Boolean)])],
       factions:factions.map(f=>({id:f.id,name:f.name})) };
@@ -449,7 +451,7 @@ function DirectorTab({ loadedNpcs, tasks = [], actions, factions = [], sendActio
   const politicalRequired = [['Faction A', !!polFactionA.trim()], ['Faction B', !!polFactionB.trim() && polFactionA.trim() !== polFactionB.trim()], ['Political event type', polEventTypeValid], ['Description', !!polDescription.trim()]];
   const missingFields = fields => fields.some(([, valid]) => !valid) && <p className="text-[10px] text-gray-400">Fill required fields: {fields.filter(([, valid]) => !valid).map(([label]) => label).join(', ')}</p>;
   const generateControls = form => <div className="flex items-center justify-between mb-2"><h2 className="section-header">{{story:'Story Dispatch',social:'NPC Social Dispatch',political:'Political Dispatch'}[form]}</h2><div className="flex gap-2">
-    <button onClick={() => generate(form)} disabled={!!pending}
+    <button data-expand-section onClick={() => generate(form)} disabled={!!pending}
       className="rounded px-2 py-1 text-xs text-gray-300 bg-white/10 disabled:opacity-40">{pending?.form === form ? 'Generating…' : 'Generate'}</button>
     <button onClick={() => pending?.form === form ? stopGenerate() : clear(form)} className="rounded px-2 py-1 text-xs text-gray-400">{pending?.form === form ? 'Stop' : 'Clear'}</button>
   </div></div>;
