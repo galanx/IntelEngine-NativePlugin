@@ -250,16 +250,23 @@ SCRIPT = r"""
         window.directorGenerateResult(JSON.stringify({requestId:request.requestId,form:'story',ok:true,fields})); await pause();
         return request;
       };
-      await fill('input[placeholder="e.g. Saadia"]', 'Saadia');
       const a = await roll({npcName:'Nazeem',storyType:'ambush',narration:'was hired to collect an unpaid debt',sender:'Guard 1'});
+      check(a.fields.npcName === '' && a.fields.storyType === '' && button('Story type').value === 'Ambush', 'auto Generate did not pick its NPC and type');
       check(narration().value === 'was hired to collect an unpaid debt', 'first Generate did not fill narration A');
-      const b = await roll({npcName:'Guard 2',storyType:'road_encounter',narration:'set out to sell pelts in Helgen',destination:'Helgen'});
+      const b = await roll({npcName:'Guard 2',storyType:'road_encounter',narration:'set out to sell pelts in Helgen',sender:'Guard 2',destination:'Helgen'});
       check(narration().value === 'set out to sell pelts in Helgen', 'second Generate did not replace narration A with B');
-      check(b.fields.narration === '' && b.fields.storyType === '' && b.fields.sender === '', 'generated fields were not blanked for reroll');
-      check(a.fields.npcName === 'Saadia' && b.fields.npcName === 'Saadia' && story().querySelector('input').value === 'Saadia', 'user-typed identity did not survive both rolls');
+      check(b.fields.narration === '' && b.fields.storyType === 'ambush' && b.fields.sender === 'Guard 1', 'reroll did not blank generated text and retain generated type/sender');
+      check(b.fields.npcName === 'Nazeem' && story().querySelector('input').value === 'Nazeem' && button('Story type').value === 'Ambush' &&
+        story().querySelector('input[aria-label="Hired by"]').value === 'Guard 1', 'reroll replaced generated identities or type');
+      story().querySelector('[aria-label="Clear NPC"]').click(); await pause();
+      const repicked = await roll({npcName:'Guard 2',storyType:'road_encounter',narration:'came to collect a debt',sender:'Guard 2'});
+      check(repicked.fields.npcName === '' && repicked.fields.storyType === 'ambush' && story().querySelector('input').value === 'Guard 2' &&
+        button('Story type').value === 'Ambush', 'clearing NPC did not re-pick only that identity');
+      await fill('input[placeholder="e.g. Saadia"]', 'Saadia');
       await fill('section textarea', 'set out to buy salt in Riften');
       const c = await roll({npcName:'Nazeem',storyType:'ambush',narration:'replacement must not win',sender:'Guard 2'});
       check(c.fields.narration === 'set out to buy salt in Riften' && narration().value === c.fields.narration, 'typing into generated narration did not preserve it');
+      check(c.fields.npcName === 'Saadia' && story().querySelector('input').value === 'Saadia', 'user-typed identity did not survive Generate');
       for (const [type, example] of [['Ambush','e.g. was hired by the Thieves Guild to rough you up'],['Road Encounter','e.g. set out to sell pelts in Helgen']]) {
         await choose('Story type', type);
         check(narration().placeholder === example, type + ' placeholder did not change');
@@ -698,10 +705,19 @@ SCRIPT = r"""
         check(!request.options.npcs.includes('Sven') && !request.options.npcs.includes('Mikael'), 'fixture unexpectedly contains producer NPC names');
         window.directorGenerateResult(JSON.stringify({requestId:request.requestId,form,ok:true,fields})); await pause();
         const inputs=[...document.querySelectorAll(`section:nth-of-type(${index}) input[type=text]`)].filter(e=>e.getAttribute('role')!=='combobox' || e.closest('[data-npc-picker]'));
-        const values=(form==='story' ? [inputs[0],inputs[1],inputs[3]] : inputs.slice(0,2)).map(e=>e.value);
+        const identityInputs=form==='story' ? [inputs[0],inputs[1],inputs[3]] : inputs.slice(0,2);
+        const values=identityInputs.map(e=>e.value);
         const audit=JSON.parse(payloads.at(-1)[1]).outcome;
+        const typeLabel={story:'Story type',social:'Social type',political:'Political event type'}[form], selectedType=button(typeLabel).value;
         if (JSON.stringify(values)!==JSON.stringify(expected) ||
             Object.keys(fields).filter(key=>!key.endsWith('Type')).some(key=>audit.rejected[key])) failures.push({form,fields,values,expected,rejected:audit.rejected});
+        control(index,'Generate').click(); await pause();
+        const reroll=JSON.parse(payloads.at(-1)[1]);
+        const replacements=Object.fromEntries(Object.entries(fields).map(([key,value])=>[key,key.endsWith('Type') ? (form==='story' ? 'ambush' : 'npc_gossip') : value && value!=='None' ? (key.startsWith('faction') ? 'ThalmorFaction0' : 'Guard 2') : value]));
+        window.directorGenerateResult(JSON.stringify({requestId:reroll.requestId,form,ok:true,fields:replacements})); await pause();
+        check(values.every((value,i)=>!value || reroll.fields[Object.keys(fields).filter(key=>!key.endsWith('Type'))[i]]===value), 'reroll request blanked filled identities');
+        check(identityInputs.every((e,i)=>e.isConnected && e.value===expected[i]), 'reroll replaced filled identities');
+        check(button(typeLabel).value===selectedType, 'reroll replaced a filled type');
       }
       check(!failures.length, 'producer identity regressions: '+JSON.stringify(failures));
       document.getElementById('result').textContent=JSON.stringify({status:'PASS',checks:['director_generate_identities']});
