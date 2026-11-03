@@ -82,6 +82,7 @@ SCRIPT = r"""
     const reloadReady = location.hash === '#director_live_polish2' && localStorage.getItem('__directorLivePolish2Reload') === 'ready';
     if (!reloadReady) { clickText('Director'); await pause(); }
     if (location.hash === '#action_generate') {
+      Math.random=()=>0;
       window.updateFullState(JSON.stringify({config:{},pluginConfig:{'ui.scale':1},tasks:[],scheduled:[],
         story:{enabled:true},social:{enabled:true},loadedNpcs:[
           {formId:1,name:'Natch [Merchant]'},{formId:2,name:'Twin [Guard]'},{formId:3,name:'Twin [Merchant]'}],
@@ -108,11 +109,17 @@ SCRIPT = r"""
       check(request.form==='action' && !request.schema.actionName.options.includes('CancelCurrentTask') &&
         !request.schema.actionName.options.includes('ChangeSpeed') && request.options.npcs.includes('Natch [Merchant]') &&
         !request.options.npcs.includes('Distant Person') && request.options.targets.includes('Distant Person'),'Action options were not restricted');
+      check(request.fields.npcName && request.options.npcs.includes(request.fields.npcName) &&
+        request.fields.actionName && request.schema.actionName.options.includes(request.fields.actionName) &&
+        !request.blank.includes('npcName') && !request.blank.includes('actionName') &&
+        button('Action NPC').value===request.fields.npcName && button('Action').value===request.fields.actionName,
+        'Empty Action Generate did not preselect and show nearby NPC/action');
       check(button('Action NPC').matches(':disabled'),'Action was editable while generating');
-      check(Object.values(request.fields).every(value=>value!=='') && request.blank.includes('reason') && request.blank.includes('npcName'),
+      check(Object.values(request.fields).every(value=>value!=='') && request.blank.includes('reason'),
         'Action Generate sent empty-string fields or lost blank-key metadata');
-      await reply('action',{npcName:'',actionName:'GoToLocation',destination:'Whiterun',speed:'bogus',reason:'expected the player to come'});
-      check(button('Action NPC').value==='Natch [Merchant]','empty generated Action NPC did not fall back to a nearby NPC');
+      await reply('action',{destination:'Whiterun',reason:'expected the player to come'});
+      check(button('Action NPC').value===request.fields.npcName && button('Action').value===request.fields.actionName,
+        'generated Action changed the preselected NPC or action');
       control(4,'Generate').click(); await pause();
       const rejected=requests().at(-1);
       await reply('action',{destination:'Natch [Merchant]'});
@@ -126,6 +133,7 @@ SCRIPT = r"""
         host(4).querySelector('input[placeholder="e.g. Whiterun, Bannered Mare, home"]').value==='Riften',
         'Action re-roll changed identity/type or failed to rewrite text');
       await fill('input[placeholder="e.g. Whiterun, Bannered Mare, home"]','Solitude',host(4));
+      check(control(4,'Generate'),`Generate missing after manual-param reply; controls=${host(4).querySelector('div.flex.items-center.justify-between')?.textContent}, pending=${JSON.stringify(requests().at(-1)?.fields)}`);
       control(4,'Generate').click(); await pause();
       check(requests().at(-1).touched.destination===true,'Action manual param ownership missing');
       await reply('action',{destination:'Whiterun',reason:'Wanted to visit Whiterun'});
@@ -140,6 +148,12 @@ SCRIPT = r"""
       control(4,'Clear').click(); await pause();
       check(button('Action NPC').value==='' && button('Action').value==='' &&
         !JSON.parse(localStorage.getItem('intelengine.director.drafts')).action,'Action Clear left fields or persisted draft');
+      control(4,'Generate').click(); await pause(); request=requests().at(-1);
+      check(request.fields.npcName && request.options.npcs.includes(request.fields.npcName) &&
+        request.fields.actionName && request.schema.actionName.options.includes(request.fields.actionName) &&
+        button('Action NPC').value===request.fields.npcName && button('Action').value===request.fields.actionName,
+        'Clear then Generate did not pick and show a nearby NPC/action');
+      control(4,'Stop').click(); await pause(); control(4,'Clear').click(); await pause();
       await choose('Action NPC','Natch [Merchant]'); await choose('Action','FetchPerson');
       control(4,'Generate').click(); await pause(); request=requests().at(-1);
       await reply('action',{targetName:'Distant Person',reason:'Wanted to find them'});

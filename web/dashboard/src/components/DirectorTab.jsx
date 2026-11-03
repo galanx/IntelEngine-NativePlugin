@@ -395,7 +395,6 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
         const other = {factionA:'factionB',factionB:'factionA',npc1Name:'npc2Name',npc2Name:'npc1Name'}[key]; if (other && value && value.trim().toLowerCase() === (next[other] || '').trim().toLowerCase()) { audit.rejected[key] = 'Identities must be distinct'; continue; }
         next[key] = value;
       }
-      if (form === 'action' && !next.npcName && nearby.length) next.npcName = nearby[Math.floor(Math.random() * nearby.length)].name;
       next[typeKey] = nextType;
       if (form === 'story') { setStoryNpc(next.npcName); setStoryType(next.storyType); setStoryNarration(next.narration); setStoryFields(Object.fromEntries(Object.keys(allowed).filter(k => !['npcName','storyType','narration'].includes(k)).map(k => [k,next[k]]))); }
       if (form === 'social') { setSocialNpc1(next.npc1Name); setSocialNpc2(next.npc2Name); setSocialType(next.socialType); setSocialNarration(next.narration); setSocialFields(Object.fromEntries(Object.keys(allowed).filter(k => !['npc1Name','npc2Name','socialType','narration'].includes(k)).map(k => [k,next[k]]))); }
@@ -414,15 +413,19 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
   }, [pending, touched]);
   const generate = form => {
     const story = form === 'story', social = form === 'social', action = form === 'action';
-    const reasonOnly = action && ['CancelCurrentTask','ChangeSpeed'].includes(selectedAction);
-    const defs = story ? currentFields : social ? currentSocialFields : action ? currentActionFields : [];
     const enumTypes = story ? DIRECTOR_STORY_TYPES : social ? SOCIAL_TYPES : action ? executableActions.filter(a => !['CancelCurrentTask','ChangeSpeed'].includes(a.name)).map(a => ({key:a.name})) : POLITICAL_EVENT_TYPES;
     const typeKey = action ? 'actionName' : story ? 'storyType' : social ? 'socialType' : 'eventType';
+    let actionNpcName = nearby.find(n => n.id === actionNpc)?.name || '';
+    let actionName = selectedAction;
+    if (action && !actionNpcName && nearby.length) { const npc = nearby[Math.floor(Math.random() * nearby.length)]; actionNpcName = npc.name; setActionNpc(npc.id); }
+    if (action && !actionName && enumTypes.length) { actionName = enumTypes[Math.floor(Math.random() * enumTypes.length)].key; setSelectedAction(actionName); }
+    const reasonOnly = action && ['CancelCurrentTask','ChangeSpeed'].includes(actionName);
+    const defs = story ? currentFields : social ? currentSocialFields : action ? (actionFieldDefs[actionName] || []) : [];
     let fields = story ? { npcName:storyNpc, storyType:touched.storyType ? storyType : '', narration:storyNarration, ...storyFields } :
       social ? { npc1Name:socialNpc1, npc2Name:socialNpc2, socialType:touched.socialType ? socialType : '', narration:socialNarration, ...socialFields } :
-        action ? { npcName:nearby.find(n => n.id === actionNpc)?.name || '', actionName:selectedAction, ...actionParams } :
+        action ? { npcName:actionNpcName, actionName, ...actionParams } :
           { factionA:polFactionA, factionB:polFactionB, eventType:polEventType, description:polDescription, relationDelta:polDelta };
-    if (reasonOnly) fields = { npcName:fields.npcName, actionName:selectedAction, reason:actionParams.reason || '' };
+    if (reasonOnly) fields = { npcName:fields.npcName, actionName, reason:actionParams.reason || '' };
     if (action && !reasonOnly) fields.reason ??= ''; if (!reasonOnly) for (const f of defs) fields[f.key] ??= '';
     for (const key of Object.keys(fields)) if (typeof fields[key] === 'string' && !fields[key].trim()) fields[key] = '';
     const draft = { ...fields };
@@ -430,7 +433,7 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
     for (const key of Object.keys(fields)) if (touched[key] !== true && !([...IDENTITY_KEYS, typeKey].includes(key) && fields[key])) fields[key] = '';
     const schema = Object.fromEntries(Object.entries(draft).filter(([k])=>!defs.some(f=>f.key===k)).map(([k,v]) => [k, { type: typeof v === 'number' ? 'number' : k === typeKey ? 'select' : 'text',
       required: (!reasonOnly || (action && k === 'reason')) && k !== 'relationDelta' && (k !== 'reason' || action),
-      ...(k === typeKey ? { options:reasonOnly ? [selectedAction] : enumTypes.map(x=>x.key) } : {}) }]));
+      ...(k === typeKey ? { options:reasonOnly ? [actionName] : enumTypes.map(x=>x.key) } : {}) }]));
     if (story && storyGuidance) schema.narration.hint = `${storyGuidance.hint} ${storyGuidance.narration}`;
     const variants = Object.fromEntries(enumTypes.map(t => [t.key, Object.fromEntries((story ? (STORY_TYPE_FIELDS[t.key]?.fields||[]) : social ? (SOCIAL_TYPE_FIELDS[t.key]||[]) : action ? actionFieldDefs[t.key] : []).map(f=>[f.key,Object.fromEntries(Object.entries(f).filter(([key])=>key!=='placeholder').map(([key,value])=>[key,key === 'options' ? value.map(o => typeof o === 'string' ? o : o.value) : key === 'type' && value === 'faction' ? 'text' : value]))]))]));
     const id = String(++requestId.current);
