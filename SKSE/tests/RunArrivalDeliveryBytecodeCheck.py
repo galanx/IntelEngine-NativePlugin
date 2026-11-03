@@ -670,25 +670,37 @@ def run_director_lite_checks(files, history):
                 if method == "GetFactionLeaderFormIds":
                     require(len(args) == 1, "faction lookup did not receive one sender")
                     self.effects.append((method, tuple(args)))
-                    return [13276, 0] if args[0] == "ImperialFaction" else []
+                    return [13276, 0] if args[0] in ("ImperialFaction", "UndisplayedFaction") else []
+                if method == "GetFactionDisplayName":
+                    require(args[0] in ("ImperialFaction", "UndisplayedFaction"),
+                            "display-name lookup did not receive the faction ID: " + repr(args))
+                    self.effects.append((method, tuple(args)))
+                    return "Imperials" if args[0] == "ImperialFaction" else ""
+                if method == "FriendlyKey":
+                    raise AssertionError("leader faction fact used FriendlyKey instead of display name")
                 if method == "GetForm": return self.target if args[0] == 13276 else None
                 return super().external(method, args, script)
 
         for story_type, verb in (("ambush", "sent Nazeem to ambush Player"),
                                  ("stalker", "encouraged Nazeem to follow Player")):
-            for sender in ("Recipient", "ImperialFaction", ""):
+            for sender in ("Recipient", "ImperialFaction", "UndisplayedFaction", ""):
                 task = HirerVM(files, history)
                 task.halt_before = "RandomInt" if story_type == "ambush" else "DispatchToTarget"
                 task.invoke("IntelEngine_StoryEngine", "HandleAmbushStalkerDispatch",
                             (task.agent, "had a grudge", json.dumps({"sender": sender}), story_type, "Director"))
-                expected = ("ImperialFaction " if sender == "ImperialFaction" else "") + verb
+                display_name = {"ImperialFaction": "Imperials", "UndisplayedFaction": "UndisplayedFaction"}.get(sender, "")
+                expected = (display_name + " " if display_name else "") + verb
                 require([e for e in task.effects if e[0] == "InjectFact"] ==
                         [("InjectFact", (task.agent, "had a grudge"))] +
                         ([("InjectFact", (task.target, expected))] if sender else []),
                         "hirer facts differ for " + story_type + "/" + sender + ": " + repr(task.effects))
                 require(any(e[0] == "GetFactionLeaderFormIds" for e in task.effects) ==
                         bool(sender), "non-empty sender did not check faction leaders")
+                require(any(e[0] == "GetFactionDisplayName" for e in task.effects) ==
+                        (sender in ("ImperialFaction", "UndisplayedFaction")),
+                        "faction display name was not used only for faction-leader facts")
                 require(task.halt_reached, "hirer check did not reach the dispatch boundary")
+
 
     failures = []
     for case in (director_seek_then_seek_is_refused, run6_seek_seek_fetch_arrival,
