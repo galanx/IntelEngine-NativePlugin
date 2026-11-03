@@ -1,3 +1,4 @@
+import withSections from './Section';
 import React from 'react';
 import GameTime from './GameTime';
 
@@ -260,4 +261,4 @@ function PoliticsTab({ politics, calendar, sendAction }) {
   );
 }
 
-export default PoliticsTab;
+export default withSections(PoliticsTab);

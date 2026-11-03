@@ -10,6 +10,7 @@
 #include "FactionPairValidation.h"
 #include "Utf8Truncate.h"
 #include "TaskHistoryDescription.h"
+#include "FriendlyKey.h"
 #include "NPCIndex.h"
 #include "ItemIndex.h"
 #include <random>
@@ -166,6 +167,9 @@ namespace IntelEngine::Papyrus {
     RE::BSFixedString RunStandingMechanicsNative(RE::StaticFunctionTag*);
 
     // Remaining Migration: Text builders, math, display formatters
+    RE::BSFixedString FriendlyKeyNative(RE::StaticFunctionTag*, RE::BSFixedString key) {
+        return RE::BSFixedString(FriendlyKey(std::string(key.c_str())));
+    }
     RE::BSFixedString BuildTaskHistoryDesc(RE::StaticFunctionTag*, RE::BSFixedString, RE::BSFixedString, RE::BSFixedString, RE::BSFixedString, RE::BSFixedString);
     RE::BSFixedString GetSlotStatusNative(RE::StaticFunctionTag*, RE::BSFixedString, int, RE::BSFixedString, RE::BSFixedString);
     RE::BSFixedString GetPreciseTimeDescriptionNative(RE::StaticFunctionTag*, float, float);
@@ -466,6 +470,7 @@ namespace IntelEngine::Papyrus {
 
         // Remaining Migration: Text builders, math, display formatters
         a_vm->RegisterFunction("BuildTaskHistoryDesc", SCRIPT_NAME, BuildTaskHistoryDesc); ++count;
+        a_vm->RegisterFunction("FriendlyKey", SCRIPT_NAME, FriendlyKeyNative); ++count;
         a_vm->RegisterFunction("GetSlotStatusNative", SCRIPT_NAME, GetSlotStatusNative); ++count;
         a_vm->RegisterFunction("GetPreciseTimeDescription", SCRIPT_NAME, GetPreciseTimeDescriptionNative); ++count;
         a_vm->RegisterFunction("GetTimeDescription", SCRIPT_NAME, GetTimeDescriptionNative); ++count;

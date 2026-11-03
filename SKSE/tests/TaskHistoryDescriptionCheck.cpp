@@ -1,4 +1,5 @@
 #include "TaskHistoryDescription.h"
+#include "FriendlyKey.h"
 #include <iostream>
 #include <stdexcept>
 
@@ -8,6 +9,17 @@ int main(int argc, char** argv) {
         std::cout << IntelEngine::BuildTaskHistoryDescription(argv[2], argv[3], argv[4], argv[5], argv[6]) << '\n';
         return 0;
     }
+    if (argc == 3 && std::string_view(argv[1]) == "--friendly") {
+        std::cout << IntelEngine::FriendlyKey(argv[2]) << '\n';
+        return 0;
+    }
+    Require(IntelEngine::FriendlyKey("war_declaration") == "War Declaration");
+    Require(IntelEngine::FriendlyKey("seek_player") == "Seek Player");
+    Require(IntelEngine::FriendlyKey("npc_interaction") == "Npc Interaction");
+    Require(IntelEngine::FriendlyKey("") == "");
+    Require(IntelEngine::FriendlyKey("_two__words_") == " Two  Words ");
+    Require(IntelEngine::FriendlyKey("already Friendly") == "Already Friendly");
+    std::cout << "PASS: FriendlyKey empty, separators, word starts and existing case\n";
     using IntelEngine::BuildTaskHistoryDescription;
     const auto describe = [](const char* type, const char* result) {
         return BuildTaskHistoryDescription(type, "Nazeem", result, "", "");

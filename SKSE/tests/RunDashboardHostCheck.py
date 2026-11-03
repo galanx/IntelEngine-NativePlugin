@@ -59,6 +59,8 @@ def method(source, signature):
 
 
 manager = (SRC / "DashboardUIManager.cpp").read_text(encoding="utf-8")
+has_generate = "    void DashboardUIManager::OnGenerateDirectorStatic(" in manager
+listener_count = 15 + int(has_generate)
 listener_start = manager.index("        static const UiListener listeners[] = {")
 listener_end = manager.index("        };", listener_start)
 listener_entries = manager[manager.index("{", listener_start) + 1:listener_end]
@@ -68,6 +70,7 @@ for index, callback in enumerate((
     "OnToggleStoryTypeStatic", "OnChangeSettingStatic", "OnRemovePackagesStatic",
     "OnChangePluginConfigStatic", "OnDispatchStoryStatic", "OnDispatchNpcSocialStatic",
     "OnDispatchPoliticsStatic", "OnExecuteActionStatic", "OnToggleActionStatic",
+    "OnGenerateDirectorStatic",
 )):
     listener_entries = listener_entries.replace(callback, f"listener{index}")
 callbacks = [method(manager, sig) for sig in (
@@ -95,23 +98,26 @@ callbacks = [method(manager, sig) for sig in (
     "    void DashboardUIManager::OnDispatchPoliticsStatic(",
     "    void DashboardUIManager::OnExecuteActionStatic(",
     "    void DashboardUIManager::OnToggleActionStatic(",
+    "    void DashboardUIManager::OnGenerateDirectorStatic(",
     "    void DashboardUIManager::LoadActionYAMLs()",
     "    void DashboardUIManager::ReloadView()",
     "    void DashboardUIManager::SendModEvent(",
     "    void DashboardUIManager::HotkeyPollLoop()",
-)]
+    ) if has_generate or "OnGenerateDirectorStatic" not in sig]
 
 with tempfile.TemporaryDirectory(prefix="dashboard-host-") as temp:
     work = pathlib.Path(temp)
     (work / "actions").mkdir()
-    (work / "actions/report.yaml").write_bytes(
-        (ROOT / "SKSE/Plugins/SkyrimNet/external/galanx.intelengine/actions/reportplayerconduct.yaml").read_bytes())
+    for action_file in ("reportplayerconduct.yaml", "travel.yaml"):
+        (work / "actions" / action_file).write_bytes(
+            (ROOT / "SKSE/Plugins/SkyrimNet/external/galanx.intelengine/actions" / action_file).read_bytes())
     (work / "UiHostTestSupport.h").write_text(r'''#pragma once
 #define INTELENGINE_VERSION "3.6.2"
 #include "Windows.h"
 #include <cstdint>
 #include <string>
 #include <vector>
+#include <sstream>
 namespace SKSE {
 using PluginHandle = std::uint32_t;
 struct TaskInterface { template<class F> void AddTask(F&& f) { f(); } };
@@ -120,7 +126,14 @@ inline TaskInterface* GetTaskInterface() { static TaskInterface task; return &ta
 #include "PrismaUI_API.h"
 namespace logger {
 inline std::vector<std::string> infoMessages;
-template<class... T> void info(const char* message, T&&...) { infoMessages.emplace_back(message); }
+inline std::vector<std::string> generateMessages;
+template<class... T> void info(const char* message, T&&... args) {
+    infoMessages.emplace_back(message);
+    if (std::string(message).find("[Dashboard] Generate ") == 0) {
+        std::ostringstream line; line << message; ((line << ' ' << args), ...);
+        generateMessages.push_back(line.str());
+    }
+}
 template<class... T> void warn(const char*, T&&...) {}
 template<class... T> void error(const char*, T&&...) {}
 template<class... T> void debug(const char*, T&&...) {}
@@ -249,17 +262,29 @@ int callbackHits = 0, routedListener = -1;
 void route(int id,const char* arg) { ++callbackHits; routedListener=id; listenerCalls.push_back({std::to_string(id),arg?arg:""}); }
 #define ROUTE(N) void listener##N(const char* a){route(N,a);}
 ROUTE(0) ROUTE(1) ROUTE(2) ROUTE(3) ROUTE(4) ROUTE(5) ROUTE(6) ROUTE(7)
-ROUTE(8) ROUTE(9) ROUTE(10) ROUTE(11) ROUTE(12) ROUTE(13) ROUTE(14)
+ROUTE(8) ROUTE(9) ROUTE(10) ROUTE(11) ROUTE(12) ROUTE(13) ROUTE(14) ROUTE(15)
 #undef ROUTE
-const std::array<UiListener, 15> listeners{{
+namespace IntelEngine::SkyrimNetAPI {
+inline bool (*SendCustomPromptToLLM)(const char*, const char*, const char*,
+    std::function<void(const char*, int)>) = nullptr;
+}
+std::function<void(const char*, int)> directorCompletion;
+std::string directorContext;
+bool fakeDirectorSend(const char*, const char*, const char* context, std::function<void(const char*, int)> cb) {
+    directorContext = context ? context : ""; directorCompletion = std::move(cb); return true;
+}
+const std::array<UiListener, ''' + str(listener_count) + r'''> listeners{{
 ''' + listener_entries + r'''
 }};
-const std::array<std::string_view, 15> expectedNames{
+const std::array<std::string_view, ''' + str(listener_count) + r'''> expectedNames{
+''' + ",\n".join(f'"{name}"' for name in (
     "onCloseDashboard", "onRequestRefresh", "onReloadUI",
     "onDashboard_cancelTask", "onDashboard_cancelSchedule", "onDashboard_cancelQuest",
     "onDashboard_toggleStoryType", "onDashboard_changeSetting", "onDashboard_removePackages",
     "onDashboard_changePluginConfig", "onDashboard_dispatchStory", "onDashboard_dispatchNpcSocial",
-    "onDashboard_dispatchPolitics", "onDashboard_executeAction", "onDashboard_toggleAction"};
+    "onDashboard_dispatchPolitics", "onDashboard_executeAction", "onDashboard_toggleAction",
+    *(["onDashboard_generateDirector"] if has_generate else []),
+)) + r'''};
 
 struct FakePrisma final : PRISMA_UI_API::IVPrismaUI1 {
     PrismaView view=91; bool focusResult=true, anyFocus=false, valid=true, focusPause=false;
@@ -451,7 +476,7 @@ void prismaTest() {
     assert(h && h->Kind()==UiHostKind::PrismaUI && prisma.order==90);
     assert(prisma.hidden>0 && prisma.names.empty());
     prisma.dom(prisma.view);
-    assert(prisma.names.size()==15 && prisma.callbacks.size()==15);
+    assert(prisma.names.size()==listeners.size() && prisma.callbacks.size()==listeners.size());
     for(size_t i=0;i<listeners.size();++i) assert(prisma.names[i]==listeners[i].name);
     assert(events.size()==1 && events[0]==UiHostEvent::DomReady);
     assert(h->Open()==UiOpenResult::Accepted && prisma.focusPause);
@@ -477,7 +502,7 @@ void magelightTest() {
     assert(f.reloads==1);
     assert(f.registered==1 && f.created==1 && f.viewDesc.fullscreen && !f.viewDesc.startVisible);
     assert(f.capturedPath.find("雪")!=std::string::npos);
-    assert(f.listeners.size()==15);
+    assert(f.listeners.size()==listeners.size());
     for (size_t i=0;i<listeners.size();++i) assert(f.listeners[i].first==listeners[i].name);
     assert(h->Call("updateFullState","{}") && h->Call("updateSlots","[]"));
     assert(f.calls.size()==2 && f.calls[0].starts_with("updateFullState:") && f.calls[1].starts_with("updateSlots:"));
@@ -520,7 +545,7 @@ void magelightTest() {
     f.fire(MAGELIGHT_API::Event::UIModeEntered,f.view);
     assert(events.back()==UiHostEvent::Entered);
     h->Close(); f.fire(MAGELIGHT_API::Event::UIModeExited,f.view); h->Service();
-    assert(f.requestCalls==5 && f.listenerCountsAtReload.size()==1 && f.listenerCountsAtReload[0]==15);
+    assert(f.requestCalls==5 && f.listenerCountsAtReload.size()==1 && f.listenerCountsAtReload[0]==listeners.size());
     const auto staleListener=f.listeners[0].second;
     void* staleUser=f.listenerUsers[0];
     f.domDuringCreate=false;
@@ -530,11 +555,11 @@ void magelightTest() {
     assert(callbackHits==0);
     f.fire(MAGELIGHT_API::Event::ViewDestroyed,f.view);
     h->Service();
-    assert(f.created==2 && f.listeners.size()==30);
+    assert(f.created==2 && f.listeners.size()==listeners.size()*2);
     callbackHits=0; staleListener(f.view,"stale-after-reload",staleUser); f.drain();
     assert(callbackHits==0);
     f.dom(f.view); f.drain();
-    assert(f.reloads==2 && f.listenerCountsAtReload.size()==2 && f.listenerCountsAtReload[1]==30);
+    assert(f.reloads==2 && f.listenerCountsAtReload.size()==2 && f.listenerCountsAtReload[1]==listeners.size()*2);
     f.dom(f.view); f.drain();
     assert(events.back()==UiHostEvent::DomReady && f.reloads==2);
     f.fire(MAGELIGHT_API::Event::RenderDead, 0); assert(events.back()==UiHostEvent::Unavailable && !h->IsAvailable());
@@ -633,6 +658,13 @@ struct SlotStub { std::string SerializeToJson()const{return "[slot]";} };
 class DashboardConfig { public: static ConfigStub* GetSingleton(){static ConfigStub c;return &c;} void Reload(){} };
 class FactionPolitics { public: static PoliticsStub* GetSingleton(){static PoliticsStub p;return &p;} };
 class SlotTracker { public: static SlotStub* GetSingleton(){static SlotStub s;return &s;} };
+
+class NPCIndex { public:
+    static NPCIndex* GetSingleton(){static NPCIndex index;return &index;}
+    std::vector<std::string> names;
+    std::size_t GetNPCCount() const{return names.size();}
+    std::vector<std::string> GetKnownNames() const {auto out=names;std::sort(out.begin(),out.end());out.erase(std::unique(out.begin(),out.end()),out.end());return out;}
+};
 namespace SkyrimNetAPI { inline std::string (*GetPluginConfigValue)(const char*,const char*,const char*)=nullptr; }
 namespace RE {
 struct Calendar {
@@ -643,14 +675,15 @@ struct Calendar {
     float GetHour() const{return 12.f;}
 };
 struct Worldspace {};
-struct Cell { bool interior=false; bool IsInteriorCell() const { return interior; } };
+struct Location { const char* GetFullName() const { return ""; } };
+struct Cell { bool interior=false; const char* GetName() const { return ""; } bool IsInteriorCell() const { return interior; } };
 class Actor { public:
     struct NiPoint3 { float x=0,y=0,z=0; };
     struct Base { bool unique=false; bool IsUnique()const{return unique;} } base;
-    bool dead=false,disabled=false,loaded=true; Cell* cell=nullptr; Worldspace* world=nullptr;
+    bool dead=false,disabled=false,loaded=true; Cell* cell=nullptr; Worldspace* world=nullptr; Location* location=nullptr;
     unsigned id=0; const char* name=""; NiPoint3 position{};
     bool IsDead()const{return dead;} bool IsDisabled()const{return disabled;} bool Is3DLoaded()const{return loaded;}
-    Cell* GetParentCell()const{return cell;} Worldspace* GetWorldspace()const{return world;}
+    Cell* GetParentCell()const{return cell;} Worldspace* GetWorldspace()const{return world;} Location* GetCurrentLocation()const{return location;}
     NiPoint3 GetPosition()const{return position;} Base* GetActorBase(){return &base;}
     unsigned GetFormID()const{return id;} const char* GetDisplayFullName()const{return name;}
 };
@@ -681,9 +714,11 @@ public:
     bool expectedExitPending_=false;
     std::uint64_t slotPayloadGeneration_=0,fullStatePayloadGeneration_=0;
     std::string pendingFullState_,pendingSlotPayload_,pendingFullStatePayload_;
+    std::atomic_size_t knownNpcsSize_{static_cast<std::size_t>(-1)};
+    std::vector<std::pair<std::uint64_t,std::string>> pendingDirectorResults_;
     std::mutex mutex_,actionCacheMutex_; std::condition_variable pollCondition_;
     struct ActionParam {std::string name,description;std::vector<std::string> enumValues;};
-    struct ActionMeta {std::string name,fileName,description;bool enabled=true;std::vector<ActionParam> params;};
+    struct ActionMeta {std::string name,fileName,description;bool enabled=true;std::vector<ActionParam> params;std::string category;bool isCategory=true;};
     std::vector<ActionMeta> actionCache_; bool actionCacheLoaded_=true;
     void LoadActionYAMLs();
     void SendModEvent(const std::string&,const std::string& = "",float=0.f);
@@ -696,9 +731,12 @@ public:
     static void OnToggleStoryTypeStatic(const char*); static void OnChangeSettingStatic(const char*); static void OnRemovePackagesStatic(const char*);
     static void OnDispatchStoryStatic(const char*); static void OnDispatchNpcSocialStatic(const char*); static void OnDispatchPoliticsStatic(const char*); static void OnExecuteActionStatic(const char*);
     static void OnChangePluginConfigStatic(const char*); static void OnToggleActionStatic(const char*);
+    static void OnGenerateDirectorStatic(const char*);
 };
 }
-''' + "namespace IntelEngine {\n" + "\n".join(callbacks) + r'''
+''' + "namespace IntelEngine {\n" + "\n".join(callbacks) + (
+    "\nvoid DashboardUIManager::OnGenerateDirectorStatic(const char*) {}\n" if not has_generate else ""
+) + r'''
 void testManager() {
     auto* m=DashboardUIManager::GetSingleton(); m->host_=std::make_unique<FakeHost>();
     eventCalls.clear();
@@ -715,13 +753,82 @@ void testManager() {
     m->OnHostEvent(UiHostEvent::DomReady);
     assert(eventCalls.size()==2 && eventCalls.back().name=="IntelEngine_DashboardRefresh");
     auto* host=static_cast<FakeHost*>(m->host_.get());
+    SkyrimNetAPI::SendCustomPromptToLLM = fakeDirectorSend;
+    const char* storyRequest = R"({"requestId":"bad","form":"story","fields":{"npcName":"Brey","storyType":"seek_player","narration":""},"touched":{},"schema":{"npcName":{"type":"text"},"storyType":{"type":"select","options":["seek_player"]},"narration":{"type":"text"}},"variants":{},"options":{"npcs":["Brey"],"factions":[]}})";
+    auto drainDirector = [&] { m->stopPolling_=false; stopOnForeground=&m->stopPolling_; m->HotkeyPollLoop(); stopOnForeground=nullptr; };
+    auto generate = [&] { DashboardUIManager::OnGenerateDirectorStatic(storyRequest); };
+    DashboardUIManager::OnGenerateDirectorStatic(R"({"requestId":"audit","form":"story","outcome":{"ok":true,"filled":["npcName"],"blank":["narration"],"applied":["narration"],"rejected":{"enemyType":"Invalid option"}}})");
+    assert(logger::generateMessages.size()==1);
+    assert(logger::generateMessages.back().find(R"("rejected":{"enemyType":"Invalid option"})") != std::string::npos);
+    assert(logger::generateMessages.back().find(R"("applied":["narration"])") != std::string::npos);
+    assert(!directorCompletion);
+    generate();
+    for (const char* reply : {"```json\n{\"narration\":\"Wrapped narrative\"}\n```",
+                              "Here is the draft:\n{\"narration\":\"Wrapped narrative\"}"}) {
+        directorCompletion(reply,1); drainDirector();
+        auto wrapped=nlohmann::json::parse(host->calls.back().second);
+        assert(wrapped["ok"] && wrapped["fields"]["narration"]=="Wrapped narrative");
+        assert(logger::generateMessages.back().find(reply) != std::string::npos);
+        generate();
+    }
+    if (directorCompletion) directorCompletion("not-json",1);
+    drainDirector();
+    auto resultCount = [&] { return std::count_if(host->calls.begin(),host->calls.end(),
+        [](const auto& call){return call.first=="directorGenerateResult";}); };
+    assert(resultCount()==3);
+    auto failed=nlohmann::json::parse(host->calls.back().second);
+    assert(!failed["ok"] && failed["error"].get<std::string>().find("not-json") != std::string::npos);
+    assert(logger::generateMessages.back().find("not-json") != std::string::npos);
+    generate();
+    if (directorCompletion) directorCompletion("service unavailable",0);
+    drainDirector();
+    assert(resultCount()==4);
+    auto serviceFailure=nlohmann::json::parse(host->calls.back().second);
+    assert(!serviceFailure["ok"] && serviceFailure["error"]=="Generation failed");
+    generate();
+    directorCompletion(R"({"narration":"Keep valid narrative","unexpected":false})",1); drainDirector();
+    auto partialResult=nlohmann::json::parse(host->calls.back().second);
+    assert(partialResult["ok"] && partialResult["fields"]["narration"]=="Keep valid narrative");
+    const auto beforeStale=resultCount();
+    generate();
+    auto staleCompletion=std::move(directorCompletion);
+    m->RequestClose(); m->Toggle();
+    m->OnHostEvent(UiHostEvent::DomReady); m->OnHostEvent(UiHostEvent::Entered);
+    staleCompletion(R"({"narration":"late"})",1); drainDirector();
+    assert(resultCount()==beforeStale);
+    assert(std::none_of(eventCalls.begin(),eventCalls.end(),[](const auto& e) {
+        return e.name=="IntelEngine_DashboardDispatchStory" ||
+               e.name=="IntelEngine_DashboardDispatchNpcSocial" ||
+               e.name=="IntelEngine_DashboardDispatchPolitics";
+    }));
+    directorCompletion = {};
+    DashboardUIManager::OnGenerateDirectorStatic(R"({"requestId":"action1","form":"action","fields":{"npcName":"Brey","actionName":"GoToLocation","destination":""}})");
+    assert(directorCompletion && nlohmann::json::parse(directorContext).contains("currentLocation"));
+    directorCompletion(R"({"npcName":"Brey","actionName":"GoToLocation","destination":"Whiterun"})",1); drainDirector();
+    auto actionResult=nlohmann::json::parse(host->calls.back().second);
+    assert(actionResult["ok"] && actionResult["form"]=="action" && actionResult["requestId"]=="action1" &&
+           actionResult["fields"]["destination"]=="Whiterun");
+    host->calls.clear(); m->stopPolling_=false;
+    std::cout << "PASS director_generate_failure_and_stale_close_reopen\n";
     const auto generation=m->generation_;
     m->PushSlotData(); assert(m->pendingFlush_); m->pendingFlush_=false;
     m->SendSlotData(generation); assert(m->pendingSlotPayloadSet_);
     m->PushFullState("{\"ready\":true}");
     assert(m->pendingFullStateSet_ && m->pendingFullState_=="{\"ready\":true}");
-    m->pendingFullStateSet_=false;
-    m->ProcessFullState("{\"ready\":TRUE}",generation); assert(m->pendingFullStatePayloadSet_);
+    NPCIndex::GetSingleton()->names={"Zelda","Brey","Brey","Aela"};
+    m->ProcessFullState("{\"ready\":true}",generation); assert(m->pendingFullStatePayloadSet_);
+    auto fullPayload=nlohmann::json::parse(m->pendingFullStatePayload_);
+    assert(fullPayload["knownNpcs"]==nlohmann::json::array({"Aela","Brey","Zelda"}));
+    assert(fullPayload["knownNpcs"].size()==3 && fullPayload["knownNpcs"].dump().size()==23);
+    m->ProcessFullState("{\"ready\":true}",generation);
+    assert(nlohmann::json::parse(m->pendingFullStatePayload_)["knownNpcs"]==fullPayload["knownNpcs"]);
+    m->pendingFullStatePayloadSet_=false;
+    m->ProcessFullState("{\"ready\":true}",generation);
+    assert(!nlohmann::json::parse(m->pendingFullStatePayload_).contains("knownNpcs"));
+    NPCIndex::GetSingleton()->names.push_back("New Name");
+    m->ProcessFullState("{\"ready\":true}",generation);
+    assert(nlohmann::json::parse(m->pendingFullStatePayload_)["knownNpcs"]==nlohmann::json::array({"Aela","Brey","New Name","Zelda"}));
+    m->pendingFullStatePayloadSet_=false;
     RE::Cell exterior, neighboringExterior, distantExterior, interior{true}, otherInterior{true};
     RE::Worldspace world, otherWorld;
     auto* player=RE::PlayerCharacter::GetSingleton();
@@ -748,11 +855,21 @@ void testManager() {
         {{"formId",0x4E013BF1u},{"name","Brey"}},
         {{"formId",0x10000001u},{"name","Neighbor"}},
         {{"formId",0x10000002u},{"name","Boundary"}}}));
+    m->actionCacheLoaded_=false;
     m->LoadActionYAMLs();
     m->ProcessFullState("{\"ready\":true}",generation);
     const auto actionsPayload=nlohmann::json::parse(m->pendingFullStatePayload_)["actions"];
-    assert(actionsPayload[0]["name"]=="ReportPlayerConduct");
-    assert(actionsPayload[0]["params"][1]["enum"]==nlohmann::json::array({"strongly_positive","positive","negative","strongly_negative"}));
+    const auto action=std::find_if(actionsPayload.begin(),actionsPayload.end(),[](const auto& entry) {
+        return entry["name"]=="ReportPlayerConduct";
+    });
+    const auto category=std::find_if(actionsPayload.begin(),actionsPayload.end(),[](const auto& entry) {
+        return entry["name"]=="Travel";
+    });
+    assert(action!=actionsPayload.end() && (*action)["category"]=="intel_communication" &&
+           !(*action)["isCategory"].get<bool>());
+    assert(category!=actionsPayload.end() && (*category)["category"]=="intel_travel" &&
+           (*category)["isCategory"].get<bool>());
+    assert((*action)["params"][1]["enum"]==nlohmann::json::array({"strongly_positive","positive","negative","strongly_negative"}));
     player->cell=&interior;
     RE::Actor sameInterior, differentInterior;
     sameInterior.id=0x10000007; sameInterior.name="Same Interior"; sameInterior.cell=&interior; sameInterior.position={4000,0,0};
@@ -829,7 +946,7 @@ void testManager() {
     eventCalls.clear();
     DashboardUIManager::OnDispatchStoryStatic(R"({"npcName":"A","storyType":"rumor","narration":"hi","subject":"x"})");
     DashboardUIManager::OnDispatchNpcSocialStatic(R"({"npc1Name":"A","npc2Name":"B","socialType":"chat","narration":"hi"})");
-    DashboardUIManager::OnDispatchPoliticsStatic(R"({"factionA":"A","factionB":"B","eventType":"pact","description":"x","relationDelta":-4})");
+    DashboardUIManager::OnDispatchPoliticsStatic(R"({"factionA":"A","factionB":"B","factionALabel":"Imperial Legion","factionBLabel":"Stormcloaks","eventType":"pact","eventLabel":"Alliance pact","description":"x","relationDelta":-4})");
     DashboardUIManager::OnExecuteActionStatic(R"({"npcFormId":4294967295,"actionName":"follow","params":{"n":4,"s":"x"}})");
     assert(eventCalls.size()==4);
     assert(eventCalls[0].name=="IntelEngine_DashboardDispatchStory");
@@ -837,7 +954,14 @@ void testManager() {
     assert(eventCalls[1].name=="IntelEngine_DashboardDispatchNpcSocial");
     assert(nlohmann::json::parse(nlohmann::json::parse(eventCalls[1].str)["response"].get<std::string>())["npc2"]=="B");
     assert(eventCalls[2].name=="IntelEngine_DashboardDispatchPolitics");
-    assert(nlohmann::json::parse(eventCalls[2].str)["relation_delta"]==-4);
+    assert(nlohmann::json::parse(eventCalls[2].str)["event_label"]=="Alliance pact");
+    assert(nlohmann::json::parse(eventCalls[2].str)["event_type"]=="pact");
+    assert(nlohmann::json::parse(eventCalls[2].str)["faction_a_label"]=="Imperial Legion");
+    assert(nlohmann::json::parse(eventCalls[2].str)["faction_b_label"]=="Stormcloaks");
+    DashboardUIManager::OnDispatchPoliticsStatic(R"({"factionA":"A","factionB":"B","eventType":"pact","description":"x","relationDelta":-4})");
+    assert(nlohmann::json::parse(eventCalls.back().str)["event_label"]=="pact");
+    assert(nlohmann::json::parse(eventCalls.back().str)["faction_a_label"]=="A");
+    assert(nlohmann::json::parse(eventCalls.back().str)["faction_b_label"]=="B");
     assert(eventCalls[3].name=="IntelEngine_DashboardExecuteAction");
     assert(nlohmann::json::parse(eventCalls[3].str)["npcFormId"]=="4294967295");
     eventCalls.clear();
@@ -848,7 +972,7 @@ void testManager() {
     std::filesystem::create_directory(kActionYamlDirectory);
     const std::string actionPath=std::string(kActionYamlDirectory)+"/check.yaml";
     std::ofstream(actionPath) << "name: Check\nparams:\n  enabled: nested\nenabled: true\nother: keep";
-    m->actionCache_={{"Check","check","",true,{}}}; eventCalls.clear();
+    m->actionCache_={{"Check","check","",true,{},"",false}}; eventCalls.clear();
     DashboardUIManager::OnToggleActionStatic(R"({"name":"Check","enabled":false})");
     std::ifstream actionFile(actionPath);
     const std::string actionText((std::istreambuf_iterator<char>(actionFile)),{});

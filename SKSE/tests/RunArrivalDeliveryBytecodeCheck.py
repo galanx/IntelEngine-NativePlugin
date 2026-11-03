@@ -216,6 +216,9 @@ class VM:
             self.effects.append(("GetArrivalThreshold", tuple(args)))
             return 300.0
         if method == "GetCurrentRealTime": return 456.0
+        if method == "FriendlyKey":
+            return subprocess.run([str(self.history_exe), "--friendly", args[0]],
+                check=True, capture_output=True, text=True).stdout.rstrip("\r\n")
         if method == "BuildTaskHistoryDesc":
             self.effects.append(("formatter-args", tuple(args)))
             return subprocess.run([str(self.history_exe), "--describe", *map(str, args)],
@@ -303,6 +306,7 @@ class VM:
             elif op == "propset":
                 prop = a[0][1].removeprefix("::").removesuffix("_var")
                 self.properties[prop] = v(a[2])
+            elif op == "array_length": env[a[0][1]] = len(v(a[1]))
             elif op == "array_getelement": env[a[0][1]] = v(a[1])[v(a[2])]
             elif op == "array_setelement":
                 prop = a[0][1].removeprefix("::").removesuffix("_var")
@@ -338,8 +342,14 @@ class DirectorVM(VM):
         self.properties.update({f"AgentAlias{i:02d}": ReferenceAlias() for i in range(5)})
 
     def invoke(self, script, name, args=()):
+        if script == "IntelEngine_Core" and name == "PushDashboardState":
+            self.effects.append(("PushDashboardState", ()))
+            return None
+        if script == "IntelEngine_Core" and name == "InjectFact":
+            if args[1] != "": self.effects.append((name, tuple(args)))
+            return None
         if (script == "IntelEngine_Core" and name in
-                ("InjectFact", "InitializeStuckTrackingForSlot", "InitOffScreenTracking")) or (
+                ("InitializeStuckTrackingForSlot", "InitOffScreenTracking")) or (
                 script == "IntelEngine_StoryEngine" and name == "ReapplyTravelPackage"):
             self.effects.append((name, tuple(args)))
             return None
@@ -375,6 +385,10 @@ def run_director_lite_checks(files, history):
     def first_seek():
         task = DirectorVM(files, history)
         task.seek("First seek")
+        require(("PushDashboardState", ()) in task.effects,
+                "Director story dispatch did not push dashboard state")
+        require(("Notification", "Nazeem sets out (Seek Player).") in task.effects,
+                "Director story notice must use friendly story type: " + repr(task.effects))
         require(sum(task.properties[f"AgentAlias{i:02d}"].actor is task.agent for i in range(5)) == 1,
                 "first Director seek did not allocate exactly one slot")
         return task
@@ -383,7 +397,7 @@ def run_director_lite_checks(files, history):
         require(task.task_snapshot() == snapshot, "refused Director request changed the original task")
         extra = task.effects[effects_at:]
         require([e for e in extra if e[0] == "Notification"] ==
-                [("Notification", "Nazeem is already busy (story). Cancel it first.")],
+                [("Notification", "Nazeem is already busy (Story). Cancel it first.")],
                 "busy Director request did not notify exactly once")
         require(all(e[0] in ("Notification", "Trace") for e in extra),
                 "refused Director request wrote facts, narrated, or changed travel")
@@ -438,7 +452,7 @@ def run_director_lite_checks(files, history):
         require(task.task_snapshot() == snapshot, "second Director story displaced the active courier")
         extra = task.effects[effects_at:]
         require([e for e in extra if e[0] == "Notification"] == [("Notification",
-                "Story engine is busy with Gundarsting [Servant] (message). Cancel it first.")],
+                "Story engine is busy with Gundarsting [Servant] (Message). Cancel it first.")],
                 "active Story engine did not notify exactly once")
         require(all(e[0] in ("Notification", "Trace") for e in extra),
                 "refused story wrote facts, narrated, or changed travel")
@@ -542,14 +556,22 @@ def run_director_lite_checks(files, history):
                     "repeated cancellation injected a duplicate closing fact")
 
     def director_action_success_notice():
-        for state, expected in ((1, [("Notification", "Nazeem: ChangeSpeed started.")]), (0, [])):
+        for state, expected in ((1, [("Notification", "Nazeem: ChangeSpeed started.")]),
+                                (0, [("Notification", "Nazeem: ChangeSpeed failed.")])):
             task = DirectorVM(files, history)
             task.properties["AgentAlias00"].actor = task.agent
             task.properties["SlotStates"][0] = state
-            payload = json.dumps({"actionName": "ChangeSpeed", "npcFormId": "1234", "newSpeed": 0})
+            payload = json.dumps({"actionName": "ChangeSpeed", "npcFormId": "1234", "newSpeed": 0, "reason":"wanted to help Player"})
             task.invoke("IntelEngine_Core", "OnDashboardExecuteAction", ("", payload, 0.0, None))
+            require((("InjectFact", (task.agent, "wanted to help Player")) in task.effects) == (state == 1),
+                    "Director action reason injection did not match action success")
             require([e for e in task.effects if e[0] == "Notification"] == expected,
-                    "director_action_success_notice: Bool-true must notify once; Bool-false must not notify")
+                    "director_action_success_notice: execution outcome notice mismatch")
+        task = DirectorVM(files, history)
+        payload = json.dumps({"actionName": "ChangeSpeed", "npcFormId": "1234", "newSpeed": 0})
+        task.invoke("IntelEngine_Core", "OnDashboardExecuteAction", ("", payload, 0.0, None))
+        require(not any(e[0] == "InjectFact" for e in task.effects),
+                "Director action without a reason injected a fact")
 
     def director_social_and_political_success_notice():
         class NoticeVM(DirectorVM):
@@ -581,22 +603,55 @@ def run_director_lite_checks(files, history):
             payload = json.dumps({"npc1Name": task.agent.name, "npc2Name": task.target.name,
                 "socialType": "npc_interaction", "narration": "A meeting", "response": "{}"})
             task.invoke("IntelEngine_Core", "OnDashboardDispatchNpcSocial", ("", payload, 0.0, None))
+            if mode != "refused":
+                require(("PushDashboardState", ()) in task.effects,
+                        "Director social dispatch did not push dashboard state: " + mode)
             notices = [e for e in task.effects if e[0] == "Notification" and e[1].endswith("started.")]
             require(notices == ([] if mode == "refused" else
-                [("Notification", "Nazeem and Recipient: npc_interaction started.")]),
+                [("Notification", "Nazeem and Recipient: Npc Interaction started.")]),
                 "director_social_and_political_success_notice: Social " + mode)
             if mode == "travel":
                 require(task.properties["IsNPCStoryActive"] and task.properties["SlotTaskTypes"][0] == "npc_social",
                         "Social notice without queued travel")
         for acted in (True, False):
+          for event in ({"event_type":"war_declaration"}, {"event_type":"war_declaration","event_label":"War declared"}):
             task = NoticeVM()
             task.acted = acted
+            event.update({"faction_a": "ImperialFaction", "faction_b": "StormcloakFaction",
+                          "faction_a_label": "Imperial Legion", "faction_b_label": "Stormcloaks"})
             task.invoke("IntelEngine_Core", "OnDashboardDispatchPolitics",
-                        ("", '{"event_type":"trade_deal"}', 0.0, None))
+                        ("", json.dumps(event), 0.0, None))
             require([e for e in task.effects if e[0] == "Notification"] ==
-                    ([("Notification", "Political event recorded: trade_deal.")] if acted else []),
+                    ([("Notification", "Political event: " + event.get("event_label", "War Declaration") +
+                       " between Imperial Legion and Stormcloaks.")] if acted else []),
                     "director_social_and_political_success_notice: Political acted=" + str(acted))
             require(("political-record", acted) in task.effects, "Political native boundary not reached")
+    def director_story_not_found_notifies():
+        class MissingActorVM(DirectorVM):
+            def __init__(self):
+                super().__init__(files, history)
+
+            def external(self, method, args, script):
+                if method == "ResolveDirectorActor":
+                    return self.agent if args[0] == "Nazeem" else None
+                return super().external(method, args, script)
+
+        for event, payload, names in (
+            ("OnDashboardDispatchStory", {"storyType": "seek_player", "npcName": "Arvel the Swift"},
+             ("Arvel the Swift",)),
+            ("OnDashboardDispatchNpcSocial", {"npc1Name": "Missing One", "npc2Name": "Missing Two"},
+             ("Missing One",)),
+            ("OnDashboardDispatchNpcSocial", {"npc1Name": "Nazeem", "npc2Name": "Missing Two"},
+             ("Missing Two",))):
+            task = MissingActorVM()
+            task.invoke("IntelEngine_Core", event, ("", json.dumps(payload), 0.0, None))
+            notices = [e for e in task.effects if e[0] == "Notification"]
+            require(notices ==
+                    [("Notification", "Couldn't find NPC '" + names[0] + "' (no unique match).")],
+                    "director_story_not_found_notifies: missing NPC notice " + repr(task.effects))
+            require(any(e[0] == "Trace" for e in task.effects),
+                    "director_story_not_found_notifies: DebugMsg trace was removed")
+
 
     def director_message_generation_success_notice():
         class MessageVM(DirectorVM):
@@ -613,17 +668,64 @@ def run_director_lite_checks(files, history):
                 "narration": "A message", "response": '{"msgContent":"Hello"}'})
             task.invoke("IntelEngine_Core", "OnDashboardDispatchStory", ("", payload, 0.0, None))
             require([e for e in task.effects if e[0] == "Notification"] ==
-                    ([] if full else [("Notification", "Recipient sets out (message).")]),
+                    ([] if full else [("Notification", "Recipient sets out (Message).")]),
                     "director_message_generation_success_notice: accepted courier once, refused none")
             require(task.properties["DispatchGeneration"] == generation + (0 if full else 1),
                     "message generation did not match dispatch admission")
 
+    def ambush_faction_hirer_injects_leader_fact():
+        class HirerVM(DirectorVM):
+            def external(self, method, args, script):
+                if method == "FindNPCByName":
+                    return self.target if args[0] == self.target.name else None
+                if method == "GetFactionLeaderFormIds":
+                    require(len(args) == 1, "faction lookup did not receive one sender")
+                    self.effects.append((method, tuple(args)))
+                    return [13276, 0] if args[0] in ("ImperialFaction", "UndisplayedFaction") else []
+                if method == "GetFactionDisplayName":
+                    require(args[0] in ("ImperialFaction", "UndisplayedFaction"),
+                            "display-name lookup did not receive the faction ID: " + repr(args))
+                    self.effects.append((method, tuple(args)))
+                    return "Imperials" if args[0] == "ImperialFaction" else ""
+                if method == "FriendlyKey":
+                    raise AssertionError("leader faction fact used FriendlyKey instead of display name")
+                if method == "GetForm": return self.target if args[0] == 13276 else None
+                return super().external(method, args, script)
+
+        for story_type, verb in (("ambush", "sent Nazeem to ambush Player"),
+                                 ("stalker", "encouraged Nazeem to follow Player")):
+            for sender in ("Recipient", "ImperialFaction", "UndisplayedFaction", ""):
+                task = HirerVM(files, history)
+                task.halt_before = "RandomInt" if story_type == "ambush" else "DispatchToTarget"
+                task.invoke("IntelEngine_StoryEngine", "HandleAmbushStalkerDispatch",
+                            (task.agent, "had a grudge", json.dumps({"sender": sender}), story_type, "Director"))
+                display_name = {"ImperialFaction": "Imperials", "UndisplayedFaction": "UndisplayedFaction"}.get(sender, "")
+                expected = (display_name + " " if display_name else "") + verb
+                require([e for e in task.effects if e[0] == "InjectFact"] ==
+                        [("InjectFact", (task.agent, "had a grudge"))] +
+                        ([("InjectFact", (task.target, expected))] if sender else []),
+                        "hirer facts differ for " + story_type + "/" + sender + ": " + repr(task.effects))
+                require(any(e[0] == "GetFactionLeaderFormIds" for e in task.effects) ==
+                        bool(sender), "non-empty sender did not check faction leaders")
+                require(any(e[0] == "GetFactionDisplayName" for e in task.effects) ==
+                        (sender in ("ImperialFaction", "UndisplayedFaction")),
+                        "faction display name was not used only for faction-leader facts")
+                require(task.halt_reached, "hirer check did not reach the dispatch boundary")
+
+
+    failures = []
     for case in (director_seek_then_seek_is_refused, run6_seek_seek_fetch_arrival,
                  director_story_while_story_active, cancel_story_task_ends_story,
                  cancel_story_injects_closing_fact, director_action_success_notice,
-                 director_social_and_political_success_notice, director_message_generation_success_notice):
-        case()
-        print("actual PEX " + case.__name__ + " PASS")
+                 director_social_and_political_success_notice, director_message_generation_success_notice,
+                 director_story_not_found_notifies, ambush_faction_hirer_injects_leader_fact):
+        try:
+            case()
+            print("actual PEX " + case.__name__ + " PASS")
+        except AssertionError as error:
+            failures.append(case.__name__)
+            print("actual PEX " + case.__name__ + " FAIL: " + str(error))
+    require(not failures, "Failed Director cases: " + ", ".join(failures))
 
 
 def main():
@@ -707,7 +809,7 @@ def main():
             if method == "ClearPackageOverride": self.packages.clear()
             if method == "SetLinkedRef": self.link = args[1]
             if method == "StoryResponseGetField":
-                return {"actionName": "CancelCurrentTask", "npcFormId": "1234"}[args[1]]
+                return {"actionName": "CancelCurrentTask", "npcFormId": "1234"}.get(args[1], "")
             if method == "ParseFormID": return int(args[0])
             if method == "GetForm": return self.agent
             if method == "PushDashboardState": return None

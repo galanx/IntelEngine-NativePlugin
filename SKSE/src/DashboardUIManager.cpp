@@ -13,6 +13,7 @@
 #include "DashboardConfig.h"
 #include "FactionPolitics.h"
 #include "SkyrimNetAPI.h"
+#include "NPCIndex.h"
 #include "SlotTracker.h"
 #include "ProcessUtils.h"
 #include <windows.h>
@@ -20,10 +21,13 @@
 #include <fstream>
 #include <nlohmann/json.hpp>
 #include <cstdint>
+#include <algorithm>
 #include <limits>
 #include <optional>
 #include <sstream>
 #include <utility>
+#include <stdexcept>
+#include <string_view>
 
 namespace IntelEngine {
 
@@ -76,6 +80,7 @@ namespace IntelEngine {
             {"onDashboard_dispatchPolitics", OnDispatchPoliticsStatic},
             {"onDashboard_executeAction", OnExecuteActionStatic},
             {"onDashboard_toggleAction", OnToggleActionStatic},
+            {"onDashboard_generateDirector", OnGenerateDirectorStatic},
         };
 
         std::unique_ptr<IUiHost> host;
@@ -238,6 +243,7 @@ namespace IntelEngine {
                 pendingSlotPayload_.clear();
                 pendingFullStatePayloadSet_ = false;
                 pendingFullStatePayload_.clear();
+                knownNpcsSize_ = static_cast<std::size_t>(-1);
                 pendingFlush_ = true;
                 pendingRefresh_ = openedEventSent_;
                 break;
@@ -420,6 +426,7 @@ namespace IntelEngine {
             replaceAll(fixed, "False", "false");
 
             auto parsed = nlohmann::json::parse(fixed);
+            std::size_t knownNpcsSize = NPCIndex::GetSingleton()->GetNPCCount();
             if (auto* calendar = RE::Calendar::GetSingleton()) {
                 parsed["calendar"] = {
                     {"time", calendar->GetCurrentGameTime()},
@@ -507,6 +514,8 @@ namespace IntelEngine {
                     entry["name"] = a.name;
                     entry["fileName"] = a.fileName;
                     entry["description"] = a.description;
+                    entry["category"] = a.category;
+                    entry["isCategory"] = a.isCategory;
                     entry["enabled"] = a.enabled;
                     nlohmann::json params = nlohmann::json::array();
                     for (auto& p : a.params) {
@@ -520,13 +529,15 @@ namespace IntelEngine {
                 parsed["actions"] = acts;
             }
 
-            std::string clean = parsed.dump();
             {
                 std::lock_guard<std::mutex> lock(mutex_);
                 if (shuttingDown_ || generation_ != generation ||
                     !requestedOpen_ || !isOpen_.load() || !domReady_.load()) return;
-                pendingFullStatePayload_ = std::move(clean);
+                // Coalesced snapshots retain names until the pending state can be delivered.
+                if (knownNpcsSize_ != knownNpcsSize || pendingFullStatePayloadSet_) parsed["knownNpcs"] = NPCIndex::GetSingleton()->GetKnownNames();
+                pendingFullStatePayload_ = parsed.dump();
                 fullStatePayloadGeneration_ = generation;
+                knownNpcsSize_ = knownNpcsSize;
                 pendingFullStatePayloadSet_ = true;
             }
             pollCondition_.notify_one();
@@ -548,7 +559,7 @@ namespace IntelEngine {
             pollCondition_.wait_for(lock, kPollIntervalMs, [this] {
                 const bool ready = requestedOpen_ && isOpen_.load() && domReady_.load() && !shuttingDown_;
                 return stopPolling_.load() || pendingOpen_ || pendingClose_ ||
-                       pendingReload_ || (ready && !gameTaskQueued_ &&
+                       pendingReload_ || !pendingDirectorResults_.empty() || (ready && !gameTaskQueued_ &&
                            (pendingFlush_ || pendingFullStateSet_ ||
                             pendingSlotPayloadSet_ || pendingFullStatePayloadSet_));
             });
@@ -590,6 +601,8 @@ namespace IntelEngine {
             bool fullState = canProcessState && std::exchange(pendingFullStateSet_, false);
             std::string state;
             if (fullState) state = std::move(pendingFullState_);
+            auto directorResults = std::move(pendingDirectorResults_);
+            pendingDirectorResults_.clear();
             const bool queueGameTask = flush || fullState;
             if (queueGameTask) gameTaskQueued_ = true;
             lock.unlock();
@@ -654,6 +667,15 @@ namespace IntelEngine {
                               requestedOpen_ && isOpen_.load() && domReady_.load();
                 }
                 if (current && host_) host_->Call("updateFullState", fullStatePayload);
+            }
+            for (const auto& [resultGeneration, payload] : directorResults) {
+                bool current;
+                {
+                    std::lock_guard<std::mutex> resultLock(mutex_);
+                    current = !shuttingDown_ && generation_ == resultGeneration && requestedOpen_ &&
+                              isOpen_.load() && domReady_.load();
+                }
+                if (current && host_) host_->Call("directorGenerateResult", payload);
             }
             if (queueGameTask) {
                 auto* task = SKSE::GetTaskInterface();
@@ -962,6 +984,54 @@ namespace IntelEngine {
                     eventName, strArg, numArg);
     }
 
+    void DashboardUIManager::OnGenerateDirectorStatic(const char* jsonArg) {
+        auto* mgr = GetSingleton();
+        if (!mgr->acceptingCallbacks_.load()) return;
+        try {
+            auto request = nlohmann::json::parse(jsonArg ? jsonArg : "{}");
+            const auto id = request.at("requestId").get<std::string>();
+            const auto form = request.at("form").get<std::string>();
+            if (id.empty() || (form != "story" && form != "social" && form != "political" && form != "action")) return;
+            if (request.contains("outcome")) { logger::info("[Dashboard] Generate form={} request={} outcome={}", form, id, request["outcome"].dump()); return; }
+            std::uint64_t generation;
+            { std::lock_guard<std::mutex> lock(mgr->mutex_);
+              if (mgr->shuttingDown_ || !mgr->requestedOpen_ || !mgr->isOpen_ || !mgr->domReady_) return;
+              generation = mgr->generation_; }
+            auto queue = [mgr, generation, id, form](nlohmann::json fields, std::string error) {
+                nlohmann::json result{{"requestId", id}, {"form", form}, {"ok", error.empty()},
+                                      {"fields", std::move(fields)}, {"error", std::move(error)}};
+                { std::lock_guard<std::mutex> lock(mgr->mutex_);
+                  if (mgr->generation_ != generation || mgr->shuttingDown_) return;
+                  mgr->pendingDirectorResults_.emplace_back(generation, result.dump()); }
+                mgr->pollCondition_.notify_one();
+            };
+            if (auto* player = RE::PlayerCharacter::GetSingleton()) {
+                auto* cell = player->GetParentCell();
+                const char* location = cell && cell->IsInteriorCell() ? cell->GetName() : nullptr;
+                if (!location || !location[0]) {
+                    auto* current = player->GetCurrentLocation();
+                    location = current ? current->GetFullName() : nullptr;
+                }
+                request["currentLocation"] = location && location[0] ? location : "";
+            } else request["currentLocation"] = "";
+            if (!SkyrimNetAPI::SendCustomPromptToLLM) { queue({}, "Generate unavailable"); return; }
+            const auto context = request.dump();
+            const bool queued = SkyrimNetAPI::SendCustomPromptToLLM("intel_director_generate", "", context.c_str(),
+                [queue, form, id](const char* response, int success) mutable {
+                    std::string_view raw = response ? response : "";
+                    logger::info("[Dashboard] Generate form={} request={} raw={}", form, id, raw.substr(0, 600));
+                    if (!success) { queue({}, "Generation failed"); return; }
+                    try {
+                        const auto first = raw.find('{'), last = raw.rfind('}');
+                        auto fields = nlohmann::json::parse(first != raw.npos && last != raw.npos ? raw.substr(first, last - first + 1) : raw);
+                        if (!fields.is_object() || fields.empty()) throw std::runtime_error("invalid fields");
+                        queue(std::move(fields), "");
+                    } catch (...) { queue({}, "Malformed generation result: " + std::string(raw.substr(0, 120))); }
+                });
+            if (!queued) queue({}, "Generation unavailable");
+        } catch (...) {}
+    }
+
     // =========================================================================
     // Director: Story Dispatch (JS -> C++ -> pending params -> ModEvent -> Papyrus)
     // =========================================================================
@@ -1074,6 +1144,7 @@ namespace IntelEngine {
             std::string factionA = j.value("factionA", "");
             std::string factionB = j.value("factionB", "");
             std::string eventType = j.value("eventType", "");
+            std::string eventLabel = j.value("eventLabel", eventType);
             std::string description = j.value("description", "");
             int delta = j.value("relationDelta", 0);
             if (factionA.empty() || factionB.empty() || eventType.empty() || description.empty() || delta == 0) return;
@@ -1083,7 +1154,9 @@ namespace IntelEngine {
             response["should_act"] = true;
             response["faction_a"] = factionA;
             response["faction_b"] = factionB;
+            response["faction_a_label"] = j.value("factionALabel", factionA); response["faction_b_label"] = j.value("factionBLabel", factionB);
             response["event_type"] = eventType;
+            response["event_label"] = eventLabel;
             response["description"] = description;
             response["relation_delta"] = delta;
         
@@ -1250,6 +1323,11 @@ namespace IntelEngine {
                         // Trim whitespace
                         auto s = meta.name.find_first_not_of(" \t");
                         meta.name = s != std::string::npos ? meta.name.substr(s) : "";
+                    } else if (line.rfind("customCategory:", 0) == 0) {
+                        auto s = line.find_first_not_of(" \t", 15);
+                        meta.category = s != std::string::npos ? line.substr(s) : "";
+                    } else if (line.rfind("executionFunctionName:", 0) == 0) {
+                        meta.isCategory = false;
                     } else if (line.rfind("description:", 0) == 0) {
                         inDescription = true;
                         std::string val = line.substr(12);

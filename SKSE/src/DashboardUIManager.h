@@ -70,7 +70,9 @@ namespace IntelEngine {
         std::uint64_t fullStatePayloadGeneration_ = 0;
         std::string pendingFullState_;
         std::string pendingSlotPayload_;
+        std::vector<std::pair<std::uint64_t, std::string>> pendingDirectorResults_;
         std::string pendingFullStatePayload_;
+        std::size_t knownNpcsSize_ = static_cast<std::size_t>(-1);
         mutable std::mutex mutex_;
         std::condition_variable pollCondition_;
         std::thread hotkeyThread_;
@@ -97,6 +99,7 @@ namespace IntelEngine {
         static void OnDispatchNpcSocialStatic(const char* jsonArg);
         static void OnDispatchPoliticsStatic(const char* jsonArg);
         static void OnExecuteActionStatic(const char* jsonArg);
+        static void OnGenerateDirectorStatic(const char* jsonArg);
         static void OnToggleActionStatic(const char* jsonArg);
 
         void SendModEvent(const std::string& eventName, const std::string& strArg = "", float numArg = 0.0f);
@@ -112,6 +115,8 @@ namespace IntelEngine {
             std::string description;
             bool enabled = true;
             std::vector<ActionParam> params;
+            std::string category;
+            bool isCategory = true;
         };
 
         std::vector<ActionMeta> actionCache_;
