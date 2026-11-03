@@ -108,8 +108,9 @@ callbacks = [method(manager, sig) for sig in (
 with tempfile.TemporaryDirectory(prefix="dashboard-host-") as temp:
     work = pathlib.Path(temp)
     (work / "actions").mkdir()
-    (work / "actions/report.yaml").write_bytes(
-        (ROOT / "SKSE/Plugins/SkyrimNet/external/galanx.intelengine/actions/reportplayerconduct.yaml").read_bytes())
+    for action_file in ("reportplayerconduct.yaml", "travel.yaml"):
+        (work / "actions" / action_file).write_bytes(
+            (ROOT / "SKSE/Plugins/SkyrimNet/external/galanx.intelengine/actions" / action_file).read_bytes())
     (work / "UiHostTestSupport.h").write_text(r'''#pragma once
 #define INTELENGINE_VERSION "3.6.2"
 #include "Windows.h"
@@ -715,7 +716,7 @@ public:
     std::vector<std::pair<std::uint64_t,std::string>> pendingDirectorResults_;
     std::mutex mutex_,actionCacheMutex_; std::condition_variable pollCondition_;
     struct ActionParam {std::string name,description;std::vector<std::string> enumValues;};
-    struct ActionMeta {std::string name,fileName,description;bool enabled=true;std::vector<ActionParam> params;};
+    struct ActionMeta {std::string name,fileName,description;bool enabled=true;std::vector<ActionParam> params;std::string category;bool isCategory=true;};
     std::vector<ActionMeta> actionCache_; bool actionCacheLoaded_=true;
     void LoadActionYAMLs();
     void SendModEvent(const std::string&,const std::string& = "",float=0.f);
@@ -845,11 +846,21 @@ void testManager() {
         {{"formId",0x4E013BF1u},{"name","Brey"}},
         {{"formId",0x10000001u},{"name","Neighbor"}},
         {{"formId",0x10000002u},{"name","Boundary"}}}));
+    m->actionCacheLoaded_=false;
     m->LoadActionYAMLs();
     m->ProcessFullState("{\"ready\":true}",generation);
     const auto actionsPayload=nlohmann::json::parse(m->pendingFullStatePayload_)["actions"];
-    assert(actionsPayload[0]["name"]=="ReportPlayerConduct");
-    assert(actionsPayload[0]["params"][1]["enum"]==nlohmann::json::array({"strongly_positive","positive","negative","strongly_negative"}));
+    const auto action=std::find_if(actionsPayload.begin(),actionsPayload.end(),[](const auto& entry) {
+        return entry["name"]=="ReportPlayerConduct";
+    });
+    const auto category=std::find_if(actionsPayload.begin(),actionsPayload.end(),[](const auto& entry) {
+        return entry["name"]=="Travel";
+    });
+    assert(action!=actionsPayload.end() && (*action)["category"]=="intel_communication" &&
+           !(*action)["isCategory"].get<bool>());
+    assert(category!=actionsPayload.end() && (*category)["category"]=="intel_travel" &&
+           (*category)["isCategory"].get<bool>());
+    assert((*action)["params"][1]["enum"]==nlohmann::json::array({"strongly_positive","positive","negative","strongly_negative"}));
     player->cell=&interior;
     RE::Actor sameInterior, differentInterior;
     sameInterior.id=0x10000007; sameInterior.name="Same Interior"; sameInterior.cell=&interior; sameInterior.position={4000,0,0};
@@ -952,7 +963,7 @@ void testManager() {
     std::filesystem::create_directory(kActionYamlDirectory);
     const std::string actionPath=std::string(kActionYamlDirectory)+"/check.yaml";
     std::ofstream(actionPath) << "name: Check\nparams:\n  enabled: nested\nenabled: true\nother: keep";
-    m->actionCache_={{"Check","check","",true,{}}}; eventCalls.clear();
+    m->actionCache_={{"Check","check","",true,{},"",false}}; eventCalls.clear();
     DashboardUIManager::OnToggleActionStatic(R"({"name":"Check","enabled":false})");
     std::ifstream actionFile(actionPath);
     const std::string actionText((std::istreambuf_iterator<char>(actionFile)),{});

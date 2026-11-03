@@ -115,6 +115,8 @@ namespace IntelEngine {
             std::string description;
             bool enabled = true;
             std::vector<ActionParam> params;
+            std::string category;
+            bool isCategory = true;
         };
 
         std::vector<ActionMeta> actionCache_;

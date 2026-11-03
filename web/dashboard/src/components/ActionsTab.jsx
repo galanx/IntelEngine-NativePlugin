@@ -1,22 +1,19 @@
 import withSections from './Section';
 import { useCallback } from 'react';
 
-// IntelEngine action names — filter out other mods' actions
-const INTEL_ACTIONS = new Set([
-  'GoToLocation', 'FetchPerson', 'DeliverMessage', 'EscortTarget', 'SearchForActor',
-  'ScheduleFetch', 'ScheduleDelivery', 'ScheduleMeeting',
-  'CancelCurrentTask', 'ChangeSpeed', 'ReportPlayerConduct',
-  'Communication', 'Scheduling', 'Travel', // SkyrimNet categories that group the actions above
-]);
-const CATEGORIES = new Set(['Communication', 'Scheduling', 'Travel']);
+const CATEGORY_ORDER = ['intel_travel', 'intel_communication', 'intel_scheduling'];
+function grouped(actions) {
+  const rank = category => category ? (CATEGORY_ORDER.indexOf(category) + 1 || 4) : 5;
+  return [...actions].sort((a, b) => rank(a.category) - rank(b.category) || (a.category || '').localeCompare(b.category || '') || Number(b.isCategory === true) - Number(a.isCategory === true));
+}
 
 function ActionsTab({ actions, sendAction }) {
   const handleToggle = useCallback((name, currentEnabled) => {
     sendAction('toggleAction', { name, enabled: !currentEnabled });
   }, [sendAction]);
 
-  const intelActions = (actions || []).filter(a => INTEL_ACTIONS.has(a.name));
-  const otherActions = (actions || []).filter(a => !INTEL_ACTIONS.has(a.name));
+  const intelActions = (actions || []).filter(a => a.category?.startsWith('intel_'));
+  const otherActions = (actions || []).filter(a => !a.category?.startsWith('intel_'));
 
   if (!actions || actions.length === 0) {
     return (
@@ -41,18 +38,18 @@ function ActionsTab({ actions, sendAction }) {
       </div>
 
       <div className="space-y-1.5">
-        {intelActions.map(action => (
+        {grouped(intelActions).map(action => (
           <button
             key={action.name}
             onClick={() => handleToggle(action.name, action.enabled)}
-            className={`w-full flex items-center gap-2 px-3 py-2 rounded text-left transition-colors ${
+            className={`${action.category && !action.isCategory ? 'ml-4 !w-[calc(100%-1rem)]' : ''} w-full flex items-center gap-2 px-3 py-2 rounded text-left transition-colors ${
               action.enabled
                 ? 'slot-card text-gray-200'
                 : 'bg-transparent text-gray-600 border border-white/5'
             }`}
           >
             <div className="flex-1 min-w-0">
-              <div className="text-xs font-medium truncate">{action.name}{CATEGORIES.has(action.name) && ' (category)'}</div>
+              <div className="text-xs font-medium truncate">{action.name}{action.isCategory && ' (category)'}</div>
               {action.description && (
                 <div className="text-[10px] text-gray-500 truncate mt-0.5">{action.description.split('{{ npc.name }}').join('the NPC')}</div>
               )}
@@ -72,18 +69,18 @@ function ActionsTab({ actions, sendAction }) {
             <span className="text-xs text-gray-600">{otherActions.length} actions</span>
           </div>
           <div className="space-y-1.5">
-            {otherActions.map(action => (
+            {grouped(otherActions).map(action => (
               <button
                 key={action.name}
                 onClick={() => handleToggle(action.name, action.enabled)}
-                className={`w-full flex items-center gap-2 px-3 py-2 rounded text-left transition-colors ${
+                className={`${action.category && !action.isCategory ? 'ml-4 !w-[calc(100%-1rem)]' : ''} w-full flex items-center gap-2 px-3 py-2 rounded text-left transition-colors ${
                   action.enabled
                     ? 'slot-card text-gray-200'
                     : 'bg-transparent text-gray-600 border border-white/5'
                 }`}
               >
                 <div className="flex-1 min-w-0">
-                  <div className="text-xs font-medium truncate">{action.name}{CATEGORIES.has(action.name) && ' (category)'}</div>
+                  <div className="text-xs font-medium truncate">{action.name}{action.isCategory && ' (category)'}</div>
                   {action.description && (
                     <div className="text-[10px] text-gray-500 truncate mt-0.5">{action.description.split('{{ npc.name }}').join('the NPC')}</div>
                   )}

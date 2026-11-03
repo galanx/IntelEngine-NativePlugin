@@ -514,6 +514,8 @@ namespace IntelEngine {
                     entry["name"] = a.name;
                     entry["fileName"] = a.fileName;
                     entry["description"] = a.description;
+                    entry["category"] = a.category;
+                    entry["isCategory"] = a.isCategory;
                     entry["enabled"] = a.enabled;
                     nlohmann::json params = nlohmann::json::array();
                     for (auto& p : a.params) {
@@ -1312,6 +1314,11 @@ namespace IntelEngine {
                         // Trim whitespace
                         auto s = meta.name.find_first_not_of(" \t");
                         meta.name = s != std::string::npos ? meta.name.substr(s) : "";
+                    } else if (line.rfind("customCategory:", 0) == 0) {
+                        auto s = line.find_first_not_of(" \t", 15);
+                        meta.category = s != std::string::npos ? line.substr(s) : "";
+                    } else if (line.rfind("executionFunctionName:", 0) == 0) {
+                        meta.isCategory = false;
                     } else if (line.rfind("description:", 0) == 0) {
                         inDescription = true;
                         std::string val = line.substr(12);
