@@ -573,6 +573,37 @@ def run_director_lite_checks(files, history):
         require(not any(e[0] == "InjectFact" for e in task.effects),
                 "Director action without a reason injected a fact")
 
+    def director_conduct_report_success_notice():
+        class ConductVM(DirectorVM):
+            def __init__(self):
+                super().__init__(files, history)
+                self.scripts["IntelEngine_Politics"] = files[3]
+                self.properties["Politics"] = "IntelEngine_Politics"
+
+            def external(self, method, args, script):
+                if method == "StoryResponseGetField":
+                    return json.loads(args[0]).get(args[1], "")
+                if method == "ProcessPlayerConduct":
+                    self.effects.append(("conduct-record", tuple(args)))
+                    return 1
+                if method == "WritePoliticalStateFile":
+                    self.effects.append(("political-state-write", ()))
+                    return None
+                return super().external(method, args, script)
+
+        task = ConductVM()
+        payload = json.dumps({"actionName": "ReportPlayerConduct", "npcFormId": "1234",
+            "factionId": "Stormcloaks", "sentiment": "positive", "reason": "defended the hold"})
+        task.invoke("IntelEngine_Core", "OnDashboardExecuteAction", ("", payload, 0.0, None))
+        require(("conduct-record", (task.agent, "Stormcloaks", "positive", "defended the hold")) in task.effects,
+                "Director did not execute the Politics conduct report")
+        require([e for e in task.effects if e[0] == "InjectFact"] ==
+                [("InjectFact", (task.agent, "defended the hold"))],
+                "Director conduct report did not inject exactly the reason fact")
+        require([e for e in task.effects if e[0] == "Notification"] ==
+                [("Notification", "Nazeem: conduct reported.")],
+                "Director conduct report did not emit only the reported notice")
+
     def director_social_and_political_success_notice():
         class NoticeVM(DirectorVM):
             def __init__(self):
@@ -717,7 +748,8 @@ def run_director_lite_checks(files, history):
     for case in (director_seek_then_seek_is_refused, run6_seek_seek_fetch_arrival,
                  director_story_while_story_active, cancel_story_task_ends_story,
                  cancel_story_injects_closing_fact, director_action_success_notice,
-                 director_social_and_political_success_notice, director_message_generation_success_notice,
+                 director_conduct_report_success_notice, director_social_and_political_success_notice,
+                 director_message_generation_success_notice,
                  director_story_not_found_notifies, ambush_faction_hirer_injects_leader_fact):
         try:
             case()
@@ -803,13 +835,18 @@ def main():
             self.packages = {"travel"}
             self.link = self.target
 
+        def invoke(self, script, name, args=()):
+            if script == "IntelEngine_Core" and name == "InjectFact":
+                self.effects.append((name, tuple(args)))
+                return None
+            return super().invoke(script, name, args)
+
         def external(self, method, args, script):
             if method == "Is3DLoaded": return True
             if method == "GetDistance": return self.distance
             if method == "ClearPackageOverride": self.packages.clear()
             if method == "SetLinkedRef": self.link = args[1]
-            if method == "StoryResponseGetField":
-                return {"actionName": "CancelCurrentTask", "npcFormId": "1234"}.get(args[1], "")
+            if method == "StoryResponseGetField": return json.loads(args[0]).get(args[1], "")
             if method == "ParseFormID": return int(args[0])
             if method == "GetForm": return self.agent
             if method == "PushDashboardState": return None
@@ -857,15 +894,28 @@ def main():
 
     director = CancelVM(100.0)
     director.halt_before = "PushDashboardState"
-    director.invoke("IntelEngine_Core", "OnDashboardExecuteAction", ("", "{}", 0.0, None))
+    payload = json.dumps({"actionName": "CancelCurrentTask", "npcFormId": "1234",
+                          "reason": "helped the courier"})
+    director.invoke("IntelEngine_Core", "OnDashboardExecuteAction", ("", payload, 0.0, None))
     require(director.properties["SlotStates"][0] == 0,
             "Director cancel did not clear nearby Travel task")
-    require(("Trace", "Courier's task was cancelled.") in director.effects,
-            "Director successful cancel did not notify player")
+    notices = [e for e in director.effects if e[0] == "Trace" and e[1] in
+               ("Courier's task was cancelled.", "Courier has no task to cancel.",
+                "Courier: CancelCurrentTask failed.")]
+    require(notices == [("Trace", "Courier's task was cancelled.")],
+            "Director successful cancel emitted incorrect notices: " + repr(notices))
+    require([e for e in director.effects if e[0] == "InjectFact"] ==
+            [("InjectFact", (director.agent, "helped the courier"))],
+            "Director successful cancel did not inject only its reason fact")
     director.effects.clear()
-    director.invoke("IntelEngine_Core", "OnDashboardExecuteAction", ("", "{}", 0.0, None))
-    require(("Trace", "Courier has no task to cancel.") in director.effects,
-            "Director repeated cancel did not notify no active task")
+    director.invoke("IntelEngine_Core", "OnDashboardExecuteAction", ("", payload, 0.0, None))
+    notices = [e for e in director.effects if e[0] == "Trace" and e[1] in
+               ("Courier's task was cancelled.", "Courier has no task to cancel.",
+                "Courier: CancelCurrentTask failed.")]
+    require(notices == [("Trace", "Courier has no task to cancel.")],
+            "Director no-task cancel emitted incorrect notices: " + repr(notices))
+    require(not any(e[0] == "InjectFact" for e in director.effects),
+            "Director no-task cancel injected a reason fact")
     require(not any(e[0] == "Trace" and ("task was cancelled" in e[1] or "no task to cancel" in e[1])
                     for e in blocked.effects + cancelled.effects),
             "automatic cancellation emitted Director-only feedback")
