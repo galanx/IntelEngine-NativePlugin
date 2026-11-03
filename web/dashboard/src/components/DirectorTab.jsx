@@ -300,6 +300,8 @@ const SOCIAL_TYPE_FIELDS = {
   ],
 };
 
+const IDENTITY_KEYS = ['npcName', 'npc1Name', 'npc2Name', 'subject', 'sender', 'victimName', 'factionA', 'factionB'];
+
 function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions = [], story, social, sendAction }) {
   // Story dispatch state
   const [storyNpc, setStoryNpc] = useState('');
@@ -342,14 +344,14 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
       const { form, draft: old, schema, variants, options } = request;
       const typeKey = form === 'story' ? 'storyType' : form === 'social' ? 'socialType' : 'eventType';
       const typeOptions = schema[typeKey]?.options || [];
-      const nextType = touched[typeKey] === true && typeOptions.includes(old[typeKey]) ? old[typeKey] : typeOptions.includes(result.fields[typeKey]) ? result.fields[typeKey] : old[typeKey];
+      const nextType = typeOptions.includes(old[typeKey]) ? old[typeKey] : typeOptions.includes(result.fields[typeKey]) ? result.fields[typeKey] : old[typeKey];
       const allowed = { ...schema, ...(variants[nextType] || {}) };
       const next = { ...old }, skipped = new Set(), npcKeys = ['npcName','npc1Name','npc2Name','subject','sender','victimName'];
       for (const [key, rawValue] of Object.entries(result.fields)) {
         let value = rawValue;
         if (value === null && allowed[key] && !allowed[key].required) { skipped.add(key); continue; }
         if (npcKeys.includes(key) && typeof value === 'string' && (!value.trim() || /^(?:none|placeholder|e\.g\..*|.*\(e\.g\..*\))$/i.test(value.trim()))) { skipped.add(key); continue; }
-        if (!allowed[key] || (touched[key] === true && old[key])) { audit.rejected[key] = !allowed[key] ? 'Unknown field' : 'Preserved or unchanged'; continue; }
+        if (!allowed[key] || ((touched[key] === true || IDENTITY_KEYS.includes(key)) && old[key])) { audit.rejected[key] = !allowed[key] ? 'Unknown field' : 'Preserved or unchanged'; continue; }
         if (['factionA','factionB'].includes(key) && typeof value === 'string') value = options.factions.find(f=>f.id===value || f.name===value)?.id || '';
         if (allowed[key].type === 'number' ? typeof value !== 'number' : typeof value !== 'string') { audit.rejected[key] = 'Invalid type'; continue; }
         if (allowed[key].type === 'select' && !allowed[key].options.includes(value)) { audit.rejected[key] = 'Invalid option'; continue; }
@@ -373,12 +375,13 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
     const story = form === 'story', social = form === 'social';
     const defs = story ? currentFields : social ? currentSocialFields : [];
     const enumTypes = story ? DIRECTOR_STORY_TYPES : social ? SOCIAL_TYPES : POLITICAL_EVENT_TYPES;
-    const fields = story ? { npcName:storyNpc, storyType, narration:storyNarration, ...storyFields } :
-      social ? { npc1Name:socialNpc1, npc2Name:socialNpc2, socialType, narration:socialNarration, ...socialFields } :
+    const fields = story ? { npcName:storyNpc, storyType:touched.storyType ? storyType : '', narration:storyNarration, ...storyFields } :
+      social ? { npc1Name:socialNpc1, npc2Name:socialNpc2, socialType:touched.socialType ? socialType : '', narration:socialNarration, ...socialFields } :
         { factionA:polFactionA, factionB:polFactionB, eventType:polEventType, description:polDescription, relationDelta:polDelta };
     for (const f of defs) fields[f.key] ??= '';
     const draft = { ...fields };
-    for (const key of Object.keys(fields)) if (touched[key] !== true) fields[key] = '';
+    // Re-roll keeps who (filled identities and type, from any source) and rewrites generated text.
+    for (const key of Object.keys(fields)) if (touched[key] !== true && !([...IDENTITY_KEYS, 'storyType', 'socialType', 'eventType'].includes(key) && fields[key])) fields[key] = '';
     const schema = Object.fromEntries(Object.entries(draft).filter(([k])=>!defs.some(f=>f.key===k)).map(([k,v]) => [k, { type: typeof v === 'number' ? 'number' : k === (story?'storyType':social?'socialType':'eventType') ? 'select' : 'text',
       required: k !== 'relationDelta',
       ...((k === (story?'storyType':social?'socialType':'eventType')) ? { options:enumTypes.map(x=>x.key) } : {}) }]));
