@@ -156,9 +156,16 @@ SCRIPT = r"""
       control(4,'Stop').click(); await pause(); control(4,'Clear').click(); await pause();
       await choose('Action NPC','Natch [Merchant]'); await choose('Action','FetchPerson');
       control(4,'Generate').click(); await pause(); request=requests().at(-1);
-      await reply('action',{targetName:'Distant Person',reason:'Wanted to find them'});
-      check(host(4).querySelector('input[placeholder="e.g. Camilla Valerius, Alvor"]').value==='Distant Person',
-        'Generated non-nearby target was not applied');
+      check(request.fields.targetName==='Distant Person' && request.fields.npcName==='Natch [Merchant]' &&
+        button('Person to fetch').value==='Distant Person',`Action Generate did not preselect a non-nearby target: ${JSON.stringify({target:request.fields.targetName,blank:request.blank,action:request.fields.actionName,actor:request.fields.npcName,targets:request.options.targets,shown:button('Person to fetch').value})}`);
+      await reply('action',{targetName:'Natch [Merchant]',reason:'Found a lead'});
+      check(outcomeFor(request.requestId).rejected.targetName==='Target is the actor' &&
+        button('Person to fetch').value==='Distant Person','Action accepted its actor as target or lost preselection');
+      await fill('section:nth-of-type(4) input[aria-label="Person to fetch"]','Twin [Guard]',host(4));
+      control(4,'Generate').click(); await pause(); request=requests().at(-1);
+      check(request.fields.targetName==='Twin [Guard]','Action Generate replaced a user-set target');
+      await reply('action',{targetName:'Distant Person'});
+      check(button('Person to fetch').value==='Twin [Guard]','Generated Action replaced a user-set target');
       await choose('Action NPC','Natch [Merchant]');
       for (const action of ['CancelCurrentTask','ChangeSpeed']) {
         await choose('Action',action);
