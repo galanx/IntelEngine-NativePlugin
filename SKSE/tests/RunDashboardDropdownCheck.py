@@ -170,8 +170,8 @@ SCRIPT = r"""
       Math.random=()=>0;
       window.updateFullState(JSON.stringify({config:{},pluginConfig:{'ui.scale':1},tasks:[],scheduled:[],
         story:{enabled:true},social:{enabled:true},loadedNpcs:[
-          {formId:1,name:'Natch [Merchant]'},{formId:2,name:'Twin [Guard]'},{formId:3,name:'Twin [Merchant]'}],
-        knownNpcs:['Distant Person'],actions:[
+          {formId:1,name:'Natch [Merchant]'},{formId:2,name:'Twin [Guard]'},{formId:3,name:'Twin [Merchant]'},
+          {formId:4,name:'Twin [Guard]'}], knownNpcs:['Distant Person'],actions:[
           {name:'GoToLocation'},{name:'FetchPerson'},{name:'ChangeSpeed'},{name:'CancelCurrentTask'},
           {name:'ReportPlayerConduct',params:[{name:'factionId'},{name:'reason'},{name:'sentiment',enum:['positive','negative']}]}],
         politics:{factions:[{id:'GuildFaction',name:'Guild [Faction]'}]}})); await pause();
@@ -297,6 +297,18 @@ SCRIPT = r"""
       control(4,'Execute Action').click(); await pause();
       check(payloads.at(-1)[0]==='executeAction' && JSON.parse(payloads.at(-1)[1]).npcFormId===1 &&
         JSON.parse(payloads.at(-1)[1]).params.reason==='Helped local merchants','Action generated draft dispatched wrong actor/params');
+      control(4,'Clear').click(); await pause();
+      await fill('[aria-label="Action NPC"]','Twin [Guard]',host(4));
+      const sameNameOptions=[...host(4).querySelectorAll('[role=option]')].filter(option=>optionText(option)==='Twin [Guard]');
+      check(sameNameOptions.length===2,'duplicate nearby display names were not both selectable');
+      sameNameOptions[1].click(); await pause();
+      await choose('Action','GoToLocation');
+      control(4,'Generate').click(); await pause(); request=requests().at(-1);
+      await reply('action',{npcName:'Twin [Guard]',actionName:'GoToLocation',destination:'Riften',reason:'Wanted to travel'});
+      check(button('Action NPC').value==='Twin [Guard]','Generate changed the selected duplicate actor display name');
+      control(4,'Execute Action').click(); await pause();
+      check(payloads.at(-1)[0]==='executeAction' && JSON.parse(payloads.at(-1)[1]).npcFormId===4,
+        'Generate changed the selected duplicate actor FormID');
       document.getElementById('result').textContent=JSON.stringify({status:'PASS',checks:['action_generate','name_snapping'],requests:requests().length});
       return;
     }
