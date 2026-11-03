@@ -50,8 +50,8 @@ SCRIPT = r"""
   const filterPick = async (label, text) => {
     const count = payloads.length;
     await fill(`[aria-label="${label}"]`, '__no_match__');
-    const dispatch = { 'Story type':'Dispatch Story', 'Social type':'Dispatch Social', 'Political event type':'Dispatch Political Event' }[label];
-    if (dispatch) check([...document.querySelectorAll('button')].find(e=>e.textContent.trim()===dispatch).disabled, `${label}: unpicked type can dispatch`);
+    const dispatchSection = { 'Story type':1, 'Social type':2, 'Political event type':3 }[label];
+    if (dispatchSection) check(document.querySelectorAll('section')[dispatchSection-1].querySelector('fieldset > button')?.disabled, `${label}: unpicked type can dispatch`);
     check(!document.querySelector('[role=option]') && payloads.length === count, `${label}: free text submitted`);
     await fill(`[aria-label="${label}"]`, text.toLowerCase());
     const options = [...document.querySelectorAll('[role=option]')];
@@ -324,7 +324,36 @@ SCRIPT = r"""
       check(suffix(1) && !suffix(2) && !oldLine(1) && !oldLine(2), 'Social inactivity did not independently remove its heading suffix');
       await update(false,false);
       check(!suffix(1) && !suffix(2) && !oldLine(1) && !oldLine(2), 'inactive engines retained busy suffixes or paragraphs');
-      document.getElementById('result').textContent=JSON.stringify({status:'PASS',checks:['director_busy_line'],headers:expected,storyDispatchDisabledWhileBusy:true,socialDispatchEnabledWhileBusy:true,inactiveSuffixesAbsent:true,storyDraftPreservedAcrossTabs:true});
+      const nativeTimeout=window.setTimeout; let queuedTimeout;
+      window.setTimeout=(fn,delay,...args)=>delay===30000?(queuedTimeout=fn,0):nativeTimeout(fn,delay,...args);
+      dispatch(1).click(); await pause();
+      check(dispatch(1).textContent.trim()==='Queued' && heading(1).textContent.includes(' — queued: starts when you close the dashboard'),
+        'Story dispatch did not show queued state');
+      check(typeof queuedTimeout==='function', 'queued timeout was not armed');
+      await update(true,false);
+      check(dispatch(1).textContent.trim()==='Story engine busy' && !heading(1).textContent.includes(' — queued:'),
+        'fresh Story state did not clear queued state and show busy status');
+      await update(false,false); dispatch(1).click(); await pause();
+      queuedTimeout(); await pause();
+      check(dispatch(1).textContent.trim()==='Dispatch Story' && !heading(1).textContent.includes(' — queued:'),
+        '30 second timeout did not clear queued state');
+      window.setTimeout=nativeTimeout;
+      const political=section(3);
+      await fill('input[placeholder="e.g. StormcloakFaction"]','ImperialFaction',political);
+      await fill('input[placeholder="e.g. ThalmorFaction"]','StormcloakFaction',political);
+      await fill('[aria-label="Political event type"]','Trade Deal',political);
+      const tradeDeal=[...document.querySelectorAll('[role=option]')].find(e=>optionText(e)==='Trade Deal');
+      check(tradeDeal,'missing Political event type: Trade Deal'); tradeDeal.click(); await pause();
+      await fill('section:nth-of-type(1) textarea','came to repay a debt',director());
+      dispatch(1).click(); await pause();
+      document.dispatchEvent(new Event('visibilitychange')); await pause();
+      check(dispatch(1).textContent.trim()==='Dispatch Story' && !heading(1).textContent.includes(' — queued:'),
+        'dashboard reopen did not clear queued state');
+      await fill('section:nth-of-type(3) textarea','A diplomatic exchange',director());
+      dispatch(3).click(); await pause();
+      check(dispatch(3).textContent.trim()==='Sent','Political dispatch stopped showing its Sent flash');
+      window.setTimeout=nativeTimeout;
+      document.getElementById('result').textContent=JSON.stringify({status:'PASS',checks:['director_busy_line'],headers:expected,storyDispatchDisabledWhileBusy:true,socialDispatchEnabledWhileBusy:true,inactiveSuffixesAbsent:true,storyDraftPreservedAcrossTabs:true,queuedClearsOnStateAndTimeout:true,politicalSentFlash:true});
       return;
     }
     if (location.hash === '#generate_reroll') {
@@ -1322,7 +1351,7 @@ SCRIPT = r"""
         setSocialField('Gossip','heard a rumor about a shipment');
         await arm(2,'Social');
         await fill('input[placeholder="e.g. Sven"]','Saadia');
-        check(submit(2).textContent.trim()==='Dispatch Social','busy_confirm_cancel_dispatch: Social NPC change retained confirmation');
+        check(['Dispatch Social','Queued'].includes(submit(2).textContent.trim()),'busy_confirm_cancel_dispatch: Social NPC change retained confirmation');
         await fill('input[placeholder="e.g. Sven"]',second);
         await arm(2,'Social');
         await confirm(2,[...slots.map(slot=>['cancelTask',{slot}]),['dispatchNpcSocial',{npc1Name:first,npc2Name:second,socialType:'npc_gossip',narration:'Busy social',gossip:'heard a rumor about a shipment'}]]);
@@ -1336,6 +1365,7 @@ SCRIPT = r"""
       await arm(4,'Action');
       await confirm(4,[['cancelTask',{slot:2}],['executeAction',{npcFormId:108196,actionName:'ChangeSpeed',params:{newSpeed:'1'}}]]);
       window.updateSlots('[]'); await pause();
+      document.dispatchEvent(new Event('visibilitychange')); await pause();
     }
     clickText('Settings'); await pause();
     clickText('Dashboard▼'); await pause();
