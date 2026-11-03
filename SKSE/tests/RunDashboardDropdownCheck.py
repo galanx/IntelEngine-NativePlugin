@@ -1517,12 +1517,8 @@ SCRIPT = r"""
       }
       await choose('Action NPC','Nazeem'); await choose('Action','ChangeSpeed');
       await choose('New speed','Jog');
-      await arm(4,'Action');
-      await choose('Action NPC','Guard 2');
-      check(submit(4).textContent.trim()==='Execute Action','busy_confirm_cancel_dispatch: Action NPC change retained confirmation');
-      await choose('Action NPC','Nazeem');
-      await arm(4,'Action');
-      await confirm(4,[['cancelTask',{slot:2}],['executeAction',{npcFormId:108196,actionName:'ChangeSpeed',params:{newSpeed:'1'}}]]);
+      // ChangeSpeed/CancelCurrentTask act on the busy task: one click, no pre-cancel.
+      await confirm(4,[['executeAction',{npcFormId:108196,actionName:'ChangeSpeed',params:{newSpeed:'1'}}]]);
       window.updateSlots('[]'); await pause();
       document.dispatchEvent(new Event('visibilitychange')); await pause();
     }
