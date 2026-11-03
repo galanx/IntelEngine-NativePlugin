@@ -653,7 +653,8 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
   const actionRequired = [['NPC', actionNpcValid], ['Action', !!selectedAction], ...currentActionFields.filter(f => !validActionFields.includes(f)).map(f => [f.label, false])];
   const handleExecuteAction = useCallback(() => {
     if (!actionNpcValid || !selectedAction || !requiredFieldsValid) return;
-    if (!confirmBusy('action', actionBusy)) return;
+    // Cancel/ChangeSpeed act on the current task, so never pre-cancel it.
+    if (!['CancelCurrentTask','ChangeSpeed'].includes(selectedAction) && !confirmBusy('action', actionBusy)) return;
     sendAction('executeAction', {
       npcFormId: Number(actionNpc),
       actionName: selectedAction,
