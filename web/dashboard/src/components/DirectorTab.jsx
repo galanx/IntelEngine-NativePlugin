@@ -283,7 +283,7 @@ const SOCIAL_TYPE_FIELDS = {
   ],
 };
 
-function DirectorTab({ loadedNpcs, tasks = [], actions, factions = [], sendAction }) {
+function DirectorTab({ loadedNpcs, tasks = [], actions, factions = [], story, social, sendAction }) {
   // Story dispatch state
   const [storyNpc, setStoryNpc] = useState('');
   const [storyType, setStoryType] = useState('seek_player');
@@ -625,6 +625,7 @@ function DirectorTab({ loadedNpcs, tasks = [], actions, factions = [], sendActio
           >
             {busyConfirm.startsWith('sent:dispatchStory:') ? 'Sent' : storyBusy.length && busyConfirm === 'story' ? 'Busy — you sure?' : 'Dispatch Story'}
           </button>
+          {story?.isActive && <p className="director-hint"><span className="text-amber-400">Story engine busy with {story.activeNPC} ({story.activeType.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())}). Cancel it on the Tasks tab first.</span></p>}
           {missingFields(storyRequired)}
         </fieldset>
       </section>
@@ -699,6 +700,7 @@ function DirectorTab({ loadedNpcs, tasks = [], actions, factions = [], sendActio
           >
             {busyConfirm.startsWith('sent:dispatchNpcSocial:') ? 'Sent' : socialBusy.length && busyConfirm === 'social' ? 'Busy — you sure?' : 'Dispatch Social'}
           </button>
+          {social?.isActive && <p className="director-hint"><span className="text-amber-400">NPC Social engine busy with {social.traveler} → {social.target}. Cancel it on the Tasks tab first.</span></p>}
           {missingFields(socialRequired)}
         </fieldset>
       </section>
