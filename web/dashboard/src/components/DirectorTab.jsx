@@ -934,7 +934,7 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
             </Field>
           ))}
 
-          <Field label="Reason" hint="Why the NPC does this; they remember it and can explain it."><textarea value={actionParams.reason || ''} onChange={e => setParam('reason', e.target.value)} rows={2} className="w-full bg-white/5 border border-white/10 rounded px-2 py-1.5 text-xs text-gray-200 outline-none" /></Field>
+          <Field label="Reason" hint="Optional. Why the NPC does this; they remember it and can explain it."><textarea value={actionParams.reason || ''} onChange={e => setParam('reason', e.target.value)} rows={2} className="w-full bg-white/5 border border-white/10 rounded px-2 py-1.5 text-xs text-gray-200 outline-none" /></Field>
           <button
             onClick={handleExecuteAction}
             disabled={actionRequired.some(([, valid]) => !valid)}

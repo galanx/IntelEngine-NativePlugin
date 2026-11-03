@@ -1014,6 +1014,7 @@ namespace IntelEngine {
                 }
                 request["currentLocation"] = location && location[0] ? location : "";
             } else request["currentLocation"] = "";
+            if (!SkyrimNetAPI::SendCustomPromptToLLM) { queue({}, "Generate unavailable"); return; }
             const auto context = request.dump();
             const bool queued = SkyrimNetAPI::SendCustomPromptToLLM("intel_director_generate", "", context.c_str(),
                 [queue, form, id](const char* response, int success) mutable {
