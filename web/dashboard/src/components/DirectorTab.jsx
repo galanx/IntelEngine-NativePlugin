@@ -469,7 +469,14 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
   const socialRequired = [['NPC 1', !!socialNpc1.trim()], ['NPC 2', !!socialNpc2.trim()], ['Social type', socialTypeValid], ['Narration', !!socialNarration.trim()]];
   const politicalRequired = [['Faction A', !!polFactionA.trim()], ['Faction B', !!polFactionB.trim() && polFactionA.trim() !== polFactionB.trim()], ['Political event type', polEventTypeValid], ['Description', !!polDescription.trim()]];
   const missingFields = fields => fields.some(([, valid]) => !valid) && <p className="text-[10px] text-gray-400">Fill required fields: {fields.filter(([, valid]) => !valid).map(([label]) => label).join(', ')}</p>;
-  const generateControls = form => <div className="flex items-center justify-between mb-2"><h2 className="section-header">{{story:'Story Dispatch',social:'NPC Social Dispatch',political:'Political Dispatch'}[form]}</h2><div className="flex gap-2">
+  const busyHeader = form => {
+    const engine = form === 'story' ? story : form === 'social' ? social : null;
+    if (!engine?.isActive) return null;
+    const who = form === 'story' ? engine.activeNPC : `${engine.traveler} → ${engine.target}`;
+    const type = (form === 'story' ? engine.activeType : engine.type) || '';
+    return <span className="text-amber-400 italic normal-case"> — busy: {who} ({type.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())})</span>;
+  };
+  const generateControls = form => <div className="flex items-center justify-between mb-2"><h2 className="section-header">{{story:'Story Dispatch',social:'NPC Social Dispatch',political:'Political Dispatch'}[form]}{busyHeader(form)}</h2><div className="flex gap-2">
     <button data-expand-section onClick={() => generate(form)} disabled={!!pending}
       className="rounded px-2 py-1 text-xs text-gray-300 bg-white/10 disabled:opacity-40">{pending?.form === form ? 'Generating…' : 'Generate'}</button>
     <button onClick={() => pending?.form === form ? stopGenerate() : clear(form)} className="rounded px-2 py-1 text-xs text-gray-400">{pending?.form === form ? 'Stop' : 'Clear'}</button>
@@ -644,12 +651,11 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
 
           <button
             onClick={handleDispatchStory}
-            disabled={storyRequired.some(([, valid]) => !valid)}
+            disabled={story?.isActive || storyRequired.some(([, valid]) => !valid)}
             className="w-full px-3 py-1.5 text-xs font-medium rounded transition-colors bg-blue-500/20 text-blue-400 hover:bg-blue-500/30 disabled:opacity-30 disabled:cursor-not-allowed"
           >
-            {busyConfirm.startsWith('sent:dispatchStory:') ? 'Sent' : storyBusy.length && busyConfirm === 'story' ? 'Busy — you sure?' : 'Dispatch Story'}
+            {story?.isActive ? 'Story engine busy' : busyConfirm.startsWith('sent:dispatchStory:') ? 'Sent' : storyBusy.length && busyConfirm === 'story' ? 'Busy — you sure?' : 'Dispatch Story'}
           </button>
-          {story?.isActive && <p className="director-hint"><span className="text-amber-400">Story engine busy with {story.activeNPC} ({story.activeType.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())}). Cancel it on the Tasks tab first.</span></p>}
           {missingFields(storyRequired)}
         </fieldset>
       </section>
@@ -728,9 +734,8 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
             disabled={socialRequired.some(([, valid]) => !valid)}
             className="w-full px-3 py-1.5 text-xs font-medium rounded transition-colors bg-purple-500/20 text-purple-400 hover:bg-purple-500/30 disabled:opacity-30 disabled:cursor-not-allowed"
           >
-            {busyConfirm.startsWith('sent:dispatchNpcSocial:') ? 'Sent' : socialBusy.length && busyConfirm === 'social' ? 'Busy — you sure?' : 'Dispatch Social'}
+            {busyConfirm.startsWith('sent:dispatchNpcSocial:') ? 'Sent' : socialBusy.length && busyConfirm === 'social' ? 'Busy — you sure?' : social?.isActive ? 'NPC social busy' : 'Dispatch Social'}
           </button>
-          {social?.isActive && <p className="director-hint"><span className="text-amber-400">NPC Social engine busy with {social.traveler} → {social.target}. Cancel it on the Tasks tab first.</span></p>}
           {missingFields(socialRequired)}
         </fieldset>
       </section>
