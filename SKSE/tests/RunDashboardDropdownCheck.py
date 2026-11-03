@@ -1002,7 +1002,7 @@ SCRIPT = r"""
     }
     if (location.hash === '#ambush_faction_hirer') {
       const story = document.querySelector('section:nth-of-type(1)');
-      const button = text => [...story.querySelectorAll('button')].find(e=>e.textContent.trim()===text);
+      const button = text => [...story.querySelectorAll('button')].find(e=>e.textContent.trim()===text || text==='Dispatch Story' && e.textContent.trim()==='Queued');
       await fill('input[placeholder="e.g. Saadia"]','Saadia');
       await choose('Story type','Ambush');
       await fill('section:nth-of-type(1) textarea','was hired by the Imperial Legion');
