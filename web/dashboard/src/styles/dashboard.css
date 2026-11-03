@@ -32,7 +32,7 @@ body {
 .section-header {
   @apply text-[11px] font-semibold text-gray-400 uppercase tracking-wider;
 }
-.dashboard-section > summary { display: block; cursor: pointer; }
+.dashboard-section > summary { display: block; list-style: none; cursor: pointer; } .dashboard-section > summary::-webkit-details-marker { display: none; }
 .dashboard-section > summary .section-header::before { content: '▸ '; } .dashboard-section[open] > summary .section-header::before { content: '▾ '; }
 
 .empty-state {
