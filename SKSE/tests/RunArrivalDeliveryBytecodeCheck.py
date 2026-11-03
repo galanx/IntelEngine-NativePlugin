@@ -597,7 +597,8 @@ def run_director_lite_checks(files, history):
           for event in ({"event_type":"war_declaration"}, {"event_type":"war_declaration","event_label":"War declared"}):
             task = NoticeVM()
             task.acted = acted
-            event.update({"faction_a": "imperial_legion", "faction_b": "stormcloaks"})
+            event.update({"faction_a": "ImperialFaction", "faction_b": "StormcloakFaction",
+                          "faction_a_label": "Imperial Legion", "faction_b_label": "Stormcloaks"})
             task.invoke("IntelEngine_Core", "OnDashboardDispatchPolitics",
                         ("", json.dumps(event), 0.0, None))
             require([e for e in task.effects if e[0] == "Notification"] ==
