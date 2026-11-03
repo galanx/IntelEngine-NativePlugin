@@ -1,6 +1,12 @@
 """Exercise the built dashboard in isolated headless Chrome; stdlib only.
 Usage: python SKSE/tests/RunDashboardDropdownCheck.py [chrome.exe] [dashboard-tree] [--busy-only]
 """
+import base64
+import os
+import socket
+import struct
+import time
+import urllib.request
 import html
 import json
 from pathlib import Path
@@ -72,7 +78,9 @@ SCRIPT = r"""
       loadedNpcs:Array.from({length:30},(_,i)=>({formId:108196+i,name:i?'Guard '+i:'Nazeem'})),
       actions:[{name:'GoToLocation',enabled:true},{name:'FetchPerson',enabled:true},{name:'ReportPlayerConduct',params:[{name:'sentiment',enum:['strongly_positive','positive','negative','strongly_negative']},{name:'factionId'},{name:'reason'}]},{name:'ChangeSpeed',enabled:true}],
       politics:{enabled:true,factions:[{id:'ImperialFaction',name:'Imperial Legion'},{id:'StormcloakFaction',name:'Stormcloaks'},...Array.from({length:3},(_,i)=>({id:'ThalmorFaction'+i,name:'Thalmor '+i}))],relations:[],wars:[],player_standings:[],events:[]}}));
-    await pause(); clickText('Director'); await pause();
+    await pause();
+    const reloadReady = location.hash === '#director_live_polish2' && localStorage.getItem('__directorLivePolish2Reload') === 'ready';
+    if (!reloadReady) { clickText('Director'); await pause(); }
     if (location.hash === '#actions_grouped') {
       const actions = [
         {name:'FetchPerson',fileName:'fetch.yaml',description:'Find {{ npc.name }}',enabled:true,params:[],category:'intel_travel',isCategory:false},
@@ -488,6 +496,111 @@ SCRIPT = r"""
         'Director NPC text controls are not all combobox inputs');
       document.getElementById('result').textContent=JSON.stringify({status:'PASS',
         checks:['npc_picker_consistent'],directorPickers:pickers().length,knownFixtureCount:known.length,knownFixtureBytes:new TextEncoder().encode(JSON.stringify(known)).length});
+      return;
+    }
+    if (location.hash === '#director_live_polish2') {
+      document.querySelector('.director-tab').closest('.fixed').style.zoom=1.3;
+      if (reloadReady) {
+        check(localStorage.getItem('intelengine.activeTab')==='actions' &&
+          [...document.querySelectorAll('button')].find(e=>e.textContent.trim()==='Actions')?.classList.contains('text-blue-400') &&
+          document.querySelector('.director-tab').closest('[hidden]'),'active Actions tab did not survive reload');
+        clickText('Director'); await pause();
+      }
+      const story=document.querySelector('section:nth-of-type(1)'), social=document.querySelector('section:nth-of-type(2)');
+      const political=document.querySelector('section:nth-of-type(3)'), action=document.querySelector('section:nth-of-type(4)');
+      const checkRow=(host,labels,name)=>{
+        const fields=labels.map(label=>[...host.querySelectorAll('label')].find(e=>e.textContent.trim().startsWith(label))?.parentElement);
+        check(fields.every(Boolean),`${name}: row fields missing`);
+        check(fields.every(field=>Math.abs(field.getBoundingClientRect().top-fields[0].getBoundingClientRect().top)<3),
+          `${name}: fields do not share one row`);
+      };
+      if (!reloadReady) await fill('section:nth-of-type(1) textarea','Textarea clear alignment');
+      const clear=story.querySelector('[aria-label="Clear Narration"]');
+      const textarea=story.querySelector('textarea'), clearRect=clear.getBoundingClientRect(), areaRect=textarea.getBoundingClientRect();
+      check(clear && Math.abs(clearRect.right-areaRect.right)<7 && Math.abs(clearRect.top-areaRect.top)<7,
+        'textarea clear is not in the top-right corner');
+      const npcInput=story.querySelector('input[placeholder="e.g. Saadia"]');
+      if (!reloadReady) await fill('input[placeholder="e.g. Saadia"]','Saadia');
+      const npc=story.querySelector('[aria-label="Clear NPC"]');
+      check(Math.abs((npc.getBoundingClientRect().top+npc.getBoundingClientRect().bottom-
+        npcInput.getBoundingClientRect().top-npcInput.getBoundingClientRect().bottom)/2)<2,
+        'input clear is not vertically centered');
+      const handle=textarea.parentElement.querySelector('.director-resize-handle');
+      check(handle?.getAttribute('aria-label')==='Resize Narration','shared resize handle is missing or inaccessible');
+      const drag = async delta => {
+        handle.scrollIntoView({block:'center'}); await pause();
+        const rect=handle.getBoundingClientRect();
+        window.__dragDone=false;
+        document.getElementById('result').textContent='DRAG:'+JSON.stringify({x:rect.left+4,y:rect.top+4,delta});
+        while (!window.__dragDone) await pause();
+      };
+      const beforeHeight=textarea.getBoundingClientRect().height;
+      await drag(100);
+      check(textarea.getBoundingClientRect().height>beforeHeight+40,'real pointer drag did not increase textarea height');
+      await drag(1000);
+      check(textarea.offsetHeight===400,'resize drag did not clamp at 400px');
+      await drag(-1000);
+      check(Math.abs(textarea.getBoundingClientRect().height-beforeHeight)<2,'resize drag did not clamp at current rows height');
+      checkRow(social,['NPC 1','NPC 2','Social type'],'Social');
+      const socialNarration=[...social.querySelectorAll('label')].find(e=>e.textContent.trim().startsWith('Narration')).parentElement;
+      check(socialNarration.getBoundingClientRect().width>social.getBoundingClientRect().width*.8,
+        'Social Narration is not full width');
+      const storeKey='intelengine.director.drafts';
+      if (reloadReady) {
+        const drafts=JSON.parse(localStorage.getItem(storeKey)||'{}');
+        check(story.querySelector('textarea').value==='Saadia reload draft' &&
+          social.querySelector('textarea').value==='Mikael reload draft' &&
+          political.querySelector('textarea').value==='Imperial reload draft',
+          'Director textarea drafts did not survive page reload');
+        check(drafts.story?.[2]==='Saadia reload draft' && drafts.social?.[3]==='Mikael reload draft' &&
+          drafts.political?.[3]==='Imperial reload draft' && drafts.action?.[1]==='ChangeSpeed' &&
+          drafts.action?.[2]?.newSpeed==='1',
+          'one or more Director form values were not saved');
+        check(drafts.touched?.npcName===true && drafts.touched?.storyType===true &&
+          drafts.touched?.narration===true && drafts.touched?.npc1Name===true &&
+          drafts.touched?.socialType===true && drafts.touched?.factionA===true &&
+          drafts.touched?.eventType===true,
+          'Director touched state did not survive page reload');
+        check(npcInput.value==='Saadia' && button('Story type').value==='Message' &&
+          social.querySelector('input[placeholder="e.g. Mikael"]').value==='Mikael' &&
+          button('Social type').value==='Gossip' && button('Political event type').value==='Insult' &&
+          political.querySelector('input[placeholder="e.g. StormcloakFaction"]').value==='ImperialFaction' &&
+          button('Action NPC').value==='Nazeem' && button('Action').value==='ChangeSpeed' &&
+          button('New speed').value==='Jog',
+          'Director identity/type/Action form values did not survive page reload');
+        story.querySelector('summary button').click(); await pause();
+        const request=payloads.filter(([name,json])=>name==='generateDirector' && !JSON.parse(json).outcome).map(([,json])=>JSON.parse(json)).at(-1);
+        check(request?.touched.narration===true && request.fields.narration==='Saadia reload draft' &&
+          request.touched.npcName===true && request.fields.npcName==='Saadia',
+          'restored user ownership was not retained in Generate');
+        [...story.querySelectorAll('button')].find(e=>e.textContent.trim()==='Stop').click(); await pause();
+        for (const [form, host] of [['story',story],['social',social],['political',political]]) {
+          [...host.querySelectorAll('summary button')].find(e=>e.textContent.trim()==='Clear').click(); await pause();
+          check(!JSON.parse(localStorage.getItem(storeKey)||'{}')[form],`Clear retained ${form} saved draft`);
+        }
+        localStorage.removeItem('__directorLivePolish2Reload');
+        document.getElementById('result').textContent=JSON.stringify({status:'PASS',checks:['director_live_polish2'],reload:'CDP Page.reload'});
+        return;
+      }
+      await fill('section:nth-of-type(1) textarea','Saadia reload draft');
+      await fill('section:nth-of-type(2) textarea','Mikael reload draft');
+      await fill('section:nth-of-type(3) textarea','Imperial reload draft');
+      await fill('input[placeholder="e.g. Saadia"]','Saadia');
+      await fill('input[placeholder="e.g. Mikael"]','Mikael',social);
+      await fill('input[placeholder="e.g. StormcloakFaction"]','ImperialFaction',political);
+      const types=[['Story type','Message'],['Social type','Gossip'],['Political event type','Insult']];
+      for(const [label,value] of types) await choose(label,value);
+      await choose('Action NPC','Nazeem');
+      await choose('Action','ChangeSpeed');
+      await choose('New speed','Jog');
+      const drafts=JSON.parse(localStorage.getItem(storeKey)||'{}');
+      check(['story','social','political','action'].every(form=>Array.isArray(drafts[form])) &&
+        drafts.touched && typeof drafts.touched==='object',
+        'Director form drafts/touched were not saved to localStorage');
+      localStorage.setItem('__directorLivePolish2Reload','ready');
+      clickText('Actions'); await pause();
+      check(localStorage.getItem('intelengine.activeTab')==='actions','active tab was not saved as Actions');
+      document.getElementById('result').textContent='RELOAD_READY';
       return;
     }
     if (location.hash === '#director_live_polish') {
@@ -1169,6 +1282,96 @@ with tempfile.TemporaryDirectory(prefix='ie-dropdowns-') as directory:
     page = page.replace('</body>', '<pre id="result">RUNNING</pre><script>' + SCRIPT + '</script></body>')
     (folder / 'index.html').write_text(page, encoding='utf-8')
     scenario = next((arg.split('=',1)[1] for arg in sys.argv if arg.startswith('--scenario=')), '')
+    if scenario == 'director_live_polish2':
+        profile = folder / 'profile'
+        chrome = subprocess.Popen([str(CHROME), '--headless=new', '--no-sandbox', '--disable-gpu',
+            '--allow-file-access-from-files', '--no-first-run', '--remote-debugging-port=0',
+            '--remote-allow-origins=*', '--window-size=1600,3000', '--user-data-dir=' + str(profile),
+            (folder / 'index.html').as_uri() + '#' + scenario], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        sock = None
+        try:
+            port_file = profile / 'DevToolsActivePort'
+            deadline = time.time() + 20
+            while time.time() < deadline and not port_file.exists():
+                if chrome.poll() is not None:
+                    raise SystemExit('Chrome exited before opening the DevTools port')
+                time.sleep(.1)
+            port = int(port_file.read_text(encoding='utf-8').splitlines()[0])
+            targets = json.load(urllib.request.urlopen(f'http://127.0.0.1:{port}/json/list'))
+            target = next(item for item in targets if item.get('type') == 'page')
+            ws_url = target['webSocketDebuggerUrl']
+            host, ws_port = ws_url.split('/')[2].split(':')
+            sock = socket.create_connection((host, int(ws_port)), timeout=10)
+            key = base64.b64encode(os.urandom(16)).decode()
+            path = '/' + '/'.join(ws_url.split('/')[3:])
+            sock.sendall((f'GET {path} HTTP/1.1\r\nHost: {host}:{ws_port}\r\n'
+                f'Upgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: {key}\r\n'
+                'Sec-WebSocket-Version: 13\r\nOrigin: http://localhost\r\n\r\n').encode())
+            response = b''
+            while b'\r\n\r\n' not in response:
+                response += sock.recv(4096)
+            if b'101 ' not in response:
+                raise SystemExit('Chrome DevTools websocket handshake failed: ' + response.decode(errors='replace'))
+            sock.settimeout(10)
+            next_id = [0]
+            def cdp(method, params=None):
+                next_id[0] += 1
+                command_id = next_id[0]
+                payload = json.dumps({'id':command_id,'method':method,'params':params or {}}).encode()
+                mask = os.urandom(4)
+                size = len(payload)
+                header = bytes([0x81, 0x80 | (size if size < 126 else 126 if size < 65536 else 127)])
+                if size >= 126:
+                    header += struct.pack('!H' if size < 65536 else '!Q', size)
+                sock.sendall(header + mask + bytes(byte ^ mask[index % 4] for index,byte in enumerate(payload)))
+                while True:
+                    frame = sock.recv(2)
+                    if len(frame) != 2: raise SystemExit('Chrome DevTools websocket closed')
+                    length = frame[1] & 127
+                    if length == 126: length = struct.unpack('!H', sock.recv(2))[0]
+                    elif length == 127: length = struct.unpack('!Q', sock.recv(8))[0]
+                    body = b''
+                    while len(body) < length: body += sock.recv(length-len(body))
+                    message = json.loads(body.decode())
+                    if message.get('id') == command_id: return message
+            cdp('Runtime.enable'); cdp('Page.enable')
+            def read_result():
+                value = cdp('Runtime.evaluate', {'expression':"document.getElementById('result')?.textContent || ''",'returnByValue':True})
+                result = value.get('result',{}).get('result',{}).get('value','')
+                if result.startswith('DRAG:'):
+                    drag = json.loads(result[5:])
+                    cdp('Input.dispatchMouseEvent', {'type':'mouseMoved','x':drag['x'],'y':drag['y']})
+                    cdp('Input.dispatchMouseEvent', {'type':'mousePressed','x':drag['x'],'y':drag['y'],'button':'left','buttons':1,'clickCount':1})
+                    cdp('Input.dispatchMouseEvent', {'type':'mouseMoved','x':drag['x'],'y':drag['y']+drag['delta'],'button':'left','buttons':1})
+                    cdp('Input.dispatchMouseEvent', {'type':'mouseReleased','x':drag['x'],'y':drag['y']+drag['delta'],'button':'left','buttons':0,'clickCount':1})
+                    cdp('Runtime.evaluate', {'expression':"document.getElementById('result').textContent='RUNNING'; window.__dragDone=true;"})
+                    return 'RUNNING'
+                return result
+            deadline = time.time() + 45
+            result = ''
+            while time.time() < deadline:
+                result = read_result()
+                if result == 'RELOAD_READY' or result.startswith('{') or result.startswith('FAIL:'): break
+                time.sleep(.2)
+            if result != 'RELOAD_READY':
+                raise SystemExit('Reload scenario failed before CDP reload: ' + result)
+            cdp('Page.reload', {'ignoreCache':True})
+            deadline = time.time() + 45
+            result = ''
+            while time.time() < deadline:
+                result = read_result()
+                if result.startswith('{') or result.startswith('FAIL:'): break
+                time.sleep(.2)
+            if not result.startswith('{'):
+                raise SystemExit(result or 'Reload scenario emitted no result')
+            data = json.loads(result)
+            print(json.dumps(data, indent=2))
+            assert data['status'] == 'PASS'
+        finally:
+            if sock: sock.close()
+            chrome.terminate()
+            chrome.wait(timeout=10)
+        raise SystemExit(0)
     completed = subprocess.run([str(CHROME), '--headless=new', '--no-sandbox', '--disable-gpu',
         '--allow-file-access-from-files', '--no-first-run', '--window-size=' + ('1600,3000' if not scenario or '--busy-only' in sys.argv or scenario in ['busy','director_required_fields','npc_picker_consistent','director_polish','director_field_layout','director_live_polish'] else '1600,1000'),
         '--user-data-dir=' + str(folder / 'profile'), '--virtual-time-budget=90000', '--dump-dom',
