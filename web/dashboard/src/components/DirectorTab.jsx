@@ -107,7 +107,8 @@ const WAIT_OPTIONS = [
 // Type-specific fields per story type
 // required: true = dispatch will fail without it, hint: shown below the field
 const STORY_TYPE_FIELDS = {
-  informant: [
+  seek_player: { hint: 'Travels to find you for a personal reason.', narration: 'Why they set out to find you (past tense, under 120 characters); do not claim where you are.' },
+  informant: { hint: 'Approaches you with grounded gossip about another NPC.', narration: 'What the gossip concerns and who told them, or what they witnessed.', fields: [
     { key: 'subject', label: 'Subject NPC', type: 'text', required: true,
       placeholder: 'e.g. Camilla Valerius',
       hint: 'Required. The NPC the gossip is about. Gets a fact injected.' },
@@ -117,23 +118,23 @@ const STORY_TYPE_FIELDS = {
     { key: 'sender', label: 'Source', type: 'text',
       placeholder: 'e.g. Sven',
       hint: 'Optional. Who the informant heard it from. Empty = witnessed firsthand.' },
-  ],
-  road_encounter: [
+  ] },
+  road_encounter: { hint: 'Appears on the road ahead of you, travelling to Destination on their own errand (outdoors only).', narration: 'Why they are travelling, e.g. set out to sell pelts in Helgen.', fields: [
     { key: 'destination', label: 'Destination', type: 'text', required: true,
       placeholder: 'e.g. Falkreath, Solitude, Old Hroldan',
-      hint: 'Required. A real Skyrim location. NPC is placed on the road near player.' },
-  ],
-  ambush: [
+      hint: 'Where they are heading. Required: a real Skyrim location.' },
+  ] },
+  ambush: { hint: 'A combat-capable hostile NPC approaches to attack you (outdoors only).', narration: 'Why they want to attack you, and who hired them if anyone.', fields: [
     { key: 'sender', label: 'Hired by', type: 'text',
       placeholder: 'e.g. Maven Black-Briar',
       hint: 'Optional. NPC who ordered the ambush. Gets a fact about hiring.' },
-  ],
-  stalker: [
+  ] },
+  stalker: { hint: 'Secretly follows you out of romance, jealousy or obsession; flees when caught (outdoors only).', narration: 'The confrontation when you catch them, not their hiding; include their motive.', fields: [
     { key: 'sender', label: 'Encouraged by', type: 'text',
       placeholder: 'e.g. Faendal',
       hint: 'Optional. NPC who encouraged the stalking. Gets a fact.' },
-  ],
-  message: [
+  ] },
+  message: { hint: 'Sends a nearby courier to deliver a message from the selected NPC.', narration: 'Why the sender wants to contact you.', fields: [
     { key: 'msgContent', label: 'Message content', type: 'text', required: true,
       placeholder: 'e.g. I need to speak with you about a private matter',
       hint: 'Required. The message text. The NPC you pick is the sender; IE picks a nearby courier.' },
@@ -142,8 +143,8 @@ const STORY_TYPE_FIELDS = {
       hint: 'Optional. If set with meetTime, creates a meeting invitation.' },
     { key: 'meetTime', label: 'Meeting time', type: 'select', options: MEET_TIMES,
       hint: 'Optional. Must match msgContent. Avoid night/midnight for palaces/shops.' },
-  ],
-  quest: [
+  ] },
+  quest: { hint: 'Sends an NPC to ask for help with combat, a rescue or finding an item; leaders use a courier.', narration: 'Why help is needed, consistent with the quest location and sub-type.', fields: [
     { key: 'questSubType', label: 'Sub-type', type: 'select', options: QUEST_SUB_TYPES, required: true,
       hint: 'Required. combat = kill enemies, rescue = save captive NPC, find_item = retrieve item.' },
     { key: 'questLocation', label: 'Quest location', type: 'text', required: true,
@@ -166,7 +167,7 @@ const STORY_TYPE_FIELDS = {
     { key: 'itemDesc', label: 'Item description', type: 'text',
       placeholder: 'e.g. a legendary elven blade, a powerful spell tome',
       hint: 'Find_item only. Brief narrative description for dialogue context.' },
-  ],
+  ] },
 };
 
 // Params auto-filled from NPC dropdown or hardcoded — never shown to user
@@ -366,7 +367,8 @@ function DirectorTab({ loadedNpcs, tasks = [], actions, factions = [], sendActio
     fields[typeKey] = touched[typeKey] ? type : '';
     const schema = Object.fromEntries(Object.entries(fields).filter(([k])=>!defs.some(f=>f.key===k)).map(([k,v]) => [k, { type: typeof v === 'number' ? 'number' : k === (story?'storyType':social?'socialType':'eventType') ? 'select' : 'text',
       ...((k === (story?'storyType':social?'socialType':'eventType')) ? { options:enumTypes.map(x=>x.key) } : {}) }]));
-    const variants = Object.fromEntries(enumTypes.map(t => [t.key, Object.fromEntries((story ? (STORY_TYPE_FIELDS[t.key]||[]) : social ? (SOCIAL_TYPE_FIELDS[t.key]||[]) : []).map(f=>[f.key,Object.fromEntries(Object.entries(f).filter(([key])=>key!=='placeholder'))]))]));
+    if (story && storyGuidance) schema.narration.hint = `${storyGuidance.hint} ${storyGuidance.narration}`;
+    const variants = Object.fromEntries(enumTypes.map(t => [t.key, Object.fromEntries((story ? (STORY_TYPE_FIELDS[t.key]?.fields||[]) : social ? (SOCIAL_TYPE_FIELDS[t.key]||[]) : []).map(f=>[f.key,Object.fromEntries(Object.entries(f).filter(([key])=>key!=='placeholder'))]))]));
     const id = String(++requestId.current);
     const options = { npcs:[...new Set([...npcs.map(n=>n.name), ...['npcName','npc1Name','npc2Name','subject','sender','victimName'].map(k=>draft[k]).filter(Boolean)])],
       factions:factions.map(f=>({id:f.id,name:f.name})) };
@@ -375,7 +377,7 @@ function DirectorTab({ loadedNpcs, tasks = [], actions, factions = [], sendActio
     send('generateDirector', { requestId:id, form, fields, blank:Object.keys(fields).filter(k=>fields[k] === ''), touched, schema, variants, options });
   };
   const clear = form => {
-    const keys = form === 'story' ? ['storyType', ...Object.keys(STORY_TYPE_FIELDS).flatMap(t=>(STORY_TYPE_FIELDS[t]||[]).map(f=>f.key))] :
+    const keys = form === 'story' ? ['storyType', ...Object.keys(STORY_TYPE_FIELDS).flatMap(t=>(STORY_TYPE_FIELDS[t]?.fields||[]).map(f=>f.key))] :
       form === 'social' ? ['socialType', ...Object.keys(SOCIAL_TYPE_FIELDS).flatMap(t=>(SOCIAL_TYPE_FIELDS[t]||[]).map(f=>f.key))] : ['eventType'];
     if (pending?.form === form) stopGenerate();
     setTouched(t=>Object.fromEntries(Object.entries(t).filter(([key])=>!keys.includes(key))));
@@ -442,7 +444,7 @@ function DirectorTab({ loadedNpcs, tasks = [], actions, factions = [], sendActio
     return [];
   }, [selectedAction, currentAction]);
 
-  const currentFields = STORY_TYPE_FIELDS[storyType] || [];
+  const storyGuidance = touched.storyType ? STORY_TYPE_FIELDS[storyType] : null, currentFields = STORY_TYPE_FIELDS[storyType]?.fields || [];
   const storyTypeValid = DIRECTOR_STORY_TYPES.some(type => type.key === storyType);
   const socialTypeValid = SOCIAL_TYPES.some(type => type.key === socialType);
   const polEventTypeValid = POLITICAL_EVENT_TYPES.some(type => type.key === polEventType);
@@ -573,7 +575,7 @@ function DirectorTab({ loadedNpcs, tasks = [], actions, factions = [], sendActio
               ))}
             </Select>
           </div>
-          <p className="text-[9px] text-gray-600 leading-tight">NPC <span className="text-red-400">*</span>: exact display name. Story type <span className="text-red-400">*</span>: what they will do.</p>
+          <p className="text-[9px] text-gray-600 leading-tight">NPC <span className="text-red-400">*</span>: exact display name. Story type <span className="text-red-400">*</span>: {storyGuidance?.hint || 'what they will do.'}</p>
           <textarea
             value={storyNarration}
             onChange={e => setStoryNarration(e.target.value)}
@@ -581,7 +583,7 @@ function DirectorTab({ loadedNpcs, tasks = [], actions, factions = [], sendActio
             rows={2}
             className="w-full bg-white/5 border border-white/10 rounded px-2 py-1.5 text-xs text-gray-200 outline-none resize-none placeholder:text-gray-600"
           />
-          <p className="text-[9px] text-gray-600 leading-tight">Narration <span className="text-red-400">*</span>: why the NPC acts; used as story context.</p>
+          <p className="text-[9px] text-gray-600 leading-tight">Narration <span className="text-red-400">*</span>: {storyGuidance?.narration || 'why the NPC acts; used as story context.'}</p>
 
           {/* Type-specific fields */}
           {currentFields.map(f => (
