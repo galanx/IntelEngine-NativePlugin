@@ -63,9 +63,12 @@ SCRIPT = r"""
     for (const name of ['dispatchStory','dispatchNpcSocial','dispatchPolitics','executeAction','cancelTask','changePluginConfig','generateDirector'])
       window['onDashboard_' + name] = json => payloads.push([name, json]);
     window.updateFullState(JSON.stringify({config:{}, pluginConfig:{'ui.scale':1},
+      tasks:[{index:0,state:0,cooldownRemaining:30}], scheduled:[],
+      story:{enabled:true}, quest:{active:true}, social:{enabled:true},
+      npcSocialLog:[{type:'npc_interaction',text:'A conversation'}], packages:[{formId:1,name:'Nazeem',pkgType:'Sandbox'}],
       loadedNpcs:Array.from({length:30},(_,i)=>({formId:108196+i,name:i?'Guard '+i:'Nazeem'})),
-      actions:[{name:'GoToLocation',params:[]},{name:'ReportPlayerConduct',params:[{name:'sentiment',enum:['strongly_positive','positive','negative','strongly_negative']},{name:'factionId'},{name:'reason'}]},{name:'ChangeSpeed',params:[]}],
-      politics:{factions:Array.from({length:5},(_,i)=>({id:i?'ThalmorFaction'+(i===1?'':i):'StormcloakFaction',name:i?'Thalmor '+i:'Stormcloaks'}))}}));
+      actions:[{name:'GoToLocation',enabled:true},{name:'ReportPlayerConduct',params:[{name:'sentiment',enum:['strongly_positive','positive','negative','strongly_negative']},{name:'factionId'},{name:'reason'}]},{name:'ChangeSpeed',enabled:true}],
+      politics:{enabled:true,factions:[{id:'ImperialFaction',name:'Imperial Legion'},{id:'StormcloakFaction',name:'Stormcloaks'},...Array.from({length:3},(_,i)=>({id:'ThalmorFaction'+i,name:'Thalmor '+i}))],relations:[],wars:[],player_standings:[],events:[]}}));
     await pause(); clickText('Director'); await pause();
     if (location.hash === '#dashboard_sections_collapse') {
       const reloaded = sessionStorage.getItem('dashboard_sections_collapse') === 'closed';
@@ -95,6 +98,12 @@ SCRIPT = r"""
           }
         }
         clickText('Director'); await pause();
+        const generateSection = [...document.querySelectorAll('.dashboard-section')].find(d=>[...d.querySelector('summary').querySelectorAll('button')].some(b=>b.textContent.trim()==='Generate'));
+        check(generateSection, 'Director Generate section missing');
+        generateSection.querySelector('summary').click(); await pause();
+        generateSection.querySelector('summary button').click(); await pause();
+        check(generateSection.open && payloads.some(([name])=>name==='generateDirector'), 'collapsed Generate did not open section or fire');
+        clickText('Stop'); await pause();
       }
       const details = document.querySelector('section details'), summary = details.querySelector('summary');
       if (reloaded) {
@@ -169,6 +178,31 @@ SCRIPT = r"""
       document.getElementById('result').textContent=JSON.stringify({status:'PASS',checks:['director_required_fields']});
       return;
     }
+    if (location.hash === '#director_generate_identities') {
+      const failures = [];
+      const control = (index, text) => [...document.querySelectorAll(`section:nth-of-type(${index}) button`)].find(e=>e.textContent.trim()===text);
+      for (const [index, form, fields, expected] of [
+        [2,'social',{npc1Name:'Sven',npc2Name:'Mikael',socialType:'npc_interaction'},['Sven','Mikael']],
+        [3,'political',{factionA:'Imperial Legion',factionB:'Stormcloaks'},['ImperialFaction','StormcloakFaction']],
+        [3,'political',{factionA:'ImperialFaction',factionB:'StormcloakFaction'},['ImperialFaction','StormcloakFaction']],
+        [1,'story',{npcName:'Sven',storyType:'informant',subject:'Mikael',sender:'Sven'},['Sven','Mikael','Sven']],
+        [1,'story',{npcName:'None',storyType:'informant',subject:'',sender:'None'},['','','']],
+      ]) {
+        control(index,'Clear').click(); await pause();
+        control(index,'Generate').click(); await pause();
+        const request=JSON.parse(payloads.at(-1)[1]);
+        check(!request.options.npcs.includes('Sven') && !request.options.npcs.includes('Mikael'), 'fixture unexpectedly contains producer NPC names');
+        window.directorGenerateResult(JSON.stringify({requestId:request.requestId,form,ok:true,fields})); await pause();
+        const inputs=[...document.querySelectorAll(`section:nth-of-type(${index}) input[type=text]:not([role=combobox])`)];
+        const values=(form==='story' ? [inputs[0],inputs[1],inputs[3]] : inputs.slice(0,2)).map(e=>e.value);
+        const audit=JSON.parse(payloads.at(-1)[1]).outcome;
+        if (JSON.stringify(values)!==JSON.stringify(expected) ||
+            Object.keys(fields).filter(key=>!key.endsWith('Type')).some(key=>audit.rejected[key])) failures.push({form,fields,values,expected,rejected:audit.rejected});
+      }
+      check(!failures.length, 'producer identity regressions: '+JSON.stringify(failures));
+      document.getElementById('result').textContent=JSON.stringify({status:'PASS',checks:['director_generate_identities']});
+      return;
+    }
     if (location.hash === '#director_generate_merge_and_stop') {
       payloads.length = 0;
       check(button('Story type').placeholder==='(auto)' && button('Story type').value==='', 'untouched type is not auto');
@@ -194,20 +228,22 @@ SCRIPT = r"""
         partial.rejected.unexpected==='Unknown field', 'partial validation reasons missing');
       clickText('Generate'); await pause(); request = JSON.parse(payloads.at(-1)[1]);
       check(Object.keys(request.variants.quest).every(key => key in request.fields), 'visible quest blanks omitted from request');
+      check(Object.values(request.variants.quest).every(field=>!('placeholder' in field)), 'example placeholders leaked in generated variants');
       window.directorGenerateResult(JSON.stringify({requestId:request.requestId,form:'story',ok:true,
         fields:{storyType:'quest',npcName:'Other',narration:'Wants to discuss a careful plan',
-          questSubType:'rescue',enemyType:'bandit',questLocation:'Fort Greymoor',sender:'Nazeem',
+          questSubType:'rescue',enemyType:'bandit',questLocation:'Fort Greymoor',sender:'None',
           msgContent:'Rescue my friend',victimName:'Guard 1',itemName:'Iron sword',itemDesc:'An old family blade'}}));
       await pause();
       check(document.querySelector('input[placeholder="NPC name (e.g. Saadia)"]').value==='Saadia' &&
         document.querySelector('section:nth-of-type(1) textarea').value==='Wants to discuss a careful plan' &&
         button('Story type').value==='Quest' && button('Sub-type').value==='rescue' &&
         button('Enemy type').value==='bandit', 'generated merge changed identity/touched dropdown or lost text');
-      check([...document.querySelectorAll('section:nth-of-type(1) input:not([role=combobox]), section:nth-of-type(1) textarea')].every(e=>e.value.trim()),
-        'Generate left visible quest fields blank');
+      check([...document.querySelectorAll('section:nth-of-type(1) input:not([role=combobox]), section:nth-of-type(1) textarea')].filter(e=>e.placeholder!=='e.g. Jarl Balgruuf').every(e=>e.value.trim()) &&
+        document.querySelector('input[placeholder="e.g. Jarl Balgruuf"]').value==='', 'Generate lost quest content or applied None sender');
       const audit = JSON.parse(payloads.at(-1)[1]).outcome;
       check(audit?.ok && audit.filled.includes('npcName') && audit.blank.includes('narration') === false &&
         audit.applied.includes('questLocation') && audit.rejected.npcName === 'Preserved or unchanged', 'Generate outcome missing applied/preserved request audit');
+      check(!audit.rejected.sender, 'empty/None identity was reported as rejected');
       clickText('Generate'); await pause(); const stopped=JSON.parse(payloads.at(-1)[1]); clickText('Stop'); await pause();
       window.directorGenerateResult(JSON.stringify({requestId:stopped.requestId,form:'story',ok:true,fields:{narration:'late'}}));
       await pause();
@@ -217,9 +253,9 @@ SCRIPT = r"""
         button('Story type').value==='' && !payloads.some(([name])=>name.startsWith('dispatch')),'Clear failed or Generate dispatched');
       const formButton = (index, text) => [...document.querySelectorAll(`section:nth-of-type(${index}) button`)].find(e=>e.textContent.trim()===text);
       for (const [index, form, fields, label, expected] of [
-        [2, 'social', {npc1Name:'Nazeem',npc2Name:'Guard 1',socialType:'npc_interaction',narration:'Resolved a dispute',fact1:'settled the argument',fact2:'accepted the settlement'}, 'Social type', 'Interaction'],
+        [2, 'social', {npc1Name:'Sven',npc2Name:'Mikael',socialType:'npc_interaction',narration:'Resolved a dispute',fact1:'settled the argument',fact2:'accepted the settlement'}, 'Social type', 'Interaction'],
         [2, 'social', {npc1Name:'Nazeem',npc2Name:'Guard 1',socialType:'npc_gossip',narration:'Discussed the missing shipment',gossip:'saw a suspicious shipment'}, 'Social type', 'Gossip'],
-        [3, 'political', {factionA:'StormcloakFaction',factionB:'ThalmorFaction',eventType:'insult',description:'A public diplomatic insult',relationDelta:-5}, 'Political event type', 'Insult']
+        [3, 'political', {factionA:'Imperial Legion',factionB:'Stormcloaks',eventType:'insult',description:'A public diplomatic insult',relationDelta:-5}, 'Political event type', 'Insult']
       ]) {
         formButton(index,'Generate').click(); await pause();
         const generated=JSON.parse(payloads.at(-1)[1]);
@@ -227,6 +263,14 @@ SCRIPT = r"""
         await pause();
         check(button(label).value===expected && document.querySelector(`section:nth-of-type(${index}) textarea`).value===
           (fields.narration || fields.description), `${form}: auto type and dependent draft did not merge`);
+        if (form==='social' && fields.npc1Name==='Sven') check(
+          document.querySelector('input[placeholder="NPC 1 (e.g. Mikael)"]').value==='Sven' &&
+          document.querySelector('input[placeholder="NPC 2 (e.g. Sven)"]').value==='Mikael',
+          'producer NPC names outside nearby options were rejected');
+        if (form==='political') check(
+          document.querySelectorAll('section:nth-of-type(3) input[type=text]')[0].value==='ImperialFaction' &&
+          document.querySelectorAll('section:nth-of-type(3) input[type=text]')[1].value==='StormcloakFaction',
+          'faction display names were not normalized to IDs');
         check([...document.querySelectorAll(`section:nth-of-type(${index}) input:not([role=combobox]), section:nth-of-type(${index}) textarea`)].every(e=>e.value.trim()),
           `${form}: Generate left visible fields blank`);
         if (form==='political') {

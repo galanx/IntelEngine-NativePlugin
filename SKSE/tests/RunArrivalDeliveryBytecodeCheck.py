@@ -598,6 +598,32 @@ def run_director_lite_checks(files, history):
                     ([("Notification", "Political event recorded: " + event.get("event_label", event["event_type"]) + ".")] if acted else []),
                     "director_social_and_political_success_notice: Political acted=" + str(acted))
             require(("political-record", acted) in task.effects, "Political native boundary not reached")
+    def director_story_not_found_notifies():
+        class MissingActorVM(DirectorVM):
+            def __init__(self):
+                super().__init__(files, history)
+
+            def external(self, method, args, script):
+                if method == "ResolveDirectorActor":
+                    return self.agent if args[0] == "Nazeem" else None
+                return super().external(method, args, script)
+
+        for event, payload, names in (
+            ("OnDashboardDispatchStory", {"storyType": "seek_player", "npcName": "Arvel the Swift"},
+             ("Arvel the Swift",)),
+            ("OnDashboardDispatchNpcSocial", {"npc1Name": "Missing One", "npc2Name": "Missing Two"},
+             ("Missing One",)),
+            ("OnDashboardDispatchNpcSocial", {"npc1Name": "Nazeem", "npc2Name": "Missing Two"},
+             ("Missing Two",))):
+            task = MissingActorVM()
+            task.invoke("IntelEngine_Core", event, ("", json.dumps(payload), 0.0, None))
+            notices = [e for e in task.effects if e[0] == "Notification"]
+            require(notices ==
+                    [("Notification", "Couldn't find NPC '" + names[0] + "' (no unique match).")],
+                    "director_story_not_found_notifies: missing NPC notice " + repr(task.effects))
+            require(any(e[0] == "Trace" for e in task.effects),
+                    "director_story_not_found_notifies: DebugMsg trace was removed")
+
 
     def director_message_generation_success_notice():
         class MessageVM(DirectorVM):
@@ -622,7 +648,8 @@ def run_director_lite_checks(files, history):
     for case in (director_seek_then_seek_is_refused, run6_seek_seek_fetch_arrival,
                  director_story_while_story_active, cancel_story_task_ends_story,
                  cancel_story_injects_closing_fact, director_action_success_notice,
-                 director_social_and_political_success_notice, director_message_generation_success_notice):
+                 director_social_and_political_success_notice, director_message_generation_success_notice,
+                 director_story_not_found_notifies):
         case()
         print("actual PEX " + case.__name__ + " PASS")
 
