@@ -1,7 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import TasksTab from './components/TasksTab';
 import StoryTab from './components/StoryTab';
-import PackagesTab from './components/PackagesTab';
 import SettingsTab from './components/SettingsTab';
 import DirectorTab from './components/DirectorTab';
 import ActionsTab from './components/ActionsTab';
@@ -13,7 +12,6 @@ const TABS = [
   { id: 'politics', label: 'Politics' },
   { id: 'director', label: 'Director' },
   { id: 'actions', label: 'Actions' },
-  { id: 'packages', label: 'Packages' },
   { id: 'settings', label: 'Settings' },
 ];
 
@@ -176,6 +174,9 @@ function App() {
               scheduled={state.scheduled || []}
               calendar={state.calendar}
               sendAction={sendAction}
+              packages={state.packages || []}
+              removingIds={removingPkgIds}
+              onMarkRemoving={(formId) => setRemovingPkgIds(prev => new Set([...prev, formId]))}
             />
           )}
           {activeTab === 'story' && (
@@ -208,14 +209,6 @@ function App() {
             <ActionsTab
               actions={state.actions || []}
               sendAction={sendAction}
-            />
-          )}
-          {activeTab === 'packages' && (
-            <PackagesTab
-              packages={state.packages || []}
-              sendAction={sendAction}
-              removingIds={removingPkgIds}
-              onMarkRemoving={(formId) => setRemovingPkgIds(prev => new Set([...prev, formId]))}
             />
           )}
           {activeTab === 'settings' && (

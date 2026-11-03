@@ -70,6 +70,41 @@ SCRIPT = r"""
       actions:[{name:'GoToLocation',enabled:true},{name:'ReportPlayerConduct',params:[{name:'sentiment',enum:['strongly_positive','positive','negative','strongly_negative']},{name:'factionId'},{name:'reason'}]},{name:'ChangeSpeed',enabled:true}],
       politics:{enabled:true,factions:[{id:'ImperialFaction',name:'Imperial Legion'},{id:'StormcloakFaction',name:'Stormcloaks'},...Array.from({length:3},(_,i)=>({id:'ThalmorFaction'+i,name:'Thalmor '+i}))],relations:[],wars:[],player_standings:[],events:[]}}));
     await pause(); clickText('Director'); await pause();
+    if (location.hash === '#tasks_packages_folded') {
+      // Core.psc emits agentFormId; NPCIndex::ScanActorsWithPackages emits numeric formId/name/pkgType.
+      const tasks = [
+        {index:0,state:1,agentName:'Courier',agentFormId:108196,taskType:'travel'},
+        {index:1,state:1,agentName:'No package',agentFormId:108198,taskType:'travel'},
+        {index:2,state:0,agentName:'',agentFormId:0,cooldownRemaining:30}
+      ];
+      const packages = [
+        {formId:108196,name:'Courier',pkgType:'Travel (Jog)'},
+        {formId:108197,name:'Courier',pkgType:'Sandbox'}
+      ];
+      const push = entries => window.updateFullState(JSON.stringify({config:{},tasks,scheduled:[],packages:entries}));
+      window.onDashboard_removePackages = json => payloads.push(['removePackages',json]);
+      push(packages); await pause(); clickText('Tasks'); await pause();
+      check(![...document.querySelectorAll('button')].some(e=>e.textContent.trim()==='Packages'), 'Packages tab still present');
+      const cards = [...document.querySelectorAll('.slot-card')];
+      check(cards.find(e=>e.textContent.includes('Traveling') && e.textContent.includes('Courier'))?.textContent.includes('Travel (Jog)'), 'task card missing matched package type');
+      check(!cards.find(e=>e.textContent.includes('No package'))?.textContent.includes('Travel (Jog)'), 'unmatched task inherited package type');
+      const section = [...document.querySelectorAll('details')].find(e=>e.querySelector('summary')?.textContent.includes('Other IE packages'));
+      check(section && section.open, 'orphan packages missing collapsible section');
+      check(section.querySelectorAll('.slot-card').length === 1 && section.textContent.includes('Sandbox') && !section.textContent.includes('Travel (Jog)'), 'package/task identity partition failed');
+      section.querySelector('summary').click(); await pause();
+      check(!section.open && !section.querySelector('.slot-card').checkVisibility(), 'orphan section did not collapse');
+      section.querySelector('summary').click(); await pause();
+      section.querySelector('button').click(); await pause();
+      check(payloads.length === 1 && payloads[0][0] === 'removePackages' && JSON.parse(payloads[0][1]).formId === 108197, 'Remove sent wrong action or identity');
+      check(section.querySelector('button').disabled && section.querySelector('button').textContent === 'Removing\u2026', 'pending removal state missing');
+      push([packages[0]]); await pause();
+      check(![...document.querySelectorAll('h2')].some(e=>e.textContent === 'Other IE packages'), 'empty orphan section remains visible');
+      push(packages); await pause();
+      const remove = [...document.querySelectorAll('button')].find(e=>e.textContent === 'Remove');
+      check(remove && !remove.disabled, 'server-confirmed removal did not clear pending state');
+      document.getElementById('result').textContent=JSON.stringify({status:'PASS',checks:['tasks_packages_folded'],payloads});
+      return;
+    }
     if (location.hash === '#dashboard_sections_collapse') {
       const reloaded = sessionStorage.getItem('dashboard_sections_collapse') === 'closed';
       if (!reloaded) {
@@ -82,7 +117,7 @@ SCRIPT = r"""
           politics:{enabled:true,factions:[{id:'A',name:'Faction A'}],relations:[],
             wars:[{faction_a:'A',faction_b:'B'}],player_standings:[{faction:'A',standing:5}],events:[]}}));
         await pause();
-        for (const [tab, expected] of [['Director',4],['Actions',2],['Packages',1],['Politics',5],['Story',5],['Tasks',3]]) {
+        for (const [tab, expected] of [['Director',4],['Actions',2],['Politics',5],['Story',5],['Tasks',4]]) {
           clickText(tab); await pause();
           const headers = [...document.querySelectorAll('.section-header')];
           check(headers.length === expected, `${tab}: expected ${expected} section headings, found ${headers.length}`);
