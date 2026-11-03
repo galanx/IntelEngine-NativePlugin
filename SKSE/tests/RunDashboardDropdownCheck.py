@@ -124,6 +124,39 @@ SCRIPT = r"""
         'Other mod grouped action or flat action indentation is incorrect');
       check(!otherSection.textContent.includes('Travel') && !otherSection.textContent.includes('CustomAction') &&
         !otherSection.textContent.includes('UnknownCategory'), 'IntelEngine action leaked into Other Mod Actions');
+      const cardFor = name => [...document.querySelectorAll('button')].find(e=>e.querySelector('.text-xs.font-medium')?.textContent.trim()===name);
+      for (const parent of actions.filter(a=>a.isCategory)) {
+        const card = cardFor(parent.name+' (category)');
+        check(card.classList.contains('!border-l-4') && getComputedStyle(card).borderLeftWidth==='4px',
+          `category header lacks distinct accent border: ${parent.name}`);
+        check(card.getBoundingClientRect().width > cardFor(actions.find(a=>!a.isCategory && a.category===parent.category).name).getBoundingClientRect().width,
+          `category header is not wider than children: ${parent.name}`);
+      }
+      const updateActions = async () => { window.updateFullState(JSON.stringify({actions})); await pause(); };
+      const checkChild = (action, categoryOff) => {
+        const card = cardFor(action.name), status = card.querySelector('span');
+        check(status.textContent.trim()===(categoryOff?'OFF (category)':action.enabled?'ON':'OFF'),
+          `incorrect effective status: ${action.name}: ${status.textContent}`);
+        const dimmed = categoryOff || !action.enabled;
+        check(card.classList.contains('text-gray-600')===dimmed && !card.classList.contains('slot-card')===dimmed &&
+          status.classList.contains('text-gray-600')===dimmed, `incorrect dimmed style: ${action.name}`);
+      };
+      for (const category of actions.filter(a=>a.isCategory)) {
+        const children = actions.filter(a=>!a.isCategory && a.category===category.category);
+        const original = category.enabled;
+        category.enabled = false; await updateActions();
+        for (const child of children) {
+          checkChild(child, true);
+          cardFor(child.name).click(); await pause();
+          const [event,json] = payloads.pop();
+          check(event==='toggleAction' && JSON.stringify(JSON.parse(json))===JSON.stringify({name:child.name,enabled:!child.enabled}),
+            `category-off child toggle changed own enabled payload: ${child.name}`);
+        }
+        category.enabled = true; await updateActions();
+        for (const child of children) checkChild(child, false);
+        category.enabled = original;
+      }
+      await updateActions();
       cards.find(e=>e.querySelector('.text-xs.font-medium').textContent.trim()==='Travel (category)').click(); await pause();
       cards.find(e=>e.querySelector('.text-xs.font-medium').textContent.trim()==='GoToLocation').click(); await pause();
       check(JSON.stringify(payloads.map(([name,json])=>[name,JSON.parse(json)]))===JSON.stringify([

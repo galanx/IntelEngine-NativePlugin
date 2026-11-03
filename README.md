@@ -373,6 +373,7 @@ Pick-only dashboard dropdowns use the shared type-to-filter combobox in both hos
 ReportPlayerConduct uses the faction suggestion picker (submitting its ID), initializes YAML enums to their first choice, and requires a valid faction, sentiment and nonempty reason before Execute is enabled. Conduct reports notify their standing-change count or the failure reason; native processing also accepts configured display names case-insensitively.
 
 **Actions** — Category cards precede their indented actions: Travel, Communication, Scheduling, then other categories and uncategorised entries. IntelEngine membership comes from the YAML `customCategory` prefix `intel_`, not an action-name allowlist; other mods group by category too, otherwise remaining flat. Category definitions lack `executionFunctionName`; native metadata exposes `category` and `isCategory`. Category/action toggles retain the existing YAML rewrite behavior, counts include both, and descriptions show `the NPC` instead of `{{ npc.name }}`. Offline native-host and headless `actions_grouped` checks cover metadata, ordering, indentation and toggle payloads; no installed or live-game verification.
+Category rows use larger bold titles and an amber left border. Disabling a category dims its children and shows `OFF (category)` without changing their own enabled values or toggle payloads; re-enabling restores each child's own ON/OFF display.
 
 **Active Packages** — See which NPCs are currently running IntelEngine AI packages (travel, sandbox, stalk). Remove packages from stuck NPCs directly.
 

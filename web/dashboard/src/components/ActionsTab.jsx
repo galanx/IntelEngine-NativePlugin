@@ -14,6 +14,7 @@ function ActionsTab({ actions, sendAction }) {
 
   const intelActions = (actions || []).filter(a => a.category?.startsWith('intel_'));
   const otherActions = (actions || []).filter(a => !a.category?.startsWith('intel_'));
+  const disabledCategories = new Set((actions || []).filter(a => a.isCategory && !a.enabled).map(a => a.category));
 
   if (!actions || actions.length === 0) {
     return (
@@ -42,8 +43,8 @@ function ActionsTab({ actions, sendAction }) {
           <button
             key={action.name}
             onClick={() => handleToggle(action.name, action.enabled)}
-            className={`${action.category && !action.isCategory ? 'ml-4 !w-[calc(100%-1rem)]' : ''} w-full flex items-center gap-2 px-3 py-2 rounded text-left transition-colors ${
-              action.enabled
+            className={`${action.isCategory ? '!border-l-4 !border-l-amber-500 [&>div>div:first-child]:!text-sm [&>div>div:first-child]:!font-bold' : action.category ? 'ml-4 !w-[calc(100%-1rem)]' : ''} w-full flex items-center gap-2 px-3 py-2 rounded text-left transition-colors ${
+              action.enabled && !disabledCategories.has(action.category)
                 ? 'slot-card text-gray-200'
                 : 'bg-transparent text-gray-600 border border-white/5'
             }`}
@@ -54,8 +55,8 @@ function ActionsTab({ actions, sendAction }) {
                 <div className="text-[10px] text-gray-500 truncate mt-0.5">{action.description.split('{{ npc.name }}').join('the NPC')}</div>
               )}
             </div>
-            <span className={`text-xs shrink-0 ${action.enabled ? 'text-emerald-400' : 'text-gray-600'}`}>
-              {action.enabled ? 'ON' : 'OFF'}
+            <span className={`text-xs shrink-0 ${action.enabled && !disabledCategories.has(action.category) ? 'text-emerald-400' : 'text-gray-600'}`}>
+              {!action.isCategory && disabledCategories.has(action.category) ? 'OFF (category)' : action.enabled ? 'ON' : 'OFF'}
             </span>
           </button>
         ))}
@@ -73,8 +74,8 @@ function ActionsTab({ actions, sendAction }) {
               <button
                 key={action.name}
                 onClick={() => handleToggle(action.name, action.enabled)}
-                className={`${action.category && !action.isCategory ? 'ml-4 !w-[calc(100%-1rem)]' : ''} w-full flex items-center gap-2 px-3 py-2 rounded text-left transition-colors ${
-                  action.enabled
+                className={`${action.isCategory ? '!border-l-4 !border-l-amber-500 [&>div>div:first-child]:!text-sm [&>div>div:first-child]:!font-bold' : action.category ? 'ml-4 !w-[calc(100%-1rem)]' : ''} w-full flex items-center gap-2 px-3 py-2 rounded text-left transition-colors ${
+                  action.enabled && !disabledCategories.has(action.category)
                     ? 'slot-card text-gray-200'
                     : 'bg-transparent text-gray-600 border border-white/5'
                 }`}
@@ -85,8 +86,8 @@ function ActionsTab({ actions, sendAction }) {
                     <div className="text-[10px] text-gray-500 truncate mt-0.5">{action.description.split('{{ npc.name }}').join('the NPC')}</div>
                   )}
                 </div>
-                <span className={`text-xs shrink-0 ${action.enabled ? 'text-emerald-400' : 'text-gray-600'}`}>
-                  {action.enabled ? 'ON' : 'OFF'}
+                <span className={`text-xs shrink-0 ${action.enabled && !disabledCategories.has(action.category) ? 'text-emerald-400' : 'text-gray-600'}`}>
+                  {!action.isCategory && disabledCategories.has(action.category) ? 'OFF (category)' : action.enabled ? 'ON' : 'OFF'}
                 </span>
               </button>
             ))}
