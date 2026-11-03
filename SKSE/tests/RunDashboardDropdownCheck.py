@@ -20,6 +20,7 @@ SCRIPT = r"""
   const button = label => document.querySelector(`[role=combobox][aria-label="${label}"]`);
   const optionText = option => option.textContent.trim().replace(/ \((?:nearby|faction)\)$/, '');
   const clickText = text => [...document.querySelectorAll('button')].find(e => e.textContent.trim() === text).click();
+  const outcomeFor = id => payloads.filter(([name])=>name==='generateDirector').map(([,json])=>JSON.parse(json)).find(m=>m.requestId===id && m.outcome)?.outcome;
   const choose = async (label, text) => {
     const control = button(label);
     control.scrollIntoView({ block: 'nearest' }); await pause();
@@ -248,6 +249,8 @@ SCRIPT = r"""
         story().querySelector('summary button').click(); await pause();
         const request = JSON.parse(payloads.at(-1)[1]); requests.push(request);
         window.directorGenerateResult(JSON.stringify({requestId:request.requestId,form:'story',ok:true,fields})); await pause();
+        const stop=[...document.querySelectorAll('button')].find(e=>e.textContent.trim()==='Stop');
+        if (stop) { stop.click(); await pause(); }
         return request;
       };
       const a = await roll({npcName:'Nazeem',storyType:'ambush',narration:'was hired to collect an unpaid debt',sender:'Guard 1'});
@@ -267,7 +270,7 @@ SCRIPT = r"""
       const c = await roll({npcName:'Nazeem',storyType:'ambush',narration:'replacement must not win',sender:'Guard 2'});
       check(c.fields.narration === 'set out to buy salt in Riften' && narration().value === c.fields.narration, 'typing into generated narration did not preserve it');
       check(c.fields.npcName === 'Saadia' && story().querySelector('input').value === 'Saadia', 'user-typed identity did not survive Generate');
-      for (const [type, example] of [['Ambush','e.g. was hired by the Thieves Guild to rough you up'],['Road Encounter','e.g. set out to sell pelts in Helgen']]) {
+      for (const [type, example] of [['Ambush','e.g. was hired by the Thieves Guild to collect a debt'],['Road Encounter','e.g. set out to sell pelts in Helgen']]) {
         await choose('Story type', type);
         check(narration().placeholder === example, type + ' placeholder did not change');
       }
@@ -292,12 +295,12 @@ SCRIPT = r"""
       check(payloads.at(-1)[0] === 'generateDirector' && road.fields.storyType === 'road_encounter' && road.schema.narration.hint.includes('Why they are travelling') && road.schema.narration.hint.includes('outdoors only') && road.variants.road_encounter.destination.hint.includes('Where they are heading.'), 'Generate missing road guidance');
       clickText('Stop'); await pause();
       await choose('Story type', 'Message');
-      check(text().includes('Sends a nearby courier to deliver a message from the selected NPC.') && text().includes('Why the sender wants to contact you.'), 'message hints did not replace road hints');
+      check(text().includes('Sends a nearby courier to deliver a message from the selected NPC.') && text().includes('Why the sender wanted contact.'), 'message hints did not replace road hints');
       check(!text().includes('Where they are heading.') && !text().includes('Why they are travelling'), 'road hints survived type switch');
       check(text().includes('Optional. If set with meetTime, creates a meeting invitation.'), 'message destination hint missing');
       story().querySelector('summary button').click(); await pause();
       const message = JSON.parse(payloads.at(-1)[1]);
-      check(message.schema.narration.hint.includes('Why the sender wants to contact you.') && !message.schema.narration.hint.includes('travelling'), 'Generate retained previous type guidance');
+      check(message.schema.narration.hint.includes('Why the sender wanted contact.') && !message.schema.narration.hint.includes('travelling'), 'Generate retained previous type guidance');
       clickText('Stop'); await pause();
       document.querySelector('[aria-label="Clear Story type"]').click(); await pause();
       check(text().includes('What they will do.') && text().includes('Why the NPC acts; used as story context.'), 'auto generic hints not restored');
@@ -485,6 +488,125 @@ SCRIPT = r"""
         'Director NPC text controls are not all combobox inputs');
       document.getElementById('result').textContent=JSON.stringify({status:'PASS',
         checks:['npc_picker_consistent'],directorPickers:pickers().length,knownFixtureCount:known.length,knownFixtureBytes:new TextEncoder().encode(JSON.stringify(known)).length});
+      return;
+    }
+    if (location.hash === '#director_live_polish') {
+      const story=document.querySelector('section:nth-of-type(1)'), social=document.querySelector('section:nth-of-type(2)');
+      const political=document.querySelector('section:nth-of-type(3)');
+      const requests=()=>payloads.filter(([name,json])=>name==='generateDirector' && !JSON.parse(json).outcome).map(([,json])=>JSON.parse(json));
+      const clearButton=(host,label)=>host.querySelector(`[aria-label="Clear ${label}"]`);
+      await choose('Social type','Gossip');
+      const gossipLabel=[...social.querySelectorAll('label')].find(e=>e.textContent.trim().startsWith('Gossip'));
+      const gossipInput=gossipLabel?.parentElement.querySelector('input');
+      check(gossipInput,'Social Gossip text input is missing');
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(gossipInput,'saw an argument');
+      gossipInput.dispatchEvent(new Event('input',{bubbles:true})); await pause();
+      check(gossipInput?.closest('.director-text-field') && clearButton(social,'Gossip')?.checkVisibility(),
+        'direct text input lacks conditional clear wrapper');
+      clearButton(social,'Gossip').click(); await pause();
+      check(gossipInput.value==='' && !clearButton(social,'Gossip')?.checkVisibility(),
+        'text input clear did not clear/hide');
+      const socialTextarea=social.querySelector('textarea');
+      await fill('section:nth-of-type(2) textarea','A typed social draft');
+      check(socialTextarea.closest('.director-text-field')?.contains(clearButton(social,'Narration')) &&
+        clearButton(social,'Narration')?.checkVisibility(),'textarea clear button/wrapper did not appear');
+      clearButton(social,'Narration').click(); await pause();
+      check(socialTextarea.value==='' && !clearButton(social,'Narration')?.checkVisibility(),
+        'textarea clear did not clear/hide');
+      social.querySelector('summary button').click(); await pause();
+      let request=requests().at(-1);
+      check(request.fields.gossip==='' && request.blank.includes('gossip') && !request.touched.gossip &&
+        request.fields.narration==='' && request.blank.includes('narration') && !request.touched.narration,
+        'cleared text controls were submitted as touched');
+      clickText('Stop'); await pause();
+      const factionA=political.querySelector('input[placeholder="e.g. StormcloakFaction"]');
+      await fill('input[placeholder="e.g. StormcloakFaction"]','Stormcloaks',political);
+      const pickerClear=political.querySelector('[aria-label="Clear faction"]');
+      check(pickerClear?.checkVisibility(),'Faction A picker lacks clear button');
+      const pickerRect=factionA.getBoundingClientRect(), clearRect=pickerClear.getBoundingClientRect();
+      check(Math.abs((pickerRect.top+pickerRect.bottom-clearRect.top-clearRect.bottom)/2)<2,
+        'faction picker clear is not vertically centered');
+      pickerClear.click(); await pause();
+      check(factionA.value==='' && !political.querySelector('[aria-label="Clear faction"]')?.checkVisibility(),
+        'faction picker clear did not clear/hide');
+      political.querySelector('summary button').click(); await pause();
+      request=requests().at(-1);
+      check(request.fields.factionA==='' && request.blank.includes('factionA') && !request.touched.factionA,
+        'cleared faction picker value was submitted as touched');
+      clickText('Stop'); await pause();
+      await fill('input[placeholder="e.g. StormcloakFaction"]','Stormcloaks',political);
+      await fill('input[placeholder="e.g. StormcloakFaction"]','',political);
+      political.querySelector('summary button').click(); await pause();
+      request=requests().at(-1);
+      check(request.fields.factionA==='' && request.blank.includes('factionA') && !request.touched.factionA,
+        'manually deleted faction was submitted as touched');
+      clickText('Stop'); await pause();
+      const storyNpc=story.querySelector('input[placeholder="e.g. Saadia"]');
+      await fill('input[placeholder="e.g. Saadia"]','Saadia');
+      const npcRect=storyNpc.getBoundingClientRect(), npcClearRect=clearButton(story,'NPC').getBoundingClientRect();
+      check(Math.abs((npcRect.top+npcRect.bottom-npcClearRect.top-npcClearRect.bottom)/2)<2,
+        'NPC clear is not vertically centered');
+      await choose('Story type','Message');
+      story.querySelector('summary button').click(); await pause();
+      request=requests().at(-1);
+      const beforeMessage=requests().length;
+      window.directorGenerateResult(JSON.stringify({requestId:request.requestId,form:'story',ok:true,
+        fields:{npcName:'Other',storyType:'message',narration:'Generated message reason'}})); await pause();
+      let followup=requests().at(-1);
+      check(followup.followUp===true && followup.fields.npcName==='Saadia' &&
+        followup.fields.narration==='Generated message reason',
+        'missing required Message variant field did not follow up with merged text/identity');
+      check(requests().length===beforeMessage+1,'Message follow-up was not exactly once');
+      window.directorGenerateResult(JSON.stringify({requestId:followup.requestId,form:'story',ok:true,
+        fields:{msgContent:'Meet at the Bannered Mare',narration:'Must not replace merged narration',npcName:'Other'}})); await pause();
+      check(requests().length===beforeMessage+1 && storyNpc.value==='Saadia' &&
+        story.querySelector('textarea').value==='Generated message reason',
+        'complete Message result triggered another follow-up or replaced preserved fields');
+      await choose('Story type','Informant');
+      const gossipField=[...story.querySelectorAll('label')].find(e=>e.textContent.trim().startsWith('Gossip'));
+      check(gossipField?.parentElement.querySelector('.director-hint')?.textContent.trim()==='What the Subject NPC did, told as a rumour, e.g. "was seen arguing with Adrianne over an unpaid debt". Their name is added automatically.',
+        'Informant gossip hint is not exact');
+      story.querySelector('summary button').click(); await pause();
+      request=requests().at(-1);
+      const beforeInformant=requests().length;
+      window.directorGenerateResult(JSON.stringify({requestId:request.requestId,form:'story',ok:true,
+        fields:{storyType:'informant',narration:'Generated informant account'}})); await pause();
+      followup=requests().at(-1);
+      check(followup.followUp===true && followup.fields.narration==='Generated informant account',
+        'missing required Informant fields did not follow up with merged narration');
+      check(requests().length===beforeInformant+1,'Informant follow-up was not exactly once');
+      window.directorGenerateResult(JSON.stringify({requestId:followup.requestId,form:'story',ok:true,
+        fields:{gossip:'was seen arguing over an unpaid debt'}})); await pause();
+      check(requests().length===beforeInformant+1 && story.querySelector('[aria-label="Subject NPC"]').value==='',
+        'still-incomplete follow-up looped or invented a required subject');
+      await fill('section:nth-of-type(1) textarea','');
+      story.querySelector('summary button').click(); await pause();
+      request=requests().at(-1);
+      const beforeBase=requests().length;
+      window.directorGenerateResult(JSON.stringify({requestId:request.requestId,form:'story',ok:true,
+        fields:{storyType:'informant',subject:'Mikael',gossip:'was seen arguing over a debt'}})); await pause();
+      followup=requests().at(-1);
+      check(followup.followUp===true && followup.fields.narration==='',
+        'missing required base narration did not trigger one follow-up');
+      check(requests().length===beforeBase+1,'base narration follow-up was not exactly once');
+      window.directorGenerateResult(JSON.stringify({requestId:followup.requestId,form:'story',ok:true,
+        fields:{narration:'Completed base narrative'}})); await pause();
+      check(requests().length===beforeBase+1,'complete base narration triggered another follow-up');
+      story.querySelector('summary button').click(); await pause();
+      request=requests().at(-1);
+      const beforeComplete=requests().length;
+      window.directorGenerateResult(JSON.stringify({requestId:request.requestId,form:'story',ok:true,
+        fields:{narration:'A complete reroll',gossip:'was seen settling an old debt'}})); await pause();
+      check(requests().length===beforeComplete && story.querySelector('textarea').value==='A complete reroll',
+        'complete initial result triggered a follow-up or did not reroll generated text');
+      await choose('Social type','Gossip');
+      const socialNarration=social.querySelector('textarea'), type=button('Social type');
+      check(socialNarration.getBoundingClientRect().width>social.getBoundingClientRect().width*.8 &&
+        type.getBoundingClientRect().width<socialNarration.getBoundingClientRect().width,
+        'Social narration is not full width or type control is not narrow');
+      check(getComputedStyle(socialNarration).resize==='vertical' &&
+        getComputedStyle(socialNarration).backgroundImage.includes('gradient'),'textarea resize grip is missing');
+      document.getElementById('result').textContent=JSON.stringify({status:'PASS',checks:['director_live_polish']});
       return;
     }
     if (['#director_polish', '#director_field_layout'].includes(location.hash)) {
@@ -703,18 +825,18 @@ SCRIPT = r"""
         control(index,'Generate').click(); await pause();
         const request=JSON.parse(payloads.at(-1)[1]);
         check(!request.options.npcs.includes('Sven') && !request.options.npcs.includes('Mikael'), 'fixture unexpectedly contains producer NPC names');
-        window.directorGenerateResult(JSON.stringify({requestId:request.requestId,form,ok:true,fields})); await pause();
+        window.directorGenerateResult(JSON.stringify({requestId:request.requestId,form,ok:true,fields})); await pause(); clickText('Stop'); await pause();
         const inputs=[...document.querySelectorAll(`section:nth-of-type(${index}) input[type=text]`)].filter(e=>e.getAttribute('role')!=='combobox' || e.closest('[data-npc-picker]'));
         const identityInputs=form==='story' ? [inputs[0],inputs[1],inputs[3]] : inputs.slice(0,2);
         const values=identityInputs.map(e=>e.value);
-        const audit=JSON.parse(payloads.at(-1)[1]).outcome;
+        const audit=outcomeFor(request.requestId);
         const typeLabel={story:'Story type',social:'Social type',political:'Political event type'}[form], selectedType=button(typeLabel).value;
         if (JSON.stringify(values)!==JSON.stringify(expected) ||
             Object.keys(fields).filter(key=>!key.endsWith('Type')).some(key=>audit.rejected[key])) failures.push({form,fields,values,expected,rejected:audit.rejected});
         control(index,'Generate').click(); await pause();
         const reroll=JSON.parse(payloads.at(-1)[1]);
         const replacements=Object.fromEntries(Object.entries(fields).map(([key,value])=>[key,key.endsWith('Type') ? (form==='story' ? 'ambush' : 'npc_gossip') : value && value!=='None' ? (key.startsWith('faction') ? 'ThalmorFaction0' : 'Guard 2') : value]));
-        window.directorGenerateResult(JSON.stringify({requestId:reroll.requestId,form,ok:true,fields:replacements})); await pause();
+        window.directorGenerateResult(JSON.stringify({requestId:reroll.requestId,form,ok:true,fields:replacements})); await pause(); clickText('Stop'); await pause();
         check(values.every((value,i)=>!value || reroll.fields[Object.keys(fields).filter(key=>!key.endsWith('Type'))[i]]===value), 'reroll request blanked filled identities');
         check(identityInputs.every((e,i)=>e.isConnected && e.value===expected[i]), 'reroll replaced filled identities');
         check(button(typeLabel).value===selectedType, 'reroll replaced a filled type');
@@ -739,10 +861,10 @@ SCRIPT = r"""
         request.fields.questSubType === 'rescue' && request.fields.enemyType === '' &&
         request.options.npcs.includes('Saadia'), 'generate omitted touched/auto/options contract');
       window.directorGenerateResult(JSON.stringify({requestId:request.requestId,form:'story',ok:true,
-        fields:{narration:'Partial plan',enemyType:'not_an_enemy',unexpected:'ignore'}})); await pause();
+        fields:{narration:'Partial plan',enemyType:'not_an_enemy',unexpected:'ignore'}})); await pause(); clickText('Stop'); await pause();
       check(document.querySelector('section:nth-of-type(1) textarea').value==='Partial plan' &&
         button('Enemy type').value==='', 'one invalid field discarded valid narrative');
-      const partial = JSON.parse(payloads.at(-1)[1]).outcome;
+      const partial = outcomeFor(request.requestId);
       check(partial.applied.includes('narration') && partial.rejected.enemyType==='Invalid option' &&
         partial.rejected.unexpected==='Unknown field', 'partial validation reasons missing');
       clickText('Generate'); await pause(); request = JSON.parse(payloads.at(-1)[1]);
@@ -765,7 +887,7 @@ SCRIPT = r"""
       check(!audit.rejected.sender, 'empty/None identity was reported as rejected');
       clickText('Generate'); await pause(); const nulls=JSON.parse(payloads.at(-1)[1]);
       window.directorGenerateResult(JSON.stringify({requestId:nulls.requestId,form:'story',ok:true,fields:{narration:null,sender:null}})); await pause();
-      const nullAudit=JSON.parse(payloads.at(-1)[1]).outcome;
+      const nullAudit=outcomeFor(nulls.requestId);
       check(nullAudit.rejected.narration && !nullAudit.rejected.sender, 'Generate did not reject required null or skip optional null');
       clickText('Generate'); await pause(); const stopped=JSON.parse(payloads.at(-1)[1]); clickText('Stop'); await pause();
       window.directorGenerateResult(JSON.stringify({requestId:stopped.requestId,form:'story',ok:true,fields:{narration:'late'}}));
@@ -819,8 +941,8 @@ SCRIPT = r"""
       }
       formButton(2,'Generate').click(); await pause(); const duplicate=JSON.parse(payloads.at(-1)[1]);
       window.directorGenerateResult(JSON.stringify({requestId:duplicate.requestId,form:'social',ok:true,
-        fields:{npc1Name:'Nazeem',npc2Name:'Nazeem',socialType:'npc_interaction',narration:'A valid scene',fact1:42,fact2:'considered the proposal'}})); await pause();
-      const duplicateAudit=JSON.parse(payloads.at(-1)[1]).outcome;
+        fields:{npc1Name:'Nazeem',npc2Name:'Nazeem',socialType:'npc_interaction',narration:'A valid scene',fact1:42,fact2:'considered the proposal'}})); await pause(); clickText('Stop'); await pause();
+      const duplicateAudit=outcomeFor(duplicate.requestId);
       check(document.querySelector('input[placeholder="e.g. Mikael"]').value==='Nazeem' &&
         document.querySelector('input[placeholder="e.g. Sven"]').value==='' &&
         document.querySelector('section:nth-of-type(2) textarea').value==='A valid scene' &&
@@ -829,15 +951,15 @@ SCRIPT = r"""
       await choose('Political event type','Insult');
       document.querySelector('[aria-label="Clear Political event type"]').click(); await pause();
       formButton(3,'Generate').click(); await pause(); const clearedType=JSON.parse(payloads.at(-1)[1]);
-      check(clearedType.touched.eventType && clearedType.fields.eventType==='', 'cleared type fixture is not touched and empty');
+      check(!clearedType.touched.eventType && clearedType.blank.includes('eventType') && clearedType.fields.eventType==='', 'cleared type was not handed back to Generate');
       window.directorGenerateResult(JSON.stringify({requestId:clearedType.requestId,form:'political',ok:true,
-        fields:{eventType:'insult',factionA:'StormcloakFaction',factionB:'ThalmorFaction',description:'An insult',relationDelta:-5}})); await pause();
+        fields:{eventType:'insult',factionA:'StormcloakFaction',factionB:'ThalmorFaction0',description:'An insult',relationDelta:-5}})); await pause();
       check(button('Political event type').value==='Insult' && document.querySelector('section:nth-of-type(3) textarea').value==='An insult',
         'cleared touched type prevented a complete generated draft: '+JSON.stringify({display:button('Political event type').value,description:document.querySelector('section:nth-of-type(3) textarea').value,outcome:JSON.parse(payloads.at(-1)[1]).outcome}));
       check(payloads.every(([name])=>name==='generateDirector'), 'generation dispatched an action');
       const messages=payloads.map(([,json])=>JSON.parse(json));
       check(messages.filter(m=>!m.outcome).every(request=>messages.filter(m=>m.requestId===request.requestId && m.outcome).length===1),
-        'Generate emitted missing/duplicate outcome info records');
+        'Generate emitted missing/duplicate outcome info records: '+JSON.stringify(messages.filter(m=>!m.outcome).map(r=>({id:r.requestId,form:r.form,followUp:r.followUp,outcomes:messages.filter(m=>m.requestId===r.requestId && m.outcome).length}))));
       document.getElementById('result').textContent=JSON.stringify({status:'PASS',checks:['director_generate_merge_and_stop'],payloads});
       return;
     }
@@ -1048,7 +1170,7 @@ with tempfile.TemporaryDirectory(prefix='ie-dropdowns-') as directory:
     (folder / 'index.html').write_text(page, encoding='utf-8')
     scenario = next((arg.split('=',1)[1] for arg in sys.argv if arg.startswith('--scenario=')), '')
     completed = subprocess.run([str(CHROME), '--headless=new', '--no-sandbox', '--disable-gpu',
-        '--allow-file-access-from-files', '--no-first-run', '--window-size=' + ('1600,3000' if not scenario or '--busy-only' in sys.argv or scenario in ['busy','director_required_fields','npc_picker_consistent','director_polish','director_field_layout'] else '1600,1000'),
+        '--allow-file-access-from-files', '--no-first-run', '--window-size=' + ('1600,3000' if not scenario or '--busy-only' in sys.argv or scenario in ['busy','director_required_fields','npc_picker_consistent','director_polish','director_field_layout','director_live_polish'] else '1600,1000'),
         '--user-data-dir=' + str(folder / 'profile'), '--virtual-time-budget=90000', '--dump-dom',
         (folder / 'index.html').as_uri() + ('#busy' if '--busy-only' in sys.argv else '#' + scenario if scenario else '')], capture_output=True, text=True, encoding='utf-8', timeout=60)
     start = completed.stdout.find('<pre id="result">')
