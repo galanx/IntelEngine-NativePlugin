@@ -320,7 +320,7 @@ const SOCIAL_TYPE_FIELDS = {
   ],
 };
 
-const IDENTITY_KEYS = ['npcName', 'npc1Name', 'npc2Name', 'subject', 'sender', 'victimName', 'factionA', 'factionB'];
+const IDENTITY_KEYS = ['npcName', 'npc1Name', 'npc2Name', 'targetName', 'subject', 'sender', 'victimName', 'factionA', 'factionB'];
 
 function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions = [], story, social, sendAction }) {
   // Story dispatch state
@@ -376,13 +376,14 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
       for (const [key, rawValue] of Object.entries(result.fields)) {
         let value = rawValue;
         if (form === 'action' && key === 'waitForPlayer') value = '';
+        if (form === 'action' && key === 'targetName' && typeof value === 'string' && value.trim().toLowerCase() === String(old.npcName || '').trim().toLowerCase()) { audit.rejected[key] = 'Target is the actor'; continue; }
         if (form === 'action' && key === 'targetName' && !options.targets.includes(value)) { audit.rejected[key] = 'Invalid target NPC'; continue; }
         if (form === 'action' && key === 'destination' && typeof value === 'string' && options.targets.some(name => name.toLowerCase() === value.trim().toLowerCase())) { audit.rejected[key] = 'Destination must be a place'; continue; }
         if (value === null && allowed[key] && !allowed[key].required) { skipped.add(key); continue; }
         if (npcKeys.includes(key) && typeof value === 'string' && (!value.trim() || /^(?:none|placeholder|e\.g\..*|.*\(e\.g\..*\))$/i.test(value.trim()))) { skipped.add(key); continue; }
         if (!allowed[key] || ((touched[key] === true || request.followUp || IDENTITY_KEYS.includes(key)) && old[key])) { audit.rejected[key] = !allowed[key] ? 'Unknown field' : 'Preserved or unchanged'; continue; }
         if (IDENTITY_KEYS.includes(key) && typeof value === 'string') {
-          const names = [...options.npcs, ...options.factions.map(f => f.name)];
+          const names = key === 'targetName' ? options.targets : [...options.npcs, ...options.factions.map(f => f.name)];
           const matches = names.filter(name => name.replace(/ \[[^\]]*\]$/, '').toLowerCase() === value.toLowerCase());
           if (!names.includes(value) && matches.length === 1) value = matches[0];
         }
@@ -421,9 +422,16 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
     if (action && !actionName && enumTypes.length) { actionName = enumTypes[Math.floor(Math.random() * enumTypes.length)].key; setSelectedAction(actionName); }
     const reasonOnly = action && ['CancelCurrentTask','ChangeSpeed'].includes(actionName);
     const defs = story ? currentFields : social ? currentSocialFields : action ? (actionFieldDefs[actionName] || []) : [];
+    let params = actionParams;
+    if (action && defs.some(f => f.key === 'targetName') && !String(params.targetName || '').trim()) {
+      const targets = [...new Set([...npcs.map(n => n.name), ...knownNpcs])].filter(name => name.toLowerCase() !== actionNpcName.toLowerCase());
+      const nonNearby = targets.filter(name => !npcs.some(n => n.name === name));
+      const choices = nonNearby.length ? nonNearby : targets;
+      if (choices.length) { params = { ...params, targetName:choices[Math.floor(Math.random() * choices.length)] }; setActionParams(params); }
+    }
     let fields = story ? { npcName:storyNpc, storyType:touched.storyType ? storyType : '', narration:storyNarration, ...storyFields } :
       social ? { npc1Name:socialNpc1, npc2Name:socialNpc2, socialType:touched.socialType ? socialType : '', narration:socialNarration, ...socialFields } :
-        action ? { npcName:actionNpcName, actionName, ...actionParams } :
+        action ? { npcName:actionNpcName, actionName, ...params } :
           { factionA:polFactionA, factionB:polFactionB, eventType:polEventType, description:polDescription, relationDelta:polDelta };
     if (reasonOnly) fields = { npcName:fields.npcName, actionName, reason:actionParams.reason || '' };
     if (action && !reasonOnly) fields.reason ??= ''; if (!reasonOnly) for (const f of defs) fields[f.key] ??= '';
