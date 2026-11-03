@@ -216,6 +216,9 @@ class VM:
             self.effects.append(("GetArrivalThreshold", tuple(args)))
             return 300.0
         if method == "GetCurrentRealTime": return 456.0
+        if method == "FriendlyKey":
+            return subprocess.run([str(self.history_exe), "--friendly", args[0]],
+                check=True, capture_output=True, text=True).stdout.rstrip("\r\n")
         if method == "BuildTaskHistoryDesc":
             self.effects.append(("formatter-args", tuple(args)))
             return subprocess.run([str(self.history_exe), "--describe", *map(str, args)],
@@ -375,6 +378,8 @@ def run_director_lite_checks(files, history):
     def first_seek():
         task = DirectorVM(files, history)
         task.seek("First seek")
+        require(("Notification", "Nazeem sets out (Seek Player).") in task.effects,
+                "Director story notice must use friendly story type: " + repr(task.effects))
         require(sum(task.properties[f"AgentAlias{i:02d}"].actor is task.agent for i in range(5)) == 1,
                 "first Director seek did not allocate exactly one slot")
         return task
@@ -383,7 +388,7 @@ def run_director_lite_checks(files, history):
         require(task.task_snapshot() == snapshot, "refused Director request changed the original task")
         extra = task.effects[effects_at:]
         require([e for e in extra if e[0] == "Notification"] ==
-                [("Notification", "Nazeem is already busy (story). Cancel it first.")],
+                [("Notification", "Nazeem is already busy (Story). Cancel it first.")],
                 "busy Director request did not notify exactly once")
         require(all(e[0] in ("Notification", "Trace") for e in extra),
                 "refused Director request wrote facts, narrated, or changed travel")
@@ -438,7 +443,7 @@ def run_director_lite_checks(files, history):
         require(task.task_snapshot() == snapshot, "second Director story displaced the active courier")
         extra = task.effects[effects_at:]
         require([e for e in extra if e[0] == "Notification"] == [("Notification",
-                "Story engine is busy with Gundarsting [Servant] (message). Cancel it first.")],
+                "Story engine is busy with Gundarsting [Servant] (Message). Cancel it first.")],
                 "active Story engine did not notify exactly once")
         require(all(e[0] in ("Notification", "Trace") for e in extra),
                 "refused story wrote facts, narrated, or changed travel")
@@ -583,19 +588,21 @@ def run_director_lite_checks(files, history):
             task.invoke("IntelEngine_Core", "OnDashboardDispatchNpcSocial", ("", payload, 0.0, None))
             notices = [e for e in task.effects if e[0] == "Notification" and e[1].endswith("started.")]
             require(notices == ([] if mode == "refused" else
-                [("Notification", "Nazeem and Recipient: npc_interaction started.")]),
+                [("Notification", "Nazeem and Recipient: Npc Interaction started.")]),
                 "director_social_and_political_success_notice: Social " + mode)
             if mode == "travel":
                 require(task.properties["IsNPCStoryActive"] and task.properties["SlotTaskTypes"][0] == "npc_social",
                         "Social notice without queued travel")
         for acted in (True, False):
-          for event in ({"event_type":"trade_deal"}, {"event_type":"trade_deal","event_label":"Trade deal"}):
+          for event in ({"event_type":"war_declaration"}, {"event_type":"war_declaration","event_label":"War declared"}):
             task = NoticeVM()
             task.acted = acted
+            event.update({"faction_a": "imperial_legion", "faction_b": "stormcloaks"})
             task.invoke("IntelEngine_Core", "OnDashboardDispatchPolitics",
                         ("", json.dumps(event), 0.0, None))
             require([e for e in task.effects if e[0] == "Notification"] ==
-                    ([("Notification", "Political event recorded: " + event.get("event_label", event["event_type"]) + ".")] if acted else []),
+                    ([("Notification", "Political event: " + event.get("event_label", "War Declaration") +
+                       " between Imperial Legion and Stormcloaks.")] if acted else []),
                     "director_social_and_political_success_notice: Political acted=" + str(acted))
             require(("political-record", acted) in task.effects, "Political native boundary not reached")
     def director_story_not_found_notifies():
@@ -640,18 +647,24 @@ def run_director_lite_checks(files, history):
                 "narration": "A message", "response": '{"msgContent":"Hello"}'})
             task.invoke("IntelEngine_Core", "OnDashboardDispatchStory", ("", payload, 0.0, None))
             require([e for e in task.effects if e[0] == "Notification"] ==
-                    ([] if full else [("Notification", "Recipient sets out (message).")]),
+                    ([] if full else [("Notification", "Recipient sets out (Message).")]),
                     "director_message_generation_success_notice: accepted courier once, refused none")
             require(task.properties["DispatchGeneration"] == generation + (0 if full else 1),
                     "message generation did not match dispatch admission")
 
+    failures = []
     for case in (director_seek_then_seek_is_refused, run6_seek_seek_fetch_arrival,
                  director_story_while_story_active, cancel_story_task_ends_story,
                  cancel_story_injects_closing_fact, director_action_success_notice,
                  director_social_and_political_success_notice, director_message_generation_success_notice,
                  director_story_not_found_notifies):
-        case()
-        print("actual PEX " + case.__name__ + " PASS")
+        try:
+            case()
+            print("actual PEX " + case.__name__ + " PASS")
+        except AssertionError as error:
+            failures.append(case.__name__)
+            print("actual PEX " + case.__name__ + " FAIL: " + str(error))
+    require(not failures, "Failed Director cases: " + ", ".join(failures))
 
 
 def main():
