@@ -668,9 +668,9 @@ def run_director_lite_checks(files, history):
                 if method == "FindNPCByName":
                     return self.target if args[0] == self.target.name else None
                 if method == "GetFactionLeaderFormIds":
-                    require(args == ["ImperialFaction"], "faction lookup did not receive its id")
+                    require(len(args) == 1, "faction lookup did not receive one sender")
                     self.effects.append((method, tuple(args)))
-                    return [13276, 0]
+                    return [13276, 0] if args[0] == "ImperialFaction" else []
                 if method == "GetForm": return self.target if args[0] == 13276 else None
                 return super().external(method, args, script)
 
@@ -687,7 +687,7 @@ def run_director_lite_checks(files, history):
                         ([("InjectFact", (task.target, expected))] if sender else []),
                         "hirer facts differ for " + story_type + "/" + sender + ": " + repr(task.effects))
                 require(any(e[0] == "GetFactionLeaderFormIds" for e in task.effects) ==
-                        (sender == "ImperialFaction"), "NPC/empty sender used faction fallback")
+                        bool(sender), "non-empty sender did not check faction leaders")
                 require(task.halt_reached, "hirer check did not reach the dispatch boundary")
 
     failures = []
