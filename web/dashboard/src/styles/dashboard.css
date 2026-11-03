@@ -34,6 +34,10 @@ body {
 }
 .dashboard-section > summary { display: block; list-style: none; cursor: pointer; } .dashboard-section > summary::-webkit-details-marker { display: none; }
 .dashboard-section > summary .section-header::before { content: '▸ '; } .dashboard-section[open] > summary .section-header::before { content: '▾ '; }
+.director-hint { @apply text-[11px] text-gray-400 leading-tight; }
+.director-tab .text-red-400 { color: theme('colors.red.400'); }
+.director-tab textarea { resize: vertical; min-height: 3rem; }
+
 
 .empty-state {
   @apply text-center text-gray-600 py-4 text-xs;
