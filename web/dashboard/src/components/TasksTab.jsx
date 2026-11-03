@@ -2,6 +2,7 @@ import withSections from './Section';
 import React from 'react';
 import SlotCard from './SlotCard';
 import GameTime from './GameTime';
+import PackagesTab from './PackagesTab';
 
 const SCHED_TASK_ICONS = {
   travel: '\u{1F5FA}',
@@ -9,12 +10,13 @@ const SCHED_TASK_ICONS = {
   deliver_message: '\u{1F4DC}',
 };
 
-function TasksTab({ tasks, scheduled, calendar, sendAction }) {
+function TasksTab({ tasks, scheduled, calendar, sendAction, packages, removingIds, onMarkRemoving }) {
   const activeTasks = tasks.filter(s => s.state !== 0);
   const emptyTasks = tasks.filter(s => s.state === 0 && s.cooldownRemaining <= 0);
   const cooldownTasks = tasks.filter(s => s.state === 0 && s.cooldownRemaining > 0);
 
   const activeScheduled = scheduled.filter(s => s.agent);
+  const otherPackages = packages.filter(entry => !activeTasks.some(slot => (slot.agentFormId >>> 0) === entry.formId));
 
   return (
     <div className="p-3 space-y-4">
@@ -33,12 +35,14 @@ function TasksTab({ tasks, scheduled, calendar, sendAction }) {
                 key={slot.index}
                 slot={slot}
                 calendar={calendar}
+                packageType={packages.find(entry => entry.formId === (slot.agentFormId >>> 0))?.pkgType}
                 onCancel={() => sendAction('cancelTask', { slot: slot.index })}
               />
             ))}
           </div>
         )}
       </section>
+      {otherPackages.length > 0 && <PackagesTab packages={otherPackages} sendAction={sendAction} removingIds={removingIds} onMarkRemoving={onMarkRemoving} />}
 
       {/* Cooldowns */}
       {cooldownTasks.length > 0 && (

@@ -28,7 +28,7 @@ function PackagesTab({ packages, sendAction, removingIds, onMarkRemoving }) {
     <div className="p-3 space-y-4">
       <section>
         <div className="flex items-center justify-between mb-2">
-          <h2 className="section-header">Active Packages</h2>
+          <h2 className="section-header">Other IE packages</h2>
           <span className="text-xs text-gray-500">{packages.length} NPC{packages.length !== 1 ? 's' : ''}</span>
         </div>
         <div className="space-y-1.5">
