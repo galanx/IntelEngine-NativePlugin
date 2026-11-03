@@ -65,6 +65,7 @@ function App() {
 
       setState(prev => ({
         ...data,
+        knownNpcs: data.knownNpcs ?? prev.knownNpcs,
         // Merge: defaults → server values → locally edited values
         pluginConfig: {
           ...pluginDefaults,
@@ -199,6 +200,7 @@ function App() {
           {activeTab === 'director' && (
             <DirectorTab
               loadedNpcs={state.loadedNpcs || []}
+              knownNpcs={state.knownNpcs || []}
               tasks={state.tasks || []}
               actions={state.actions || []}
               factions={state.politics?.factions || []}

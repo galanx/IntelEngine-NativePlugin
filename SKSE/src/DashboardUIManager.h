@@ -72,6 +72,7 @@ namespace IntelEngine {
         std::string pendingSlotPayload_;
         std::vector<std::pair<std::uint64_t, std::string>> pendingDirectorResults_;
         std::string pendingFullStatePayload_;
+        std::size_t knownNpcsSize_ = static_cast<std::size_t>(-1);
         mutable std::mutex mutex_;
         std::condition_variable pollCondition_;
         std::thread hotkeyThread_;

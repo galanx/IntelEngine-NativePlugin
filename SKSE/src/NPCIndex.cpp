@@ -386,6 +386,7 @@ namespace IntelEngine {
 
         m_npcIndex.clear();
         m_allNames.clear();
+        m_allDisplayNames.clear();
         m_npcFormIds.clear();
         m_npcCurrentLocations.clear();
         m_directorActorNames.clear();
@@ -408,6 +409,7 @@ namespace IntelEngine {
                 // Store FormID (works even for unloaded NPCs)
                 m_npcFormIds[lowerName] = npcForm->GetFormID();
                 m_allNames.push_back(lowerName);
+                m_allDisplayNames.emplace_back(name);
 
                 // Note: npcForm IS the actor base (TESNPC) - no GetActorBase() needed
                 // Home location can be determined from AI packages, but that's complex
@@ -485,6 +487,8 @@ namespace IntelEngine {
             IndexLoadedNPC(actor);
             return false;
         });
+        std::sort(m_allDisplayNames.begin(), m_allDisplayNames.end());
+        m_allDisplayNames.erase(std::unique(m_allDisplayNames.begin(), m_allDisplayNames.end()), m_allDisplayNames.end());
 
         m_indexBuilt = true;
         logger::info("NPC index complete: {} total NPCs, {} currently loaded",

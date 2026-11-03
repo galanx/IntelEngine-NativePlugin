@@ -3,53 +3,60 @@ import { useState, useMemo, useCallback, useEffect, useRef } from 'react';
 import Select, { useDropdown, dropdownClass } from './Select';
 
 /** Text input with dropdown suggestions. Works in Ultralight (no <datalist> needed). */
-function FactionInput({ value, onChange, factions, placeholder }) {
+function FactionInput({ value, onChange: change, onInput, factions = [], options: entries = factions, npc = entries !== factions, selectionOnly = false, ...inputProps }) {
   const [open, setOpen] = useState(false);
   const [showAll, setShowAll] = useState(false);
+  const [query, setQuery] = useState(null);
+  const [active, setActive] = useState(0);
+  const text = query ?? (selectionOnly ? entries.find(f => f.id === String(value))?.name || '' : value);
   const openDropdown = () => setOpen(true);
+  const onChange = value => { if (npc) { onInput?.(); change({ target: { value } }); } else change(value); };
 
   const filtered = useMemo(() => {
-    if (showAll || !value) return factions;
-    const lc = value.toLowerCase();
-    return factions.filter(f => f.id.toLowerCase().includes(lc) || f.name.toLowerCase().includes(lc));
-  }, [factions, value, showAll]);
-  const expanded = open && filtered.length > 0;
+    const lc = showAll ? '' : text.toLowerCase();
+    const matches = entries.filter(f => f.id.toLowerCase().includes(lc) || f.name.toLowerCase().includes(lc));
+    const factionMatches = matches.filter(f => f.kind === 'faction').slice(0, 10);
+    return [...matches.filter(f => f.kind !== 'faction').slice(0, 50 - factionMatches.length), ...factionMatches];
+  }, [entries, text, showAll]);
+  const expanded = open && (npc || filtered.length > 0);
   const { ref, menuRef, openUp, maxHeight } = useDropdown(expanded, setOpen, filtered.length);
 
   return (
-    <div ref={ref} className="flex-1 relative">
+    <div ref={ref} data-npc-picker={npc || undefined} className="flex-1 min-w-0 relative">
       <input
+        {...inputProps} role={npc ? 'combobox' : undefined} aria-expanded={npc ? expanded : undefined} aria-autocomplete={npc ? 'list' : undefined}
         type="text"
-        value={value}
-        onChange={e => { onChange(e.target.value); setShowAll(false); openDropdown(); }}
+        value={text}
+        onChange={e => { if (selectionOnly) setQuery(e.target.value); onChange(selectionOnly ? '' : e.target.value); setActive(0); setShowAll(false); openDropdown(); }}
         onFocus={() => { setShowAll(true); openDropdown(); }}
         onClick={() => { setShowAll(true); openDropdown(); }}
-        placeholder={placeholder}
-        onKeyDown={e => { if (e.key === 'Escape' && expanded) { e.stopPropagation(); setOpen(false); } }}
+        onKeyDown={e => { if (e.key === 'Escape' && expanded) { e.stopPropagation(); setOpen(false); } else if (npc && ['ArrowDown','ArrowUp','Enter'].includes(e.key)) { e.preventDefault(); if (!expanded) { setActive(0); openDropdown(); } else if (e.key === 'Enter' && filtered[active]) { onChange(filtered[active].id); setQuery(null); setOpen(false); } else setActive(i => (i + (e.key === 'ArrowUp' ? -1 : 1) + filtered.length) % (filtered.length || 1)); } }}
         className="w-full bg-white/5 border border-white/10 rounded px-2 py-1.5 pr-6 text-xs text-gray-200 outline-none placeholder:text-gray-600"
       />
-      {value && (
+      {text && (
         <button
           type="button"
-          aria-label="Clear faction"
+          aria-label={npc ? `Clear ${inputProps['aria-label'] || 'NPC'}` : 'Clear faction'}
           onMouseDown={e => e.preventDefault()}
-          onClick={() => { onChange(''); setShowAll(true); openDropdown(); }}
+          onClick={() => { onChange(''); setQuery(null); setShowAll(true); openDropdown(); }}
           className="absolute right-1 top-1/2 -translate-y-1/2 px-1 text-xs text-gray-500 hover:text-gray-200"
         >
           ×
         </button>
       )}
       {expanded && (
-        <div ref={menuRef} style={{ maxHeight }} className={`${dropdownClass} ${openUp ? 'bottom-full mb-0.5' : 'top-full mt-0.5'}`}>
+        <div role={npc ? 'listbox' : undefined} ref={menuRef} style={{ maxHeight }} className={`${dropdownClass} ${openUp ? 'bottom-full mb-0.5' : 'top-full mt-0.5'}`}>
           {filtered.map(f => (
             <div
               key={f.id}
-              onClick={() => { onChange(f.id); setOpen(false); }}
+              role={npc ? 'option' : undefined} aria-selected={npc ? f.id === String(value) : undefined} onMouseDown={e => e.preventDefault()}
+              onClick={() => { onChange(f.id); setQuery(null); setOpen(false); }}
               className="px-2 py-1 text-xs text-gray-300 hover:bg-white/10 cursor-pointer truncate"
             >
-              {f.name} <span className="text-gray-600">({f.id})</span>
+              {f.name} {(!npc || f.kind) && <span className="text-gray-600">({npc ? f.kind : f.id})</span>}
             </div>
           ))}
+          {!filtered.length && <div className="px-2 py-1 text-xs text-gray-500">No matches</div>}
         </div>
       )}
     </div>
@@ -283,7 +290,7 @@ const SOCIAL_TYPE_FIELDS = {
   ],
 };
 
-function DirectorTab({ loadedNpcs, tasks = [], actions, factions = [], story, social, sendAction }) {
+function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions = [], story, social, sendAction }) {
   // Story dispatch state
   const [storyNpc, setStoryNpc] = useState('');
   const [storyType, setStoryType] = useState('seek_player');
@@ -393,6 +400,9 @@ function DirectorTab({ loadedNpcs, tasks = [], actions, factions = [], story, so
   const send = sendAction;
   sendAction = (action, payload) => { send(action, payload); if (action === 'cancelTask') return; const sent = `sent:${action}:${Date.now()}`; setBusyConfirm(sent); setTimeout(() => setBusyConfirm(current => current === sent ? '' : current), 2000); };
   const npcs = loadedNpcs || [];
+  const nearby = useMemo(() => npcs.map(n => ({ id: String(n.formId), name: n.name, kind: 'nearby' })), [loadedNpcs]);
+  const npcOptions = useMemo(() => { const names = new Set(npcs.map(n => n.name)); return [...new Set([...names, ...knownNpcs])].map(name => ({ id: name, name, kind: names.has(name) ? 'nearby' : '' })); }, [loadedNpcs, knownNpcs]);
+  const hirerOptions = useMemo(() => [...npcOptions, ...factions.map(f => ({ ...f, kind: 'faction' }))], [npcOptions, factions]);
   const busySlots = names => tasks.filter(slot => slot.state && names.some(name => slot.agentName?.toLowerCase() === name.trim().toLowerCase()));
   const storyBusy = busySlots([storyNpc]);
   const socialBusy = busySlots([socialNpc1, socialNpc2]);
@@ -555,7 +565,7 @@ function DirectorTab({ loadedNpcs, tasks = [], actions, factions = [], story, so
         {generateControls('story')}{pending?.form === 'story' && <small>Generating…</small>}{generateError && !pending && <small>{generateError}</small>}
         <fieldset disabled={pending?.form === 'story'} className="space-y-2 border-0 p-0 m-0 min-w-0" inert={pending?.form === 'story' ? '' : undefined}>
           <div className="flex gap-2">
-            <input
+            <FactionInput options={npcOptions}
               type="text"
               value={storyNpc}
               onInput={() => setTouched(t=>({...t,npcName:true}))}
@@ -602,7 +612,7 @@ function DirectorTab({ loadedNpcs, tasks = [], actions, factions = [], story, so
                     <option key={o} value={o}>{o}</option>
                   ))}
                 </Select>
-              ) : f.key === 'sender' && ['ambush','stalker'].includes(storyType) ? <FactionInput value={storyFields.sender || ''} onChange={value => { setTouched(t=>({...t,sender:true})); setStoryFields(prev => ({...prev,sender:value})); }} factions={factions} placeholder={f.placeholder} /> : (
+              ) : ['subject','sender','victimName'].includes(f.key) ? <FactionInput options={f.key === 'sender' && ['ambush','stalker'].includes(storyType) ? hirerOptions : npcOptions} aria-label={f.label} value={storyFields[f.key] || ''} onChange={e => { setTouched(t=>({...t,[f.key]:true})); setStoryFields(prev => ({...prev,[f.key]:e.target.value})); }} placeholder={f.placeholder} /> : (
                 <input
                   type="text"
                   value={storyFields[f.key] || ''}
@@ -635,7 +645,7 @@ function DirectorTab({ loadedNpcs, tasks = [], actions, factions = [], story, so
         {generateControls('social')}{pending?.form === 'social' && <small>Generating…</small>}{generateError && !pending && <small>{generateError}</small>}
         <fieldset disabled={pending?.form === 'social'} className="space-y-2 border-0 p-0 m-0 min-w-0" inert={pending?.form === 'social' ? '' : undefined}>
           <div className="flex gap-2">
-            <input
+            <FactionInput options={npcOptions}
               type="text"
               value={socialNpc1}
               onInput={() => setTouched(t=>({...t,npc1Name:true}))}
@@ -643,7 +653,7 @@ function DirectorTab({ loadedNpcs, tasks = [], actions, factions = [], story, so
               placeholder="NPC 1 (e.g. Mikael)"
               className="flex-1 bg-white/5 border border-white/10 rounded px-2 py-1.5 text-xs text-gray-200 outline-none placeholder:text-gray-600"
             />
-            <input
+            <FactionInput options={npcOptions}
               type="text"
               value={socialNpc2}
               onInput={() => setTouched(t=>({...t,npc2Name:true}))}
@@ -774,16 +784,11 @@ function DirectorTab({ loadedNpcs, tasks = [], actions, factions = [], story, so
         <h2 className="section-header mb-2">Action Execution</h2>
         <div className="space-y-2">
           <div className="flex gap-2">
-            <Select aria-label="Action NPC" containerClassName="flex-1"
+            <FactionInput options={nearby} selectionOnly aria-label="Action NPC" placeholder="Select NPC..."
               value={actionNpc}
               onChange={e => { setActionNpc(e.target.value); setBusyConfirm(''); }}
               className="bg-white/5 border border-white/10 rounded px-2 py-1.5 text-xs text-gray-200 outline-none"
-            >
-              <option value="">Select NPC...</option>
-              {npcs.map(n => (
-                <option key={n.formId} value={n.formId}>{n.name}</option>
-              ))}
-            </Select>
+            />
             <Select aria-label="Action" containerClassName="w-[150px]"
               value={selectedAction}
               onChange={e => handleActionChange(e.target.value)}
@@ -824,7 +829,7 @@ function DirectorTab({ loadedNpcs, tasks = [], actions, factions = [], story, so
                     <option key={o.value} value={o.value}>{o.label}</option>
                   ))}
                 </Select>
-              ) : (
+              ) : f.key === 'targetName' ? <FactionInput options={npcOptions} aria-label={f.label} value={actionParams[f.key] || ''} onChange={e => setParam(f.key, e.target.value)} placeholder={f.placeholder} /> : (
                 <input
                   type="text"
                   value={actionParams[f.key] || ''}
