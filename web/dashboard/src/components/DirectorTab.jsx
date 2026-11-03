@@ -473,8 +473,12 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
   useEffect(() => { if (!restoredDrafts.current) { restoredDrafts.current = true; return; } try { localStorage.setItem('intelengine.director.drafts', draftSnapshot); } catch {} }, [draftSnapshot]);
 
   const [busyConfirm, setBusyConfirm] = useState('');
+  const [queued, setQueued] = useState('');
+  useEffect(() => { if (queued === 'dispatchStory' && story || queued === 'dispatchNpcSocial' && social) setQueued(''); }, [story, social]);
+  useEffect(() => { if (!queued) return; const timer = setTimeout(() => setQueued(''), 30000); return () => clearTimeout(timer); }, [queued]);
+  useEffect(() => { const reset = () => { if (!document.hidden) setQueued(''); }; document.addEventListener('visibilitychange', reset); return () => document.removeEventListener('visibilitychange', reset); }, []);
   const send = sendAction;
-  sendAction = (action, payload) => { send(action, payload); if (action === 'cancelTask') return; const sent = `sent:${action}:${Date.now()}`; setBusyConfirm(sent); setTimeout(() => setBusyConfirm(current => current === sent ? '' : current), 2000); };
+  sendAction = (action, payload) => { send(action, payload); if (action === 'cancelTask') return; if (action === 'dispatchStory' || action === 'dispatchNpcSocial') { setQueued(action); return; } const sent = `sent:${action}:${Date.now()}`; setBusyConfirm(sent); setTimeout(() => setBusyConfirm(current => current === sent ? '' : current), 2000); };
   const npcs = loadedNpcs || [];
   const nearby = useMemo(() => npcs.map(n => ({ id: String(n.formId), name: n.name, kind: 'nearby' })), [loadedNpcs]);
   const npcOptions = useMemo(() => { const names = new Set(npcs.map(n => n.name)); return [...new Set([...names, ...knownNpcs])].map(name => ({ id: name, name, kind: names.has(name) ? 'nearby' : '' })); }, [loadedNpcs, knownNpcs]);
@@ -540,7 +544,7 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
     const type = (form === 'story' ? engine.activeType : engine.type) || '';
     return <span className="text-amber-400 italic normal-case"> — busy: {who} ({type.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())})</span>;
   };
-  const generateControls = form => <div className="flex items-center justify-between mb-2"><h2 className="section-header">{{story:'Story Dispatch',social:'NPC Social Dispatch',political:'Political Dispatch',action:'Action Execution'}[form]}{busyHeader(form)}</h2><div className="flex gap-2">
+  const generateControls = form => <div className="flex items-center justify-between mb-2"><h2 className="section-header">{{story:'Story Dispatch',social:'NPC Social Dispatch',political:'Political Dispatch',action:'Action Execution'}[form]}{queued === (form === 'story' ? 'dispatchStory' : 'dispatchNpcSocial') && ['story','social'].includes(form) ? ' — queued: starts when you close the dashboard' : ''}{busyHeader(form)}</h2><div className="flex gap-2">
     <button data-expand-section onClick={() => generate(form)} disabled={!!pending}
       className="rounded px-2 py-1 text-xs text-gray-300 bg-white/10 disabled:opacity-40">{pending?.form === form ? 'Generating…' : 'Generate'}</button>
     <button onClick={() => pending?.form === form ? stopGenerate() : clear(form)} className="rounded px-2 py-1 text-xs text-gray-400">{pending?.form === form ? 'Stop' : 'Clear'}</button>
@@ -716,7 +720,7 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
             disabled={story?.isActive || storyRequired.some(([, valid]) => !valid)}
             className="w-full px-3 py-1.5 text-xs font-medium rounded transition-colors bg-blue-500/20 text-blue-400 hover:bg-blue-500/30 disabled:opacity-30 disabled:cursor-not-allowed"
           >
-            {story?.isActive ? 'Story engine busy' : busyConfirm.startsWith('sent:dispatchStory:') ? 'Sent' : storyBusy.length && busyConfirm === 'story' ? 'Busy — you sure?' : 'Dispatch Story'}
+            {story?.isActive ? 'Story engine busy' : queued === 'dispatchStory' ? 'Queued' : busyConfirm.startsWith('sent:dispatchStory:') ? 'Sent' : storyBusy.length && busyConfirm === 'story' ? 'Busy — you sure?' : 'Dispatch Story'}
           </button>
           {missingFields(storyRequired)}
         </fieldset>
@@ -791,7 +795,7 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
             disabled={socialRequired.some(([, valid]) => !valid)}
             className="w-full px-3 py-1.5 text-xs font-medium rounded transition-colors bg-purple-500/20 text-purple-400 hover:bg-purple-500/30 disabled:opacity-30 disabled:cursor-not-allowed"
           >
-            {busyConfirm.startsWith('sent:dispatchNpcSocial:') ? 'Sent' : socialBusy.length && busyConfirm === 'social' ? 'Busy — you sure?' : social?.isActive ? 'NPC social busy' : 'Dispatch Social'}
+            {socialBusy.length && busyConfirm === 'social' ? 'Busy — you sure?' : queued === 'dispatchNpcSocial' ? 'Queued' : busyConfirm.startsWith('sent:dispatchNpcSocial:') ? 'Sent' : social?.isActive ? 'NPC social busy' : 'Dispatch Social'}
           </button>
           {missingFields(socialRequired)}
         </fieldset>
