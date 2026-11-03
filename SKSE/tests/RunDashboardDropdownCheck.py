@@ -69,7 +69,7 @@ SCRIPT = r"""
       story:{enabled:true}, quest:{active:true}, social:{enabled:true},
       npcSocialLog:[{type:'npc_interaction',text:'A conversation'}], packages:[{formId:1,name:'Nazeem',pkgType:'Sandbox'}],
       loadedNpcs:Array.from({length:30},(_,i)=>({formId:108196+i,name:i?'Guard '+i:'Nazeem'})),
-      actions:[{name:'GoToLocation',enabled:true},{name:'ReportPlayerConduct',params:[{name:'sentiment',enum:['strongly_positive','positive','negative','strongly_negative']},{name:'factionId'},{name:'reason'}]},{name:'ChangeSpeed',enabled:true}],
+      actions:[{name:'GoToLocation',enabled:true},{name:'FetchPerson',enabled:true},{name:'ReportPlayerConduct',params:[{name:'sentiment',enum:['strongly_positive','positive','negative','strongly_negative']},{name:'factionId'},{name:'reason'}]},{name:'ChangeSpeed',enabled:true}],
       politics:{enabled:true,factions:[{id:'ImperialFaction',name:'Imperial Legion'},{id:'StormcloakFaction',name:'Stormcloaks'},...Array.from({length:3},(_,i)=>({id:'ThalmorFaction'+i,name:'Thalmor '+i}))],relations:[],wars:[],player_standings:[],events:[]}}));
     await pause(); clickText('Director'); await pause();
     if (location.hash === '#director_busy_line') {
@@ -94,10 +94,10 @@ SCRIPT = r"""
         check(hint.getBoundingClientRect().top >= dispatch(index).getBoundingClientRect().bottom, 'busy line is not beneath Dispatch');
       }
       check(payloads.length===0, 'busy advisory dispatched an action');
-      await fill('input[placeholder="NPC name (e.g. Saadia)"]','Saadia');
+      await fill('input[placeholder="e.g. Saadia"]','Saadia');
       await fill('section:nth-of-type(1) textarea','came to repay a debt');
-      await fill('input[placeholder="NPC 1 (e.g. Mikael)"]','Mikael');
-      await fill('input[placeholder="NPC 2 (e.g. Sven)"]','Sven');
+      await fill('input[placeholder="e.g. Mikael"]','Mikael');
+      await fill('input[placeholder="e.g. Sven"]','Sven');
       await fill('section:nth-of-type(2) textarea','discussed a shipment');
       check(!dispatch(1).disabled && !dispatch(2).disabled, 'busy engine disabled a valid Dispatch');
       await update(false,true);
@@ -119,7 +119,7 @@ SCRIPT = r"""
         window.directorGenerateResult(JSON.stringify({requestId:request.requestId,form:'story',ok:true,fields})); await pause();
         return request;
       };
-      await fill('input[placeholder="NPC name (e.g. Saadia)"]', 'Saadia');
+      await fill('input[placeholder="e.g. Saadia"]', 'Saadia');
       const a = await roll({npcName:'Nazeem',storyType:'ambush',narration:'was hired to collect an unpaid debt',sender:'Guard 1'});
       check(narration().value === 'was hired to collect an unpaid debt', 'first Generate did not fill narration A');
       const b = await roll({npcName:'Guard 2',storyType:'road_encounter',narration:'set out to sell pelts in Helgen',destination:'Helgen'});
@@ -133,8 +133,9 @@ SCRIPT = r"""
         await choose('Story type', type);
         check(narration().placeholder === example, type + ' placeholder did not change');
       }
-      const hint = [...story().querySelectorAll('p')].find(e=>e.textContent.startsWith('Narration'));
-      check(getComputedStyle(hint).fontSize === '11px' && getComputedStyle(hint).color === 'rgb(156, 163, 175)' && hint.querySelector('.text-red-400'), 'hint is not readable or required star lost');
+      const label = [...story().querySelectorAll('label')].find(e=>e.textContent.startsWith('Narration'));
+      const hint = label.parentElement.querySelector('.director-hint');
+      check(getComputedStyle(hint).fontSize === '11px' && getComputedStyle(hint).color === 'rgb(156, 163, 175)' && label.querySelector('.text-red-400'), 'hint is not readable or required label star lost');
       [...story().querySelectorAll('button')].find(e=>e.textContent.trim()==='Clear').click(); await pause();
       const cleared = await roll({npcName:'Guard 1',storyType:'seek_player',narration:'came to repay a debt'});
       check(cleared.fields.npcName === '' && cleared.fields.narration === '' && story().querySelector('input').value === 'Guard 1', 'Clear retained user ownership');
@@ -144,7 +145,7 @@ SCRIPT = r"""
     if (location.hash === '#story_type_hints') {
       const story = () => document.querySelector('section');
       const text = () => [...story().querySelectorAll('p, span')].map(e=>e.textContent).join('\n');
-      check(text().includes('what they will do.') && text().includes('why the NPC acts; used as story context.'), 'auto hints changed');
+      check(text().includes('What they will do.') && text().includes('Why the NPC acts; used as story context.'), 'auto hints changed');
       await choose('Story type', 'Road Encounter');
       check(text().includes('Appears on the road ahead of you, travelling to Destination on their own errand (outdoors only).'), 'road encounter type hint missing');
       check(text().includes('Why they are travelling, e.g. set out to sell pelts in Helgen.') && text().includes('Where they are heading. Required: a real Skyrim location.'), 'road narration or Destination hint missing');
@@ -161,7 +162,7 @@ SCRIPT = r"""
       check(message.schema.narration.hint.includes('Why the sender wants to contact you.') && !message.schema.narration.hint.includes('travelling'), 'Generate retained previous type guidance');
       clickText('Stop'); await pause();
       document.querySelector('[aria-label="Clear Story type"]').click(); await pause();
-      check(text().includes('what they will do.') && text().includes('why the NPC acts; used as story context.'), 'auto generic hints not restored');
+      check(text().includes('What they will do.') && text().includes('Why the NPC acts; used as story context.'), 'auto generic hints not restored');
       document.getElementById('result').textContent=JSON.stringify({status:'PASS',checks:['story_type_hints'],guidance:[road.schema.narration.hint,message.schema.narration.hint]});
       return;
     }
@@ -276,7 +277,7 @@ SCRIPT = r"""
         check(option,`missing NPC picker option: ${label}`); option.click(); await pause();
       };
       const open = async control => { control.focus(); control.click(); await pause(); };
-      const storyInput = () => input('NPC name (e.g. Saadia)');
+      const storyInput = () => input('e.g. Saadia');
       check(pickers().length===4, 'Story, both Social identities, and Action do not share NPC picker');
       check(pickers().every(w=>w.querySelector('[role=combobox]')), 'a Director NPC picker lacks combobox role');
       const story=storyInput();
@@ -285,7 +286,7 @@ SCRIPT = r"""
         options()[29].textContent.trim()==='Guard 29 (nearby)' &&
         options()[30].textContent.trim()==='Aela the Huntress',
         'nearby-first ordering, nearby markers, known names, or 50-row cap failed');
-      await fill('[placeholder="NPC name (e.g. Saadia)"]','Camilla');
+      await fill('[placeholder="e.g. Saadia"]','Camilla');
       check(options().length===1 && options()[0].textContent.trim()==='Camilla Valerius','typing did not filter known NPCs');
       await chooseOption('Camilla Valerius');
       check(story.value==='Camilla Valerius','known non-nearby NPC was not selected');
@@ -295,13 +296,13 @@ SCRIPT = r"""
       check(story.value==='Camilla Valerius','Message sender did not use the Story NPC picker');
       clickText('Clear'); await pause();
       check(story.value==='', 'Director Clear did not clear the picked NPC');
-      await fill('[placeholder="NPC name (e.g. Saadia)"]','Saadia');
-      const social1=input('NPC 1 (e.g. Mikael)'), social2=input('NPC 2 (e.g. Sven)');
-      await fill('[placeholder="NPC 1 (e.g. Mikael)"]','Aela');
+      await fill('[placeholder="e.g. Saadia"]','Saadia');
+      const social1=input('e.g. Mikael'), social2=input('e.g. Sven');
+      await fill('[placeholder="e.g. Mikael"]','Aela');
       check(options().length===1 && options()[0].textContent.trim()==='Aela the Huntress',
         'Social NPC picker did not filter known names');
       await chooseOption('Aela the Huntress');
-      await fill('[placeholder="NPC 2 (e.g. Sven)"]','Maven');
+      await fill('[placeholder="e.g. Sven"]','Maven');
       await chooseOption('Maven Black-Briar');
       check(social1.value==='Aela the Huntress' && social2.value==='Maven Black-Briar',
         'Social NPC identities did not retain selected names');
@@ -348,31 +349,56 @@ SCRIPT = r"""
         checks:['npc_picker_consistent'],directorPickers:pickers().length,knownFixtureCount:known.length,knownFixtureBytes:new TextEncoder().encode(JSON.stringify(known)).length});
       return;
     }
-    if (location.hash === '#director_polish') {
+    if (['#director_polish', '#director_field_layout'].includes(location.hash)) {
       const failures = [];
       const expect = (condition, message, details) => {
         if (!condition) failures.push({message, ...(details || {})});
       };
       const section = index => document.querySelector(`section:nth-of-type(${index})`);
-      const hint = (host, prefix) => [...host.querySelectorAll('p')].find(p=>p.textContent.trim().startsWith(prefix));
-      const paired = (host, specs, name) => {
-        const found = specs.map(([selector, prefix]) => [host.querySelector(selector), hint(host, prefix)]);
-        const nodes = found.map(([,p])=>p);
-        const parent = nodes[0]?.parentElement;
-        const geometries = found.map(([control,p]) => {
-          const a=control?.getBoundingClientRect(), b=p?.getBoundingClientRect();
-          return {control:control?.outerHTML?.slice(0,100),hint:p?.textContent.trim(),controlRect:a&&{x:a.x,y:a.y,width:a.width,bottom:a.bottom},hintRect:b&&{x:b.x,y:b.y,width:b.width,bottom:b.bottom}};
-        });
-        expect(found.every(([control,p])=>control && p?.tagName==='P') &&
-          new Set(nodes).size===nodes.length && nodes.every(p=>p.parentElement===parent),
-          `${name}: paired hints are not distinct paragraphs in one hint row`, {geometries});
-        expect(found.every(([control,p])=>{
-          if (!control || !p) return false;
-          const a=control.getBoundingClientRect(), b=p.getBoundingClientRect();
-          return b.y>=a.bottom-1 && Math.abs(a.x-b.x)<=2 && Math.abs(a.width-b.width)<=2;
-        }), `${name}: hints are not below and aligned to their respective controls`, {geometries});
+      const hint = (host, prefix) => [...host.querySelectorAll('p, span')].find(p=>p.textContent.trim().startsWith(prefix));
+      const field = (host, labelText, controlSelector, hintText, required) => {
+        const label = [...host.querySelectorAll('label')].find(e=>e.textContent.trim().startsWith(labelText));
+        const control = label?.parentElement.querySelector(controlSelector);
+        const help = label && hint(label.parentElement, hintText);
+        const rect = node => {
+          const r=node?.getBoundingClientRect();
+          return r&&{x:r.x,y:r.y,width:r.width,bottom:r.bottom};
+        };
+        const details = {label:label?.textContent.trim(),labelClass:label?.className,control:control?.outerHTML?.slice(0,100),
+          hint:help?.textContent.trim(),labelRect:rect(label),controlRect:rect(control),hintRect:rect(help)};
+        const labelBeforeControl = !!label && !!control &&
+          !!(label.compareDocumentPosition(control) & Node.DOCUMENT_POSITION_FOLLOWING);
+        const controlBeforeHint = !!control && !!help &&
+          !!(control.compareDocumentPosition(help) & Node.DOCUMENT_POSITION_FOLLOWING);
+        expect(!!label && !!control && !!help && labelBeforeControl && controlBeforeHint,
+          `${labelText}: label/control/hint DOM order is wrong`, details);
+        expect(label?.classList.contains('text-[10px]') && label?.classList.contains('text-gray-500') &&
+          (label?.querySelector('.text-red-400') !== null) === required &&
+          !help?.querySelector('.text-red-400'),
+          `${labelText}: label variant or required star is wrong`, details);
+        expect(!!label && !!control && !!help && (() => {
+          const l=label.getBoundingClientRect(), c=control.getBoundingClientRect(), h=help.getBoundingClientRect();
+          return l.y<=c.y && h.y>=c.bottom-1 && Math.abs(l.x-c.x)<=2 && Math.abs(c.x-h.x)<=2;
+        })(), `${labelText}: label/control/hint geometry is not vertically stacked and aligned`, details);
+        return help;
       };
       const story = section(1), social = section(2), politics = section(3), action = section(4);
+      const baseHints = [
+        field(story,'NPC','input[placeholder="e.g. Saadia"]','Exact display name.',true),
+        field(story,'Story type','[aria-label="Story type"]','What they will do.',true),
+        field(story,'Narration','textarea','Why the NPC acts; used as story context.',true),
+        field(social,'NPC 1','input[placeholder="e.g. Mikael"]','The traveler/teller.',true),
+        field(social,'NPC 2','input[placeholder="e.g. Sven"]','The counterpart/listener.',true),
+        field(social,'Social type','[aria-label="Social type"]','Interaction or gossip.',true),
+        field(social,'Narration','textarea','What happens between them.',true),
+        field(politics,'Faction A','input[placeholder="e.g. StormcloakFaction"]','First side.',true),
+        field(politics,'Faction B','input[placeholder="e.g. ThalmorFaction"]','Other side.',true),
+        field(politics,'Event','[aria-label="Political event type"]','What happened.',true),
+        field(politics,'Relation delta','input[type=number]','Change, -15 to 15.',false),
+        field(politics,'Description','textarea','A short account of the political event.',true),
+        field(action,'NPC','[aria-label="Action NPC"]','Nearby actor who performs the action.',true),
+        field(action,'Action','[aria-label="Action"]','Command to run.',true)
+      ];
       const starSpans = [...document.querySelectorAll('section .text-red-400')];
       const badStars = starSpans.filter(s=>getComputedStyle(s).color!=='rgb(248, 113, 113)');
       const rules = badStars.map(star=>{
@@ -384,42 +410,38 @@ SCRIPT = r"""
         return {text:star.parentElement?.textContent,computed:getComputedStyle(star).color,matches:matched};
       });
       expect(starSpans.length>0 && !badStars.length, 'required stars do not compute to red-400', {starCount:starSpans.length,badStars:rules});
-      paired(story, [['input[placeholder="NPC name (e.g. Saadia)"]','NPC '],['[aria-label="Story type"]','Story type ']], 'Story NPC/Story type');
-      paired(social, [['input[placeholder="NPC 1 (e.g. Mikael)"]','NPC 1 '],['input[placeholder="NPC 2 (e.g. Sven)"]','NPC 2 ']], 'Social NPC1/NPC2');
-      paired(social, [['[aria-label="Social type"]','Social type '],['textarea','Narration ']], 'Social type/Narration');
-      paired(politics, [['input[placeholder="Faction A (e.g. StormcloakFaction)"]','Faction A '],['input[placeholder="Faction B (e.g. ThalmorFaction)"]','Faction B ']], 'Political factions');
-      paired(politics, [['[aria-label="Political event type"]','Event '],['div:has(> input[type=number])','Δ:']], 'Political Event/Δ');
-      paired(action, [['[aria-label="Action NPC"]','NPC *'],['[aria-label="Action"]','Action *']], 'Action NPC/Action');
       const textareas = [...document.querySelectorAll('section textarea')];
       const badTextareas=textareas.filter(t=>getComputedStyle(t).resize!=='vertical' || parseFloat(getComputedStyle(t).minHeight)<48);
       expect(textareas.length>0 && !badTextareas.length, 'Director textareas lack vertical resize or sensible minimum height',
         {textareas:textareas.map(t=>({placeholder:t.placeholder,resize:getComputedStyle(t).resize,minHeight:getComputedStyle(t).minHeight}))});
-      const storyHint = hint(story,'Narration ');
+      const storyHint = baseHints[2];
       const storyStyle = storyHint && getComputedStyle(storyHint);
       const storyContract = element => element?.classList.contains('director-hint') &&
         getComputedStyle(element).fontSize===storyStyle?.fontSize &&
         getComputedStyle(element).color===storyStyle?.color &&
         storyStyle?.fontSize==='11px' && storyStyle?.color==='rgb(156, 163, 175)';
-      const actionBaseHint=hint(action,'NPC *');
-      expect(storyContract(storyHint) && storyContract(actionBaseHint),
-        'Story and Action Execution base hints do not share the readable director-hint style',
-        {story:storyHint&&{className:storyHint.className,fontSize:storyStyle.fontSize,color:storyStyle.color},
-          action:actionBaseHint&&{className:actionBaseHint.className,fontSize:getComputedStyle(actionBaseHint).fontSize,color:getComputedStyle(actionBaseHint).color}});
+      expect(baseHints.length===14 && baseHints.every(storyContract),
+        'base fields do not retain shared director-hint style',
+        {hints:baseHints.map(e=>e&&{text:e.textContent.trim(),className:e.className,fontSize:getComputedStyle(e).fontSize,color:getComputedStyle(e).color})});
+      await choose('Action','FetchPerson');
+      const refusalHint=[...action.querySelectorAll('.director-hint')].find(e=>e.textContent.trim()==='Optional. Leave empty and the person comes along. If filled, they refuse to come and give this reason.');
+      expect(!!refusalHint,'FetchPerson visible refusal hint is missing or changed',
+        {hints:[...action.querySelectorAll('.director-hint')].map(e=>e.textContent.trim())});
       await choose('Action','GoToLocation');
-      const dynamicHint=[...action.querySelectorAll('span,p')].find(e=>e.textContent.includes('Named location') && e.textContent.includes('Required.'));
+      const dynamicHint=[...action.querySelectorAll('.director-hint')].find(e=>e.textContent.includes('Named location'));
       expect(storyContract(dynamicHint), 'Action Execution dynamic hint does not share the readable director-hint style with Story',
         {dynamic:dynamicHint&&{tag:dynamicHint.tagName,className:dynamicHint.className,fontSize:getComputedStyle(dynamicHint).fontSize,color:getComputedStyle(dynamicHint).color},
           story:storyHint&&{className:storyHint.className,fontSize:storyStyle.fontSize,color:storyStyle.color}});
       document.getElementById('result').textContent=JSON.stringify({status:failures.length?'FAIL':'PASS',
-        checks:['director_polish'],starColors:starSpans.map(s=>({text:s.parentElement?.textContent.trim(),className:s.className,color:getComputedStyle(s).color})),failures});
+        checks:[location.hash.slice(1)],starColors:starSpans.map(s=>({text:s.parentElement?.textContent.trim(),className:s.className,color:getComputedStyle(s).color})),failures});
       return;
     }
     if (location.hash === '#director_required_fields') {
       const story = () => document.querySelector('section:nth-of-type(1)');
       const dispatch = () => [...story().querySelectorAll('button')].find(e => e.textContent.trim() === 'Dispatch Story');
-      const hints = () => [...story().querySelectorAll('p')].map(e => e.textContent);
+      const labels = () => [...story().querySelectorAll('label')].map(e => e.textContent);
       const missing = () => [...story().querySelectorAll('p')].find(e => e.textContent.startsWith('Fill required fields:'));
-      check(['NPC *:', 'Story type *:', 'Narration *:'].every(text => hints().some(hint => hint.includes(text))), 'Story required field hints are not marked');
+      check(['NPC *', 'Story type *', 'Narration *'].every(text => labels().includes(text)), 'Story required field labels are not marked');
       for (const [index, title] of [[1,'Story Dispatch'],[2,'NPC Social Dispatch'],[3,'Political Dispatch']]) {
         const section = document.querySelector(`section:nth-of-type(${index})`);
         const heading = section.querySelector('h2'), generate = [...section.querySelectorAll('button')].find(e=>e.textContent==='Generate');
@@ -430,7 +452,7 @@ SCRIPT = r"""
         check(b.left >= h.right && Math.abs(b.top-h.top)<10 && b.width<100, 'Generate is not a small right-hand header button');
       }
       check(dispatch().disabled && missing()?.textContent === 'Fill required fields: NPC, Narration', 'Story missing list does not match initial validation');
-      await fill('input[placeholder="NPC name (e.g. Saadia)"]', 'Saadia');
+      await fill('input[placeholder="e.g. Saadia"]', 'Saadia');
       check(dispatch().disabled && missing()?.textContent === 'Fill required fields: Narration', 'filled NPC remained missing');
       await choose('Story type', 'Message');
       check(![...story().querySelectorAll('label')].some(e => e.textContent.includes('Message content') && e.textContent.includes('*')), 'optional Dispatch field marked required');
@@ -439,18 +461,18 @@ SCRIPT = r"""
       const section = index => document.querySelector(`section:nth-of-type(${index})`);
       const submit = index => [...section(index).querySelectorAll('button')].at(-1);
       const missingIn = index => [...section(index).querySelectorAll('p')].find(e => e.textContent.startsWith('Fill required fields:'))?.textContent;
-      await fill('input[placeholder="NPC 1 (e.g. Mikael)"]', 'Mikael');
-      await fill('input[placeholder="NPC 2 (e.g. Sven)"]', 'Sven');
+      await fill('input[placeholder="e.g. Mikael"]', 'Mikael');
+      await fill('input[placeholder="e.g. Sven"]', 'Sven');
       await fill('section:nth-of-type(2) textarea', 'Discussed a shipment');
       await choose('Social type', 'Gossip');
       check(!submit(2).disabled && !missingIn(2) && ![...section(2).querySelectorAll('label')].some(e => e.textContent.includes('Gossip') && e.textContent.includes('*')), 'Social optional variant marked required');
-      await fill('input[placeholder="Faction A (e.g. StormcloakFaction)"]', 'StormcloakFaction');
-      await fill('input[placeholder="Faction B (e.g. ThalmorFaction)"]', 'StormcloakFaction');
+      await fill('input[placeholder="e.g. StormcloakFaction"]', 'StormcloakFaction');
+      await fill('input[placeholder="e.g. ThalmorFaction"]', 'StormcloakFaction');
       await fill('section:nth-of-type(3) textarea', 'A diplomatic exchange');
       check(submit(3).disabled && missingIn(3) === 'Fill required fields: Faction B, Political event type', 'unpicked Political event type did not block dispatch');
       await choose('Political event type', 'Trade Deal');
       check(submit(3).disabled && missingIn(3) === 'Fill required fields: Faction B', 'same-faction validation lost its label');
-      await fill('input[placeholder="Faction B (e.g. ThalmorFaction)"]', 'ThalmorFaction');
+      await fill('input[placeholder="e.g. ThalmorFaction"]', 'ThalmorFaction');
       check(!submit(3).disabled && !missingIn(3), 'valid Political form remains blocked');
       [...section(3).querySelectorAll('button')].find(e=>e.textContent.trim()==='Dispatch Political Event').click(); await pause();
       const politicalPayload = JSON.parse(payloads.find(([name])=>name==='dispatchPolitics')[1]);
@@ -470,26 +492,26 @@ SCRIPT = r"""
     if (location.hash === '#ambush_faction_hirer') {
       const story = document.querySelector('section:nth-of-type(1)');
       const button = text => [...story.querySelectorAll('button')].find(e=>e.textContent.trim()===text);
-      await fill('input[placeholder="NPC name (e.g. Saadia)"]','Saadia');
+      await fill('input[placeholder="e.g. Saadia"]','Saadia');
       await choose('Story type','Ambush');
       await fill('section:nth-of-type(1) textarea','was hired by the Imperial Legion');
       await fill('input[placeholder="e.g. Maven Black-Briar"]','Imperial Legion');
       button('Dispatch Story').click(); await pause();
       check(JSON.parse(payloads.at(-1)[1]).sender==='ImperialFaction','typed faction name was not dispatched as producer faction ID');
       button('Clear').click(); await pause();
-      await fill('input[placeholder="NPC name (e.g. Saadia)"]','Saadia');
+      await fill('input[placeholder="e.g. Saadia"]','Saadia');
       await choose('Story type','Stalker');
       button('Generate').click(); await pause();
       const request=JSON.parse(payloads.at(-1)[1]);
       window.directorGenerateResult(JSON.stringify({requestId:request.requestId,form:'story',ok:true,
         fields:{npcName:'Nazeem',storyType:'stalker',narration:'confessed to following you for the Imperial Legion',sender:'Imperial Legion'}})); await pause();
-      check(story.querySelector('input[placeholder="NPC name (e.g. Saadia)"]').value==='Saadia','generation replaced the typed NPC identity');
+      check(story.querySelector('input[placeholder="e.g. Saadia"]').value==='Saadia','generation replaced the typed NPC identity');
       button('Dispatch Story').click(); await pause();
       const generated=JSON.parse(payloads.at(-1)[1]);
       check(generated.sender==='ImperialFaction' && generated.npcName==='Saadia','generated faction sender or preserved NPC was dispatched incorrectly');
       for (const sender of ['ImperialFaction', 'Maven Black-Briar']) {
         button('Clear').click(); await pause();
-        await fill('input[placeholder="NPC name (e.g. Saadia)"]','Saadia');
+        await fill('input[placeholder="e.g. Saadia"]','Saadia');
         await choose('Story type','Ambush');
         await fill('section:nth-of-type(1) textarea','had an unpaid debt');
         await fill('input[placeholder="e.g. Maven Black-Briar"]',sender);
@@ -526,8 +548,8 @@ SCRIPT = r"""
     }
     if (location.hash === '#director_generate_merge_and_stop') {
       payloads.length = 0;
-      check(button('Story type').placeholder==='(auto)' && button('Story type').value==='', 'untouched type is not auto');
-      await fill('input[placeholder="NPC name (e.g. Saadia)"]','Saadia');
+      check(button('Story type').placeholder==='e.g. Seek Player' && button('Story type').value==='', 'untouched type is not auto');
+      await fill('input[placeholder="e.g. Saadia"]','Saadia');
       await choose('Story type','Quest'); await filterPick('Story type','Quest');
       await choose('Sub-type','rescue');
       clickText('Generate');
@@ -554,7 +576,7 @@ SCRIPT = r"""
           questSubType:'rescue',enemyType:'bandit',questLocation:'Fort Greymoor',sender:'None',
           msgContent:'Rescue my friend',victimName:'Guard 1',itemName:'Iron sword',itemDesc:'An old family blade'}}));
       await pause();
-      check(document.querySelector('input[placeholder="NPC name (e.g. Saadia)"]').value==='Saadia' &&
+      check(document.querySelector('input[placeholder="e.g. Saadia"]').value==='Saadia' &&
         document.querySelector('section:nth-of-type(1) textarea').value==='Wants to discuss a careful plan' &&
         button('Story type').value==='Quest' && button('Sub-type').value==='rescue' &&
         button('Enemy type').value==='bandit', 'generated merge changed identity/touched dropdown or lost text');
@@ -569,7 +591,7 @@ SCRIPT = r"""
       await pause();
       check(document.querySelector('section:nth-of-type(1) textarea').value==='Wants to discuss a careful plan','Stop applied late result');
       clickText('Clear'); await pause();
-      check(document.querySelector('input[placeholder="NPC name (e.g. Saadia)"]').value==='' &&
+      check(document.querySelector('input[placeholder="e.g. Saadia"]').value==='' &&
         button('Story type').value==='' && !payloads.some(([name])=>name.startsWith('dispatch')),'Clear failed or Generate dispatched');
       const formButton = (index, text) => [...document.querySelectorAll(`section:nth-of-type(${index}) button`)].find(e=>e.textContent.trim()===text);
       for (const [index, form, fields, label, expected] of [
@@ -584,8 +606,8 @@ SCRIPT = r"""
         check(button(label).value===expected && document.querySelector(`section:nth-of-type(${index}) textarea`).value===
           (fields.narration || fields.description), `${form}: auto type and dependent draft did not merge`);
         if (form==='social' && fields.npc1Name==='Sven') check(
-          document.querySelector('input[placeholder="NPC 1 (e.g. Mikael)"]').value==='Sven' &&
-          document.querySelector('input[placeholder="NPC 2 (e.g. Sven)"]').value==='Mikael',
+          document.querySelector('input[placeholder="e.g. Mikael"]').value==='Sven' &&
+          document.querySelector('input[placeholder="e.g. Sven"]').value==='Mikael',
           'producer NPC names outside nearby options were rejected');
         if (form==='political') check(
           document.querySelectorAll('section:nth-of-type(3) input[type=text]')[0].value==='ImperialFaction' &&
@@ -614,8 +636,8 @@ SCRIPT = r"""
       window.directorGenerateResult(JSON.stringify({requestId:duplicate.requestId,form:'social',ok:true,
         fields:{npc1Name:'Nazeem',npc2Name:'Nazeem',socialType:'npc_interaction',narration:'A valid scene',fact1:42,fact2:'considered the proposal'}})); await pause();
       const duplicateAudit=JSON.parse(payloads.at(-1)[1]).outcome;
-      check(document.querySelector('input[placeholder="NPC 1 (e.g. Mikael)"]').value==='Nazeem' &&
-        document.querySelector('input[placeholder="NPC 2 (e.g. Sven)"]').value==='' &&
+      check(document.querySelector('input[placeholder="e.g. Mikael"]').value==='Nazeem' &&
+        document.querySelector('input[placeholder="e.g. Sven"]').value==='' &&
         document.querySelector('section:nth-of-type(2) textarea').value==='A valid scene' &&
         duplicateAudit.rejected.npc2Name==='Identities must be distinct' && duplicateAudit.rejected.fact1==='Invalid type',
         'duplicate identities or wrong-type field discarded valid fields');
@@ -641,18 +663,18 @@ SCRIPT = r"""
     }
     payloads.length = 0;
     check(!document.querySelector('select'), 'native selects remain');
-    await fill('input[placeholder="NPC name (e.g. Saadia)"]','Saadia');
+    await fill('input[placeholder="e.g. Saadia"]','Saadia');
     await fill('section:nth-of-type(1) textarea','Story proof');
     await filterPick('Story type','Message');
     await filterPick('Meeting time','dawn');
     await choose('Story type','Message'); // Same value must not clear type-specific fields.
     clickText('Dispatch Story'); await pause();
-    await fill('input[placeholder="NPC 1 (e.g. Mikael)"]','Mikael');
-    await fill('input[placeholder="NPC 2 (e.g. Sven)"]','Sven');
+    await fill('input[placeholder="e.g. Mikael"]','Mikael');
+    await fill('input[placeholder="e.g. Sven"]','Sven');
     await fill('section:nth-of-type(2) textarea','Social proof');
     await filterPick('Social type','Gossip'); clickText('Dispatch Social'); await pause();
-    await fill('input[placeholder="Faction A (e.g. StormcloakFaction)"]','StormcloakFaction');
-    await fill('input[placeholder="Faction B (e.g. ThalmorFaction)"]','ThalmorFaction');
+    await fill('input[placeholder="e.g. StormcloakFaction"]','StormcloakFaction');
+    await fill('input[placeholder="e.g. ThalmorFaction"]','ThalmorFaction');
     await fill('section:nth-of-type(3) textarea','Politics proof');
     await filterPick('Political event type','Insult'); clickText('Dispatch Political Event'); await pause();
     await filterPick('Action NPC','Nazeem'); await filterPick('Action','ReportPlayerConduct');
@@ -703,7 +725,7 @@ SCRIPT = r"""
     };
     for (const control of [...document.querySelectorAll('[role=combobox]')]) await geometry(control,control.getAttribute('aria-label'));
     // The five-row faction list must also prefer down when it fits below.
-    await geometry(document.querySelector('input[placeholder="Faction A (e.g. StormcloakFaction)"]'),'FactionInput');
+    await geometry(document.querySelector('input[placeholder="e.g. StormcloakFaction"]'),'FactionInput');
     const npc=button('Action NPC'); npc.click(); await pause();
     check(optionText(document.querySelector('[role=option][aria-selected=true]'))==='Nazeem','current value not highlighted');
     npc.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowDown',bubbles:true})); await pause();
@@ -747,10 +769,10 @@ SCRIPT = r"""
     check(!document.querySelector('[role=listbox]') && escapeCapture.at(-1)?.[1]==='0','Escape on clear button left capture armed');
     npc.click(); await pause(); clearNpc.focus(); button('Action').focus(); await pause();
     check(!document.querySelector('[role=listbox]') && escapeCapture.at(-1)?.[1]==='0','focus leaving clear button left capture armed');
-    const factionInput=document.querySelector('input[placeholder="Faction A (e.g. StormcloakFaction)"]');
+    const factionInput=document.querySelector('input[placeholder="e.g. StormcloakFaction"]');
     factionInput.focus(); await pause(); button('Action').focus(); await pause();
     check(!factionInput.parentElement.querySelector('.overflow-y-auto') && escapeCapture.at(-1)?.[1]==='0','faction focus exit left capture armed');
-    await fill('input[placeholder="Faction A (e.g. StormcloakFaction)"]','__no_faction__');
+    await fill('input[placeholder="e.g. StormcloakFaction"]','__no_faction__');
     check(!factionInput.parentElement.querySelector('.overflow-y-auto') && escapeCapture.at(-1)?.[1]==='0','invisible faction list retained Escape capture');
     let escaped = false;
     const uncapturedEscape = () => { escaped = true; };
@@ -777,23 +799,23 @@ SCRIPT = r"""
           'busy_confirm_cancel_dispatch: cancel/dispatch order or payload changed: '+JSON.stringify(payloads.slice(count)));
       };
       await choose('Story type','Seek Player');
-      await fill('input[placeholder="NPC name (e.g. Saadia)"]',' nazeem ');
+      await fill('input[placeholder="e.g. Saadia"]',' nazeem ');
       await fill('section:nth-of-type(1) textarea','Busy story');
       await arm(1,'Story');
-      await fill('input[placeholder="NPC name (e.g. Saadia)"]','Saadia');
+      await fill('input[placeholder="e.g. Saadia"]','Saadia');
       check(submit(1).textContent.trim()==='Dispatch Story','busy_confirm_cancel_dispatch: Story NPC change retained confirmation');
-      await fill('input[placeholder="NPC name (e.g. Saadia)"]',' nazeem ');
+      await fill('input[placeholder="e.g. Saadia"]',' nazeem ');
       await arm(1,'Story');
       await confirm(1,[['cancelTask',{slot:2}],['dispatchStory',{npcName:'nazeem',storyType:'seek_player',narration:'Busy story'}]]);
       await choose('Social type','Gossip');
       for (const [first,second,slots] of [['Nazeem','Sven',[2]],['Mikael','Nazeem',[2]],['Nazeem','Guard 1',[2,4]]]) {
-        await fill('input[placeholder="NPC 1 (e.g. Mikael)"]',first);
-        await fill('input[placeholder="NPC 2 (e.g. Sven)"]',second);
+        await fill('input[placeholder="e.g. Mikael"]',first);
+        await fill('input[placeholder="e.g. Sven"]',second);
         await fill('section:nth-of-type(2) textarea','Busy social');
         await arm(2,'Social');
-        await fill('input[placeholder="NPC 2 (e.g. Sven)"]','Saadia');
+        await fill('input[placeholder="e.g. Sven"]','Saadia');
         check(submit(2).textContent.trim()==='Dispatch Social','busy_confirm_cancel_dispatch: Social NPC change retained confirmation');
-        await fill('input[placeholder="NPC 2 (e.g. Sven)"]',second);
+        await fill('input[placeholder="e.g. Sven"]',second);
         await arm(2,'Social');
         await confirm(2,[...slots.map(slot=>['cancelTask',{slot}]),['dispatchNpcSocial',{npc1Name:first,npc2Name:second,socialType:'npc_gossip',narration:'Busy social'}]]);
       }
@@ -831,7 +853,7 @@ with tempfile.TemporaryDirectory(prefix='ie-dropdowns-') as directory:
     (folder / 'index.html').write_text(page, encoding='utf-8')
     scenario = next((arg.split('=',1)[1] for arg in sys.argv if arg.startswith('--scenario=')), '')
     completed = subprocess.run([str(CHROME), '--headless=new', '--no-sandbox', '--disable-gpu',
-        '--allow-file-access-from-files', '--no-first-run', '--window-size=' + ('1600,3000' if not scenario or '--busy-only' in sys.argv or scenario in ['busy','director_required_fields','npc_picker_consistent'] else '1600,1000'),
+        '--allow-file-access-from-files', '--no-first-run', '--window-size=' + ('1600,3000' if not scenario or '--busy-only' in sys.argv or scenario in ['busy','director_required_fields','npc_picker_consistent','director_polish','director_field_layout'] else '1600,1000'),
         '--user-data-dir=' + str(folder / 'profile'), '--virtual-time-budget=90000', '--dump-dom',
         (folder / 'index.html').as_uri() + ('#busy' if '--busy-only' in sys.argv else '#' + scenario if scenario else '')], capture_output=True, text=True, encoding='utf-8', timeout=60)
     start = completed.stdout.find('<pre id="result">')

@@ -2,6 +2,16 @@ import withSections from './Section';
 import { useState, useMemo, useCallback, useEffect, useRef } from 'react';
 import Select, { useDropdown, dropdownClass } from './Select';
 
+function Field({ label, required, hint, children }) {
+  return (
+    <div className="flex flex-1 min-w-0 flex-col gap-0.5">
+      <label className="text-[10px] text-gray-500">{label} {required && <span className="text-red-400 ml-0.5">*</span>}</label>
+      {children}
+      {hint && <span className="director-hint">{hint}</span>}
+    </div>
+  );
+}
+
 /** Text input with dropdown suggestions. Works in Ultralight (no <datalist> needed). */
 function FactionInput({ value, onChange: change, onInput, factions = [], options: entries = factions, npc = entries !== factions, selectionOnly = false, ...inputProps }) {
   const [open, setOpen] = useState(false);
@@ -205,8 +215,8 @@ const ACTION_FIELDS = {
       placeholder: 'e.g. Camilla Valerius, Alvor',
       hint: 'Required. Exact NPC name. Agent goes alone, returns with them.' },
     { key: 'failReason', label: 'Refuse reason', type: 'text',
-      placeholder: 'none',
-      hint: 'Optional. Empty = comes willingly. If set, target refuses with this reason.' },
+      placeholder: 'e.g. "I\'m on duty."',
+      hint: 'Optional. Leave empty and the person comes along. If filled, they refuse to come and give this reason.' },
   ],
   SearchForActor: [
     { key: 'targetName', label: 'Person to find', type: 'text', required: true,
@@ -565,35 +575,39 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
         {generateControls('story')}{pending?.form === 'story' && <small>Generating…</small>}{generateError && !pending && <small>{generateError}</small>}
         <fieldset disabled={pending?.form === 'story'} className="space-y-2 border-0 p-0 m-0 min-w-0" inert={pending?.form === 'story' ? '' : undefined}>
           <div className="flex gap-2">
+            <Field label="NPC" required hint="Exact display name.">
             <FactionInput options={npcOptions}
               type="text"
               value={storyNpc}
               onInput={() => setTouched(t=>({...t,npcName:true}))}
               onChange={e => { setStoryNpc(e.target.value); setBusyConfirm(''); }}
-              placeholder="NPC name (e.g. Saadia)"
+              placeholder="e.g. Saadia"
               className="flex-1 bg-white/5 border border-white/10 rounded px-2 py-1.5 text-xs text-gray-200 outline-none placeholder:text-gray-600"
             />
+            </Field>
+            <Field label="Story type" required hint={storyGuidance?.hint || 'What they will do.'}>
             <Select aria-label="Story type" containerClassName="w-[130px]"
               value={touched.storyType ? storyType : ''}
               onChange={e => { setTouched(t => ({...t,storyType:true})); handleStoryTypeChange(e.target.value); }}
               className="bg-white/5 border border-white/10 rounded px-2 py-1.5 text-xs text-gray-200 outline-none"
             >
-              <option value="" className="text-gray-500">(auto)</option>
+              <option value="" className="text-gray-500">e.g. Seek Player</option>
               {DIRECTOR_STORY_TYPES.map(t => (
                 <option key={t.key} value={t.key}>{t.label}</option>
               ))}
             </Select>
+            </Field>
           </div>
-          <div className="grid grid-cols-[minmax(0,1fr)_130px] gap-2"><p className="director-hint">NPC <span className="text-red-400">*</span>: exact display name.</p><p className="director-hint">Story type <span className="text-red-400">*</span>: {storyGuidance?.hint || 'what they will do.'}</p></div>
+          <Field label="Narration" required hint={storyGuidance?.narration || 'Why the NPC acts; used as story context.'}>
           <textarea
             value={storyNarration}
             onInput={() => setTouched(t=>({...t,narration:true}))}
             onChange={e => setStoryNarration(e.target.value)}
-            placeholder={storyGuidance?.example || 'Narration (why the NPC acts...)'}
+            placeholder={storyGuidance?.example || 'e.g. set out to buy supplies'}
             rows={2}
             className="w-full bg-white/5 border border-white/10 rounded px-2 py-1.5 text-xs text-gray-200 outline-none placeholder:text-gray-600"
           />
-          <p className="director-hint">Narration <span className="text-red-400">*</span>: {storyGuidance?.narration || 'why the NPC acts; used as story context.'}</p>
+          </Field>
 
           {/* Type-specific fields */}
           {currentFields.map(f => (
@@ -645,45 +659,51 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
         {generateControls('social')}{pending?.form === 'social' && <small>Generating…</small>}{generateError && !pending && <small>{generateError}</small>}
         <fieldset disabled={pending?.form === 'social'} className="space-y-2 border-0 p-0 m-0 min-w-0" inert={pending?.form === 'social' ? '' : undefined}>
           <div className="flex gap-2">
+            <Field label="NPC 1" required hint="The traveler/teller.">
             <FactionInput options={npcOptions}
               type="text"
               value={socialNpc1}
               onInput={() => setTouched(t=>({...t,npc1Name:true}))}
               onChange={e => { setSocialNpc1(e.target.value); setBusyConfirm(''); }}
-              placeholder="NPC 1 (e.g. Mikael)"
+              placeholder="e.g. Mikael"
               className="flex-1 bg-white/5 border border-white/10 rounded px-2 py-1.5 text-xs text-gray-200 outline-none placeholder:text-gray-600"
             />
+            </Field>
+            <Field label="NPC 2" required hint="The counterpart/listener.">
             <FactionInput options={npcOptions}
               type="text"
               value={socialNpc2}
               onInput={() => setTouched(t=>({...t,npc2Name:true}))}
               onChange={e => { setSocialNpc2(e.target.value); setBusyConfirm(''); }}
-              placeholder="NPC 2 (e.g. Sven)"
+              placeholder="e.g. Sven"
               className="flex-1 bg-white/5 border border-white/10 rounded px-2 py-1.5 text-xs text-gray-200 outline-none placeholder:text-gray-600"
             />
+            </Field>
           </div>
-          <div className="grid grid-cols-2 gap-2"><p className="director-hint">NPC 1 <span className="text-red-400">*</span>: the traveler/teller.</p><p className="director-hint">NPC 2 <span className="text-red-400">*</span>: the counterpart/listener.</p></div>
           <div className="flex gap-2">
+            <Field label="Social type" required hint="Interaction or gossip.">
             <Select aria-label="Social type" containerClassName="w-[130px]"
               value={touched.socialType ? socialType : ''}
               onChange={e => { setTouched(t => ({...t,socialType:true})); handleSocialTypeChange(e.target.value); }}
               className="bg-white/5 border border-white/10 rounded px-2 py-1.5 text-xs text-gray-200 outline-none"
             >
-              <option value="" className="text-gray-500">(auto)</option>
+              <option value="" className="text-gray-500">e.g. Gossip</option>
               {SOCIAL_TYPES.map(t => (
                 <option key={t.key} value={t.key}>{t.label}</option>
               ))}
             </Select>
+            </Field>
+            <Field label="Narration" required hint="What happens between them.">
             <textarea
               value={socialNarration}
               onInput={() => setTouched(t=>({...t,narration:true}))}
               onChange={e => setSocialNarration(e.target.value)}
-              placeholder="Narration (e.g. confronted him about the stolen shipment)"
+              placeholder="e.g. confronted him about the stolen shipment"
               rows={1}
               className="flex-1 bg-white/5 border border-white/10 rounded px-2 py-1.5 text-xs text-gray-200 outline-none placeholder:text-gray-600"
             />
+            </Field>
           </div>
-          <div className="grid grid-cols-[130px_minmax(0,1fr)] gap-2"><p className="director-hint">Social type <span className="text-red-400">*</span>: interaction or gossip.</p><p className="director-hint">Narration <span className="text-red-400">*</span>: what happens between them.</p></div>
 
           {currentSocialFields.map(f => (
             <div key={f.key} className="flex flex-col gap-0.5">
@@ -720,33 +740,37 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
         {generateControls('political')}{pending?.form === 'political' && <small>Generating…</small>}{generateError && !pending && <small>{generateError}</small>}
         <fieldset disabled={pending?.form === 'political'} className="space-y-2 border-0 p-0 m-0 min-w-0" inert={pending?.form === 'political' ? '' : undefined}>
           <div className="flex gap-2">
+            <Field label="Faction A" required hint="First side.">
             <FactionInput
               value={polFactionA}
               onChange={value => { setTouched(t=>({...t,factionA:true})); setPolFactionA(value); }}
               factions={factions}
-              placeholder="Faction A (e.g. StormcloakFaction)"
+              placeholder="e.g. StormcloakFaction"
             />
+            </Field>
+            <Field label="Faction B" required hint="Other side. Pick two different faction IDs.">
             <FactionInput
               value={polFactionB}
               onChange={value => { setTouched(t=>({...t,factionB:true})); setPolFactionB(value); }}
               factions={factions}
-              placeholder="Faction B (e.g. ThalmorFaction)"
+              placeholder="e.g. ThalmorFaction"
             />
+            </Field>
           </div>
-          <div className="grid grid-cols-2 gap-2"><p className="director-hint">Faction A <span className="text-red-400">*</span>: first side.</p><p className="director-hint">Faction B <span className="text-red-400">*</span>: other side. Pick two different faction IDs.</p></div>
           <div className="flex gap-2">
+            <Field label="Event type" required hint="What happened.">
             <Select aria-label="Political event type" containerClassName="flex-1"
               value={touched.eventType ? polEventType : ''}
               onChange={e => { setTouched(t => ({...t,eventType:true})); handlePolEventTypeChange(e.target.value); }}
               className="bg-white/5 border border-white/10 rounded px-2 py-1.5 text-xs text-gray-200 outline-none"
             >
-              <option value="" className="text-gray-500">(auto)</option>
+              <option value="" className="text-gray-500">e.g. Trade Deal</option>
               {POLITICAL_EVENT_TYPES.map(t => (
                 <option key={t.key} value={t.key}>{t.label}</option>
               ))}
             </Select>
-            <div className="flex items-center gap-1 w-[70px]">
-              <label className="text-[10px] text-gray-500">Δ</label>
+            </Field>
+            <Field label="Relation delta" hint="Change, -15 to 15.">
               <input
                 type="number"
                 value={polDelta}
@@ -756,18 +780,18 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
                 min={-15}
                 max={15}
               />
-            </div>
+            </Field>
           </div>
-          <div className="grid grid-cols-[minmax(0,1fr)_70px] gap-2"><p className="director-hint">Event <span className="text-red-400">*</span>: what happened.</p><p className="director-hint">Δ: relation change, from -15 to 15.</p></div>
+          <Field label="Description" required hint="A short account of the political event.">
           <textarea
             value={polDescription}
             onInput={() => setTouched(t=>({...t,description:true}))}
             onChange={e => setPolDescription(e.target.value)}
-            placeholder="Event description (e.g. Imperial spies intercepted Stormcloak dispatches near Windhelm)"
+            placeholder="e.g. Imperial spies intercepted dispatches near Windhelm"
             rows={2}
             className="w-full bg-white/5 border border-white/10 rounded px-2 py-1.5 text-xs text-gray-200 outline-none placeholder:text-gray-600"
           />
-          <p className="director-hint">Description <span className="text-red-400">*</span>: a short account of the political event.</p>
+          </Field>
           <button
             onClick={handleDispatchPolitics}
             disabled={politicalRequired.some(([, valid]) => !valid)}
@@ -784,31 +808,30 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
         <h2 className="section-header mb-2">Action Execution</h2>
         <div className="space-y-2">
           <div className="flex gap-2">
-            <FactionInput options={nearby} selectionOnly aria-label="Action NPC" placeholder="Select NPC..."
+            <Field label="NPC" required hint="Nearby actor who performs the action.">
+            <FactionInput options={nearby} selectionOnly aria-label="Action NPC" placeholder="e.g. Guard 1"
               value={actionNpc}
               onChange={e => { setActionNpc(e.target.value); setBusyConfirm(''); }}
               className="bg-white/5 border border-white/10 rounded px-2 py-1.5 text-xs text-gray-200 outline-none"
             />
+            </Field>
+            <Field label="Action" required hint="Command to run.">
             <Select aria-label="Action" containerClassName="w-[150px]"
               value={selectedAction}
               onChange={e => handleActionChange(e.target.value)}
               className="bg-white/5 border border-white/10 rounded px-2 py-1.5 text-xs text-gray-200 outline-none"
             >
-              <option value="">Select Action...</option>
+              <option value="">e.g. FetchPerson</option>
               {executableActions.map(a => (
                 <option key={a.name} value={a.name}>{a.name}</option>
               ))}
             </Select>
+            </Field>
           </div>
-          <div className="grid grid-cols-[minmax(0,1fr)_150px] gap-2"><p className="director-hint">NPC <span className="text-red-400">*</span>: nearby actor who performs the action.</p><p className="director-hint">Action <span className="text-red-400">*</span>: command to run.</p></div>
 
           {/* Dynamic param fields for selected action */}
           {currentActionFields.map(f => (
-            <div key={f.key} className="flex flex-col gap-0.5">
-              <label className="text-[10px] text-gray-500">
-                {f.label}
-                {f.required && <span className="text-red-400 ml-0.5">*</span>}
-              </label>
+            <Field key={f.key} label={f.label} required={f.required} hint={f.hint}>
               {f.type === 'faction' ? (
                 <FactionInput
                   value={actionParams[f.key] || ''}
@@ -838,10 +861,7 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
                   className="bg-white/5 border border-white/10 rounded px-2 py-1.5 text-xs text-gray-200 outline-none placeholder:text-gray-600"
                 />
               )}
-              {f.hint && (
-                <span className="director-hint">{f.hint}</span>
-              )}
-            </div>
+            </Field>
           ))}
 
           <button
