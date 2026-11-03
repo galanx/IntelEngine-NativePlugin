@@ -100,7 +100,8 @@ namespace IntelEngine {
         /**
          * Get index statistics.
          */
-        size_t GetNPCCount() const { return m_allNames.size(); }
+        size_t GetNPCCount() const { std::shared_lock lock(m_mutex); return m_allNames.size(); }
+        std::vector<std::string> GetKnownNames() const { std::shared_lock lock(m_mutex); return m_allDisplayNames; }
         size_t GetLoadedCount() const { return m_npcIndex.size(); }
 
         /**
@@ -628,6 +629,7 @@ namespace IntelEngine {
 
         // All indexed names for fuzzy search
         std::vector<std::string> m_allNames;
+        std::vector<std::string> m_allDisplayNames;
 
         // Keep duplicate display names so response resolution can reject ambiguity.
         // Each tick replaces only its own pool.

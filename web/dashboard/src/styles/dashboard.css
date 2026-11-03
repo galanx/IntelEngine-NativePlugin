@@ -32,6 +32,15 @@ body {
 .section-header {
   @apply text-[11px] font-semibold text-gray-400 uppercase tracking-wider;
 }
+.dashboard-section > summary { display: block; list-style: none; cursor: pointer; } .dashboard-section > summary::-webkit-details-marker { display: none; }
+.dashboard-section > summary .section-header::before { content: '▸ '; } .dashboard-section[open] > summary .section-header::before { content: '▾ '; }
+.director-hint { @apply text-[11px] text-gray-400 leading-tight; }
+.director-tab .text-red-400 { color: theme('colors.red.400'); }
+.director-tab textarea { resize: vertical; min-height: 3rem; max-height: 400px; }
+.director-tab textarea { background-image: linear-gradient(135deg, transparent 50%, #9ca3af 50%, #9ca3af 58%, transparent 58%, transparent 70%, #9ca3af 70%, #9ca3af 78%, transparent 78%); background-size: 12px 12px; background-position: right 2px bottom 2px; background-repeat: no-repeat; }
+.director-text-field > input, .director-text-field > textarea { display: block; width: 100%; padding-right: 1.5rem; }
+.director-resize-handle { position: absolute; right: 0; bottom: 0; width: 16px; height: 16px; cursor: ns-resize; touch-action: none; }
+
 
 .empty-state {
   @apply text-center text-gray-600 py-4 text-xs;

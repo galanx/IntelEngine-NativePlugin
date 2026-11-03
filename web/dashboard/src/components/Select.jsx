@@ -60,6 +60,7 @@ export default function Select({ value, onChange, children, className = '', cont
   const optionText = option => Children.toArray(option?.props.children).join('');
   const selectedOption = allOptions.find(option => String(option.props.value) === String(value));
   const [query, setQuery] = useState(null);
+  useEffect(() => { if (String(value) !== '') setQuery(null); }, [value]);
   const text = query ?? (String(value) === '' ? '' : optionText(selectedOption));
   const options = allOptions.filter(option => String(option.props.value) !== '' &&
     (query === null || optionText(option).toLowerCase().includes(query.toLowerCase())));

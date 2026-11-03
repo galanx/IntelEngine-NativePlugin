@@ -147,11 +147,11 @@ void FinishPrismaDomReady(PrismaContext& context, PrismaView view, std::uint64_t
         requestGeneration = context.requestGeneration;
         magelight = context.magelight;
     }
-    static constexpr std::array<PRISMA_UI_API::JSListenerCallback, 15> callbacks = {
+    static constexpr std::array<PRISMA_UI_API::JSListenerCallback, 16> callbacks = {
         &PrismaListener<0>, &PrismaListener<1>, &PrismaListener<2>, &PrismaListener<3>,
         &PrismaListener<4>, &PrismaListener<5>, &PrismaListener<6>, &PrismaListener<7>,
         &PrismaListener<8>, &PrismaListener<9>, &PrismaListener<10>, &PrismaListener<11>,
-        &PrismaListener<12>, &PrismaListener<13>, &PrismaListener<14>
+        &PrismaListener<12>, &PrismaListener<13>, &PrismaListener<14>, &PrismaListener<15>
     };
     for (std::size_t i = 0; i < listeners.size() && i < callbacks.size(); ++i)
         api->RegisterJSListener(view, listeners[i].name, callbacks[i]);

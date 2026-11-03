@@ -37,7 +37,7 @@ const TASK_TYPE_ICONS = {
   scheduled: '\u{23F0}',
 };
 
-function SlotCard({ slot, calendar, onCancel }) {
+function SlotCard({ slot, calendar, onCancel, packageType }) {
   const stateLabel = STATE_LABELS[slot.state] || `State ${slot.state}`;
   const stateColor = STATE_COLORS[slot.state] || 'text-gray-400';
   const dotColor = DOT_COLORS[slot.state] || 'bg-gray-400';
@@ -73,6 +73,7 @@ function SlotCard({ slot, calendar, onCancel }) {
             {taskLabel}{slot.targetName ? ` \u2192 ${slot.targetName}` : ''}
           </div>
           {slot.origin && <div className="text-[10px] text-gray-500 mt-0.5">{slot.origin}</div>}
+          {packageType && <div className="text-xs text-gray-500">{packageType}</div>}
           <GameTime time={slot.startTime} calendar={calendar} />
           {slot.reason && <div className="text-xs text-gray-400 mt-1 italic">{slot.reason}</div>}
         </div>
