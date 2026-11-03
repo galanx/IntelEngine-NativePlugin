@@ -115,8 +115,15 @@ SCRIPT = r"""
       await fill('section:nth-of-type(1) input[placeholder="e.g. Saadia"]','Saadia',director());
       await fill('section:nth-of-type(1) textarea','came to repay a debt',director());
       await fill('section:nth-of-type(2) input[placeholder="e.g. Mikael"]','Mikael',director());
+      await choose('Social type','Interaction');
       await fill('section:nth-of-type(2) input[placeholder="e.g. Sven"]','Sven',director());
       await fill('section:nth-of-type(2) textarea','discussed a shipment',director());
+      const socialLabel = name => [...section(2).querySelectorAll('label')].find(e=>e.textContent.trim().startsWith(name));
+      for (const [name,value] of [['NPC 1 memory','discussed the shipment'],['NPC 2 memory','agreed to help']]) {
+        const control=socialLabel(name)?.parentElement.querySelector('input,textarea');
+        Object.getOwnPropertyDescriptor(control.tagName==='TEXTAREA'?HTMLTextAreaElement.prototype:HTMLInputElement.prototype,'value').set.call(control,value);
+        control.dispatchEvent(new Event('input',{bubbles:true})); await pause();
+      }
       check(dispatch(1)?.disabled && dispatch(1).textContent.trim()==='Story engine busy',
         'active Story did not disable dispatch with busy label');
       check(!dispatch(2)?.disabled && dispatch(2).textContent.trim()==='NPC social busy',
@@ -485,17 +492,47 @@ SCRIPT = r"""
       await fill('input[placeholder="e.g. Saadia"]', 'Saadia');
       check(dispatch().disabled && missing()?.textContent === 'Fill required fields: Narration', 'filled NPC remained missing');
       await choose('Story type', 'Message');
-      check(![...story().querySelectorAll('label')].some(e => e.textContent.includes('Message content') && e.textContent.includes('*')), 'optional Dispatch field marked required');
       await fill('section:nth-of-type(1) textarea', 'Requests a private meeting');
+      await fill('input[placeholder="e.g. I need to speak with you about a private matter"]', 'Meet me at the inn');
       check(!dispatch().disabled && !missing(), 'valid Story remains disabled or shows missing fields');
       const section = index => document.querySelector(`section:nth-of-type(${index})`);
       const submit = index => [...section(index).querySelectorAll('button')].at(-1);
       const missingIn = index => [...section(index).querySelectorAll('p')].find(e => e.textContent.startsWith('Fill required fields:'))?.textContent;
-      await fill('input[placeholder="e.g. Mikael"]', 'Mikael');
-      await fill('input[placeholder="e.g. Sven"]', 'Sven');
+      const labeled = (container, name) => [...container.querySelectorAll('label')].find(e => e.textContent.trim().startsWith(name));
+      const controlFor = label => label?.parentElement?.querySelector('input, textarea');
+      const redStar = label => [...(label?.parentElement?.querySelectorAll('span') || [])].some(e => e.textContent === '*' && e.classList.contains('text-red-400'));
+      await choose('Story type', 'Informant');
+      check(['Subject NPC', 'Gossip'].every(name => redStar(labeled(story(), name))), 'Informant required fields are not marked with red stars');
+      check(submit(1).disabled && missingIn(1) === 'Fill required fields: Subject NPC, Gossip', 'Informant missing list does not name Subject NPC and Gossip');
+      for (const name of ['Subject NPC', 'Gossip']) {
+        const control = controlFor(labeled(story(), name));
+        check(control, `Informant ${name} control missing`);
+        const value = name === 'Subject NPC' ? 'Mikael' : 'saw a suspicious meeting';
+        Object.getOwnPropertyDescriptor(control.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype, 'value').set.call(control, value);
+        control.dispatchEvent(new Event('input', { bubbles: true })); await pause();
+      }
+      clickText('Generate'); await pause();
+      const informantRequest = JSON.parse(payloads.at(-1)[1]);
+      check(informantRequest.variants?.informant?.subject?.required === true &&
+        informantRequest.variants?.informant?.gossip?.required === true, 'Generate omitted required Informant metadata');
+      clickText('Stop'); await pause();
+      check(!submit(1).disabled && !missingIn(1), 'completed Informant remains blocked');
+      await fill('input[placeholder="e.g. Mikael"]', 'Mikael', section(2));
+      await fill('input[placeholder="e.g. Sven"]', 'Sven', section(2));
       await fill('section:nth-of-type(2) textarea', 'Discussed a shipment');
+      await choose('Social type', 'Interaction');
+      const social = section(2);
+      check(['NPC 1 memory', 'NPC 2 memory'].every(name => redStar(labeled(social, name))), 'Interaction memories are not marked with red stars');
+      check(submit(2).disabled && missingIn(2) === 'Fill required fields: NPC 1 memory, NPC 2 memory', 'Interaction missing list does not name both memories');
+      for (const [name, value] of [['NPC 1 memory', 'settled the argument'], ['NPC 2 memory', 'accepted the settlement']]) {
+        const control = controlFor(labeled(social, name));
+        check(control, `${name} control missing`);
+        Object.getOwnPropertyDescriptor(control.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype, 'value').set.call(control, value);
+        control.dispatchEvent(new Event('input', { bubbles: true })); await pause();
+      }
+      check(!submit(2).disabled && !missingIn(2), 'completed Interaction remains blocked');
       await choose('Social type', 'Gossip');
-      check(!submit(2).disabled && !missingIn(2) && ![...section(2).querySelectorAll('label')].some(e => e.textContent.includes('Gossip') && e.textContent.includes('*')), 'Social optional variant marked required');
+      check(submit(2).disabled && missingIn(2) === 'Fill required fields: Gossip' && redStar(labeled(section(2), 'Gossip')), 'Gossip requirements retained inactive Interaction memories');
       await fill('input[placeholder="e.g. StormcloakFaction"]', 'StormcloakFaction');
       await fill('input[placeholder="e.g. ThalmorFaction"]', 'StormcloakFaction');
       await fill('section:nth-of-type(3) textarea', 'A diplomatic exchange');
@@ -616,6 +653,10 @@ SCRIPT = r"""
       check(audit?.ok && audit.filled.includes('npcName') && audit.blank.includes('narration') &&
         audit.applied.includes('questLocation') && audit.rejected.npcName === 'Preserved or unchanged', 'Generate outcome missing applied/preserved request audit');
       check(!audit.rejected.sender, 'empty/None identity was reported as rejected');
+      clickText('Generate'); await pause(); const nulls=JSON.parse(payloads.at(-1)[1]);
+      window.directorGenerateResult(JSON.stringify({requestId:nulls.requestId,form:'story',ok:true,fields:{narration:null,sender:null}})); await pause();
+      const nullAudit=JSON.parse(payloads.at(-1)[1]).outcome;
+      check(nullAudit.rejected.narration && !nullAudit.rejected.sender, 'Generate did not reject required null or skip optional null');
       clickText('Generate'); await pause(); const stopped=JSON.parse(payloads.at(-1)[1]); clickText('Stop'); await pause();
       window.directorGenerateResult(JSON.stringify({requestId:stopped.requestId,form:'story',ok:true,fields:{narration:'late'}}));
       await pause();
@@ -631,6 +672,10 @@ SCRIPT = r"""
       ]) {
         formButton(index,'Generate').click(); await pause();
         const generated=JSON.parse(payloads.at(-1)[1]);
+        if (form==='social' && fields.socialType==='npc_interaction')
+          check(generated.variants?.npc_interaction?.fact1?.required===true &&
+            generated.variants?.npc_interaction?.fact2?.required===true,
+            'Generate omitted required Social memory metadata');
         window.directorGenerateResult(JSON.stringify({requestId:generated.requestId,form,ok:true,fields}));
         await pause();
         check(button(label).value===expected && document.querySelector(`section:nth-of-type(${index}) textarea`).value===
@@ -702,6 +747,10 @@ SCRIPT = r"""
     await fill('input[placeholder="e.g. Mikael"]','Mikael');
     await fill('input[placeholder="e.g. Sven"]','Sven');
     await fill('section:nth-of-type(2) textarea','Social proof');
+    const gossipLabel=[...document.querySelectorAll('section:nth-of-type(2) label')].find(e=>e.textContent.trim().startsWith('Gossip'));
+    const gossipControl=gossipLabel?.parentElement?.querySelector('input,textarea');
+    Object.getOwnPropertyDescriptor(gossipControl.tagName==='TEXTAREA'?HTMLTextAreaElement.prototype:HTMLInputElement.prototype,'value').set.call(gossipControl,'heard a rumor about a shipment');
+    gossipControl.dispatchEvent(new Event('input',{bubbles:true})); await pause();
     await filterPick('Social type','Gossip'); clickText('Dispatch Social'); await pause();
     await fill('input[placeholder="e.g. StormcloakFaction"]','StormcloakFaction');
     await fill('input[placeholder="e.g. ThalmorFaction"]','ThalmorFaction');
@@ -828,6 +877,11 @@ SCRIPT = r"""
         check(JSON.stringify(payloads.slice(count).map(([name,json])=>[name,JSON.parse(json)])) === JSON.stringify(expected),
           'busy_confirm_cancel_dispatch: cancel/dispatch order or payload changed: '+JSON.stringify(payloads.slice(count)));
       };
+      const setSocialField = (name,value) => {
+        const control=[...document.querySelectorAll('section:nth-of-type(2) label')].find(e=>e.textContent.trim().startsWith(name))?.parentElement?.querySelector('input,textarea');
+        Object.getOwnPropertyDescriptor(control.tagName==='TEXTAREA'?HTMLTextAreaElement.prototype:HTMLInputElement.prototype,'value').set.call(control,value);
+        control.dispatchEvent(new Event('input',{bubbles:true}));
+      };
       await choose('Story type','Seek Player');
       await fill('input[placeholder="e.g. Saadia"]',' nazeem ');
       await fill('section:nth-of-type(1) textarea','Busy story');
@@ -842,12 +896,13 @@ SCRIPT = r"""
         await fill('input[placeholder="e.g. Mikael"]',first);
         await fill('input[placeholder="e.g. Sven"]',second);
         await fill('section:nth-of-type(2) textarea','Busy social');
+        setSocialField('Gossip','heard a rumor about a shipment');
         await arm(2,'Social');
         await fill('input[placeholder="e.g. Sven"]','Saadia');
         check(submit(2).textContent.trim()==='Dispatch Social','busy_confirm_cancel_dispatch: Social NPC change retained confirmation');
         await fill('input[placeholder="e.g. Sven"]',second);
         await arm(2,'Social');
-        await confirm(2,[...slots.map(slot=>['cancelTask',{slot}]),['dispatchNpcSocial',{npc1Name:first,npc2Name:second,socialType:'npc_gossip',narration:'Busy social'}]]);
+        await confirm(2,[...slots.map(slot=>['cancelTask',{slot}]),['dispatchNpcSocial',{npc1Name:first,npc2Name:second,socialType:'npc_gossip',narration:'Busy social',gossip:'heard a rumor about a shipment'}]]);
       }
       await choose('Action NPC','Nazeem'); await choose('Action','ChangeSpeed');
       await choose('New speed','Jog');
