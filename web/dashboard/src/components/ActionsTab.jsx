@@ -6,7 +6,9 @@ const INTEL_ACTIONS = new Set([
   'GoToLocation', 'FetchPerson', 'DeliverMessage', 'EscortTarget', 'SearchForActor',
   'ScheduleFetch', 'ScheduleDelivery', 'ScheduleMeeting',
   'CancelCurrentTask', 'ChangeSpeed', 'ReportPlayerConduct',
+  'Communication', 'Scheduling', 'Travel', // SkyrimNet categories that group the actions above
 ]);
+const CATEGORIES = new Set(['Communication', 'Scheduling', 'Travel']);
 
 function ActionsTab({ actions, sendAction }) {
   const handleToggle = useCallback((name, currentEnabled) => {
@@ -50,9 +52,9 @@ function ActionsTab({ actions, sendAction }) {
             }`}
           >
             <div className="flex-1 min-w-0">
-              <div className="text-xs font-medium truncate">{action.name}</div>
+              <div className="text-xs font-medium truncate">{action.name}{CATEGORIES.has(action.name) && ' (category)'}</div>
               {action.description && (
-                <div className="text-[10px] text-gray-500 truncate mt-0.5">{action.description}</div>
+                <div className="text-[10px] text-gray-500 truncate mt-0.5">{action.description.split('{{ npc.name }}').join('the NPC')}</div>
               )}
             </div>
             <span className={`text-xs shrink-0 ${action.enabled ? 'text-emerald-400' : 'text-gray-600'}`}>
@@ -81,9 +83,9 @@ function ActionsTab({ actions, sendAction }) {
                 }`}
               >
                 <div className="flex-1 min-w-0">
-                  <div className="text-xs font-medium truncate">{action.name}</div>
+                  <div className="text-xs font-medium truncate">{action.name}{CATEGORIES.has(action.name) && ' (category)'}</div>
                   {action.description && (
-                    <div className="text-[10px] text-gray-500 truncate mt-0.5">{action.description}</div>
+                    <div className="text-[10px] text-gray-500 truncate mt-0.5">{action.description.split('{{ npc.name }}').join('the NPC')}</div>
                   )}
                 </div>
                 <span className={`text-xs shrink-0 ${action.enabled ? 'text-emerald-400' : 'text-gray-600'}`}>
