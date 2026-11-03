@@ -591,7 +591,7 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
               onChange={e => { setTouched(t => ({...t,storyType:true})); handleStoryTypeChange(e.target.value); }}
               className="bg-white/5 border border-white/10 rounded px-2 py-1.5 text-xs text-gray-200 outline-none"
             >
-              <option value="" className="text-gray-500">e.g. Seek Player</option>
+              <option value="" className="text-gray-500">(auto)</option>
               {DIRECTOR_STORY_TYPES.map(t => (
                 <option key={t.key} value={t.key}>{t.label}</option>
               ))}
@@ -687,7 +687,7 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
               onChange={e => { setTouched(t => ({...t,socialType:true})); handleSocialTypeChange(e.target.value); }}
               className="bg-white/5 border border-white/10 rounded px-2 py-1.5 text-xs text-gray-200 outline-none"
             >
-              <option value="" className="text-gray-500">e.g. Gossip</option>
+              <option value="" className="text-gray-500">(auto)</option>
               {SOCIAL_TYPES.map(t => (
                 <option key={t.key} value={t.key}>{t.label}</option>
               ))}
@@ -764,7 +764,7 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
               onChange={e => { setTouched(t => ({...t,eventType:true})); handlePolEventTypeChange(e.target.value); }}
               className="bg-white/5 border border-white/10 rounded px-2 py-1.5 text-xs text-gray-200 outline-none"
             >
-              <option value="" className="text-gray-500">e.g. Trade Deal</option>
+              <option value="" className="text-gray-500">(auto)</option>
               {POLITICAL_EVENT_TYPES.map(t => (
                 <option key={t.key} value={t.key}>{t.label}</option>
               ))}
@@ -821,7 +821,7 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
               onChange={e => handleActionChange(e.target.value)}
               className="bg-white/5 border border-white/10 rounded px-2 py-1.5 text-xs text-gray-200 outline-none"
             >
-              <option value="">e.g. FetchPerson</option>
+              <option value="">Select action...</option>
               {executableActions.map(a => (
                 <option key={a.name} value={a.name}>{a.name}</option>
               ))}

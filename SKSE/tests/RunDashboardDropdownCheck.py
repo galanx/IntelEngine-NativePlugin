@@ -548,7 +548,7 @@ SCRIPT = r"""
     }
     if (location.hash === '#director_generate_merge_and_stop') {
       payloads.length = 0;
-      check(button('Story type').placeholder==='e.g. Seek Player' && button('Story type').value==='', 'untouched type is not auto');
+      check(button('Story type').placeholder==='(auto)' && button('Story type').value==='', 'untouched type is not auto');
       await fill('input[placeholder="e.g. Saadia"]','Saadia');
       await choose('Story type','Quest'); await filterPick('Story type','Quest');
       await choose('Sub-type','rescue');
