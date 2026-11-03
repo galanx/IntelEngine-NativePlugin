@@ -34,7 +34,7 @@ function ActionsTab({ actions, sendAction }) {
 
       <div className="px-2 py-1.5 rounded bg-amber-500/10 border border-amber-500/20">
         <p className="text-[10px] text-amber-400/80 leading-relaxed">
-          Toggles rewrite the action YAML files. Changes apply after Reload configs in the SkyrimNet web UI, or on next game launch.
+          These toggles only control which actions the AI can choose; Director Action Execution always works. Toggles rewrite the action YAML files. Changes apply after Reload configs in the SkyrimNet web UI, or on next game launch.
         </p>
       </div>
 
