@@ -107,8 +107,8 @@ const WAIT_OPTIONS = [
 // Type-specific fields per story type
 // required: true = dispatch will fail without it, hint: shown below the field
 const STORY_TYPE_FIELDS = {
-  seek_player: { hint: 'Travels to find you for a personal reason.', narration: 'Why they set out to find you (past tense, under 120 characters); do not claim where you are.' },
-  informant: { hint: 'Approaches you with grounded gossip about another NPC.', narration: 'What the gossip concerns and who told them, or what they witnessed.', fields: [
+  seek_player: { example: 'e.g. set out to find you to repay an old debt', hint: 'Travels to find you for a personal reason.', narration: 'Why they set out to find you (past tense, under 120 characters); do not claim where you are.' },
+  informant: { example: 'e.g. heard from Sven that Camilla had vanished', hint: 'Approaches you with grounded gossip about another NPC.', narration: 'What the gossip concerns and who told them, or what they witnessed.', fields: [
     { key: 'subject', label: 'Subject NPC', type: 'text', required: true,
       placeholder: 'e.g. Camilla Valerius',
       hint: 'Required. The NPC the gossip is about. Gets a fact injected.' },
@@ -119,22 +119,22 @@ const STORY_TYPE_FIELDS = {
       placeholder: 'e.g. Sven',
       hint: 'Optional. Who the informant heard it from. Empty = witnessed firsthand.' },
   ] },
-  road_encounter: { hint: 'Appears on the road ahead of you, travelling to Destination on their own errand (outdoors only).', narration: 'Why they are travelling, e.g. set out to sell pelts in Helgen.', fields: [
+  road_encounter: { example: 'e.g. set out to sell pelts in Helgen', hint: 'Appears on the road ahead of you, travelling to Destination on their own errand (outdoors only).', narration: 'Why they are travelling, e.g. set out to sell pelts in Helgen.', fields: [
     { key: 'destination', label: 'Destination', type: 'text', required: true,
       placeholder: 'e.g. Falkreath, Solitude, Old Hroldan',
       hint: 'Where they are heading. Required: a real Skyrim location.' },
   ] },
-  ambush: { hint: 'A combat-capable hostile NPC approaches to attack you (outdoors only).', narration: 'Why they want to attack you, and who hired them if anyone.', fields: [
+  ambush: { example: 'e.g. was hired by the Thieves Guild to rough you up', hint: 'A combat-capable hostile NPC approaches to attack you (outdoors only).', narration: 'Why they want to attack you, and who hired them if anyone.', fields: [
     { key: 'sender', label: 'Hired by', type: 'text',
       placeholder: 'e.g. Maven Black-Briar',
       hint: 'Optional. NPC who ordered the ambush. Gets a fact about hiring.' },
   ] },
-  stalker: { hint: 'Secretly follows you out of romance, jealousy or obsession; flees when caught (outdoors only).', narration: 'The confrontation when you catch them, not their hiding; include their motive.', fields: [
+  stalker: { example: 'e.g. confessed to following you out of jealousy', hint: 'Secretly follows you out of romance, jealousy or obsession; flees when caught (outdoors only).', narration: 'The confrontation when you catch them, not their hiding; include their motive.', fields: [
     { key: 'sender', label: 'Encouraged by', type: 'text',
       placeholder: 'e.g. Faendal',
       hint: 'Optional. NPC who encouraged the stalking. Gets a fact.' },
   ] },
-  message: { hint: 'Sends a nearby courier to deliver a message from the selected NPC.', narration: 'Why the sender wants to contact you.', fields: [
+  message: { example: 'e.g. wanted to arrange a private meeting about a debt', hint: 'Sends a nearby courier to deliver a message from the selected NPC.', narration: 'Why the sender wants to contact you.', fields: [
     { key: 'msgContent', label: 'Message content', type: 'text', required: true,
       placeholder: 'e.g. I need to speak with you about a private matter',
       hint: 'Required. The message text. The NPC you pick is the sender; IE picks a nearby courier.' },
@@ -144,7 +144,7 @@ const STORY_TYPE_FIELDS = {
     { key: 'meetTime', label: 'Meeting time', type: 'select', options: MEET_TIMES,
       hint: 'Optional. Must match msgContent. Avoid night/midnight for palaces/shops.' },
   ] },
-  quest: { hint: 'Sends an NPC to ask for help with combat, a rescue or finding an item; leaders use a courier.', narration: 'Why help is needed, consistent with the quest location and sub-type.', fields: [
+  quest: { example: 'e.g. needed help rescuing a friend from Fort Greymoor', hint: 'Sends an NPC to ask for help with combat, a rescue or finding an item; leaders use a courier.', narration: 'Why help is needed, consistent with the quest location and sub-type.', fields: [
     { key: 'questSubType', label: 'Sub-type', type: 'select', options: QUEST_SUB_TYPES, required: true,
       hint: 'Required. combat = kill enemies, rescue = save captive NPC, find_item = retrieve item.' },
     { key: 'questLocation', label: 'Quest location', type: 'text', required: true,
@@ -325,14 +325,13 @@ function DirectorTab({ loadedNpcs, tasks = [], actions, factions = [], sendActio
       const { form, draft: old, schema, variants, options } = request;
       const typeKey = form === 'story' ? 'storyType' : form === 'social' ? 'socialType' : 'eventType';
       const typeOptions = schema[typeKey]?.options || [];
-      const nextType = touched[typeKey] && typeOptions.includes(old[typeKey]) ? old[typeKey] : typeOptions.includes(result.fields[typeKey]) ? result.fields[typeKey] : old[typeKey];
+      const nextType = touched[typeKey] === true && typeOptions.includes(old[typeKey]) ? old[typeKey] : typeOptions.includes(result.fields[typeKey]) ? result.fields[typeKey] : old[typeKey];
       const allowed = { ...schema, ...(variants[nextType] || {}) };
       const next = { ...old }, skipped = new Set(), npcKeys = ['npcName','npc1Name','npc2Name','subject','sender','victimName'];
       for (const [key, rawValue] of Object.entries(result.fields)) {
         let value = rawValue;
         if (npcKeys.includes(key) && typeof value === 'string' && (!value.trim() || /^(?:none|placeholder|e\.g\..*|.*\(e\.g\..*\))$/i.test(value.trim()))) { skipped.add(key); continue; }
-        if (!allowed[key] || (['factionA','factionB',...npcKeys].includes(key) && old[key]) ||
-            (touched[key] && old[key])) { audit.rejected[key] = !allowed[key] ? 'Unknown field' : 'Preserved or unchanged'; continue; }
+        if (!allowed[key] || (touched[key] === true && old[key])) { audit.rejected[key] = !allowed[key] ? 'Unknown field' : 'Preserved or unchanged'; continue; }
         if (['factionA','factionB'].includes(key) && typeof value === 'string') value = options.factions.find(f=>f.id===value || f.name===value)?.id || '';
         if (allowed[key].type === 'number' ? typeof value !== 'number' : typeof value !== 'string') { audit.rejected[key] = 'Invalid type'; continue; }
         if (allowed[key].type === 'select' && !allowed[key].options.includes(value)) { audit.rejected[key] = 'Invalid option'; continue; }
@@ -344,7 +343,7 @@ function DirectorTab({ loadedNpcs, tasks = [], actions, factions = [], sendActio
       next[typeKey] = nextType;
       if (form === 'story') { setStoryNpc(next.npcName); setStoryType(next.storyType); setStoryNarration(next.narration); setStoryFields(Object.fromEntries(Object.keys(allowed).filter(k => !['npcName','storyType','narration'].includes(k)).map(k => [k,next[k]]))); }
       if (form === 'social') { setSocialNpc1(next.npc1Name); setSocialNpc2(next.npc2Name); setSocialType(next.socialType); setSocialNarration(next.narration); setSocialFields(Object.fromEntries(Object.keys(allowed).filter(k => !['npc1Name','npc2Name','socialType','narration'].includes(k)).map(k => [k,next[k]]))); }
-      setTouched(t=>({...t,[typeKey]:true}));
+      setTouched(t=>({...t,[typeKey]:t[typeKey] || 'generated'}));
       if (form === 'political') { setPolFactionA(next.factionA); setPolFactionB(next.factionB); setPolEventType(next.eventType); setPolDescription(next.description); setPolDelta(next.relationDelta); }
       audit.ok = true; delete audit.rejected.$response; audit.applied = Object.keys(result.fields).filter(k=>next[k] !== old[k]); for (const k of Object.keys(result.fields)) if (!skipped.has(k) && !audit.applied.includes(k)) audit.rejected[k] ??= 'Preserved or unchanged';
       setGenerateError('');
@@ -354,7 +353,6 @@ function DirectorTab({ loadedNpcs, tasks = [], actions, factions = [], sendActio
   }, [pending, touched]);
   const generate = form => {
     const story = form === 'story', social = form === 'social';
-    const type = story ? storyType : social ? socialType : polEventType;
     const defs = story ? currentFields : social ? currentSocialFields : [];
     const enumTypes = story ? DIRECTOR_STORY_TYPES : social ? SOCIAL_TYPES : POLITICAL_EVENT_TYPES;
     const fields = story ? { npcName:storyNpc, storyType, narration:storyNarration, ...storyFields } :
@@ -362,10 +360,8 @@ function DirectorTab({ loadedNpcs, tasks = [], actions, factions = [], sendActio
         { factionA:polFactionA, factionB:polFactionB, eventType:polEventType, description:polDescription, relationDelta:polDelta };
     for (const f of defs) fields[f.key] ??= '';
     const draft = { ...fields };
-    for (const f of defs) if (f.type === 'select' && !touched[f.key]) fields[f.key] = '';
-    const typeKey = story ? 'storyType' : social ? 'socialType' : 'eventType';
-    fields[typeKey] = touched[typeKey] ? type : '';
-    const schema = Object.fromEntries(Object.entries(fields).filter(([k])=>!defs.some(f=>f.key===k)).map(([k,v]) => [k, { type: typeof v === 'number' ? 'number' : k === (story?'storyType':social?'socialType':'eventType') ? 'select' : 'text',
+    for (const key of Object.keys(fields)) if (touched[key] !== true) fields[key] = '';
+    const schema = Object.fromEntries(Object.entries(draft).filter(([k])=>!defs.some(f=>f.key===k)).map(([k,v]) => [k, { type: typeof v === 'number' ? 'number' : k === (story?'storyType':social?'socialType':'eventType') ? 'select' : 'text',
       ...((k === (story?'storyType':social?'socialType':'eventType')) ? { options:enumTypes.map(x=>x.key) } : {}) }]));
     if (story && storyGuidance) schema.narration.hint = `${storyGuidance.hint} ${storyGuidance.narration}`;
     const variants = Object.fromEntries(enumTypes.map(t => [t.key, Object.fromEntries((story ? (STORY_TYPE_FIELDS[t.key]?.fields||[]) : social ? (SOCIAL_TYPE_FIELDS[t.key]||[]) : []).map(f=>[f.key,Object.fromEntries(Object.entries(f).filter(([key])=>key!=='placeholder'))]))]));
@@ -379,6 +375,7 @@ function DirectorTab({ loadedNpcs, tasks = [], actions, factions = [], sendActio
   const clear = form => {
     const keys = form === 'story' ? ['storyType', ...Object.keys(STORY_TYPE_FIELDS).flatMap(t=>(STORY_TYPE_FIELDS[t]?.fields||[]).map(f=>f.key))] :
       form === 'social' ? ['socialType', ...Object.keys(SOCIAL_TYPE_FIELDS).flatMap(t=>(SOCIAL_TYPE_FIELDS[t]||[]).map(f=>f.key))] : ['eventType'];
+    keys.push(...(form === 'story' ? ['npcName','narration'] : form === 'social' ? ['npc1Name','npc2Name','narration'] : ['factionA','factionB','description','relationDelta']));
     if (pending?.form === form) stopGenerate();
     setTouched(t=>Object.fromEntries(Object.entries(t).filter(([key])=>!keys.includes(key))));
     setGenerateError('');
@@ -552,7 +549,7 @@ function DirectorTab({ loadedNpcs, tasks = [], actions, factions = [], sendActio
 
 
   return (
-    <div className="p-3 space-y-4">
+    <div className="p-3 space-y-4 [&_.leading-tight]:text-[11px] [&_.leading-tight]:text-gray-400">
       {/* Story Dispatch */}
       <section>
         {generateControls('story')}{pending?.form === 'story' && <small>Generating…</small>}{generateError && !pending && <small>{generateError}</small>}
@@ -561,6 +558,7 @@ function DirectorTab({ loadedNpcs, tasks = [], actions, factions = [], sendActio
             <input
               type="text"
               value={storyNpc}
+              onInput={() => setTouched(t=>({...t,npcName:true}))}
               onChange={e => { setStoryNpc(e.target.value); setBusyConfirm(''); }}
               placeholder="NPC name (e.g. Saadia)"
               className="flex-1 bg-white/5 border border-white/10 rounded px-2 py-1.5 text-xs text-gray-200 outline-none placeholder:text-gray-600"
@@ -579,8 +577,9 @@ function DirectorTab({ loadedNpcs, tasks = [], actions, factions = [], sendActio
           <p className="text-[9px] text-gray-600 leading-tight">NPC <span className="text-red-400">*</span>: exact display name. Story type <span className="text-red-400">*</span>: {storyGuidance?.hint || 'what they will do.'}</p>
           <textarea
             value={storyNarration}
+            onInput={() => setTouched(t=>({...t,narration:true}))}
             onChange={e => setStoryNarration(e.target.value)}
-            placeholder="Narration (e.g. rushes out to find the player because...)"
+            placeholder={storyGuidance?.example || 'Narration (why the NPC acts...)'}
             rows={2}
             className="w-full bg-white/5 border border-white/10 rounded px-2 py-1.5 text-xs text-gray-200 outline-none resize-none placeholder:text-gray-600"
           />
@@ -607,6 +606,7 @@ function DirectorTab({ loadedNpcs, tasks = [], actions, factions = [], sendActio
                 <input
                   type="text"
                   value={storyFields[f.key] || ''}
+                  onInput={() => setTouched(t=>({...t,[f.key]:true}))}
                   onChange={e => setStoryFields(prev => ({ ...prev, [f.key]: e.target.value }))}
                   placeholder={f.placeholder}
                   className="bg-white/5 border border-white/10 rounded px-2 py-1.5 text-xs text-gray-200 outline-none placeholder:text-gray-600"
@@ -637,6 +637,7 @@ function DirectorTab({ loadedNpcs, tasks = [], actions, factions = [], sendActio
             <input
               type="text"
               value={socialNpc1}
+              onInput={() => setTouched(t=>({...t,npc1Name:true}))}
               onChange={e => { setSocialNpc1(e.target.value); setBusyConfirm(''); }}
               placeholder="NPC 1 (e.g. Mikael)"
               className="flex-1 bg-white/5 border border-white/10 rounded px-2 py-1.5 text-xs text-gray-200 outline-none placeholder:text-gray-600"
@@ -644,6 +645,7 @@ function DirectorTab({ loadedNpcs, tasks = [], actions, factions = [], sendActio
             <input
               type="text"
               value={socialNpc2}
+              onInput={() => setTouched(t=>({...t,npc2Name:true}))}
               onChange={e => { setSocialNpc2(e.target.value); setBusyConfirm(''); }}
               placeholder="NPC 2 (e.g. Sven)"
               className="flex-1 bg-white/5 border border-white/10 rounded px-2 py-1.5 text-xs text-gray-200 outline-none placeholder:text-gray-600"
@@ -663,6 +665,7 @@ function DirectorTab({ loadedNpcs, tasks = [], actions, factions = [], sendActio
             </Select>
             <textarea
               value={socialNarration}
+              onInput={() => setTouched(t=>({...t,narration:true}))}
               onChange={e => setSocialNarration(e.target.value)}
               placeholder="Narration (e.g. confronted him about the stolen shipment)"
               rows={1}
@@ -707,13 +710,13 @@ function DirectorTab({ loadedNpcs, tasks = [], actions, factions = [], sendActio
           <div className="flex gap-2">
             <FactionInput
               value={polFactionA}
-              onChange={setPolFactionA}
+              onChange={value => { setTouched(t=>({...t,factionA:true})); setPolFactionA(value); }}
               factions={factions}
               placeholder="Faction A (e.g. StormcloakFaction)"
             />
             <FactionInput
               value={polFactionB}
-              onChange={setPolFactionB}
+              onChange={value => { setTouched(t=>({...t,factionB:true})); setPolFactionB(value); }}
               factions={factions}
               placeholder="Faction B (e.g. ThalmorFaction)"
             />
@@ -735,6 +738,7 @@ function DirectorTab({ loadedNpcs, tasks = [], actions, factions = [], sendActio
               <input
                 type="number"
                 value={polDelta}
+                onInput={() => setTouched(t=>({...t,relationDelta:true}))}
                 onChange={e => setPolDelta(Number(e.target.value))}
                 className="w-14 bg-white/5 border border-white/10 rounded px-2 py-1.5 text-xs text-gray-200 outline-none text-center"
                 min={-15}
@@ -745,6 +749,7 @@ function DirectorTab({ loadedNpcs, tasks = [], actions, factions = [], sendActio
           <p className="text-[9px] text-gray-600 leading-tight">Event <span className="text-red-400">*</span>: what happened. Δ: relation change, from -15 to 15.</p>
           <textarea
             value={polDescription}
+            onInput={() => setTouched(t=>({...t,description:true}))}
             onChange={e => setPolDescription(e.target.value)}
             placeholder="Event description (e.g. Imperial spies intercepted Stormcloak dispatches near Windhelm)"
             rows={2}

@@ -70,6 +70,38 @@ SCRIPT = r"""
       actions:[{name:'GoToLocation',enabled:true},{name:'ReportPlayerConduct',params:[{name:'sentiment',enum:['strongly_positive','positive','negative','strongly_negative']},{name:'factionId'},{name:'reason'}]},{name:'ChangeSpeed',enabled:true}],
       politics:{enabled:true,factions:[{id:'ImperialFaction',name:'Imperial Legion'},{id:'StormcloakFaction',name:'Stormcloaks'},...Array.from({length:3},(_,i)=>({id:'ThalmorFaction'+i,name:'Thalmor '+i}))],relations:[],wars:[],player_standings:[],events:[]}}));
     await pause(); clickText('Director'); await pause();
+    if (location.hash === '#generate_reroll') {
+      const story = () => document.querySelector('section');
+      const narration = () => story().querySelector('textarea');
+      const requests = [];
+      const roll = async fields => {
+        story().querySelector('summary button').click(); await pause();
+        const request = JSON.parse(payloads.at(-1)[1]); requests.push(request);
+        window.directorGenerateResult(JSON.stringify({requestId:request.requestId,form:'story',ok:true,fields})); await pause();
+        return request;
+      };
+      await fill('input[placeholder="NPC name (e.g. Saadia)"]', 'Saadia');
+      const a = await roll({npcName:'Nazeem',storyType:'ambush',narration:'was hired to collect an unpaid debt',sender:'Guard 1'});
+      check(narration().value === 'was hired to collect an unpaid debt', 'first Generate did not fill narration A');
+      const b = await roll({npcName:'Guard 2',storyType:'road_encounter',narration:'set out to sell pelts in Helgen',destination:'Helgen'});
+      check(narration().value === 'set out to sell pelts in Helgen', 'second Generate did not replace narration A with B');
+      check(b.fields.narration === '' && b.fields.storyType === '' && b.fields.sender === '', 'generated fields were not blanked for reroll');
+      check(a.fields.npcName === 'Saadia' && b.fields.npcName === 'Saadia' && story().querySelector('input').value === 'Saadia', 'user-typed identity did not survive both rolls');
+      await fill('section textarea', 'set out to buy salt in Riften');
+      const c = await roll({npcName:'Nazeem',storyType:'ambush',narration:'replacement must not win',sender:'Guard 2'});
+      check(c.fields.narration === 'set out to buy salt in Riften' && narration().value === c.fields.narration, 'typing into generated narration did not preserve it');
+      for (const [type, example] of [['Ambush','e.g. was hired by the Thieves Guild to rough you up'],['Road Encounter','e.g. set out to sell pelts in Helgen']]) {
+        await choose('Story type', type);
+        check(narration().placeholder === example, type + ' placeholder did not change');
+      }
+      const hint = [...story().querySelectorAll('p')].find(e=>e.textContent.startsWith('Narration'));
+      check(getComputedStyle(hint).fontSize === '11px' && getComputedStyle(hint).color === 'rgb(156, 163, 175)' && hint.querySelector('.text-red-400'), 'hint is not readable or required star lost');
+      [...story().querySelectorAll('button')].find(e=>e.textContent.trim()==='Clear').click(); await pause();
+      const cleared = await roll({npcName:'Guard 1',storyType:'seek_player',narration:'came to repay a debt'});
+      check(cleared.fields.npcName === '' && cleared.fields.narration === '' && story().querySelector('input').value === 'Guard 1', 'Clear retained user ownership');
+      document.getElementById('result').textContent=JSON.stringify({status:'PASS',checks:['generate_reroll'],requests});
+      return;
+    }
     if (location.hash === '#story_type_hints') {
       const story = () => document.querySelector('section');
       const text = () => [...story().querySelectorAll('p, span')].map(e=>e.textContent).join('\n');
