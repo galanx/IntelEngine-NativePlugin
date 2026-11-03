@@ -18,6 +18,7 @@ SCRIPT = r"""
   const pause = () => new Promise(resolve => setTimeout(resolve, 100));
   const check = (ok, message) => { if (!ok) throw Error(message); };
   const button = label => document.querySelector(`[role=combobox][aria-label="${label}"]`);
+  const optionText = option => option.textContent.trim().replace(/ \((?:nearby|faction)\)$/, '');
   const clickText = text => [...document.querySelectorAll('button')].find(e => e.textContent.trim() === text).click();
   const choose = async (label, text) => {
     const control = button(label);
@@ -26,11 +27,12 @@ SCRIPT = r"""
     await pause(); // Focus/scroll dismissal must settle before opening the next control.
     if (control.getAttribute('aria-expanded') !== 'true') control.click();
     await pause();
-    const option = [...document.querySelectorAll('[role=option]')].find(e => e.textContent.trim() === text);
+    const option = [...document.querySelectorAll('[role=option]')].find(e => optionText(e) === text);
     check(option, `missing option ${label}: ${text}`); option.click(); await pause();
   };
   const fill = async (selector, value) => {
     const element = document.querySelector(selector);
+    check(element, `missing input ${selector}`);
     element.scrollIntoView({ block: 'nearest' }); await pause();
     element.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
     element.focus({ preventScroll: true });
@@ -47,7 +49,7 @@ SCRIPT = r"""
     await fill(`[aria-label="${label}"]`, text.toLowerCase());
     const options = [...document.querySelectorAll('[role=option]')];
     check(options.length && options.every(option => option.textContent.toLowerCase().includes(text.toLowerCase())), `${label}: filter failed`);
-    options.find(option => option.textContent.trim() === text).click(); await pause();
+    options.find(option => optionText(option) === text).click(); await pause();
     check(button(label).value === text, `${label}: pick failed`);
     const beforeClear = payloads.length;
     document.querySelector(`[aria-label="Clear ${label}"]`).click(); await pause();
@@ -255,6 +257,97 @@ SCRIPT = r"""
       location.reload();
       return;
     }
+    if (location.hash === '#npc_picker_consistent') {
+      const nearby = Array.from({length:30},(_,i)=>({formId:108196+i,name:i?'Guard '+i:'Nazeem'}));
+      const known = ['Aela the Huntress','Balgruuf the Greater','Camilla Valerius','Farengar Secret-Fire',
+        'Maven Black-Briar','Sven','Whiterun citizen', ...Array.from({length:5000},(_,i)=>`Indexed citizen ${String(i).padStart(4,'0')}`)].sort();
+      const fixture = {config:{},pluginConfig:{'ui.scale':1},tasks:[],scheduled:[],
+        loadedNpcs:nearby,knownNpcs:known,
+        actions:['FetchPerson','SearchForActor','DeliverMessage','EscortTarget','ScheduleFetch','ScheduleDelivery',
+          'ChangeSpeed'].map(name=>({name,enabled:true,params:name==='ChangeSpeed'?[{name:'newSpeed',enum:['0','1','2']}]:[]})),
+        politics:{enabled:true,factions:[{id:'ImperialFaction',name:'Imperial Legion'},{id:'StormcloakFaction',name:'Stormcloaks'}],relations:[],wars:[],player_standings:[],events:[]}};
+      window.updateFullState(JSON.stringify(fixture));
+      await pause();
+      const pickers = () => [...document.querySelectorAll('[data-npc-picker]')];
+      const input = placeholder => document.querySelector(`[data-npc-picker] input[placeholder="${placeholder}"]`);
+      const options = () => [...document.querySelectorAll('[role=option]')];
+      const chooseOption = async label => {
+        const option=options().find(e=>e.textContent.trim()===label);
+        check(option,`missing NPC picker option: ${label}`); option.click(); await pause();
+      };
+      const open = async control => { control.focus(); control.click(); await pause(); };
+      const storyInput = () => input('NPC name (e.g. Saadia)');
+      check(pickers().length===4, 'Story, both Social identities, and Action do not share NPC picker');
+      check(pickers().every(w=>w.querySelector('[role=combobox]')), 'a Director NPC picker lacks combobox role');
+      const story=storyInput();
+      await open(story);
+      check(options().length===50 && options()[0].textContent.trim()==='Nazeem (nearby)' &&
+        options()[29].textContent.trim()==='Guard 29 (nearby)' &&
+        options()[30].textContent.trim()==='Aela the Huntress',
+        'nearby-first ordering, nearby markers, known names, or 50-row cap failed');
+      await fill('[placeholder="NPC name (e.g. Saadia)"]','Camilla');
+      check(options().length===1 && options()[0].textContent.trim()==='Camilla Valerius','typing did not filter known NPCs');
+      await chooseOption('Camilla Valerius');
+      check(story.value==='Camilla Valerius','known non-nearby NPC was not selected');
+      const {knownNpcs: omitted, ...periodic} = fixture;
+      window.updateFullState(JSON.stringify(periodic)); await pause();
+      await choose('Story type','Message');
+      check(story.value==='Camilla Valerius','Message sender did not use the Story NPC picker');
+      clickText('Clear'); await pause();
+      check(story.value==='', 'Director Clear did not clear the picked NPC');
+      await fill('[placeholder="NPC name (e.g. Saadia)"]','Saadia');
+      const social1=input('NPC 1 (e.g. Mikael)'), social2=input('NPC 2 (e.g. Sven)');
+      await fill('[placeholder="NPC 1 (e.g. Mikael)"]','Aela');
+      check(options().length===1 && options()[0].textContent.trim()==='Aela the Huntress',
+        'Social NPC picker did not filter known names');
+      await chooseOption('Aela the Huntress');
+      await fill('[placeholder="NPC 2 (e.g. Sven)"]','Maven');
+      await chooseOption('Maven Black-Briar');
+      check(social1.value==='Aela the Huntress' && social2.value==='Maven Black-Briar',
+        'Social NPC identities did not retain selected names');
+      await choose('Story type','Informant');
+      check(pickers().length===6 && input('e.g. Camilla Valerius') && input('e.g. Sven'),
+        'Informant subject/source fields do not use NPC picker');
+      await choose('Story type','Ambush');
+      const hirer=input('e.g. Maven Black-Briar');
+      check(hirer && pickers().length===5,'Ambush hired-by field does not use NPC picker');
+      await open(hirer);
+      check(options().some(e=>e.textContent.trim()==='Imperial Legion (faction)'),
+        'Hired by picker omitted labeled faction suggestion');
+      await chooseOption('Imperial Legion (faction)');
+      await fill('section:nth-of-type(1) textarea','was hired by the Imperial Legion');
+      clickText('Dispatch Story'); await pause();
+      check(JSON.parse(payloads.at(-1)[1]).sender==='ImperialFaction','faction suggestion lost faction-ID mapping');
+      await choose('Story type','Stalker');
+      check(input('e.g. Faendal'),'Encouraged by field does not use NPC picker');
+      await choose('Story type','Quest');
+      await choose('Sub-type','rescue');
+      check(input('e.g. Jarl Balgruuf') && input('e.g. Camilla Valerius'),
+        'quest giver or rescue victim does not use NPC picker');
+      const action=document.querySelector('[aria-label="Action NPC"]');
+      await open(action);
+      check(action.closest('[data-npc-picker]') && options().length===30 &&
+        options().every(e=>e.textContent.trim().endsWith('(nearby)')),
+        'Action NPC is not the shared nearby-only picker');
+      await chooseOption('Guard 2 (nearby)');
+      check(action.value==='Guard 2','Action NPC selection displayed a marker');
+      await choose('Action','ChangeSpeed'); await choose('New speed','Jog');
+      clickText('Execute Action'); await pause();
+      check(JSON.parse(payloads.at(-1)[1]).npcFormId===108198,'Action picker did not preserve selected formId');
+      for (const [name,placeholder] of [
+        ['FetchPerson','e.g. Camilla Valerius, Alvor'],['SearchForActor','e.g. Lydia, Faendal'],
+        ['DeliverMessage','e.g. Jarl Balgruuf, Camilla'],['EscortTarget','e.g. Camilla Valerius, Sven'],
+        ['ScheduleFetch','e.g. Camilla Valerius'],['ScheduleDelivery','e.g. Jarl Balgruuf']
+      ]) {
+        await choose('Action',name);
+        check(input(placeholder),`${name} targetName does not use NPC picker`);
+      }
+      check(pickers().every(w=>w.querySelector('input[role=combobox]')),
+        'Director NPC text controls are not all combobox inputs');
+      document.getElementById('result').textContent=JSON.stringify({status:'PASS',
+        checks:['npc_picker_consistent'],directorPickers:pickers().length,knownFixtureCount:known.length,knownFixtureBytes:new TextEncoder().encode(JSON.stringify(known)).length});
+      return;
+    }
     if (location.hash === '#director_polish') {
       const failures = [];
       const expect = (condition, message, details) => {
@@ -421,7 +514,7 @@ SCRIPT = r"""
         const request=JSON.parse(payloads.at(-1)[1]);
         check(!request.options.npcs.includes('Sven') && !request.options.npcs.includes('Mikael'), 'fixture unexpectedly contains producer NPC names');
         window.directorGenerateResult(JSON.stringify({requestId:request.requestId,form,ok:true,fields})); await pause();
-        const inputs=[...document.querySelectorAll(`section:nth-of-type(${index}) input[type=text]:not([role=combobox])`)];
+        const inputs=[...document.querySelectorAll(`section:nth-of-type(${index}) input[type=text]`)].filter(e=>e.getAttribute('role')!=='combobox' || e.closest('[data-npc-picker]'));
         const values=(form==='story' ? [inputs[0],inputs[1],inputs[3]] : inputs.slice(0,2)).map(e=>e.value);
         const audit=JSON.parse(payloads.at(-1)[1]).outcome;
         if (JSON.stringify(values)!==JSON.stringify(expected) ||
@@ -465,7 +558,7 @@ SCRIPT = r"""
         document.querySelector('section:nth-of-type(1) textarea').value==='Wants to discuss a careful plan' &&
         button('Story type').value==='Quest' && button('Sub-type').value==='rescue' &&
         button('Enemy type').value==='bandit', 'generated merge changed identity/touched dropdown or lost text');
-      check([...document.querySelectorAll('section:nth-of-type(1) input:not([role=combobox]), section:nth-of-type(1) textarea')].filter(e=>e.placeholder!=='e.g. Jarl Balgruuf').every(e=>e.value.trim()) &&
+      check([...document.querySelectorAll('section:nth-of-type(1) input, section:nth-of-type(1) textarea')].filter(e=>e.placeholder!=='e.g. Jarl Balgruuf').every(e=>e.value.trim()) &&
         document.querySelector('input[placeholder="e.g. Jarl Balgruuf"]').value==='', 'Generate lost quest content or applied None sender');
       const audit = JSON.parse(payloads.at(-1)[1]).outcome;
       check(audit?.ok && audit.filled.includes('npcName') && audit.blank.includes('narration') &&
@@ -498,7 +591,7 @@ SCRIPT = r"""
           document.querySelectorAll('section:nth-of-type(3) input[type=text]')[0].value==='ImperialFaction' &&
           document.querySelectorAll('section:nth-of-type(3) input[type=text]')[1].value==='StormcloakFaction',
           'faction display names were not normalized to IDs');
-        check([...document.querySelectorAll(`section:nth-of-type(${index}) input:not([role=combobox]), section:nth-of-type(${index}) textarea`)].every(e=>e.value.trim()),
+        check([...document.querySelectorAll(`section:nth-of-type(${index}) input, section:nth-of-type(${index}) textarea`)].every(e=>e.value.trim()),
           `${form}: Generate left visible fields blank`);
         if (form==='political') {
           formButton(index,'Generate').click(); await pause(); const partial=JSON.parse(payloads.at(-1)[1]);
@@ -612,7 +705,7 @@ SCRIPT = r"""
     // The five-row faction list must also prefer down when it fits below.
     await geometry(document.querySelector('input[placeholder="Faction A (e.g. StormcloakFaction)"]'),'FactionInput');
     const npc=button('Action NPC'); npc.click(); await pause();
-    check(document.querySelector('[role=option][aria-selected=true]').textContent.trim()==='Nazeem','current value not highlighted');
+    check(optionText(document.querySelector('[role=option][aria-selected=true]'))==='Nazeem','current value not highlighted');
     npc.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowDown',bubbles:true})); await pause();
     npc.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true})); await pause();
     check(npc.value==='Guard 1','keyboard selection failed');
@@ -738,7 +831,7 @@ with tempfile.TemporaryDirectory(prefix='ie-dropdowns-') as directory:
     (folder / 'index.html').write_text(page, encoding='utf-8')
     scenario = next((arg.split('=',1)[1] for arg in sys.argv if arg.startswith('--scenario=')), '')
     completed = subprocess.run([str(CHROME), '--headless=new', '--no-sandbox', '--disable-gpu',
-        '--allow-file-access-from-files', '--no-first-run', '--window-size=' + ('1600,3000' if not scenario or '--busy-only' in sys.argv or scenario == 'director_required_fields' else '1600,1000'),
+        '--allow-file-access-from-files', '--no-first-run', '--window-size=' + ('1600,3000' if not scenario or '--busy-only' in sys.argv or scenario in ['busy','director_required_fields','npc_picker_consistent'] else '1600,1000'),
         '--user-data-dir=' + str(folder / 'profile'), '--virtual-time-budget=90000', '--dump-dom',
         (folder / 'index.html').as_uri() + ('#busy' if '--busy-only' in sys.argv else '#' + scenario if scenario else '')], capture_output=True, text=True, encoding='utf-8', timeout=60)
     start = completed.stdout.find('<pre id="result">')

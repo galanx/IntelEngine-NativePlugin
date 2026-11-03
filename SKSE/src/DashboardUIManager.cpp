@@ -13,6 +13,7 @@
 #include "DashboardConfig.h"
 #include "FactionPolitics.h"
 #include "SkyrimNetAPI.h"
+#include "NPCIndex.h"
 #include "SlotTracker.h"
 #include "ProcessUtils.h"
 #include <windows.h>
@@ -242,6 +243,7 @@ namespace IntelEngine {
                 pendingSlotPayload_.clear();
                 pendingFullStatePayloadSet_ = false;
                 pendingFullStatePayload_.clear();
+                knownNpcsSize_ = static_cast<std::size_t>(-1);
                 pendingFlush_ = true;
                 pendingRefresh_ = openedEventSent_;
                 break;
@@ -424,6 +426,7 @@ namespace IntelEngine {
             replaceAll(fixed, "False", "false");
 
             auto parsed = nlohmann::json::parse(fixed);
+            std::size_t knownNpcsSize = NPCIndex::GetSingleton()->GetNPCCount();
             if (auto* calendar = RE::Calendar::GetSingleton()) {
                 parsed["calendar"] = {
                     {"time", calendar->GetCurrentGameTime()},
@@ -524,13 +527,15 @@ namespace IntelEngine {
                 parsed["actions"] = acts;
             }
 
-            std::string clean = parsed.dump();
             {
                 std::lock_guard<std::mutex> lock(mutex_);
                 if (shuttingDown_ || generation_ != generation ||
                     !requestedOpen_ || !isOpen_.load() || !domReady_.load()) return;
-                pendingFullStatePayload_ = std::move(clean);
+                // Coalesced snapshots retain names until the pending state can be delivered.
+                if (knownNpcsSize_ != knownNpcsSize || pendingFullStatePayloadSet_) parsed["knownNpcs"] = NPCIndex::GetSingleton()->GetKnownNames();
+                pendingFullStatePayload_ = parsed.dump();
                 fullStatePayloadGeneration_ = generation;
+                knownNpcsSize_ = knownNpcsSize;
                 pendingFullStatePayloadSet_ = true;
             }
             pollCondition_.notify_one();

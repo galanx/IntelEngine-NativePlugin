@@ -656,6 +656,13 @@ struct SlotStub { std::string SerializeToJson()const{return "[slot]";} };
 class DashboardConfig { public: static ConfigStub* GetSingleton(){static ConfigStub c;return &c;} void Reload(){} };
 class FactionPolitics { public: static PoliticsStub* GetSingleton(){static PoliticsStub p;return &p;} };
 class SlotTracker { public: static SlotStub* GetSingleton(){static SlotStub s;return &s;} };
+
+class NPCIndex { public:
+    static NPCIndex* GetSingleton(){static NPCIndex index;return &index;}
+    std::vector<std::string> names;
+    std::size_t GetNPCCount() const{return names.size();}
+    std::vector<std::string> GetKnownNames() const {auto out=names;std::sort(out.begin(),out.end());out.erase(std::unique(out.begin(),out.end()),out.end());return out;}
+};
 namespace SkyrimNetAPI { inline std::string (*GetPluginConfigValue)(const char*,const char*,const char*)=nullptr; }
 namespace RE {
 struct Calendar {
@@ -704,6 +711,7 @@ public:
     bool expectedExitPending_=false;
     std::uint64_t slotPayloadGeneration_=0,fullStatePayloadGeneration_=0;
     std::string pendingFullState_,pendingSlotPayload_,pendingFullStatePayload_;
+    std::atomic_size_t knownNpcsSize_{static_cast<std::size_t>(-1)};
     std::vector<std::pair<std::uint64_t,std::string>> pendingDirectorResults_;
     std::mutex mutex_,actionCacheMutex_; std::condition_variable pollCondition_;
     struct ActionParam {std::string name,description;std::vector<std::string> enumValues;};
@@ -797,8 +805,20 @@ void testManager() {
     m->SendSlotData(generation); assert(m->pendingSlotPayloadSet_);
     m->PushFullState("{\"ready\":true}");
     assert(m->pendingFullStateSet_ && m->pendingFullState_=="{\"ready\":true}");
-    m->pendingFullStateSet_=false;
-    m->ProcessFullState("{\"ready\":TRUE}",generation); assert(m->pendingFullStatePayloadSet_);
+    NPCIndex::GetSingleton()->names={"Zelda","Brey","Brey","Aela"};
+    m->ProcessFullState("{\"ready\":true}",generation); assert(m->pendingFullStatePayloadSet_);
+    auto fullPayload=nlohmann::json::parse(m->pendingFullStatePayload_);
+    assert(fullPayload["knownNpcs"]==nlohmann::json::array({"Aela","Brey","Zelda"}));
+    assert(fullPayload["knownNpcs"].size()==3 && fullPayload["knownNpcs"].dump().size()==23);
+    m->ProcessFullState("{\"ready\":true}",generation);
+    assert(nlohmann::json::parse(m->pendingFullStatePayload_)["knownNpcs"]==fullPayload["knownNpcs"]);
+    m->pendingFullStatePayloadSet_=false;
+    m->ProcessFullState("{\"ready\":true}",generation);
+    assert(!nlohmann::json::parse(m->pendingFullStatePayload_).contains("knownNpcs"));
+    NPCIndex::GetSingleton()->names.push_back("New Name");
+    m->ProcessFullState("{\"ready\":true}",generation);
+    assert(nlohmann::json::parse(m->pendingFullStatePayload_)["knownNpcs"]==nlohmann::json::array({"Aela","Brey","New Name","Zelda"}));
+    m->pendingFullStatePayloadSet_=false;
     RE::Cell exterior, neighboringExterior, distantExterior, interior{true}, otherInterior{true};
     RE::Worldspace world, otherWorld;
     auto* player=RE::PlayerCharacter::GetSingleton();
