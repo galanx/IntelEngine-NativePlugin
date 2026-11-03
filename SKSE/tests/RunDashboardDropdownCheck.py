@@ -62,7 +62,7 @@ SCRIPT = r"""
     window.payloads = [];
     window.escapeCapture = [];
     window.magelight = { send: (name, value) => escapeCapture.push([name, value]) };
-    for (const name of ['dispatchStory','dispatchNpcSocial','dispatchPolitics','executeAction','cancelTask','changePluginConfig','generateDirector'])
+    for (const name of ['dispatchStory','dispatchNpcSocial','dispatchPolitics','executeAction','cancelTask','changePluginConfig','toggleAction','generateDirector'])
       window['onDashboard_' + name] = json => payloads.push([name, json]);
     window.updateFullState(JSON.stringify({config:{}, pluginConfig:{'ui.scale':1},
       tasks:[{index:0,state:0,cooldownRemaining:30}], scheduled:[],
@@ -72,6 +72,67 @@ SCRIPT = r"""
       actions:[{name:'GoToLocation',enabled:true},{name:'FetchPerson',enabled:true},{name:'ReportPlayerConduct',params:[{name:'sentiment',enum:['strongly_positive','positive','negative','strongly_negative']},{name:'factionId'},{name:'reason'}]},{name:'ChangeSpeed',enabled:true}],
       politics:{enabled:true,factions:[{id:'ImperialFaction',name:'Imperial Legion'},{id:'StormcloakFaction',name:'Stormcloaks'},...Array.from({length:3},(_,i)=>({id:'ThalmorFaction'+i,name:'Thalmor '+i}))],relations:[],wars:[],player_standings:[],events:[]}}));
     await pause(); clickText('Director'); await pause();
+    if (location.hash === '#actions_grouped') {
+      const actions = [
+        {name:'FetchPerson',fileName:'fetch.yaml',description:'Find {{ npc.name }}',enabled:true,params:[],category:'intel_travel',isCategory:false},
+        {name:'OtherFlat',fileName:'flat.yaml',description:'Flat mod action',enabled:true,params:[],category:'',isCategory:false},
+        {name:'Scheduling',fileName:'scheduling.yaml',description:'Scheduling actions',enabled:false,params:[],category:'intel_scheduling',isCategory:true},
+        {name:'ModAction',fileName:'mod.yaml',description:'Other mod action',enabled:true,params:[],category:'other_mod',isCategory:false},
+        {name:'Communication',fileName:'communication.yaml',description:'Communication actions',enabled:true,params:[],category:'intel_communication',isCategory:true},
+        {name:'CommunicationAction',fileName:'communication-action.yaml',description:'Communication action',enabled:false,params:[],category:'intel_communication',isCategory:false},
+        {name:'GoToLocation',fileName:'travel.yaml',description:'Travel action',enabled:false,params:[],category:'intel_travel',isCategory:false},
+        {name:'Travel',fileName:'travel-category.yaml',description:'Travel actions',enabled:true,params:[],category:'intel_travel',isCategory:true},
+        {name:'UnknownCategory',fileName:'unknown-category.yaml',description:'Unknown category',enabled:true,params:[],category:'intel_custom',isCategory:true},
+        {name:'CustomAction',fileName:'custom.yaml',description:'Custom IntelEngine action',enabled:true,params:[],category:'intel_custom',isCategory:false},
+        {name:'ScheduledAction',fileName:'scheduled.yaml',description:'Scheduled action',enabled:true,params:[],category:'intel_scheduling',isCategory:false},
+        {name:'ModCategory',fileName:'mod-category.yaml',description:'Mod category',enabled:true,params:[],category:'other_mod',isCategory:true}
+      ];
+      window.updateFullState(JSON.stringify({config:{},pluginConfig:{'ui.scale':1},tasks:[],scheduled:[],
+        story:{enabled:true},quest:{active:true},social:{enabled:true},npcSocialLog:[],packages:[],
+        loadedNpcs:[],actions}));
+      await pause(); clickText('Actions'); await pause();
+      const cards = [...document.querySelectorAll('button')].filter(e => e.querySelector('.text-xs.font-medium'));
+      const names = cards.map(e => e.querySelector('.text-xs.font-medium').textContent.trim());
+      const order = ['Travel (category)',...names.slice(1,3),'Communication (category)','CommunicationAction',
+        'Scheduling (category)','ScheduledAction','UnknownCategory (category)','CustomAction'];
+      check(names.slice(1,3).sort().join('|')==='FetchPerson|GoToLocation' &&
+        JSON.stringify(names.slice(0,order.length))===JSON.stringify(order),
+        'IntelEngine categories/actions not ordered and grouped: '+JSON.stringify(names));
+      for (const parent of ['Travel','Communication','Scheduling','UnknownCategory']) {
+        const card=cards.find(e=>e.querySelector('.text-xs.font-medium').textContent.trim()===parent+' (category)');
+        check(card && !card.classList.contains('ml-4'), `category label/indent missing: ${parent}`);
+      }
+      for (const child of ['GoToLocation','FetchPerson','CommunicationAction','ScheduledAction','CustomAction']) {
+        const card=cards.find(e=>e.querySelector('.text-xs.font-medium').textContent.trim()===child);
+        const parent=cards.find(e=>e.querySelector('.text-xs.font-medium').textContent.trim()===(child==='GoToLocation'||child==='FetchPerson'?'Travel':child==='CommunicationAction'?'Communication':child==='ScheduledAction'?'Scheduling':'UnknownCategory')+' (category)');
+        check(card && card.getBoundingClientRect().left > parent.getBoundingClientRect().left,
+          `categorized action not visibly indented: ${child}`);
+      }
+      check(cards.find(e=>names.includes('FetchPerson') && e.textContent.includes('Find the NPC')),
+        'NPC description placeholder was not substituted');
+      const intelSection=[...document.querySelectorAll('h2')].find(e=>e.textContent.trim()==='IntelEngine Actions')?.closest('section');
+      check(intelSection?.querySelector('.text-xs.text-gray-500')?.textContent.trim()==='9 actions',
+        'IntelEngine category/action count is incorrect');
+      const otherHeading=[...document.querySelectorAll('h2')].find(e=>e.textContent.trim()==='Other Mod Actions');
+      const otherSection=otherHeading?.closest('section');
+      check(otherSection && otherSection.querySelector('.text-xs.text-gray-600')?.textContent.trim()==='3 actions',
+        'Other Mod Actions count is incorrect');
+      check(names.slice(order.length).join('|')==='ModCategory (category)|ModAction|OtherFlat',
+        'Other mod category/action and flat ordering is incorrect: '+JSON.stringify(names.slice(order.length)));
+      check(cards.at(-2).getBoundingClientRect().left > cards.at(-3).getBoundingClientRect().left &&
+        cards.at(-1).getBoundingClientRect().left === cards.at(-3).getBoundingClientRect().left,
+        'Other mod grouped action or flat action indentation is incorrect');
+      check(!otherSection.textContent.includes('Travel') && !otherSection.textContent.includes('CustomAction') &&
+        !otherSection.textContent.includes('UnknownCategory'), 'IntelEngine action leaked into Other Mod Actions');
+      cards.find(e=>e.querySelector('.text-xs.font-medium').textContent.trim()==='Travel (category)').click(); await pause();
+      cards.find(e=>e.querySelector('.text-xs.font-medium').textContent.trim()==='GoToLocation').click(); await pause();
+      check(JSON.stringify(payloads.map(([name,json])=>[name,JSON.parse(json)]))===JSON.stringify([
+        ['toggleAction',{name:'Travel',enabled:false}],
+        ['toggleAction',{name:'GoToLocation',enabled:true}]
+      ]), 'category/action toggles emitted incorrect toggleAction payloads: '+JSON.stringify(payloads));
+      document.getElementById('result').textContent=JSON.stringify({status:'PASS',checks:['actions_grouped'],names,otherCount:3});
+      return;
+    }
     if (location.hash === '#director_draft_persistence') {
       await fill('input[placeholder="e.g. Saadia"]', 'Saadia draft');
       clickText('Tasks'); await pause();
