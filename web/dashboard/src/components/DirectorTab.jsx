@@ -428,7 +428,7 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
     // Re-roll keeps who (filled identities and type, from any source) and rewrites generated text.
     for (const key of Object.keys(fields)) if (touched[key] !== true && !([...IDENTITY_KEYS, typeKey].includes(key) && fields[key])) fields[key] = '';
     const schema = Object.fromEntries(Object.entries(draft).filter(([k])=>!defs.some(f=>f.key===k)).map(([k,v]) => [k, { type: typeof v === 'number' ? 'number' : k === typeKey ? 'select' : 'text',
-      required: !reasonOnly && k !== 'relationDelta' && k !== 'reason',
+      required: (!reasonOnly || (action && k === 'reason')) && k !== 'relationDelta' && (k !== 'reason' || action),
       ...(k === typeKey ? { options:reasonOnly ? [selectedAction] : enumTypes.map(x=>x.key) } : {}) }]));
     if (story && storyGuidance) schema.narration.hint = `${storyGuidance.hint} ${storyGuidance.narration}`;
     const variants = Object.fromEntries(enumTypes.map(t => [t.key, Object.fromEntries((story ? (STORY_TYPE_FIELDS[t.key]?.fields||[]) : social ? (SOCIAL_TYPE_FIELDS[t.key]||[]) : action ? actionFieldDefs[t.key] : []).map(f=>[f.key,Object.fromEntries(Object.entries(f).filter(([key])=>key!=='placeholder').map(([key,value])=>[key,key === 'options' ? value.map(o => typeof o === 'string' ? o : o.value) : key === 'type' && value === 'faction' ? 'text' : value]))]))]));
@@ -878,7 +878,7 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
         {generateControls('action')}{pending?.form === 'action' && <small>Generating…</small>}{generateError && !pending && <small>{generateError}</small>}
         <fieldset disabled={pending?.form === 'action'} className="space-y-2 border-0 p-0 m-0 min-w-0" inert={pending?.form === 'action' ? '' : undefined}>
           <div className="flex gap-2">
-            <Field label="NPC" required hint="Nearby actor who performs the action.">
+            <Field label="NPC (nearby only)" required hint="Nearby actor who performs the action.">
             <FactionInput options={nearby} selectionOnly aria-label="Action NPC" placeholder="e.g. Guard 1"
               value={actionNpc}
               onChange={e => { setActionNpc(e.target.value); setBusyConfirm(''); }}
@@ -934,7 +934,7 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
             </Field>
           ))}
 
-          <Field label="Reason" hint="Optional. Why the NPC does this; they remember it and can explain it."><textarea value={actionParams.reason || ''} onChange={e => setParam('reason', e.target.value)} rows={2} className="w-full bg-white/5 border border-white/10 rounded px-2 py-1.5 text-xs text-gray-200 outline-none" /></Field>
+          <Field label="Reason" hint="Why the NPC does this; they remember it and can explain it."><textarea value={actionParams.reason || ''} onChange={e => setParam('reason', e.target.value)} rows={2} className="w-full bg-white/5 border border-white/10 rounded px-2 py-1.5 text-xs text-gray-200 outline-none" /></Field>
           <button
             onClick={handleExecuteAction}
             disabled={actionRequired.some(([, valid]) => !valid)}

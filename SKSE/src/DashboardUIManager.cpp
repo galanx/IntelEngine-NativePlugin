@@ -1005,7 +1005,15 @@ namespace IntelEngine {
                   mgr->pendingDirectorResults_.emplace_back(generation, result.dump()); }
                 mgr->pollCondition_.notify_one();
             };
-            if (!SkyrimNetAPI::SendCustomPromptToLLM) { queue({}, "Generate unavailable"); return; }
+            if (auto* player = RE::PlayerCharacter::GetSingleton()) {
+                auto* cell = player->GetParentCell();
+                const char* location = cell && cell->IsInteriorCell() ? cell->GetName() : nullptr;
+                if (!location || !location[0]) {
+                    auto* current = player->GetCurrentLocation();
+                    location = current ? current->GetFullName() : nullptr;
+                }
+                request["currentLocation"] = location && location[0] ? location : "";
+            } else request["currentLocation"] = "";
             const auto context = request.dump();
             const bool queued = SkyrimNetAPI::SendCustomPromptToLLM("intel_director_generate", "", context.c_str(),
                 [queue, form, id](const char* response, int success) mutable {
