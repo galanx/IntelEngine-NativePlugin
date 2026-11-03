@@ -375,7 +375,9 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
       const next = { ...old }, skipped = new Set(), npcKeys = ['npcName','npc1Name','npc2Name','subject','sender','victimName'];
       for (const [key, rawValue] of Object.entries(result.fields)) {
         let value = rawValue;
-        if (form === 'action' && key === 'destination' && typeof value === 'string' && options.npcs.some(name => name.toLowerCase() === value.trim().toLowerCase())) { audit.rejected[key] = 'Destination must be a place'; continue; }
+        if (form === 'action' && key === 'waitForPlayer') value = '';
+        if (form === 'action' && key === 'targetName' && !options.targets.includes(value)) { audit.rejected[key] = 'Invalid target NPC'; continue; }
+        if (form === 'action' && key === 'destination' && typeof value === 'string' && options.targets.some(name => name.toLowerCase() === value.trim().toLowerCase())) { audit.rejected[key] = 'Destination must be a place'; continue; }
         if (value === null && allowed[key] && !allowed[key].required) { skipped.add(key); continue; }
         if (npcKeys.includes(key) && typeof value === 'string' && (!value.trim() || /^(?:none|placeholder|e\.g\..*|.*\(e\.g\..*\))$/i.test(value.trim()))) { skipped.add(key); continue; }
         if (!allowed[key] || ((touched[key] === true || request.followUp || IDENTITY_KEYS.includes(key)) && old[key])) { audit.rejected[key] = !allowed[key] ? 'Unknown field' : 'Preserved or unchanged'; continue; }
@@ -432,7 +434,7 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
     const variants = Object.fromEntries(enumTypes.map(t => [t.key, Object.fromEntries((story ? (STORY_TYPE_FIELDS[t.key]?.fields||[]) : social ? (SOCIAL_TYPE_FIELDS[t.key]||[]) : action ? actionFieldDefs[t.key] : []).map(f=>[f.key,Object.fromEntries(Object.entries(f).filter(([key])=>key!=='placeholder').map(([key,value])=>[key,key === 'options' ? value.map(o => typeof o === 'string' ? o : o.value) : key === 'type' && value === 'faction' ? 'text' : value]))]))]));
     const id = String(++requestId.current);
     const options = { npcs:action ? nearby.map(n => n.name) : [...new Set([...npcs.map(n=>n.name), ...['npcName','npc1Name','npc2Name','subject','sender','victimName'].map(k=>draft[k]).filter(Boolean)])],
-      factions:factions.map(f=>({id:f.id,name:f.name})) };
+      ...(action ? { targets:[...new Set([...npcs.map(n=>n.name), ...knownNpcs])] } : {}), factions:factions.map(f=>({id:f.id,name:f.name})) };
     const request = { id, form, fields, draft, schema, variants, options };
     submitGenerate(request);
   };

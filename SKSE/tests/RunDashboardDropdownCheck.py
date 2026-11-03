@@ -107,7 +107,7 @@ SCRIPT = r"""
       let request=requests().at(-1);
       check(request.form==='action' && !request.schema.actionName.options.includes('CancelCurrentTask') &&
         !request.schema.actionName.options.includes('ChangeSpeed') && request.options.npcs.includes('Natch [Merchant]') &&
-        !request.options.npcs.includes('Distant Person'),'Action options were not restricted');
+        !request.options.npcs.includes('Distant Person') && request.options.targets.includes('Distant Person'),'Action options were not restricted');
       check(button('Action NPC').matches(':disabled'),'Action was editable while generating');
       await reply('action',{npcName:'Distant Person',actionName:'GoToLocation',destination:'Whiterun',speed:'bogus'});
       check(requests().at(-1).followUp && button('Action NPC').value==='' &&
@@ -116,9 +116,9 @@ SCRIPT = r"""
       const rejected=requests().at(-1);
       await reply('action',{npcName:'Natch',destination:'Natch [Merchant]',waitForPlayer:'1',reason:'expected the player to come'});
       check(outcomeFor(rejected.requestId).rejected.destination==='Destination must be a place' &&
-        button('Wait for player').value==='Yes' &&
+        button('Wait for player').value==='' &&
         host(4).querySelector('textarea').value==='expected the player to come',
-        `Action rejected a justified waitForPlayer or failed to retain its reason: wait=${button('Wait for player').textContent}, reason=${host(4).querySelector('textarea').value}, audit=${JSON.stringify(outcomeFor(rejected.requestId))}`);
+        `Action failed to clear waitForPlayer or retain its reason: wait=${button('Wait for player').textContent}, reason=${host(4).querySelector('textarea').value}, audit=${JSON.stringify(outcomeFor(rejected.requestId))}`);
       control(4,'Generate').click(); await pause(); request=requests().at(-1);
       check(request.fields.npcName==='Natch [Merchant]' && request.fields.actionName==='GoToLocation' &&
         request.fields.destination==='','Action re-roll lost identities/type or retained generated text');
@@ -141,6 +141,11 @@ SCRIPT = r"""
       control(4,'Clear').click(); await pause();
       check(button('Action NPC').value==='' && button('Action').value==='' &&
         !JSON.parse(localStorage.getItem('intelengine.director.drafts')).action,'Action Clear left fields or persisted draft');
+      await choose('Action NPC','Natch [Merchant]'); await choose('Action','FetchPerson');
+      control(4,'Generate').click(); await pause(); request=requests().at(-1);
+      await reply('action',{targetName:'Distant Person'});
+      check(host(4).querySelector('input[placeholder="e.g. Camilla Valerius, Alvor"]').value==='Distant Person',
+        'Generated non-nearby target was not applied');
       await choose('Action NPC','Natch [Merchant]');
       for (const action of ['CancelCurrentTask','ChangeSpeed']) {
         await choose('Action',action);
