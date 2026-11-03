@@ -322,6 +322,7 @@ const SOCIAL_TYPE_FIELDS = {
 
 const IDENTITY_KEYS = ['npcName', 'npc1Name', 'npc2Name', 'targetName', 'subject', 'sender', 'victimName', 'factionA', 'factionB'];
 
+const stripExamples = value => typeof value === 'string' ? value.replace(/\s*e\.g\.[^.;]*(?:[.;]|$)/gi, '').replace(/"[^"]*"/g, '').trim() : value;
 function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions = [], story, social, sendAction }) {
   // Story dispatch state
   const [storyNpc, setStoryNpc] = useState('');
@@ -435,6 +436,12 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
           { factionA:polFactionA, factionB:polFactionB, eventType:polEventType, description:polDescription, relationDelta:polDelta };
     if (reasonOnly) fields = { npcName:fields.npcName, actionName, reason:actionParams.reason || '' };
     if (action && !reasonOnly) fields.reason ??= ''; if (!reasonOnly) for (const f of defs) fields[f.key] ??= '';
+    const npcPool = [...new Set([...npcs.map(n => n.name), ...knownNpcs, ...['npcName','npc1Name','npc2Name','subject','sender','victimName'].map(k => fields[k]).filter(Boolean)])];
+    const requiredNpcKeys = [...(story ? ['npcName'] : social ? ['npc1Name','npc2Name'] : []), ...defs.filter(f => f.required && ['npcName','npc1Name','npc2Name','subject'].includes(f.key)).map(f => f.key)];
+    for (const key of requiredNpcKeys) if (!String(fields[key] || '').trim()) { const choices = npcPool.filter(name => !Object.values(fields).some(value => typeof value === 'string' && value.trim().toLowerCase() === name.toLowerCase())); if (choices.length) fields[key] = choices[Math.floor(Math.random() * choices.length)]; }
+    if (story) { setStoryNpc(fields.npcName); if (fields.subject) setStoryFields(prev => ({...prev,subject:fields.subject})); }
+    if (social) { setSocialNpc1(fields.npc1Name); setSocialNpc2(fields.npc2Name); }
+    if (story || social) setTouched(t => ({...t,...Object.fromEntries(requiredNpcKeys.filter(k=>fields[k]).map(k=>[k,'generated']))}));
     for (const key of Object.keys(fields)) if (typeof fields[key] === 'string' && !fields[key].trim()) fields[key] = '';
     const draft = { ...fields };
     // Re-roll keeps who (filled identities and type, from any source) and rewrites generated text.
@@ -444,8 +451,9 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
       ...(k === typeKey ? { options:reasonOnly ? [actionName] : enumTypes.map(x=>x.key) } : {}) }]));
     if (story && storyGuidance) schema.narration.hint = `${storyGuidance.hint} ${storyGuidance.narration}`;
     const variants = Object.fromEntries(enumTypes.map(t => [t.key, Object.fromEntries((story ? (STORY_TYPE_FIELDS[t.key]?.fields||[]) : social ? (SOCIAL_TYPE_FIELDS[t.key]||[]) : action ? actionFieldDefs[t.key] : []).map(f=>[f.key,Object.fromEntries(Object.entries(f).filter(([key])=>key!=='placeholder').map(([key,value])=>[key,key === 'options' ? value.map(o => typeof o === 'string' ? o : o.value) : key === 'type' && value === 'faction' ? 'text' : value]))]))]));
+    for (const definition of [...Object.values(schema), ...Object.values(variants).flatMap(fields => Object.values(fields))]) for (const key of ['hint','example']) if (definition[key]) definition[key] = stripExamples(definition[key]);
     const id = String(++requestId.current);
-    const options = { npcs:action ? nearby.map(n => n.name) : [...new Set([...npcs.map(n=>n.name), ...['npcName','npc1Name','npc2Name','subject','sender','victimName'].map(k=>draft[k]).filter(Boolean)])],
+    const options = { npcs:action ? nearby.map(n => n.name) : [...new Set([...npcs.map(n=>n.name), ...knownNpcs, ...['npcName','npc1Name','npc2Name','subject','sender','victimName'].map(k=>draft[k]).filter(Boolean)])],
       ...(action ? { targets:[...new Set([...npcs.map(n=>n.name), ...knownNpcs])] } : {}), factions:factions.map(f=>({id:f.id,name:f.name})) };
     const request = { id, form, fields, draft, schema, variants, options };
     submitGenerate(request);

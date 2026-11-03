@@ -81,6 +81,42 @@ SCRIPT = r"""
     await pause();
     const reloadReady = location.hash === '#director_live_polish2' && localStorage.getItem('__directorLivePolish2Reload') === 'ready';
     if (!reloadReady) { clickText('Director'); await pause(); }
+    if (location.hash === '#story_social_identity') {
+      Math.random=()=>0;
+      const story=()=>document.querySelector('section:nth-of-type(1)'), social=()=>document.querySelector('section:nth-of-type(2)');
+      const control=(root,label)=>[...root.querySelectorAll('button')].find(e=>e.textContent.trim()===label);
+      const request=()=>JSON.parse(payloads.filter(([name,json])=>name==='generateDirector'&&!JSON.parse(json).outcome).at(-1)[1]);
+      const stop=root=>control(root,'Stop').click();
+      await choose('Story type','Informant'); control(story(),'Generate').click(); await pause();
+      let result=request();
+      check(result.fields.subject && result.fields.subject!==result.fields.npcName && story().querySelector('input[placeholder="e.g. Camilla Valerius"]').value===result.fields.subject,
+        'Informant did not preselect and show a distinct Subject NPC');
+      check(!JSON.stringify([result.schema,result.variants]).includes('e.g.') &&
+        !JSON.stringify([result.schema,result.variants]).includes('"was seen'),
+        'Generate metadata retained examples');
+      check(story().textContent.includes('e.g. "was seen arguing'),
+        'UI Informant gossip hint was altered');
+      stop(story()); await pause();
+      await fill('input[placeholder="e.g. Camilla Valerius"]','Mikael',story()); control(story(),'Generate').click(); await pause();
+      result=request(); check(result.fields.subject==='Mikael','Generate replaced a user-set Subject NPC'); stop(story()); await pause();
+      await choose('Story type','Road Encounter'); control(story(),'Generate').click(); await pause(); result=request();
+      check(!JSON.stringify([result.schema,result.variants]).includes('e.g.') &&
+        !result.schema.narration.hint.includes('sell pelts in Helgen'), 'Generate schema retained narration examples');
+      check(story().querySelector('textarea').placeholder==='e.g. set out to sell pelts in Helgen' &&
+        story().textContent.includes('Why they are travelling, e.g. set out to sell pelts in Helgen.'), 'UI Road Encounter hints were altered');
+      stop(story()); await pause();
+      control(social(),'Generate').click(); await pause(); result=request();
+      check(result.fields.npc1Name && result.fields.npc2Name && result.fields.npc1Name!==result.fields.npc2Name &&
+        social().querySelector('input[placeholder="e.g. Mikael"]').value===result.fields.npc1Name &&
+        social().querySelector('input[placeholder="e.g. Sven"]').value===result.fields.npc2Name,
+        'Social Generate did not preselect and show distinct NPCs');
+      stop(social()); await pause(); control(social(),'Clear').click(); await pause();
+      await fill('input[placeholder="e.g. Mikael"]','Mikael',social()); control(social(),'Generate').click(); await pause(); result=request();
+      check(result.fields.npc1Name==='Mikael' && result.fields.npc2Name && result.fields.npc2Name!=='Mikael' &&
+        social().querySelector('input[placeholder="e.g. Sven"]').value===result.fields.npc2Name,
+        'Social Generate replaced NPC 1 or failed to preselect a distinct empty NPC 2');
+      document.getElementById('result').textContent=JSON.stringify({status:'PASS',checks:['story_social_identity','hint_stripping']}); return;
+    }
     if (location.hash === '#action_generate') {
       Math.random=()=>0;
       window.updateFullState(JSON.stringify({config:{},pluginConfig:{'ui.scale':1},tasks:[],scheduled:[],
@@ -100,10 +136,10 @@ SCRIPT = r"""
       check(document.querySelector('input[placeholder="e.g. Saadia"]').value==='Natch [Merchant]','unique trailing-tag name was not snapped');
       control(1,'Clear').click(); await pause(); control(1,'Generate').click(); await pause();
       await reply('story',{npcName:'Twin',storyType:'seek_player',narration:'Wanted to discuss trade'});
-      check(document.querySelector('input[placeholder="e.g. Saadia"]').value==='Twin','ambiguous trailing-tag name was changed');
+      check(document.querySelector('input[placeholder="e.g. Saadia"]').value==='Natch [Merchant]','Story Generate replaced its preselected NPC with an ambiguous example match');
       control(1,'Clear').click(); await pause(); control(1,'Generate').click(); await pause();
       await reply('story',{npcName:'Twin [Guard]',storyType:'seek_player',narration:'Wanted to discuss trade'});
-      check(document.querySelector('input[placeholder="e.g. Saadia"]').value==='Twin [Guard]','exact tagged name changed');
+      check(document.querySelector('input[placeholder="e.g. Saadia"]').value==='Natch [Merchant]','Story Generate replaced its preselected NPC with a tagged name');
       control(4,'Generate').click(); await pause();
       let request=requests().at(-1);
       check(request.form==='action' && !request.schema.actionName.options.includes('CancelCurrentTask') &&
@@ -425,16 +461,16 @@ SCRIPT = r"""
         return request;
       };
       const a = await roll({npcName:'Nazeem',storyType:'ambush',narration:'was hired to collect an unpaid debt',sender:'Guard 1'});
-      check((a.fields.npcName ?? '') === '' && (a.fields.storyType ?? '') === '' && button('Story type').value === 'Ambush', 'auto Generate did not pick its NPC and type');
+      check((a.fields.npcName ?? '') !== '' && (a.fields.storyType ?? '') === '' && button('Story type').value === 'Ambush', 'auto Generate did not preselect its NPC or pick its type');
       check(narration().value === 'was hired to collect an unpaid debt', 'first Generate did not fill narration A');
       const b = await roll({npcName:'Guard 2',storyType:'road_encounter',narration:'set out to sell pelts in Helgen',sender:'Guard 2',destination:'Helgen'});
       check(narration().value === 'set out to sell pelts in Helgen', 'second Generate did not replace narration A with B');
       check((b.fields.narration ?? '') === '' && b.fields.storyType === 'ambush' && b.fields.sender === 'Guard 1', 'reroll did not blank generated text and retain generated type/sender');
-      check(b.fields.npcName === 'Nazeem' && story().querySelector('input').value === 'Nazeem' && button('Story type').value === 'Ambush' &&
+      check(b.fields.npcName === a.fields.npcName && story().querySelector('input').value === a.fields.npcName && button('Story type').value === 'Ambush' &&
         story().querySelector('input[aria-label="Hired by"]').value === 'Guard 1', 'reroll replaced generated identities or type');
       story().querySelector('[aria-label="Clear NPC"]').click(); await pause();
       const repicked = await roll({npcName:'Guard 2',storyType:'road_encounter',narration:'came to collect a debt',sender:'Guard 2'});
-      check((repicked.fields.npcName ?? '') === '' && repicked.fields.storyType === 'ambush' && story().querySelector('input').value === 'Guard 2' &&
+      check(repicked.fields.npcName && repicked.fields.storyType === 'ambush' && story().querySelector('input').value === repicked.fields.npcName &&
         button('Story type').value === 'Ambush', 'clearing NPC did not re-pick only that identity');
       await fill('input[placeholder="e.g. Saadia"]', 'Saadia');
       await fill('section textarea', 'set out to buy salt in Riften');
@@ -450,7 +486,7 @@ SCRIPT = r"""
       check(getComputedStyle(hint).fontSize === '11px' && getComputedStyle(hint).color === 'rgb(156, 163, 175)' && label.querySelector('.text-red-400'), 'hint is not readable or required label star lost');
       [...story().querySelectorAll('button')].find(e=>e.textContent.trim()==='Clear').click(); await pause();
       const cleared = await roll({npcName:'Guard 1',storyType:'seek_player',narration:'came to repay a debt'});
-      check((cleared.fields.npcName ?? '') === '' && (cleared.fields.narration ?? '') === '' && story().querySelector('input').value === 'Guard 1', 'Clear retained user ownership');
+      check(cleared.fields.npcName && (cleared.fields.narration ?? '') === '' && story().querySelector('input').value === cleared.fields.npcName, 'Clear retained user ownership');
       document.getElementById('result').textContent=JSON.stringify({status:'PASS',checks:['generate_reroll'],requests});
       return;
     }
@@ -853,8 +889,8 @@ SCRIPT = r"""
       check(requests().length===beforeInformant+1,'Informant follow-up was not exactly once');
       window.directorGenerateResult(JSON.stringify({requestId:followup.requestId,form:'story',ok:true,
         fields:{gossip:'was seen arguing over an unpaid debt'}})); await pause();
-      check(requests().length===beforeInformant+1 && story.querySelector('[aria-label="Subject NPC"]').value==='',
-        'still-incomplete follow-up looped or invented a required subject');
+      check(requests().length===beforeInformant+1 && story.querySelector('[aria-label="Subject NPC"]').value!=='',
+        'still-incomplete follow-up looped or lost the preselected subject');
       await fill('section:nth-of-type(1) textarea','');
       story.querySelector('summary button').click(); await pause();
       request=requests().at(-1);
@@ -1101,6 +1137,9 @@ SCRIPT = r"""
         control(index,'Clear').click(); await pause();
         control(index,'Generate').click(); await pause();
         const request=JSON.parse(payloads.at(-1)[1]);
+        const identityKeys=Object.keys(fields).filter(key=>!key.endsWith('Type'));
+        const selected=identityKeys.map((key,i)=>request.fields[key] || expected[i]);
+        if (form==='social') check(selected.every(Boolean) && selected[0]!==selected[1], 'Social required NPC preselection was empty or duplicated');
         check(!request.options.npcs.includes('Sven') && !request.options.npcs.includes('Mikael'), 'fixture unexpectedly contains producer NPC names');
         window.directorGenerateResult(JSON.stringify({requestId:request.requestId,form,ok:true,fields})); await pause(); clickText('Stop'); await pause();
         const inputs=[...document.querySelectorAll(`section:nth-of-type(${index}) input[type=text]`)].filter(e=>e.getAttribute('role')!=='combobox' || e.closest('[data-npc-picker]'));
@@ -1108,14 +1147,14 @@ SCRIPT = r"""
         const values=identityInputs.map(e=>e.value);
         const audit=outcomeFor(request.requestId);
         const typeLabel={story:'Story type',social:'Social type',political:'Political event type'}[form], selectedType=button(typeLabel).value;
-        if (JSON.stringify(values)!==JSON.stringify(expected) ||
-            Object.keys(fields).filter(key=>!key.endsWith('Type')).some(key=>audit.rejected[key])) failures.push({form,fields,values,expected,rejected:audit.rejected});
+        if (JSON.stringify(values)!==JSON.stringify(selected) ||
+            identityKeys.some(key=>audit.rejected[key] && !(request.fields[key] && audit.rejected[key]==='Preserved or unchanged'))) failures.push({form,fields,values,expected:selected,rejected:audit.rejected});
         control(index,'Generate').click(); await pause();
         const reroll=JSON.parse(payloads.at(-1)[1]);
         const replacements=Object.fromEntries(Object.entries(fields).map(([key,value])=>[key,key.endsWith('Type') ? (form==='story' ? 'ambush' : 'npc_gossip') : value && value!=='None' ? (key.startsWith('faction') ? 'ThalmorFaction0' : 'Guard 2') : value]));
         window.directorGenerateResult(JSON.stringify({requestId:reroll.requestId,form,ok:true,fields:replacements})); await pause(); clickText('Stop'); await pause();
-        check(values.every((value,i)=>!value || reroll.fields[Object.keys(fields).filter(key=>!key.endsWith('Type'))[i]]===value), 'reroll request blanked filled identities');
-        check(identityInputs.every((e,i)=>e.isConnected && e.value===expected[i]), 'reroll replaced filled identities');
+        check(values.every((value,i)=>!value || reroll.fields[identityKeys[i]]===value), 'reroll request blanked filled identities');
+        check(identityInputs.every((e,i)=>e.isConnected && e.value===(reroll.fields[identityKeys[i]] || values[i])), 'reroll replaced filled identities');
         check(button(typeLabel).value===selectedType, 'reroll replaced a filled type');
       }
       check(!failures.length, 'producer identity regressions: '+JSON.stringify(failures));
@@ -1190,9 +1229,10 @@ SCRIPT = r"""
         check(button(label).value===expected && document.querySelector(`section:nth-of-type(${index}) textarea`).value===
           (fields.narration || fields.description), `${form}: auto type and dependent draft did not merge`);
         if (form==='social' && fields.npc1Name==='Sven') check(
-          document.querySelector('input[placeholder="e.g. Mikael"]').value==='Sven' &&
-          document.querySelector('input[placeholder="e.g. Sven"]').value==='Mikael',
-          'producer NPC names outside nearby options were rejected');
+          document.querySelector('input[placeholder="e.g. Mikael"]').value===generated.fields.npc1Name &&
+          document.querySelector('input[placeholder="e.g. Sven"]').value===generated.fields.npc2Name &&
+          generated.fields.npc1Name && generated.fields.npc2Name && generated.fields.npc1Name!==generated.fields.npc2Name,
+          'dashboard did not preselect distinct social NPCs');
         if (form==='political') check(
           document.querySelectorAll('section:nth-of-type(3) input[type=text]')[0].value==='ImperialFaction' &&
           document.querySelectorAll('section:nth-of-type(3) input[type=text]')[1].value==='StormcloakFaction',
@@ -1220,10 +1260,11 @@ SCRIPT = r"""
       window.directorGenerateResult(JSON.stringify({requestId:duplicate.requestId,form:'social',ok:true,
         fields:{npc1Name:'Nazeem',npc2Name:'Nazeem',socialType:'npc_interaction',narration:'A valid scene',fact1:42,fact2:'considered the proposal'}})); await pause(); clickText('Stop'); await pause();
       const duplicateAudit=outcomeFor(duplicate.requestId);
-      check(document.querySelector('input[placeholder="e.g. Mikael"]').value==='Nazeem' &&
-        document.querySelector('input[placeholder="e.g. Sven"]').value==='' &&
+      check(duplicate.fields.npc1Name && duplicate.fields.npc2Name && duplicate.fields.npc1Name!==duplicate.fields.npc2Name &&
+        document.querySelector('input[placeholder="e.g. Mikael"]').value===duplicate.fields.npc1Name &&
+        document.querySelector('input[placeholder="e.g. Sven"]').value===duplicate.fields.npc2Name &&
         document.querySelector('section:nth-of-type(2) textarea').value==='A valid scene' &&
-        duplicateAudit.rejected.npc2Name==='Identities must be distinct' && duplicateAudit.rejected.fact1==='Invalid type',
+        duplicateAudit.rejected.npc1Name==='Preserved or unchanged' && duplicateAudit.rejected.npc2Name==='Preserved or unchanged' && duplicateAudit.rejected.fact1==='Invalid type',
         'duplicate identities or wrong-type field discarded valid fields');
       await choose('Political event type','Insult');
       document.querySelector('[aria-label="Clear Political event type"]').click(); await pause();
