@@ -368,7 +368,7 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
         setGenerateError(String(result.error || 'Generation failed; try again.').slice(0,120)); return;
       }
       const { form, draft: old, schema, variants, options } = request;
-      const typeKey = form === 'story' ? 'storyType' : form === 'social' ? 'socialType' : 'eventType';
+      const typeKey = form === 'action' ? 'actionName' : form === 'story' ? 'storyType' : form === 'social' ? 'socialType' : 'eventType';
       const typeOptions = schema[typeKey]?.options || [];
       const nextType = typeOptions.includes(old[typeKey]) ? old[typeKey] : typeOptions.includes(result.fields[typeKey]) ? result.fields[typeKey] : old[typeKey];
       const allowed = { ...schema, ...(variants[nextType] || {}) };
@@ -378,10 +378,16 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
         if (value === null && allowed[key] && !allowed[key].required) { skipped.add(key); continue; }
         if (npcKeys.includes(key) && typeof value === 'string' && (!value.trim() || /^(?:none|placeholder|e\.g\..*|.*\(e\.g\..*\))$/i.test(value.trim()))) { skipped.add(key); continue; }
         if (!allowed[key] || ((touched[key] === true || request.followUp || IDENTITY_KEYS.includes(key)) && old[key])) { audit.rejected[key] = !allowed[key] ? 'Unknown field' : 'Preserved or unchanged'; continue; }
-        if (['factionA','factionB'].includes(key) && typeof value === 'string') value = options.factions.find(f=>f.id===value || f.name===value)?.id || '';
+        if (IDENTITY_KEYS.includes(key) && typeof value === 'string') {
+          const names = [...options.npcs, ...options.factions.map(f => f.name)];
+          const matches = names.filter(name => name.replace(/ \[[^\]]*\]$/, '').toLowerCase() === value.toLowerCase());
+          if (!names.includes(value) && matches.length === 1) value = matches[0];
+        }
+        if (['factionA','factionB','factionId'].includes(key) && typeof value === 'string') value = options.factions.find(f=>f.id===value || f.name===value)?.id || '';
         if (allowed[key].type === 'number' ? typeof value !== 'number' : typeof value !== 'string') { audit.rejected[key] = 'Invalid type'; continue; }
         if (allowed[key].type === 'select' && !allowed[key].options.includes(value)) { audit.rejected[key] = 'Invalid option'; continue; }
-        if (['factionA','factionB'].includes(key) && !value) { audit.rejected[key] = 'Invalid identity'; continue; }
+        if (['factionA','factionB','factionId'].includes(key) && !value) { audit.rejected[key] = 'Invalid identity'; continue; }
+        if (form === 'action' && key === 'npcName' && !options.npcs.includes(value)) { audit.rejected[key] = 'Invalid nearby NPC'; continue; }
         if (key === 'relationDelta' && (!Number.isInteger(value) || value < -15 || value > 15)) { audit.rejected[key] = 'Invalid relation change'; continue; }
         const other = {factionA:'factionB',factionB:'factionA',npc1Name:'npc2Name',npc2Name:'npc1Name'}[key]; if (other && value && value.trim().toLowerCase() === (next[other] || '').trim().toLowerCase()) { audit.rejected[key] = 'Identities must be distinct'; continue; }
         next[key] = value;
@@ -391,6 +397,7 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
       if (form === 'social') { setSocialNpc1(next.npc1Name); setSocialNpc2(next.npc2Name); setSocialType(next.socialType); setSocialNarration(next.narration); setSocialFields(Object.fromEntries(Object.keys(allowed).filter(k => !['npc1Name','npc2Name','socialType','narration'].includes(k)).map(k => [k,next[k]]))); }
       setTouched(t=>({...t,[typeKey]:t[typeKey] || 'generated'}));
       if (form === 'political') { setPolFactionA(next.factionA); setPolFactionB(next.factionB); setPolEventType(next.eventType); setPolDescription(next.description); setPolDelta(next.relationDelta); }
+      if (form === 'action') { setActionNpc(nearby.find(n => n.name === next.npcName)?.id || ''); setSelectedAction(next.actionName); setActionParams(Object.fromEntries(Object.keys(allowed).filter(k => !['npcName','actionName'].includes(k)).map(k => [k,next[k] ?? '']))); }
       audit.ok = true; delete audit.rejected.$response; audit.applied = Object.keys(result.fields).filter(k=>next[k] !== old[k]); for (const k of Object.keys(result.fields)) if (!skipped.has(k) && !audit.applied.includes(k)) audit.rejected[k] ??= 'Preserved or unchanged';
       setGenerateError('');
       if (!request.followUp && Object.entries(allowed).some(([k, f]) => f.required && !String(next[k] ?? '').trim())) {
@@ -402,24 +409,27 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
     return () => { delete window.directorGenerateResult; };
   }, [pending, touched]);
   const generate = form => {
-    const story = form === 'story', social = form === 'social';
-    const defs = story ? currentFields : social ? currentSocialFields : [];
-    const enumTypes = story ? DIRECTOR_STORY_TYPES : social ? SOCIAL_TYPES : POLITICAL_EVENT_TYPES;
+    const story = form === 'story', social = form === 'social', action = form === 'action';
+    if (action && ['CancelCurrentTask','ChangeSpeed'].includes(selectedAction)) { setGenerateError('Generate does not fill CancelCurrentTask or ChangeSpeed.'); return; }
+    const defs = story ? currentFields : social ? currentSocialFields : action ? currentActionFields : [];
+    const enumTypes = story ? DIRECTOR_STORY_TYPES : social ? SOCIAL_TYPES : action ? executableActions.filter(a => !['CancelCurrentTask','ChangeSpeed'].includes(a.name)).map(a => ({key:a.name})) : POLITICAL_EVENT_TYPES;
+    const typeKey = action ? 'actionName' : story ? 'storyType' : social ? 'socialType' : 'eventType';
     const fields = story ? { npcName:storyNpc, storyType:touched.storyType ? storyType : '', narration:storyNarration, ...storyFields } :
       social ? { npc1Name:socialNpc1, npc2Name:socialNpc2, socialType:touched.socialType ? socialType : '', narration:socialNarration, ...socialFields } :
-        { factionA:polFactionA, factionB:polFactionB, eventType:polEventType, description:polDescription, relationDelta:polDelta };
+        action ? { npcName:nearby.find(n => n.id === actionNpc)?.name || '', actionName:selectedAction, ...actionParams } :
+          { factionA:polFactionA, factionB:polFactionB, eventType:polEventType, description:polDescription, relationDelta:polDelta };
     for (const f of defs) fields[f.key] ??= '';
     for (const key of Object.keys(fields)) if (typeof fields[key] === 'string' && !fields[key].trim()) fields[key] = '';
     const draft = { ...fields };
     // Re-roll keeps who (filled identities and type, from any source) and rewrites generated text.
-    for (const key of Object.keys(fields)) if (touched[key] !== true && !([...IDENTITY_KEYS, 'storyType', 'socialType', 'eventType'].includes(key) && fields[key])) fields[key] = '';
-    const schema = Object.fromEntries(Object.entries(draft).filter(([k])=>!defs.some(f=>f.key===k)).map(([k,v]) => [k, { type: typeof v === 'number' ? 'number' : k === (story?'storyType':social?'socialType':'eventType') ? 'select' : 'text',
+    for (const key of Object.keys(fields)) if (touched[key] !== true && !([...IDENTITY_KEYS, typeKey].includes(key) && fields[key])) fields[key] = '';
+    const schema = Object.fromEntries(Object.entries(draft).filter(([k])=>!defs.some(f=>f.key===k)).map(([k,v]) => [k, { type: typeof v === 'number' ? 'number' : k === typeKey ? 'select' : 'text',
       required: k !== 'relationDelta',
-      ...((k === (story?'storyType':social?'socialType':'eventType')) ? { options:enumTypes.map(x=>x.key) } : {}) }]));
+      ...(k === typeKey ? { options:enumTypes.map(x=>x.key) } : {}) }]));
     if (story && storyGuidance) schema.narration.hint = `${storyGuidance.hint} ${storyGuidance.narration}`;
-    const variants = Object.fromEntries(enumTypes.map(t => [t.key, Object.fromEntries((story ? (STORY_TYPE_FIELDS[t.key]?.fields||[]) : social ? (SOCIAL_TYPE_FIELDS[t.key]||[]) : []).map(f=>[f.key,Object.fromEntries(Object.entries(f).filter(([key])=>key!=='placeholder'))]))]));
+    const variants = Object.fromEntries(enumTypes.map(t => [t.key, Object.fromEntries((story ? (STORY_TYPE_FIELDS[t.key]?.fields||[]) : social ? (SOCIAL_TYPE_FIELDS[t.key]||[]) : action ? actionFieldDefs[t.key] : []).map(f=>[f.key,Object.fromEntries(Object.entries(f).filter(([key])=>key!=='placeholder').map(([key,value])=>[key,key === 'options' ? value.map(o => typeof o === 'string' ? o : o.value) : key === 'type' && value === 'faction' ? 'text' : value]))]))]));
     const id = String(++requestId.current);
-    const options = { npcs:[...new Set([...npcs.map(n=>n.name), ...['npcName','npc1Name','npc2Name','subject','sender','victimName'].map(k=>draft[k]).filter(Boolean)])],
+    const options = { npcs:action ? nearby.map(n => n.name) : [...new Set([...npcs.map(n=>n.name), ...['npcName','npc1Name','npc2Name','subject','sender','victimName'].map(k=>draft[k]).filter(Boolean)])],
       factions:factions.map(f=>({id:f.id,name:f.name})) };
     const request = { id, form, fields, draft, schema, variants, options };
     submitGenerate(request);
@@ -428,12 +438,14 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
     const keys = form === 'story' ? ['storyType', ...Object.keys(STORY_TYPE_FIELDS).flatMap(t=>(STORY_TYPE_FIELDS[t]?.fields||[]).map(f=>f.key))] :
       form === 'social' ? ['socialType', ...Object.keys(SOCIAL_TYPE_FIELDS).flatMap(t=>(SOCIAL_TYPE_FIELDS[t]||[]).map(f=>f.key))] : ['eventType'];
     keys.push(...(form === 'story' ? ['npcName','narration'] : form === 'social' ? ['npc1Name','npc2Name','narration'] : ['factionA','factionB','description','relationDelta']));
+    if (form === 'action') keys.splice(0, keys.length, 'npcName', 'actionName', ...Object.values(actionFieldDefs).flatMap(defs => defs.map(f => f.key)));
     if (pending?.form === form) stopGenerate();
     setTouched(t=>Object.fromEntries(Object.entries(t).filter(([key])=>!keys.includes(key))));
     setGenerateError('');
     if (form === 'story') { setStoryNpc(''); setStoryType('seek_player'); setStoryNarration(''); setStoryFields({}); }
     if (form === 'social') { setSocialNpc1(''); setSocialNpc2(''); setSocialType('npc_interaction'); setSocialNarration(''); setSocialFields({}); }
     if (form === 'political') { setPolFactionA(''); setPolFactionB(''); setPolEventType(''); setPolDescription(''); setPolDelta(8); }
+    if (form === 'action') { setActionNpc(''); setSelectedAction(''); setActionParams({}); }
   };
 
   // Action execution state
@@ -496,24 +508,20 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
   );
 
   // Use ACTION_FIELDS if defined, otherwise fall back to YAML params (minus hidden ones)
-  const currentActionFields = useMemo(() => {
-    if (!selectedAction) return [];
-    if (ACTION_FIELDS[selectedAction]) return ACTION_FIELDS[selectedAction];
-    if (currentAction) {
-      return (currentAction.params || [])
+  const actionFieldDefs = useMemo(() => Object.fromEntries(executableActions.map(action => [action.name,
+    ACTION_FIELDS[action.name] || (action.params || [])
         .filter(p => !HIDDEN_PARAMS.has(p.name))
         .map(p => ({
           key: p.name,
           label: p.name,
           type: p.name === 'factionId' ? 'faction' : Array.isArray(p.enum) && p.enum.length ? 'select' : 'text',
-          required: selectedAction === 'ReportPlayerConduct' || p.required,
+          required: action.name === 'ReportPlayerConduct' || p.required,
           options: p.enum || [],
           placeholder: p.description,
           hint: p.description,
-        }));
-    }
-    return [];
-  }, [selectedAction, currentAction]);
+        }))
+  ])), [executableActions]);
+  const currentActionFields = actionFieldDefs[selectedAction] || [];
 
   const storyGuidance = touched.storyType ? STORY_TYPE_FIELDS[storyType] : null, currentFields = STORY_TYPE_FIELDS[storyType]?.fields || [];
   const currentSocialFields = SOCIAL_TYPE_FIELDS[socialType] || [];
@@ -532,7 +540,7 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
     const type = (form === 'story' ? engine.activeType : engine.type) || '';
     return <span className="text-amber-400 italic normal-case"> — busy: {who} ({type.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())})</span>;
   };
-  const generateControls = form => <div className="flex items-center justify-between mb-2"><h2 className="section-header">{{story:'Story Dispatch',social:'NPC Social Dispatch',political:'Political Dispatch'}[form]}{busyHeader(form)}</h2><div className="flex gap-2">
+  const generateControls = form => <div className="flex items-center justify-between mb-2"><h2 className="section-header">{{story:'Story Dispatch',social:'NPC Social Dispatch',political:'Political Dispatch',action:'Action Execution'}[form]}{busyHeader(form)}</h2><div className="flex gap-2">
     <button data-expand-section onClick={() => generate(form)} disabled={!!pending}
       className="rounded px-2 py-1 text-xs text-gray-300 bg-white/10 disabled:opacity-40">{pending?.form === form ? 'Generating…' : 'Generate'}</button>
     <button onClick={() => pending?.form === form ? stopGenerate() : clear(form)} className="rounded px-2 py-1 text-xs text-gray-400">{pending?.form === form ? 'Stop' : 'Clear'}</button>
@@ -597,12 +605,13 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
   }, [polFactionA, polFactionB, polEventType, polEventTypeValid, polDescription, polDelta, sendAction, factions]);
 
   const handleActionChange = useCallback((name) => {
+    setTouched(t => ({...t, actionName:!!name, ...Object.fromEntries(Object.keys(actionParams).map(k => [k,false]))}));
     setSelectedAction(name);
     const action = executableActions.find(a => a.name === name);
     setActionParams(Object.fromEntries((action?.params || [])
       .filter(p => !HIDDEN_PARAMS.has(p.name) && Array.isArray(p.enum) && p.enum.length)
       .map(p => [p.name, p.enum[0]])));
-  }, [executableActions]);
+  }, [executableActions, actionParams]);
   const validActionFields = currentActionFields.filter(f => {
     const value = actionParams[f.key] || '';
     if (f.required && !value.trim()) return false;
@@ -626,6 +635,7 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
   }, [actionNpc, actionNpcValid, selectedAction, actionParams, sendAction, requiredFieldsValid, handleActionChange, confirmBusy, actionBusy]);
 
   const setParam = useCallback((key, value) => {
+    setTouched(t => ({...t, [key]:true}));
     setActionParams(prev => ({ ...prev, [key]: value }));
   }, []);
 
@@ -857,8 +867,8 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
 
       {/* Action Execution */}
       <section>
-        <h2 className="section-header mb-2">Action Execution</h2>
-        <div className="space-y-2">
+        {generateControls('action')}{pending?.form === 'action' && <small>Generating…</small>}{generateError && !pending && <small>{generateError}</small>}
+        <fieldset disabled={pending?.form === 'action'} className="space-y-2 border-0 p-0 m-0 min-w-0" inert={pending?.form === 'action' ? '' : undefined}>
           <div className="flex gap-2">
             <Field label="NPC" required hint="Nearby actor who performs the action.">
             <FactionInput options={nearby} selectionOnly aria-label="Action NPC" placeholder="e.g. Guard 1"
@@ -924,7 +934,7 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
             {busyConfirm.startsWith('sent:executeAction:') ? 'Sent' : actionBusy.length && busyConfirm === 'action' ? 'Busy — you sure?' : 'Execute Action'}
           </button>
           {missingFields(actionRequired)}
-        </div>
+        </fieldset>
       </section>
     </div>
   );

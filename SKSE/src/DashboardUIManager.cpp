@@ -991,7 +991,7 @@ namespace IntelEngine {
             auto request = nlohmann::json::parse(jsonArg ? jsonArg : "{}");
             const auto id = request.at("requestId").get<std::string>();
             const auto form = request.at("form").get<std::string>();
-            if (id.empty() || (form != "story" && form != "social" && form != "political")) return;
+            if (id.empty() || (form != "story" && form != "social" && form != "political" && form != "action")) return;
             if (request.contains("outcome")) { logger::info("[Dashboard] Generate form={} request={} outcome={}", form, id, request["outcome"].dump()); return; }
             std::uint64_t generation;
             { std::lock_guard<std::mutex> lock(mgr->mutex_);
