@@ -74,6 +74,7 @@ function StoryTab({ story, quest, social, npcSocialLog, calendar, sendAction }) 
       {/* Story Type Toggles */}
       <section>
         <h2 className="section-header mb-2">Story Types</h2>
+        <p className="text-[10px] text-gray-400 mb-1">Only affects automatic stories. Director dispatch can use any type.</p>
         <div className="grid grid-cols-1 gap-1">
           {STORY_TYPES.map(type => {
             const enabled = story.types ? story.types[type.key] : true;
