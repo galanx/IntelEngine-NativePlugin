@@ -70,6 +70,30 @@ SCRIPT = r"""
       actions:[{name:'GoToLocation',enabled:true},{name:'ReportPlayerConduct',params:[{name:'sentiment',enum:['strongly_positive','positive','negative','strongly_negative']},{name:'factionId'},{name:'reason'}]},{name:'ChangeSpeed',enabled:true}],
       politics:{enabled:true,factions:[{id:'ImperialFaction',name:'Imperial Legion'},{id:'StormcloakFaction',name:'Stormcloaks'},...Array.from({length:3},(_,i)=>({id:'ThalmorFaction'+i,name:'Thalmor '+i}))],relations:[],wars:[],player_standings:[],events:[]}}));
     await pause(); clickText('Director'); await pause();
+    if (location.hash === '#story_type_hints') {
+      const story = () => document.querySelector('section');
+      const text = () => [...story().querySelectorAll('p, span')].map(e=>e.textContent).join('\n');
+      check(text().includes('what they will do.') && text().includes('why the NPC acts; used as story context.'), 'auto hints changed');
+      await choose('Story type', 'Road Encounter');
+      check(text().includes('Appears on the road ahead of you, travelling to Destination on their own errand (outdoors only).'), 'road encounter type hint missing');
+      check(text().includes('Why they are travelling, e.g. set out to sell pelts in Helgen.') && text().includes('Where they are heading. Required: a real Skyrim location.'), 'road narration or Destination hint missing');
+      story().querySelector('summary button').click(); await pause();
+      const road = JSON.parse(payloads.at(-1)[1]);
+      check(payloads.at(-1)[0] === 'generateDirector' && road.fields.storyType === 'road_encounter' && road.schema.narration.hint.includes('Why they are travelling') && road.schema.narration.hint.includes('outdoors only') && road.variants.road_encounter.destination.hint.includes('Where they are heading.'), 'Generate missing road guidance');
+      clickText('Stop'); await pause();
+      await choose('Story type', 'Message');
+      check(text().includes('Sends a nearby courier to deliver a message from the selected NPC.') && text().includes('Why the sender wants to contact you.'), 'message hints did not replace road hints');
+      check(!text().includes('Where they are heading.') && !text().includes('Why they are travelling'), 'road hints survived type switch');
+      check(text().includes('Optional. If set with meetTime, creates a meeting invitation.'), 'message destination hint missing');
+      story().querySelector('summary button').click(); await pause();
+      const message = JSON.parse(payloads.at(-1)[1]);
+      check(message.schema.narration.hint.includes('Why the sender wants to contact you.') && !message.schema.narration.hint.includes('travelling'), 'Generate retained previous type guidance');
+      clickText('Stop'); await pause();
+      document.querySelector('[aria-label="Clear Story type"]').click(); await pause();
+      check(text().includes('what they will do.') && text().includes('why the NPC acts; used as story context.'), 'auto generic hints not restored');
+      document.getElementById('result').textContent=JSON.stringify({status:'PASS',checks:['story_type_hints'],guidance:[road.schema.narration.hint,message.schema.narration.hint]});
+      return;
+    }
     if (location.hash === '#tasks_packages_folded') {
       // Core.psc emits agentFormId; NPCIndex::ScanActorsWithPackages emits numeric formId/name/pkgType.
       const tasks = [
