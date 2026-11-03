@@ -354,6 +354,8 @@ SCRIPT = r"""
       await fill('input[placeholder="Faction A (e.g. StormcloakFaction)"]', 'StormcloakFaction');
       await fill('input[placeholder="Faction B (e.g. ThalmorFaction)"]', 'StormcloakFaction');
       await fill('section:nth-of-type(3) textarea', 'A diplomatic exchange');
+      check(submit(3).disabled && missingIn(3) === 'Fill required fields: Faction B, Political event type', 'unpicked Political event type did not block dispatch');
+      await choose('Political event type', 'Trade Deal');
       check(submit(3).disabled && missingIn(3) === 'Fill required fields: Faction B', 'same-faction validation lost its label');
       await fill('input[placeholder="Faction B (e.g. ThalmorFaction)"]', 'ThalmorFaction');
       check(!submit(3).disabled && !missingIn(3), 'valid Political form remains blocked');
@@ -433,7 +435,6 @@ SCRIPT = r"""
       payloads.length = 0;
       check(button('Story type').placeholder==='(auto)' && button('Story type').value==='', 'untouched type is not auto');
       await fill('input[placeholder="NPC name (e.g. Saadia)"]','Saadia');
-      await fill('section:nth-of-type(1) textarea','Wants to discuss a plan');
       await choose('Story type','Quest'); await filterPick('Story type','Quest');
       await choose('Sub-type','rescue');
       clickText('Generate');
@@ -467,7 +468,7 @@ SCRIPT = r"""
       check([...document.querySelectorAll('section:nth-of-type(1) input:not([role=combobox]), section:nth-of-type(1) textarea')].filter(e=>e.placeholder!=='e.g. Jarl Balgruuf').every(e=>e.value.trim()) &&
         document.querySelector('input[placeholder="e.g. Jarl Balgruuf"]').value==='', 'Generate lost quest content or applied None sender');
       const audit = JSON.parse(payloads.at(-1)[1]).outcome;
-      check(audit?.ok && audit.filled.includes('npcName') && audit.blank.includes('narration') === false &&
+      check(audit?.ok && audit.filled.includes('npcName') && audit.blank.includes('narration') &&
         audit.applied.includes('questLocation') && audit.rejected.npcName === 'Preserved or unchanged', 'Generate outcome missing applied/preserved request audit');
       check(!audit.rejected.sender, 'empty/None identity was reported as rejected');
       clickText('Generate'); await pause(); const stopped=JSON.parse(payloads.at(-1)[1]); clickText('Stop'); await pause();
