@@ -1,4 +1,5 @@
 import { useState, useCallback, useRef } from 'react';
+import Select from './Select';
 
 const DANGER_POLICIES = ['Allow All', 'Block Civilians', 'Followers Only', 'Block All'];
 const DANGER_HINTS = [
@@ -393,7 +394,7 @@ function SettingsTab({ config, onSettingChange, pluginConfig, onPluginConfigChan
           label="Debug Mode"
           value={config.debugMode}
           onChange={v => onSettingChange('debugMode', v)}
-          hint="Enable debug notifications and logging."
+          hint="Shows IE debug messages as in-game notifications (always logged to Papyrus.0.log)."
         />
       </Accordion>
 
@@ -691,9 +692,9 @@ function HotkeyRow({ value, modifiers, onChangeKey, onChangeMods }) {
     <div className="py-1 space-y-2">
       <div className="flex items-center justify-between">
         <span className="text-xs text-gray-300">Key</span>
-        <select
+        <Select aria-label="Dashboard hotkey" containerClassName="w-24"
           value={value}
-          onChange={e => onChangeKey(parseInt(e.target.value))}
+          onChange={e => { if (e.target.value !== '') onChangeKey(parseInt(e.target.value)); }}
           className="px-2 py-1 text-xs bg-white/5 border border-white/10 rounded text-gray-300 focus:border-blue-500/50 focus:outline-none"
         >
           <option value={-1}>Disabled</option>
@@ -703,7 +704,7 @@ function HotkeyRow({ value, modifiers, onChangeKey, onChangeMods }) {
           {[1,2,3,4,5,6,7,8,9,10,11,12].map(n => (
             <option key={`f${n}`} value={111 + n}>F{n}</option>
           ))}
-        </select>
+        </Select>
       </div>
       <div className="flex items-center justify-between">
         <span className="text-xs text-gray-300">Modifiers</span>

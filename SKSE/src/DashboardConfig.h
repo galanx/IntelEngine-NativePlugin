@@ -31,6 +31,8 @@ namespace IntelEngine {
         void Load();
         void Reload() { Load(); }
 
+        std::string GetHostPreference() const { return uiHostPreference_; }
+
         int GetHotkey() const { return dashboardHotkey_.load(); }
         int GetModifiers() const { return dashboardModifiers_.load(); }
 
@@ -58,6 +60,7 @@ namespace IntelEngine {
 
         std::atomic<int> dashboardHotkey_{55};     // VK_7 default (Shift+7)
         std::atomic<int> dashboardModifiers_{kModShift};  // Shift modifier
+        std::string uiHostPreference_ = "auto";
         std::mutex writeMutex_;
     };
 

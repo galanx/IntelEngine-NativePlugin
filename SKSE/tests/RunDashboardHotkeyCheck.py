@@ -1,4 +1,4 @@
-"""Compile the real dashboard hotkey loop against Win32/SKSE stubs; requires clang++.
+"""Compile the real dashboard hotkey branch against Win32/SKSE stubs; requires clang++.
 
 Usage: python SKSE/tests/RunDashboardHotkeyCheck.py
 """
@@ -10,9 +10,12 @@ src = pathlib.Path(__file__).resolve().parents[1] / "src" / "DashboardUIManager.
 source = src.read_text(encoding="utf-8")
 start = source.index("    void DashboardUIManager::HotkeyPollLoop() {")
 end = source.index("\n    }", start) + len("\n    }")
-loop = source[start:end].replace(
-    "std::this_thread::sleep_for(kPollIntervalMs);", "testSleepFor();"
-).replace("std::chrono::steady_clock::now()", "FakeClock::now()")
+loop = source[start:end]
+worker_start = loop.index("\n            std::unique_lock")
+keyboard_start = loop.index("\n            HWND foregroundWindow")
+# Drive frames instead of the unrelated host/state worker, retaining real key logic.
+loop = loop[:worker_start] + "\n            testSleepFor();\n" + loop[keyboard_start:]
+loop = loop.replace("std::chrono::steady_clock::now()", "FakeClock::now()")
 
 with tempfile.TemporaryDirectory(prefix="dashboard-hotkey-") as directory:
     work = pathlib.Path(directory)
@@ -125,6 +128,10 @@ int main() {
     }) == 2); // exact Shift+7; unexpected modifiers rejected; fresh edge toggles
     assert(run({makeFrame(true, true, false, false, 99)}) == 0);
     assert(run({makeFrame(true, true, false, false, 0)}) == 0);
+    assert(run({
+        makeFrame(true, true, false, false, 99, true),
+        makeFrame(true, true, false, false, 42, true), makeFrame(true)
+    }) == 0); // paused focus loss still requires release after returning
     assert(run({
         makeFrame(true, true, false, false, 99), makeFrame(true)
     }) == 0); // returning focus while held is not a new press
