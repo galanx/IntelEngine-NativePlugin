@@ -25,6 +25,12 @@ The `IntelEngine.dll` SKSE plugin provides high-performance functions that would
 
 All functions are exposed to Papyrus via the `IntelEngine` script namespace.
 
+### FriendlyKey
+```papyrus
+String Function FriendlyKey(String key) Global Native
+```
+Replaces underscores with spaces and uppercases an ASCII lowercase letter at each word start; preserves other characters and existing case. Empty input stays empty. Example: `war_declaration` → `War Declaration`. Director notice fallback only; supplied event labels remain unchanged.
+
 ---
 
 ## NPC Search Functions

@@ -125,6 +125,10 @@ namespace IntelEngine::SkyrimNetAPI {
      *  Non-empty searchQuery enables semantic search. Returns "[]" on error or if SkyrimNet older than v9. */
     inline std::string (*GetWorldKnowledgeForActor)(uint32_t formId, int maxResults, const char* searchQuery) = nullptr;
 
+
+    inline bool (*SendCustomPromptToLLM)(const char*, const char*, const char*,
+        std::function<void(const char*, int)>) = nullptr;
+
     /**
      * Initialize the SkyrimNet API by loading function pointers from the DLL.
      * Returns true if SkyrimNet was found and API version is >= 3.
@@ -225,6 +229,8 @@ namespace IntelEngine::SkyrimNetAPI {
             GetProcAddress(hDLL, "PublicGetWorldKnowledge"));
         GetWorldKnowledgeForActor = reinterpret_cast<std::string(*)(uint32_t, int, const char*)>(
             GetProcAddress(hDLL, "PublicGetWorldKnowledgeForActor"));
+        SendCustomPromptToLLM = reinterpret_cast<decltype(SendCustomPromptToLLM)>(
+            GetProcAddress(hDLL, "PublicSendCustomPromptToLLM"));
 
         // Bio template API
         logger::info("SkyrimNet Data API: Memories={}, Events={}, Dialogue={}, Ready={}, "

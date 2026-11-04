@@ -35,6 +35,11 @@ namespace IntelEngine {
         int speed = 0;                  // 0=walk, 1=jog, 2=run
         float deadline = 0.0f;         // Game time deadline
         float offscreenArrival = 0.0f; // Game time estimate for off-screen travel
+
+        // Rehydrated from actor StorageUtil by Core; not a co-save format change.
+        std::string origin;
+        float startTime = -1.0f;
+        std::string reason;
     };
 
     class SlotTracker {
@@ -49,7 +54,8 @@ namespace IntelEngine {
          * Called by native function when AllocateSlot/SetSlotState fires.
          */
         void UpdateSlot(int slot, RE::Actor* agent, int state,
-                       const std::string& taskType, const std::string& targetName);
+                       const std::string& taskType, const std::string& targetName,
+                       const std::string& origin, float startTime, const std::string& reason);
 
         /**
          * Clear a slot. Called by native function when ClearSlot fires.

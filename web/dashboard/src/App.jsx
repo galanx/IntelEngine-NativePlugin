@@ -1,7 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import TasksTab from './components/TasksTab';
 import StoryTab from './components/StoryTab';
-import PackagesTab from './components/PackagesTab';
 import SettingsTab from './components/SettingsTab';
 import DirectorTab from './components/DirectorTab';
 import ActionsTab from './components/ActionsTab';
@@ -13,12 +12,12 @@ const TABS = [
   { id: 'politics', label: 'Politics' },
   { id: 'director', label: 'Director' },
   { id: 'actions', label: 'Actions' },
-  { id: 'packages', label: 'Packages' },
   { id: 'settings', label: 'Settings' },
 ];
 
 function App() {
-  const [activeTab, setActiveTab] = useState('tasks');
+  const [activeTab, setActiveTab] = useState(() => { try { const saved = localStorage.getItem('intelengine.activeTab'); return TABS.some(tab => tab.id === saved) ? saved : 'tasks'; } catch { return 'tasks'; } });
+  useEffect(() => { try { localStorage.setItem('intelengine.activeTab', activeTab); } catch {} }, [activeTab]);
   const [state, setState] = useState({
     tasks: [],
     scheduled: [],
@@ -67,6 +66,7 @@ function App() {
 
       setState(prev => ({
         ...data,
+        knownNpcs: data.knownNpcs ?? prev.knownNpcs,
         // Merge: defaults → server values → locally edited values
         pluginConfig: {
           ...pluginDefaults,
@@ -174,7 +174,11 @@ function App() {
             <TasksTab
               tasks={state.tasks || []}
               scheduled={state.scheduled || []}
+              calendar={state.calendar}
               sendAction={sendAction}
+              packages={state.packages || []}
+              removingIds={removingPkgIds}
+              onMarkRemoving={(formId) => setRemovingPkgIds(prev => new Set([...prev, formId]))}
             />
           )}
           {activeTab === 'story' && (
@@ -183,35 +187,33 @@ function App() {
               quest={state.quest}
               social={state.social}
               npcSocialLog={state.npcSocialLog}
+              calendar={state.calendar}
               sendAction={sendAction}
             />
           )}
           {activeTab === 'politics' && (
             <PoliticsTab
               politics={state.politics}
+              calendar={state.calendar}
               sendAction={sendAction}
             />
           )}
-          {activeTab === 'director' && (
+          <div hidden={activeTab !== 'director'}>
             <DirectorTab
               loadedNpcs={state.loadedNpcs || []}
+              knownNpcs={state.knownNpcs || []}
+              tasks={state.tasks || []}
               actions={state.actions || []}
               factions={state.politics?.factions || []}
+              story={state.story}
+              social={state.social}
               sendAction={sendAction}
             />
-          )}
+          </div>
           {activeTab === 'actions' && (
             <ActionsTab
               actions={state.actions || []}
               sendAction={sendAction}
-            />
-          )}
-          {activeTab === 'packages' && (
-            <PackagesTab
-              packages={state.packages || []}
-              sendAction={sendAction}
-              removingIds={removingPkgIds}
-              onMarkRemoving={(formId) => setRemovingPkgIds(prev => new Set([...prev, formId]))}
             />
           )}
           {activeTab === 'settings' && (
