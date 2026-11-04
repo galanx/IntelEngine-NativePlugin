@@ -139,6 +139,7 @@ namespace IntelEngine::Papyrus {
 
     float GetDistance3D(RE::StaticFunctionTag*, RE::TESObjectREFR* ref1, RE::TESObjectREFR* ref2);
     float GetDistance2D(RE::StaticFunctionTag*, RE::TESObjectREFR* ref1, RE::TESObjectREFR* ref2);
+    float GetArrivalThreshold(RE::StaticFunctionTag*, RE::Actor* agent, RE::TESObjectREFR* target);
     float CalculateDeadlineFromDistance(RE::StaticFunctionTag*,
                                         RE::TESObjectREFR* source, RE::TESObjectREFR* target,
                                         bool isRoundTrip, float minHours, float maxHours);
@@ -214,7 +215,8 @@ namespace IntelEngine::Papyrus {
     // Push slot state from Papyrus to C++ SlotTracker.
     // Called by Core.AllocateSlot, Core.SetSlotState.
     void UpdateSlotState(RE::StaticFunctionTag*, int slot, RE::Actor* agent, int newState,
-                         RE::BSFixedString taskType, RE::BSFixedString targetName);
+                         RE::BSFixedString taskType, RE::BSFixedString targetName,
+                         RE::BSFixedString origin, float startTime, RE::BSFixedString reason);
 
     // Clear a slot in C++ SlotTracker.
     // Called by Core.ClearSlot.
@@ -257,6 +259,8 @@ namespace IntelEngine::Papyrus {
     bool StoryResponseShouldAct(RE::StaticFunctionTag*, RE::BSFixedString response);
     RE::BSFixedString StoryResponseGetField(RE::StaticFunctionTag*, RE::BSFixedString json,
                                             RE::BSFixedString fieldName);
+    RE::BSFixedString StoryResponseGetOptionalField(RE::StaticFunctionTag*, RE::BSFixedString json,
+                                                    RE::BSFixedString fieldName);
     RE::BSFixedString BuildActorContextJson(RE::StaticFunctionTag*, RE::Actor* actor,
                                             int slot);
     RE::BSFixedString BuildDungeonMasterContext(RE::StaticFunctionTag*, int maxCandidates,
@@ -514,6 +518,7 @@ namespace IntelEngine::Papyrus {
 
     // Utility
     int HexToInt(RE::StaticFunctionTag*, RE::BSFixedString hexStr);
+    int ParseFormID(RE::StaticFunctionTag*, RE::BSFixedString formId);
 
     // Dialogue Tracker
     void SetAutoBioEnabled(RE::StaticFunctionTag*, bool enabled);

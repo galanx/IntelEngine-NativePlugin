@@ -8,10 +8,12 @@
 #   .\build.ps1 -DeployOnly -SkipGit
 #   .\build.ps1 -DeployOnly -SkipDeploy -SkipGit
 #   .\build.ps1 -DataDir "<IntelEngine-GamePlugin checkout>" -SkipGit
+#   .\build.ps1 -DashboardOnly -DataDir "<IntelEngine-GamePlugin checkout>"
 
 param(
     [string[]]$Scripts,
     [switch]$DeployOnly,
+    [switch]$DashboardOnly,
     [switch]$SkipDeploy,
     [switch]$SkipGit,
     [string]$DataDir,
@@ -20,8 +22,12 @@ param(
     [string]$VanillaDest,
     [string]$CKDest
 )
-
 $ErrorActionPreference = "Stop"
+# Dashboard-only builds are isolated from Papyrus, deployment targets, and publishing.
+if ($DashboardOnly) {
+    $SkipDeploy = $true
+    $SkipGit = $true
+}
 # Optional private defaults; explicitly supplied parameters always win.
 $localDefaultsPath = Join-Path $PSScriptRoot "build.local.psd1"
 if (Test-Path -LiteralPath $localDefaultsPath) {
@@ -33,7 +39,7 @@ if (Test-Path -LiteralPath $localDefaultsPath) {
     }
 }
 $requiredPaths = @("DataDir")
-if (-not $DeployOnly) { $requiredPaths += "ToolkitRoot" }
+if (-not $DeployOnly -and -not $DashboardOnly) { $requiredPaths += "ToolkitRoot" }
 if (-not $SkipDeploy) { $requiredPaths += @("TestDest", "VanillaDest", "CKDest") }
 foreach ($name in $requiredPaths) {
     if ([string]::IsNullOrWhiteSpace((Get-Variable -Name $name -ValueOnly))) {
@@ -45,8 +51,8 @@ $DataDir = [System.IO.Path]::GetFullPath($DataDir).TrimEnd([char[]]@('\', '/'))
 $RepoRoot = $PSScriptRoot
 $SourceDir = Join-Path $RepoRoot "Source\Scripts"
 $SKSEDir = Join-Path $RepoRoot "SKSE"
-$HeadersDir = [System.IO.Path]::Combine($ToolkitRoot, "skyrim-script-headers")
-$CompilerProject = [System.IO.Path]::Combine($ToolkitRoot, "src\SpookysAutomod.Cli")
+$HeadersDir = if ($ToolkitRoot) { Join-Path $ToolkitRoot "skyrim-script-headers" } else { $null }
+$CompilerProject = if ($ToolkitRoot) { Join-Path $ToolkitRoot "src\SpookysAutomod.Cli" } else { $null }
 $OutputDir = Join-Path $DataDir "Scripts"
 $ExternalSource = Join-Path $SKSEDir "Plugins\SkyrimNet\external\galanx.intelengine"
 $ExternalData = Join-Path $DataDir "SKSE\Plugins\SkyrimNet\external\galanx.intelengine"
@@ -182,7 +188,7 @@ function Deploy-Data {
 # =============================================================================
 # Step 1: Sync headers and compile Papyrus scripts (unless -DeployOnly)
 # =============================================================================
-if (-not $DeployOnly) {
+if (-not $DeployOnly -and -not $DashboardOnly) {
     if (-not (Test-Path -LiteralPath $HeadersDir -PathType Container)) {
         throw "Papyrus headers directory not found: $HeadersDir"
     }
@@ -251,19 +257,31 @@ if (-not $DeployOnly) {
 }
 
 # =============================================================================
-# Step 2: Build Dashboard UI (React/webpack -> Data/PrismaUI/views/)
+# Step 2: Build Dashboard UI (React/webpack -> both Data dashboard hosts)
 # =============================================================================
 $dashboardDir = Join-Path $RepoRoot "web\dashboard"
 $dashboardDist = Join-Path $dashboardDir "dist"
-$dashboardDest = Join-Path $DataDir "PrismaUI\views\IntelEngine\dashboard"
+$dashboardDests = @(
+    (Join-Path $DataDir "PrismaUI\views\IntelEngine\dashboard"),
+    (Join-Path $DataDir "Magelight\IntelEngine\dashboard")
+)
 if (Test-Path -LiteralPath (Join-Path $dashboardDir "package.json")) {
     $npmCmd = Get-Command npm -ErrorAction SilentlyContinue
     if (-not $npmCmd -and (Test-Path -LiteralPath "C:\Program Files\nodejs\npm.cmd")) {
         $env:PATH = "C:\Program Files\nodejs;" + $env:PATH
         $npmCmd = Get-Command npm -ErrorAction SilentlyContinue
     }
+
+    if ($DashboardOnly -and -not $npmCmd) {
+        throw "npm is required for -DashboardOnly."
+    }
+    if ($DashboardOnly -and -not (Test-Path -LiteralPath (Join-Path $dashboardDir "node_modules"))) {
+        throw "Dashboard dependencies are not installed; run npm ci in $dashboardDir before an offline dashboard build."
+    }
+
+    $dashboardBuildSucceeded = $false
     if ($npmCmd) {
-        if (-not (Test-Path -LiteralPath (Join-Path $dashboardDir "node_modules"))) {
+        if (-not $DashboardOnly -and -not (Test-Path -LiteralPath (Join-Path $dashboardDir "node_modules"))) {
             Write-Host "`n--- Installing Dashboard UI dependencies ---" -ForegroundColor Cyan
             Push-Location $dashboardDir
             & npm install --silent 2>&1 | Out-Null
@@ -284,13 +302,12 @@ if (Test-Path -LiteralPath (Join-Path $dashboardDir "package.json")) {
         }
 
         if ($npmExitCode -eq 0 -and (Test-Path -LiteralPath (Join-Path $dashboardDist "index.html"))) {
-            if (-not (Test-Path -LiteralPath $dashboardDest)) {
-                New-Item -ItemType Directory -Path $dashboardDest -Force | Out-Null
-            }
-            Copy-Item -Path (Join-Path $dashboardDist "*") -Destination $dashboardDest -Recurse -Force
-            $uiFiles = @(Get-ChildItem -LiteralPath $dashboardDist -Recurse -File).Count
-            Write-Host "  Dashboard UI built ($uiFiles files)" -ForegroundColor Green
+            $dashboardBuildSucceeded = $true
+            if ($npmResult) { Write-Host $npmResult }
         } else {
+            if ($DashboardOnly) {
+                throw "Dashboard production build failed. $npmResult"
+            }
             Write-Host "  WARN: Dashboard UI build failed (non-fatal)" -ForegroundColor Yellow
             if ($npmResult) {
                 $npmResult -split "`n" | Select-Object -Last 5 | ForEach-Object {
@@ -298,18 +315,35 @@ if (Test-Path -LiteralPath (Join-Path $dashboardDir "package.json")) {
                 }
             }
         }
+    } elseif (Test-Path -LiteralPath (Join-Path $dashboardDist "index.html")) {
+        $dashboardBuildSucceeded = $true
+        Write-Host "  npm not found - deploying cached build" -ForegroundColor Yellow
     } else {
-        Write-Host "`n--- Dashboard UI ---" -ForegroundColor Cyan
-        if (Test-Path -LiteralPath (Join-Path $dashboardDist "index.html")) {
-            if (-not (Test-Path -LiteralPath $dashboardDest)) {
+        Write-Host "  SKIP: npm not found (install Node.js to build Dashboard UI)" -ForegroundColor Yellow
+    }
+
+    if ($dashboardBuildSucceeded) {
+        foreach ($dashboardDest in $dashboardDests) {
+            if (Test-Path -LiteralPath $dashboardDest) {
+                Get-ChildItem -LiteralPath $dashboardDest -Force | Remove-Item -Recurse -Force
+            } else {
                 New-Item -ItemType Directory -Path $dashboardDest -Force | Out-Null
             }
-            Copy-Item -Path (Join-Path $dashboardDist "*") -Destination $dashboardDest -Recurse -Force
-            Write-Host "  npm not found - deploying cached build" -ForegroundColor Yellow
-        } else {
-            Write-Host "  SKIP: npm not found (install Node.js to build Dashboard UI)" -ForegroundColor Yellow
+            Get-ChildItem -LiteralPath $dashboardDist -Force |
+                Copy-Item -Destination $dashboardDest -Recurse -Force
         }
+        $uiFiles = @(Get-ChildItem -LiteralPath $dashboardDist -Recurse -File).Count
+        Write-Host "  Dashboard UI staged to PrismaUI and Magelight ($uiFiles files)" -ForegroundColor Green
+    } elseif ($DashboardOnly) {
+        throw "Dashboard production output not found: $dashboardDist"
     }
+} elseif ($DashboardOnly) {
+    throw "Dashboard package not found: $dashboardDir"
+}
+
+if ($DashboardOnly) {
+    Write-Host "`n--- Dashboard-only build complete (deployment and git publishing skipped) ---" -ForegroundColor Green
+    return
 }
 
 # =============================================================================

@@ -1,4 +1,6 @@
+import withSections from './Section';
 import React, { useState } from 'react';
+import GameTime from './GameTime';
 
 const STORY_TYPES = [
   { key: 'seek_player', label: 'Seek Player', icon: '\u{1F50D}' },
@@ -15,7 +17,7 @@ const STORY_TYPES = [
 
 const TYPE_ICON_MAP = Object.fromEntries(STORY_TYPES.map(t => [t.key, t.icon]));
 
-function StoryTab({ story, quest, social, npcSocialLog, sendAction }) {
+function StoryTab({ story, quest, social, npcSocialLog, calendar, sendAction }) {
   const [expandedLog, setExpandedLog] = useState(null);
   if (!story) {
     return (
@@ -72,6 +74,7 @@ function StoryTab({ story, quest, social, npcSocialLog, sendAction }) {
       {/* Story Type Toggles */}
       <section>
         <h2 className="section-header mb-2">Story Types</h2>
+        <p className="text-[10px] text-gray-400 mb-1">Only affects automatic stories. Director dispatch can use any type.</p>
         <div className="grid grid-cols-1 gap-1">
           {STORY_TYPES.map(type => {
             const enabled = story.types ? story.types[type.key] : true;
@@ -197,6 +200,7 @@ function StoryTab({ story, quest, social, npcSocialLog, sendAction }) {
                 </div>
                 <div className="text-xs text-gray-400 leading-relaxed pl-6">
                   {entry.text}
+                  <GameTime time={entry.time} calendar={calendar} />
                 </div>
                 {entry.detail && entry.type !== 'npc_gossip' && (
                   <div className="pl-6 mt-1">
@@ -222,4 +226,4 @@ function StoryTab({ story, quest, social, npcSocialLog, sendAction }) {
   );
 }
 
-export default StoryTab;
+export default withSections(StoryTab);

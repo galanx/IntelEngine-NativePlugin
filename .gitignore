@@ -19,6 +19,7 @@ Output/
 temp_decompile/
 temp_decompiled/
 _tmp/
+__pycache__/
 
 # Windows NUL device artifact
 nul

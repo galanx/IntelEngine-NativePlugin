@@ -6,7 +6,7 @@ cmake_minimum_required(VERSION 3.21)
 
 project(
     IntelEngine
-    VERSION 3.6.2
+    VERSION 3.7.0
     DESCRIPTION "Intelligent NPC Task Execution for SkyrimNet"
     LANGUAGES CXX
 )
@@ -145,6 +145,9 @@ set(SOURCES
     src/ProximityMonitor.cpp
     src/MemoryDB.cpp
     src/DashboardConfig.cpp
+    # Unmodified Magelight v1.7.1 API header from https://github.com/Severause/MagelightUI/blob/v1.7.1/api/MagelightUI_API.h
+    # v1.7.1 peeled commit: 05d05d8cf13164e0dead3596640f28c058b9b307; upstream LICENSE is MIT (Copyright (c) 2026 Severause).
+    src/UiHost.cpp
     src/DashboardUIManager.cpp
     src/PoliticalDB.cpp
     src/FactionPolitics.cpp
@@ -190,11 +193,25 @@ target_precompile_headers(
 
 add_executable(Utf8TruncateCheck EXCLUDE_FROM_ALL tests/Utf8TruncateCheck.cpp)
 target_include_directories(Utf8TruncateCheck PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+add_executable(StoryCandidateResolutionCheck EXCLUDE_FROM_ALL tests/StoryCandidateResolutionCheck.cpp)
+target_include_directories(StoryCandidateResolutionCheck PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+add_executable(FactionLeaderNameMatchCheck EXCLUDE_FROM_ALL tests/FactionLeaderNameMatchCheck.cpp)
+target_include_directories(FactionLeaderNameMatchCheck PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+add_executable(FormIDStringCheck EXCLUDE_FROM_ALL tests/FormIDStringCheck.cpp)
+target_include_directories(FormIDStringCheck PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+add_executable(DirectorActorResolutionCheck EXCLUDE_FROM_ALL tests/DirectorActorResolutionCheck.cpp)
+target_include_directories(DirectorActorResolutionCheck PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+add_executable(FactionPairValidationCheck EXCLUDE_FROM_ALL tests/FactionPairValidationCheck.cpp)
+target_include_directories(FactionPairValidationCheck PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+add_executable(TaskHistoryDescriptionCheck EXCLUDE_FROM_ALL tests/TaskHistoryDescriptionCheck.cpp)
+target_include_directories(TaskHistoryDescriptionCheck PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 # Offline synthetic engine vtables exercise the production CommonLib getter.
 add_executable(ReferenceGetterDispatchCheck EXCLUDE_FROM_ALL tests/ReferenceGetterDispatchCheck.cpp)
 target_compile_definitions(ReferenceGetterDispatchCheck PRIVATE ENABLE_COMMONLIBSSE_TESTING=1)
 target_link_libraries(ReferenceGetterDispatchCheck PRIVATE CommonLibSSE::CommonLibSSE)
 
+add_executable(ProximityDistanceCheck EXCLUDE_FROM_ALL tests/ProximityDistanceCheck.cpp)
+target_include_directories(ProximityDistanceCheck PRIVATE src)
 
 # =============================================================================
 # Output Configuration

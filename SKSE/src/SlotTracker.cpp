@@ -21,7 +21,8 @@ namespace IntelEngine {
     }
 
     void SlotTracker::UpdateSlot(int slot, RE::Actor* agent, int state,
-                                  const std::string& taskType, const std::string& targetName) {
+                                  const std::string& taskType, const std::string& targetName,
+                                  const std::string& origin, float startTime, const std::string& reason) {
         if (slot < 0 || slot >= MAX_SLOTS) return;
 
         RE::FormID prevFormId = 0;
@@ -37,6 +38,9 @@ namespace IntelEngine {
             s.state = state;
             s.taskType = taskType;
             s.targetName = targetName;
+            s.origin = origin;
+            s.startTime = startTime;
+            s.reason = reason;
         }
 
         // SkyrimNet busy API calls outside lock (avoids lock ordering issues)
@@ -78,6 +82,9 @@ namespace IntelEngine {
             s.speed = 0;
             s.deadline = 0.0f;
             s.offscreenArrival = 0.0f;
+            s.origin.clear();
+            s.startTime = -1.0f;
+            s.reason.clear();
             // Note: cooldown is NOT cleared here — it's per-actor, not per-slot
         }
 
@@ -195,6 +202,9 @@ namespace IntelEngine {
             slot["state"] = s.state;
             slot["taskType"] = s.taskType;
             slot["targetName"] = s.targetName;
+            slot["origin"] = s.origin;
+            if (s.startTime >= 0.0f) slot["startTime"] = s.startTime;
+            slot["reason"] = s.reason;
             slot["agentName"] = (s.agent && s.state != 0)
                 ? s.agent->GetDisplayFullName() : "";
             slot["agentFormId"] = (s.agent && s.state != 0)
@@ -236,6 +246,9 @@ namespace IntelEngine {
                 s.speed = 0;
                 s.deadline = 0.0f;
                 s.offscreenArrival = 0.0f;
+                s.origin.clear();
+                s.startTime = -1.0f;
+                s.reason.clear();
             }
             m_cooldowns.clear();
             m_hasCoSaveData.store(false, std::memory_order_release);

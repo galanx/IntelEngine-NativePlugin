@@ -202,6 +202,7 @@ namespace IntelEngine {
             std::ofstream out(path);
             if (out.is_open()) {
                 out << "ui:\n"
+                    << "  host: auto\n"
                     << "  dashboard_hotkey: " << kDefaultHotkey << "\n"
                     << "  dashboard_modifiers: " << kDefaultModifiers << "\n"
                     << "story:\n"
@@ -214,6 +215,7 @@ namespace IntelEngine {
         }
 
         if (std::filesystem::exists(path)) {
+            uiHostPreference_ = ReadYamlString(path, "ui", "host", "auto");
             dashboardHotkey_.store(ReadYamlInt(path, "ui", "dashboard_hotkey", kDefaultHotkey));
             dashboardModifiers_.store(ReadYamlInt(path, "ui", "dashboard_modifiers", kDefaultModifiers));
             logger::info("DashboardConfig: Loaded from file - key={}, modifiers={}",
