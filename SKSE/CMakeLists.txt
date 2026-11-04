@@ -155,6 +155,7 @@ set(SOURCES
     src/BattleManager.cpp
     src/DialogueTracker.cpp
     src/AsyncDispatch.cpp
+    src/PoliticalEngineBridge.cpp
 )
 
 # =============================================================================
@@ -214,6 +215,10 @@ target_link_libraries(ReferenceGetterDispatchCheck PRIVATE CommonLibSSE::CommonL
 
 add_executable(ProximityDistanceCheck EXCLUDE_FROM_ALL tests/ProximityDistanceCheck.cpp)
 target_include_directories(ProximityDistanceCheck PRIVATE src)
+
+add_executable(PoliticalEngineReadJSONCheck EXCLUDE_FROM_ALL tests/PoliticalEngineReadJSONCheck.cpp)
+target_include_directories(PoliticalEngineReadJSONCheck PRIVATE src)
+target_link_libraries(PoliticalEngineReadJSONCheck PRIVATE nlohmann_json::nlohmann_json)
 
 # =============================================================================
 # Output Configuration
