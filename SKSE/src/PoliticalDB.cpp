@@ -8,6 +8,7 @@
 #include "PoliticalDB.h"
 #include "FactionPolitics.h"  // for MAX_EVENT_DESCRIPTION_LENGTH, MAX_EVENT_REPLAY_LIMIT
 #include "Utf8Truncate.h"
+#include "FactionPairValidation.h"
 
 #include <algorithm>
 #include <filesystem>
@@ -166,6 +167,7 @@ namespace IntelEngine {
         e.description = SafeColumnText(stmt, 4);
         e.relationDelta = sqlite3_column_int(stmt, 5);
         e.gameTime = static_cast<float>(sqlite3_column_double(stmt, 6));
+        e.hasGameTime = sqlite3_column_type(stmt, 6) != SQLITE_NULL;
         e.instigatorNpc = SafeColumnText(stmt, 7);
         return e;
     }
@@ -223,6 +225,7 @@ namespace IntelEngine {
         std::lock_guard<std::mutex> lock(mutex_);
         if (!db_) return 0;
 
+        if (IsSameFactionPair(factionA, factionB)) return 0;
         auto [a, b] = OrderFactions(factionA, factionB);
 
         sqlite3_stmt* stmt = nullptr;
@@ -241,6 +244,7 @@ namespace IntelEngine {
     }
 
     bool PoliticalDB::SetRelation(const std::string& factionA, const std::string& factionB, int score) {
+        if (IsSameFactionPair(factionA, factionB)) return false;
         std::lock_guard<std::mutex> lock(mutex_);
         if (!db_) return false;
 
@@ -250,6 +254,7 @@ namespace IntelEngine {
     }
 
     int PoliticalDB::AdjustRelation(const std::string& factionA, const std::string& factionB, int delta) {
+        if (IsSameFactionPair(factionA, factionB)) return 0;
         std::lock_guard<std::mutex> lock(mutex_);
         if (!db_) return 0;
 
@@ -284,7 +289,7 @@ namespace IntelEngine {
         if (!db_) return results;
 
         sqlite3_stmt* stmt = nullptr;
-        const char* sql = "SELECT faction_a, faction_b, relation_score, trade_active, war_active FROM faction_relations";
+        const char* sql = "SELECT faction_a, faction_b, relation_score, trade_active, war_active FROM faction_relations WHERE faction_a != faction_b";
         if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK) return results;
 
         while (sqlite3_step(stmt) == SQLITE_ROW) {
@@ -309,7 +314,7 @@ namespace IntelEngine {
                                   int relationDelta, float gameTime,
                                   const std::string& instigatorNpc) {
         std::lock_guard<std::mutex> lock(mutex_);
-        if (!db_) return -1;
+        if (!db_ || IsSameFactionPair(factionA, factionB)) return -1;
 
         // Truncate LLM-generated descriptions to prevent unbounded DB growth
         std::string safeDescription = TruncateUtf8Bytes(description, MAX_EVENT_DESCRIPTION_LENGTH, "...");
@@ -775,6 +780,7 @@ namespace IntelEngine {
         std::lock_guard<std::mutex> lock(mutex_);
         if (!db_) return false;
 
+        if (IsSameFactionPair(factionA, factionB)) return false;
         auto [a, b] = OrderFactions(factionA, factionB);
         score = std::clamp(score, RELATION_MIN, RELATION_MAX);
 
@@ -821,7 +827,7 @@ namespace IntelEngine {
         if (!db_) return -1;
 
         auto [a, b] = OrderFactions(factionA, factionB);
-
+        if (IsSameFactionPair(factionA, factionB)) return -1;
         // If OrderFactions swapped the pair, swap strengths to match
         if (a != factionA) {
             std::swap(strengthA, strengthB);
@@ -1016,6 +1022,7 @@ namespace IntelEngine {
             b.warId = sqlite3_column_int(stmt, 1);
             b.locationName = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 2));
             b.gameTime = static_cast<float>(sqlite3_column_double(stmt, 3));
+            b.hasGameTime = sqlite3_column_type(stmt, 3) != SQLITE_NULL;
             b.attacker = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 4));
             b.defender = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 5));
             if (sqlite3_column_text(stmt, 6)) b.result = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 6));

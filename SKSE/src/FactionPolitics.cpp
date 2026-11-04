@@ -7,6 +7,7 @@
  */
 
 #include "FactionPolitics.h"
+#include "FactionPairValidation.h"
 #include "FactionConfigLoader.h"
 #include <filesystem>
 #include <fstream>
@@ -515,6 +516,11 @@ default_relations:
                                          const std::string& eventType, int relationDelta) {
         if (!initialized_.load()) return false;
 
+        if (IsSameFactionPair(factionA, factionB)) {
+            logger::warn("FactionPolitics: Rejected political event with same faction on both sides: {}", factionA);
+            return false;
+        }
+
         if (!GetFaction(factionA)) {
             logger::warn("FactionPolitics: Invalid faction_a: {}", factionA);
             return false;
@@ -583,7 +589,9 @@ default_relations:
         // Essential NPCs can't permanently die (bleedout ≠ death), so never exclude them.
         auto* npcIndex = NPCIndex::GetSingleton();
         return BuildFactionJsonCore(f, [npcIndex](const std::string& name) -> std::pair<bool, bool> {
-            auto* actor = npcIndex ? npcIndex->FindByName(name) : nullptr;
+            auto* actor = npcIndex
+                ? npcIndex->GetActorFromFormId(npcIndex->FindFactionLeaderFormId(name))
+                : nullptr;
             if (!actor) return {false, false};
             return {true, actor->IsDead() && !actor->IsEssential()};
         });
@@ -649,7 +657,7 @@ default_relations:
             e.factionId = info.factionId;
             e.hold = info.hold;
 
-            auto* leader = npcIndex->FindByName(info.name);
+            auto* leader = npcIndex->GetActorFromFormId(npcIndex->FindFactionLeaderFormId(info.name));
             if (leader) {
                 e.formId = leader->GetFormID();
                 e.wasResolved = true;
@@ -999,7 +1007,7 @@ default_relations:
             ej["faction_b"] = e.factionB;
             ej["description"] = e.description;
             ej["delta"] = e.relationDelta;
-            ej["time"] = e.gameTime;
+            if (e.hasGameTime) ej["time"] = e.gameTime;
             eventsJson.push_back(ej);
         }
         dashboard["events"] = eventsJson;
@@ -1023,6 +1031,7 @@ default_relations:
                 nlohmann::json battlesJson = nlohmann::json::array();
                 for (const auto& b : battles) {
                     nlohmann::json bj;
+                    if (b.hasGameTime) bj["time"] = b.gameTime;
                     bj["location"] = b.locationName;
                     bj["attacker"] = b.attacker;
                     bj["defender"] = b.defender;
@@ -1341,7 +1350,7 @@ default_relations:
 
             auto checkLeadersNearby = [&](const FactionConfig& cfg) -> bool {
                 for (const auto& name : cfg.leaderNames) {
-                    auto* actor = npcIndex->FindByName(name);
+                    auto* actor = npcIndex->GetActorFromFormId(npcIndex->FindFactionLeaderFormId(name));
                     if (!actor) continue;
                     float dx = px - actor->GetPositionX();
                     float dy = py - actor->GetPositionY();
@@ -1472,9 +1481,13 @@ default_relations:
         return "";
     }
 
-    int FactionPolitics::ProcessPlayerConduct(RE::Actor* reporter, const std::string& factionId,
+    int FactionPolitics::ProcessPlayerConduct(RE::Actor* reporter, const std::string& factionInput,
                                                const std::string& sentiment, const std::string& reason) {
-        if (!initialized_.load()) return 0;
+        if (!initialized_.load()) {
+            RE::SendHUDMessage::ShowHUDMessage("Conduct report failed: politics is not initialized.");
+            return 0;
+        }
+        const std::string factionId = GetFaction(factionInput) ? factionInput : GetFactionIdByName(factionInput);
 
         // Map sentiment to delta
         int delta = 0;
@@ -1484,17 +1497,23 @@ default_relations:
         else if (sentiment == "strongly_negative") delta = -10;
         else {
             logger::warn("FactionPolitics: Invalid sentiment '{}'", sentiment);
+            RE::SendHUDMessage::ShowHUDMessage(("Conduct report failed: invalid sentiment '" + sentiment + "'.").c_str());
             return 0;
         }
 
         // Validate target faction
-        if (!GetFaction(factionId)) {
-            logger::warn("FactionPolitics: Unknown faction '{}' in conduct report", factionId);
+        const auto faction = GetFaction(factionId);
+        if (!faction) {
+            logger::warn("FactionPolitics: Unknown faction '{}' in conduct report", factionInput);
+            RE::SendHUDMessage::ShowHUDMessage(("Conduct report failed: unknown faction '" + factionInput + "'.").c_str());
             return 0;
         }
 
         auto* db = PoliticalDB::GetSingleton();
-        if (!db->IsReady()) return 0;
+        if (!db->IsReady()) {
+            RE::SendHUDMessage::ShowHUDMessage("Conduct report failed: political database is unavailable.");
+            return 0;
+        }
 
         auto* cal = RE::Calendar::GetSingleton();
         float gameTime = cal ? cal->GetCurrentGameTime() : 0.0f;
@@ -1549,6 +1568,7 @@ default_relations:
             }
         }
 
+        RE::SendHUDMessage::ShowHUDMessage(("Reported to " + faction->name + ": " + std::to_string(changes) + " standings changed.").c_str());
         return changes;
     }
 
@@ -1703,6 +1723,10 @@ default_relations:
 
     int FactionPolitics::DeclareWar(const std::string& factionA, const std::string& factionB, float gameTime) {
         if (!initialized_.load()) return -1;
+        if (IsSameFactionPair(factionA, factionB)) {
+            logger::warn("FactionPolitics: Rejected war declaration with same faction on both sides: {}", factionA);
+            return -1;
+        }
 
         auto cfgA = GetFaction(factionA);
         auto cfgB = GetFaction(factionB);
