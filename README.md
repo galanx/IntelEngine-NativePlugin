@@ -389,6 +389,8 @@ Story toggles affect automatic stories; Action toggles affect AI-chosen actions.
 
 The dashboard communicates through a shared C++ host bridge and existing Papyrus ModEvents. All JSON is built with `nlohmann::json` for proper escaping. Papyrus reads live quest properties and pushes comprehensive JSON snapshots. Remove Packages and Execute Action retain exact decimal-string actor FormIDs, including high-bit IDs.
 
+Dashboard JSON serialization replaces invalid UTF-8 bytes in game strings with U+FFFD rather than dropping the whole state update. Offline regression: `cmake --build <native-build> --config Release --target DashboardUtf8DumpCheck`, then run `<native-build>/DashboardUtf8DumpCheck.exe` (Ninja Release). The host check below also exercises a malformed actor name through the production state push.
+
 Director submission does not close the dashboard. Manual cancellation notifies `<Name>'s task was cancelled.` on success or `<Name> has no task to cancel.` on a repeated/no-task request; SkyrimNet-driven cancellation feedback is unchanged. Delivery-recipient rejection also notifies the player. SkyMessage confirmations are unchanged. Magelight lifecycle, Escape, contention and game dispatch require separate live acceptance; offline checks/builds are not runtime proof.
 
 DeliverMessage targets the resolved recipient actor, including across cells. An unresolved or invalid recipient is rejected through a player notification/log without replacing an existing task or triggering NPC dialogue that could select an unrelated action. Missing delivery, fetch, search and escort targets use target-first wording: `<Target> could not be found.`
