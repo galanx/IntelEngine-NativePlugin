@@ -113,7 +113,7 @@ with tempfile.TemporaryDirectory(prefix="dashboard-host-") as temp:
         (work / "actions" / action_file).write_bytes(
             (ROOT / "SKSE/Plugins/SkyrimNet/external/galanx.intelengine/actions" / action_file).read_bytes())
     (work / "UiHostTestSupport.h").write_text(r'''#pragma once
-#define INTELENGINE_VERSION "3.7.0"
+#define INTELENGINE_VERSION "3.7.1"
 #include "Windows.h"
 #include <cstdint>
 #include <string>
