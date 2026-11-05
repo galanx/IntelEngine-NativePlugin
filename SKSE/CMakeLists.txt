@@ -193,6 +193,8 @@ target_precompile_headers(
 
 add_executable(Utf8TruncateCheck EXCLUDE_FROM_ALL tests/Utf8TruncateCheck.cpp)
 target_include_directories(Utf8TruncateCheck PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+add_executable(DashboardUtf8DumpCheck EXCLUDE_FROM_ALL tests/DashboardUtf8DumpCheck.cpp)
+target_link_libraries(DashboardUtf8DumpCheck PRIVATE nlohmann_json::nlohmann_json)
 add_executable(StoryCandidateResolutionCheck EXCLUDE_FROM_ALL tests/StoryCandidateResolutionCheck.cpp)
 target_include_directories(StoryCandidateResolutionCheck PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 add_executable(FactionLeaderNameMatchCheck EXCLUDE_FROM_ALL tests/FactionLeaderNameMatchCheck.cpp)
