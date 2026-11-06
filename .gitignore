@@ -14,6 +14,7 @@ node_modules/
 
 # Compiled PEX output (built from Source/Scripts/*.psc)
 Output/
+/Scripts/
 
 # Temp decompile directories
 temp_decompile/

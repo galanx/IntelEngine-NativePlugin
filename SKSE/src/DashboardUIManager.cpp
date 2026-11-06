@@ -31,6 +31,10 @@
 
 namespace IntelEngine {
 
+    static std::string SafeDump(const nlohmann::json& value) {
+        return value.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
+    }
+
     static constexpr auto kPollIntervalMs = std::chrono::milliseconds(50);
     static constexpr auto kKeyPressCooldownMs = std::chrono::milliseconds(300);
     static constexpr const char* kActionYamlDirectory =
@@ -535,7 +539,7 @@ namespace IntelEngine {
                     !requestedOpen_ || !isOpen_.load() || !domReady_.load()) return;
                 // Coalesced snapshots retain names until the pending state can be delivered.
                 if (knownNpcsSize_ != knownNpcsSize || pendingFullStatePayloadSet_) parsed["knownNpcs"] = NPCIndex::GetSingleton()->GetKnownNames();
-                pendingFullStatePayload_ = parsed.dump();
+                pendingFullStatePayload_ = SafeDump(parsed);
                 fullStatePayloadGeneration_ = generation;
                 knownNpcsSize_ = knownNpcsSize;
                 pendingFullStatePayloadSet_ = true;
@@ -904,7 +908,7 @@ namespace IntelEngine {
             } else if (val.is_boolean()) {
                 yamlValue = val.get<bool>() ? "true" : "false";
             } else {
-                yamlValue = val.dump();
+                yamlValue = SafeDump(val);
             }
         
             auto* config = DashboardConfig::GetSingleton();
@@ -992,7 +996,7 @@ namespace IntelEngine {
             const auto id = request.at("requestId").get<std::string>();
             const auto form = request.at("form").get<std::string>();
             if (id.empty() || (form != "story" && form != "social" && form != "political" && form != "action")) return;
-            if (request.contains("outcome")) { logger::info("[Dashboard] Generate form={} request={} outcome={}", form, id, request["outcome"].dump()); return; }
+            if (request.contains("outcome")) { logger::info("[Dashboard] Generate form={} request={} outcome={}", form, id, SafeDump(request["outcome"])); return; }
             std::uint64_t generation;
             { std::lock_guard<std::mutex> lock(mgr->mutex_);
               if (mgr->shuttingDown_ || !mgr->requestedOpen_ || !mgr->isOpen_ || !mgr->domReady_) return;
@@ -1002,7 +1006,7 @@ namespace IntelEngine {
                                       {"fields", std::move(fields)}, {"error", std::move(error)}};
                 { std::lock_guard<std::mutex> lock(mgr->mutex_);
                   if (mgr->generation_ != generation || mgr->shuttingDown_) return;
-                  mgr->pendingDirectorResults_.emplace_back(generation, result.dump()); }
+                  mgr->pendingDirectorResults_.emplace_back(generation, SafeDump(result)); }
                 mgr->pollCondition_.notify_one();
             };
             if (auto* player = RE::PlayerCharacter::GetSingleton()) {
@@ -1015,7 +1019,7 @@ namespace IntelEngine {
                 request["currentLocation"] = location && location[0] ? location : "";
             } else request["currentLocation"] = "";
             if (!SkyrimNetAPI::SendCustomPromptToLLM) { queue({}, "Generate unavailable"); return; }
-            const auto context = request.dump();
+            const auto context = SafeDump(request);
             const bool queued = SkyrimNetAPI::SendCustomPromptToLLM("intel_director_generate", "", context.c_str(),
                 [queue, form, id](const char* response, int success) mutable {
                     std::string_view raw = response ? response : "";
@@ -1068,10 +1072,10 @@ namespace IntelEngine {
             eventPayload["storyType"] = type;
             eventPayload["narration"] = narration;
             eventPayload["npcName"] = npcName;
-            eventPayload["response"] = response.dump();
+            eventPayload["response"] = SafeDump(response);
         
             DashboardUIManager::GetSingleton()->SendModEvent(
-                "IntelEngine_DashboardDispatchStory", eventPayload.dump(), 0.0f);
+                "IntelEngine_DashboardDispatchStory", SafeDump(eventPayload), 0.0f);
             logger::info("[Dashboard] Director: dispatch story type={} npc={}", type, npcName);
         } catch (const std::exception& e) {
             logger::error("[Dashboard] Director story dispatch failed: {}", e.what());
@@ -1118,10 +1122,10 @@ namespace IntelEngine {
             eventPayload["narration"] = narration;
             eventPayload["npc1Name"] = npc1;
             eventPayload["npc2Name"] = npc2;
-            eventPayload["response"] = response.dump();
+            eventPayload["response"] = SafeDump(response);
         
             DashboardUIManager::GetSingleton()->SendModEvent(
-                "IntelEngine_DashboardDispatchNpcSocial", eventPayload.dump(), 0.0f);
+                "IntelEngine_DashboardDispatchNpcSocial", SafeDump(eventPayload), 0.0f);
             logger::info("[Dashboard] Director: NPC social type={} npc1={} npc2={}", type, npc1, npc2);
         } catch (const std::exception& e) {
             logger::error("[Dashboard] Director NPC social dispatch failed: {}", e.what());
@@ -1162,7 +1166,7 @@ namespace IntelEngine {
         
             // Pass the full response JSON as strArg — Papyrus feeds it to ProcessPoliticalDMResponse
             DashboardUIManager::GetSingleton()->SendModEvent(
-                "IntelEngine_DashboardDispatchPolitics", response.dump(), 0.0f);
+                "IntelEngine_DashboardDispatchPolitics", SafeDump(response), 0.0f);
             logger::info("[Dashboard] Director: politics event={} factionA={} factionB={} delta={}",
                 eventType, factionA, factionB, delta);
         } catch (const std::exception& e) {
@@ -1192,12 +1196,12 @@ namespace IntelEngine {
             eventPayload["actionName"] = actionName;
             if (j.contains("params") && j["params"].is_object()) {
                 for (auto& [key, val] : j["params"].items()) {
-                    eventPayload[key] = val.is_string() ? val.get<std::string>() : val.dump();
+                    eventPayload[key] = val.is_string() ? val.get<std::string>() : SafeDump(val);
                 }
             }
             eventPayload["npcFormId"] = std::to_string(*formId);
             DashboardUIManager::GetSingleton()->SendModEvent(
-                "IntelEngine_DashboardExecuteAction", eventPayload.dump());
+                "IntelEngine_DashboardExecuteAction", SafeDump(eventPayload));
             logger::info("[Dashboard] Director: execute action={} npc=0x{:X}", actionName, *formId);
         } catch (...) {}
     }
