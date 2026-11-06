@@ -1683,6 +1683,14 @@ namespace IntelEngine {
         std::vector<std::string> factionNames;
         for (const auto& fr : base->factions) {
             if (!fr.faction) continue;
+            if (fr.faction->GetFormType() != RE::FormType::Faction) {
+                static bool warned = false;
+                if (!warned) {
+                    logger::warn("[NPCIndex] Skipping non-faction entry {:08X} (type {}) in faction list of {:08X} '{}'", fr.faction->GetFormID(), static_cast<uint32_t>(fr.faction->GetFormType()), base->GetFormID(), base->GetFullName());
+                    warned = true;
+                }
+                continue;
+            }
 
             // Only include vanilla factions (Skyrim.esm = mod index 0)
             // Filters out modded factions (VectorPlexus, Schlongified, etc.)
