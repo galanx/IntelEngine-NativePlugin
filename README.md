@@ -1,7 +1,7 @@
 # IntelEngine
 ### NPC Autonomy, Faction Politics & Player-Driven Task Framework for SkyrimNet
 
-> **Compatibility:** IntelEngine 3.7.0 requires **SkyrimNet Beta 27** or newer (its travel prompt uses the `get_place_names` decorator added in Beta 27); 3.5.1–3.6.x required Beta 25. Beta 26 and earlier are incompatible with 3.7.0.
+> **Compatibility:** IntelEngine 3.7.1 requires **SkyrimNet Beta 27** or newer (its travel prompt uses the `get_place_names` decorator added in Beta 27); 3.5.1–3.6.x required Beta 25. Beta 26 and earlier are incompatible with 3.7.1.
 > The 3.6.0 native build includes SE/AE/VR. Tested runtimes: Skyrim **1.6.1170.0** and **1.7.104.0**. Skyrim VR **1.4.15** should work and was partly tested. Skyrim SE **1.5.x**: untested; **1.6.640.0** and **1.7.99.0** are also untested targets.
 >
 > This repository carries a compatibility update for current SkyrimNet releases. IntelEngine was originally created by [Galanx](https://github.com/galanx).
@@ -389,6 +389,8 @@ Story toggles affect automatic stories; Action toggles affect AI-chosen actions.
 
 The dashboard communicates through a shared C++ host bridge and existing Papyrus ModEvents. All JSON is built with `nlohmann::json` for proper escaping. Papyrus reads live quest properties and pushes comprehensive JSON snapshots. Remove Packages and Execute Action retain exact decimal-string actor FormIDs, including high-bit IDs.
 
+Dashboard JSON serialization replaces invalid UTF-8 bytes in game strings with U+FFFD rather than dropping the whole state update. Offline regression: `cmake --build <native-build> --config Release --target DashboardUtf8DumpCheck`, then run `<native-build>/DashboardUtf8DumpCheck.exe` (Ninja Release). The host check below also exercises a malformed actor name through the production state push.
+
 Director submission does not close the dashboard. Manual cancellation notifies `<Name>'s task was cancelled.` on success or `<Name> has no task to cancel.` on a repeated/no-task request; SkyrimNet-driven cancellation feedback is unchanged. Delivery-recipient rejection also notifies the player. SkyMessage confirmations are unchanged. Magelight lifecycle, Escape, contention and game dispatch require separate live acceptance; offline checks/builds are not runtime proof.
 
 DeliverMessage targets the resolved recipient actor, including across cells. An unresolved or invalid recipient is rejected through a player notification/log without replacing an existing task or triggering NPC dialogue that could select an unrelated action. Missing delivery, fetch, search and escort targets use target-first wording: `<Target> could not be found.`
@@ -557,7 +559,7 @@ The native MSVC Release profile disables optimization with `/Od /Ob0`, retains C
 
 - The 3.6.0 native build includes Skyrim SE, AE and VR. Tested: Skyrim **1.6.1170.0** and **1.7.104.0**; Skyrim VR **1.4.15** should work and was partly tested. Skyrim SE **1.5.x**: untested. Other listed targets are untested.
 - [SKSE](https://skse.silverlock.org/)
-- [SkyrimNet Beta 27 or newer](https://github.com/MinLL/SkyrimNet-GamePlugin) (3.7.0 minimum; 3.6.0 tested with official Beta 28)
+- [SkyrimNet Beta 27 or newer](https://github.com/MinLL/SkyrimNet-GamePlugin) (3.7.1 minimum; 3.6.0 tested with official Beta 28)
 - [SkyUI](https://www.nexusmods.com/skyrimspecialedition/mods/12604) (MCM)
 - [PapyrusUtil](https://www.nexusmods.com/skyrimspecialedition/mods/13048) (persistent storage)
 - [powerofthree's Papyrus Extender](https://www.nexusmods.com/skyrimspecialedition/mods/22854) (package management, linked refs)
