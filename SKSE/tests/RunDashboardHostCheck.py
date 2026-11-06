@@ -74,6 +74,7 @@ for index, callback in enumerate((
 )):
     listener_entries = listener_entries.replace(callback, f"listener{index}")
 callbacks = [method(manager, sig) for sig in (
+    "    static std::string SafeDump(",
     "    static std::optional<std::uint32_t> ReadFormID(",
     "    void DashboardUIManager::Toggle()",
     "    void DashboardUIManager::RequestClose()",
@@ -112,7 +113,7 @@ with tempfile.TemporaryDirectory(prefix="dashboard-host-") as temp:
         (work / "actions" / action_file).write_bytes(
             (ROOT / "SKSE/Plugins/SkyrimNet/external/galanx.intelengine/actions" / action_file).read_bytes())
     (work / "UiHostTestSupport.h").write_text(r'''#pragma once
-#define INTELENGINE_VERSION "3.7.0"
+#define INTELENGINE_VERSION "3.7.1"
 #include "Windows.h"
 #include <cstdint>
 #include <string>
@@ -855,6 +856,12 @@ void testManager() {
         {{"formId",0x4E013BF1u},{"name","Brey"}},
         {{"formId",0x10000001u},{"name","Neighbor"}},
         {{"formId",0x10000002u},{"name","Boundary"}}}));
+    named.name="S\xE9nn";
+    m->ProcessFullState("{\"ready\":true}",generation);
+    const auto repairedState=nlohmann::json::parse(m->pendingFullStatePayload_);
+    assert(repairedState["ready"]==true);
+    assert(repairedState["loadedNpcs"][2]["name"]=="S\xEF\xBF\xBDnn");
+    named.name="Brey";
     m->actionCacheLoaded_=false;
     m->LoadActionYAMLs();
     m->ProcessFullState("{\"ready\":true}",generation);
