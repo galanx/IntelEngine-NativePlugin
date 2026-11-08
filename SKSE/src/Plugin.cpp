@@ -124,6 +124,7 @@ namespace IntelEngine {
     }
 
     void RevertCallback(SKSE::SerializationInterface*) {
+        PoliticalEngineBridge::GetSingleton()->MarkDirty(true);
         PoliticalDB::GetSingleton()->BeginLoad();
         g_currentSaveID.clear();
         g_hasReverted = true;
@@ -381,7 +382,7 @@ namespace IntelEngine {
             case SKSE::MessagingInterface::kNewGame:
                 // New game — clear SlotTracker state, force DB re-discovery
                 logger::info("New game - clearing SlotTracker, clearing MemoryDB caches");
-                PoliticalEngineBridge::GetSingleton()->QueueCapture("[\"new_game\"]");
+                PoliticalEngineBridge::GetSingleton()->MarkDirty(true);
                 SlotTracker::GetSingleton()->ClearAll();
                 ProximityMonitor::GetSingleton()->DisarmAll();
                 NPCIndex::GetSingleton()->RefreshIndex();
@@ -402,7 +403,7 @@ namespace IntelEngine {
                 // Game loaded — SlotTracker already populated from co-save (LoadCallback).
                 // ClearAll moved to RevertCallback to avoid wiping co-save data.
                 logger::info("Game loaded - refreshing indexes, clearing MemoryDB caches");
-                PoliticalEngineBridge::GetSingleton()->QueueCapture("[\"post_load_game\"]");
+                PoliticalEngineBridge::GetSingleton()->MarkDirty(true);
                 NPCIndex::GetSingleton()->RefreshIndex();
                 MemoryDB::GetSingleton()->ClearCaches();
                 // Initialize per-save political DB (save ID restored via serialization)

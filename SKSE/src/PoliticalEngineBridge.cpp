@@ -1,12 +1,9 @@
 #include "PoliticalEngineBridge.h"
 #include "PoliticalEngineReadJSON.h"
+#include "PoliticalEngineChanges.h"
 #include "AsyncDispatch.h"
 #include <Windows.h>
 #include <algorithm>
-#include <chrono>
-#include <format>
-#include <filesystem>
-#include <fstream>
 
 namespace IntelEngine {
     void PoliticalEngineBridge::Initialize() {
@@ -22,62 +19,43 @@ namespace IntelEngine {
         reader_ = reader;
         if (auto* source = SKSE::GetModCallbackEventSource()) source->AddEventSink(this);
         logger::info("PoliticalEngineBridge: detected API v3");
-        QueueCapture("[\"attached\"]");
+        MarkDirty(true);
+        AsyncDispatch::Submit([this] { Poll(); });
     }
 
-    // ponytail: temporary capture for design D2; remove when diff lands
-    void PoliticalEngineBridge::QueueCapture(std::string sections) {
-        if (!reader_) return;
-        AsyncDispatch::Submit([this, sections = std::move(sections)] { Capture(sections); });
+    void PoliticalEngineBridge::MarkDirty(bool reset) {
+        if (reset) { resetEpoch_.fetch_add(1); active_.store(false); }
+        dirty_.store(true);
     }
 
     RE::BSEventNotifyControl PoliticalEngineBridge::ProcessEvent(const SKSE::ModCallbackEvent* event,
         RE::BSTEventSource<SKSE::ModCallbackEvent>*) {
-        if (event && event->eventName == "PL_StateChanged") QueueCapture(event->strArg.c_str());
+        if (event && event->eventName == "PL_StateChanged")
+            MarkDirty(std::string_view(event->strArg.c_str()).find("\"loaded\"") != std::string_view::npos);
         return RE::BSEventNotifyControl::kContinue;
     }
 
-    void PoliticalEngineBridge::Capture(const std::string& sections) {
+    nlohmann::json PoliticalEngineBridge::Poll() {
+        std::lock_guard lock(mutex_);
+        auto changes = nlohmann::json::array();
+        if (!reader_ || !dirty_.exchange(false)) return changes;
+        const auto epoch = resetEpoch_.load();
         auto snapshot = ReadJSON(reader_);
-        active_.store(false);
-        if (!snapshot) return;
-        if (snapshot->is_object()) {
-            auto ready = snapshot->find("data_ready");
-            auto status = snapshot->find("status");
-            if (ready != snapshot->end() && *ready == true && status != snapshot->end() && status->is_object()) {
-                auto enabled = status->find("bEnabled");
-                active_.store(enabled != status->end() && *enabled == true);
-            }
+        active_.store(snapshot && PEField(*snapshot, "data_ready") == true &&
+            PEField(PEField(*snapshot, "status"), "bEnabled") == true);
+        if (!active_ || epoch != resetEpoch_.load()) { active_.store(false); baseline_ = nullptr; return changes; }
+        auto current = PEComparable(*snapshot);
+        const auto& revision = current["revision"];
+        if (!baseline_.is_object() || baselineEpoch_ != epoch) { revision_ = nullptr; revisionCount_ = 0; }
+        if (baseline_.is_object() && baselineEpoch_ == epoch && revision.is_number_unsigned()) {
+            if (revision_ != revision) { revision_ = revision; revisionCount_ = 0; }
+            changes = PEDiff(baseline_, current);
+            // ponytail: four public records per revision; raise only if real news is lost.
+            if (changes.size() > 4 - revisionCount_) changes.erase(changes.begin() + (4 - revisionCount_), changes.end());
+            revisionCount_ += changes.size();
         }
-        auto revision = snapshot->is_object() ? snapshot->find("revision") : snapshot->end();
-        const auto revisionText = revision != snapshot->end() && revision->is_number_unsigned() ? revision->dump() :
-            std::format("{:%Y%m%dT%H%M%S}Z", std::chrono::system_clock::now());
-        const std::filesystem::path folder = "Data/SKSE/Plugins/IntelEngine/pe_snapshots";
-        try {
-            std::filesystem::create_directories(folder);
-            const auto path = folder / ("pe_snapshot_" + revisionText + ".json");
-            const bool existed = std::filesystem::exists(path);
-            {
-                std::ofstream file;
-                file.exceptions(std::ios::failbit | std::ios::badbit);
-                file.open(path, std::ios::trunc);
-                file << snapshot->dump(2);
-                file.close();
-            }
-            if (!existed) logger::info("PoliticalEngineBridge: wrote snapshot {}", path.string());
-            std::vector<std::pair<std::filesystem::file_time_type, std::filesystem::path>> files;
-            for (const auto& entry : std::filesystem::directory_iterator(folder))
-                if (entry.is_regular_file() && entry.path().filename().string().starts_with("pe_snapshot_") &&
-                    entry.path().extension() == ".json") files.emplace_back(entry.last_write_time(), entry.path());
-            std::sort(files.begin(), files.end());
-            for (std::size_t i = 50; i < files.size(); ++i) std::filesystem::remove(files[i - 50].second);
-            std::ofstream events;
-            events.exceptions(std::ios::failbit | std::ios::badbit);
-            events.open(folder / "pe_events.log", std::ios::app);
-            events << revisionText << ' ' << sections << '\n';
-            events.close();
-        } catch (const std::exception& e) {
-            logger::warn("PoliticalEngineBridge: snapshot capture failed: {}", e.what());
-        }
+        baseline_ = std::move(current);
+        baselineEpoch_ = epoch;
+        return changes;
     }
 }
