@@ -985,6 +985,36 @@ def run_hold_restriction_checks(files, history):
     print("actual PEX hold restriction: Director informant retained, automatic abort notified, stale guard passed")
 
 
+def run_soft_stuck_checks(files, history):
+    class StuckVM(VM):
+        loaded = True
+
+        def external(self, method, args, script):
+            if method == "RandomFloat": return 0.0
+            if method == "Is3DLoaded": return self.loaded
+            if method in ("Wait", "PathToReference", "MoveTo"):
+                self.effects.append((method, tuple(args)))
+                return None
+            return super().external(method, args, script)
+
+    for dest_player in (True, False):
+        for loaded in (True, False):
+            vm = StuckVM(files, history)
+            vm.loaded = loaded
+            package = object()
+            vm.properties.update({"SlotSpeeds": [0] * 5, "TravelPackage_Walk": package,
+                                  "PRIORITY_TRAVEL": 100})
+            vm.invoke("IntelEngine_Core", "SoftStuckRecovery",
+                      (vm.agent, 0, vm.player if dest_player else None))
+            calls = [event for event in vm.effects if event[0] in ("Wait", "PathToReference")]
+            require(not calls, f"SoftStuckRecovery left latent calls for dest_player={dest_player}, loaded={loaded}: {calls!r}")
+            require(("AddPackageOverride", (vm.agent, package, 100, 1)) in vm.effects,
+                    "SoftStuckRecovery did not reapply the travel package")
+            require(sum(event[0] == "EvaluatePackage" for event in vm.effects) >= 1,
+                    "SoftStuckRecovery did not evaluate the re-applied package")
+    print("actual PEX SoftStuckRecovery: no Wait/PathToReference; travel package and EvaluatePackage retained (player/None, loaded/unloaded)")
+
+
 def main():
     if len(sys.argv) != 4:
         raise SystemExit(__doc__)
@@ -1278,6 +1308,7 @@ def main():
     run_courier_checks(files, history)
     run_near_player_checks(files, history)
     run_hold_restriction_checks(files, history)
+    run_soft_stuck_checks(files, history)
 
 
 if __name__ == "__main__":
