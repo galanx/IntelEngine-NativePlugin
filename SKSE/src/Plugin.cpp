@@ -119,6 +119,7 @@ namespace IntelEngine {
     }
 
     void RevertCallback(SKSE::SerializationInterface*) {
+        PoliticalDB::GetSingleton()->BeginLoad();
         g_currentSaveID.clear();
         g_hasReverted = true;
         // Cancel deferred Maintenance and NPC tick snapshots/results from the previous load.
@@ -138,6 +139,7 @@ namespace IntelEngine {
 
     /** Initialize PoliticalDB with per-save database path + timeline cleanup. */
     static void InitializePoliticalDB() {
+        FactionPolitics::GetSingleton()->ClearCaches();
         std::string saveID = GetSaveUniqueID();
 
         // Build path: Data/SKSE/Plugins/IntelEngine/data/IntelEngine-{saveID}.db
@@ -154,13 +156,14 @@ namespace IntelEngine {
             db->Shutdown();
         }
 
-        if (!db->Initialize(PathToUtf8(dbPath))) {
+        if (!db->Initialize(PathToUtf8(dbPath), saveID)) {
             logger::error("Failed to initialize PoliticalDB");
             return;
         }
 
         // Timeline cleanup: delete events from the future (save-scumming)
         auto* calendar = RE::Calendar::GetSingleton();
+        if (!calendar) logger::warn("PoliticalDB: No calendar for cleanup; pipe 2 remains not ready");
         if (calendar) {
             float currentGameTime = calendar->GetCurrentGameTime();
             int cleaned = db->CleanupFutureEvents(currentGameTime);
@@ -171,9 +174,6 @@ namespace IntelEngine {
 
         // Recalculate player standings from history (handles save-scumming correctly)
         db->RecalculatePlayerStandings();
-
-        // Clear FactionPolitics in-memory caches
-        FactionPolitics::GetSingleton()->ClearCaches();
     }
 
     // =========================================================================
@@ -337,6 +337,9 @@ namespace IntelEngine {
 
     void MessageHandler(SKSE::MessagingInterface::Message* a_msg) {
         switch (a_msg->type) {
+            case SKSE::MessagingInterface::kPreLoadGame:
+                PoliticalDB::GetSingleton()->BeginLoad();
+                break;
             case SKSE::MessagingInterface::kDataLoaded:
                 // Game data is loaded - initialize SkyrimNet API and build NPC index
                 // Note: PoliticalDB + FactionPolitics init deferred to kNewGame/kPostLoadGame
