@@ -660,6 +660,13 @@ same-faction pairs still reject. Public PE news is visible to unaffiliated NPCs 
 Optional `PE_GetIntelInitiatives080JSON` supplies public visits, gifts and disputes.
 IE baselines the bounded journal on attach/load and deduplicates string IDs; PE must
 not also call `RecordPoliticalEvent` for these initiatives. Missing export disables only this intake.
+Active PE adds authoritative territory and recent public developments to the Political DM
+context. A development is eligible for one `political_reaction` on the next tick through
+`reacts_to`; expiry, load identity and duplicate responses reject stale reactions.
+`politics.pe_reactions_move_relations` defaults true. Its persisted Papyrus/MCM/dashboard
+toggle controls only tagged reaction relation and player-standing deltas, not IE's own
+politics, standing decay or war/battle mechanics. Disabled still records the reaction.
+Dashboard settings also report optional-provider detection. All of this remains offline-verified.
 
 Run `PoliticalEngineReadJSONCheck` and
 `python SKSE/tests/RunPoliticalEngineBridgeCheck.py <vcpkg-triplet-dir> <private-sample-directory>`

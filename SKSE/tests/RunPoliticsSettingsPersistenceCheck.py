@@ -29,6 +29,7 @@ methods = [method(dashboard, "std::string DashboardConfig::ReadYamlString("),
                "bool FactionPolitics::SetTickIntervalHours(",
                "bool FactionPolitics::SetMaxRelationChangePerTick(",
                "bool FactionPolitics::SetMaxActiveWars(",
+               "bool FactionPolitics::SetPEReactionsMoveRelations(",
                "void FactionPolitics::LoadSettings(",
                "void FactionPolitics::Initialize("))]
 
@@ -73,6 +74,8 @@ public:
     bool SetTickIntervalHours(int);
     bool SetMaxRelationChangePerTick(int);
     bool SetMaxActiveWars(int);
+    bool SetPEReactionsMoveRelations(bool);
+    bool GetPEReactionsMoveRelations() const { return peReactionsMoveRelations_.load(); }
     void LoadSettings();
     void Initialize();
     bool IsEnabled() const { return enabled_.load(); }
@@ -88,6 +91,7 @@ public:
     void WritePoliticalStateFile() {}
 private:
     std::atomic<bool> enabled_{true};
+    std::atomic<bool> peReactionsMoveRelations_{true};
     std::atomic<bool> initialized_{false};
     bool configLoaded_ = false;
     std::atomic<int> tickIntervalHours_{6};
@@ -113,6 +117,9 @@ int main(int argc, char** argv) {
     assert(!politics.IsEnabled());
     assert(politics.IsInitialized());
     assert(politics.IsConfigLoaded());
+    assert(politics.GetPEReactionsMoveRelations());
+    assert(politics.SetPEReactionsMoveRelations(false));
+    assert(!politics.GetPEReactionsMoveRelations());
     assert(politics.SetEnabled(true));
     assert(politics.IsEnabled());
     assert(politics.SetEnabled(false));
@@ -132,6 +139,8 @@ int main(int argc, char** argv) {
     settingsPath = "missing/settings.yaml";
     assert(!politics.SetEnabled(true));
     assert(!politics.IsEnabled());
+    assert(!politics.SetPEReactionsMoveRelations(true));
+    assert(!politics.GetPEReactionsMoveRelations());
     settingsPath = argv[1];
     FactionPolitics reloaded;
     reloaded.LoadSettings();
@@ -139,6 +148,7 @@ int main(int argc, char** argv) {
     assert(reloaded.GetTickIntervalHours() == 168);
     assert(reloaded.GetMaxRelationChangePerTick() == 30);
     assert(reloaded.GetMaxActiveWars() == 5);
+    assert(!reloaded.GetPEReactionsMoveRelations());
 }
 ''', encoding="utf-8")
     executable = work / "check.exe"

@@ -80,6 +80,8 @@ template<class... T> void error(T&&...) {}
         if name in ("FactionPolitics.h", "BattleManager.h"):
             text = text.replace("    private:", "    public:")
         (work / name).write_text(text, encoding="utf-8")
+    header = (work / "FactionPolitics.h").read_text()
+    (work / "FactionPolitics.h").write_text(header.replace("    public:", "    public:\n        nlohmann::json TestPEContext();", 1))
     source = (src / "FactionPolitics.cpp").read_text(encoding="utf-8")
     signatures = (
         "std::string ToLower(",
@@ -94,10 +96,16 @@ template<class... T> void error(T&&...) {}
         "std::string FactionPolitics::GetFactionsJson(",
         "int FactionPolitics::RecordOffScreenBattle(",
         "void FactionPolitics::RecalculateRelationScores(",
+        "std::string FactionPolitics::ProcessPoliticalDMResponse(",
+        "int FactionPolitics::DecayPlayerStandings(",
+        "std::string FactionPolitics::GetFactionDisplayName(",
     )
     (work / "PoliticalFeedMethods.inc").write_text(
         "namespace IntelEngine {\n" + "\n".join(method(source, s) for s in signatures) +
         "\nvoid FactionPolitics::WritePoliticalStateFile() {}\n}\n", encoding="utf-8")
+    context_start = source.index("        auto pe = PoliticalEngineBridge::GetSingleton()->Context();")
+    context_end = source.index("        // Active wars", context_start)
+    (work / "PEContext.inc").write_text(source[context_start:context_end])
     battle = (src / "BattleManager.cpp").read_text(encoding="utf-8")
     (work / "PhysicalPosition.inc").write_text(
         "namespace IntelEngine {\n" +
