@@ -217,6 +217,7 @@ namespace IntelEngine {
             RE::FormID  playerFormId    = 0;
             std::string playerHold;
             std::vector<PoliticsLeaderSnapshot> leaders;
+            nlohmann::json vanillaSides = nlohmann::json::array();
         };
 
         /**

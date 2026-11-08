@@ -667,6 +667,12 @@ context. A development is eligible for one `political_reaction` on the next tick
 toggle controls only tagged reaction relation and player-standing deltas, not IE's own
 politics, standing decay or war/battle mechanics. Disabled still records the reaction.
 Dashboard settings also report optional-provider detection. All of this remains offline-verified.
+Optional `PE_GetPoliticalSides080JSON` joins current district owner IDs to realm sides;
+both ownership and sides-only changes refresh context. A present but unreadable export
+never invokes vanilla fallback. Only an absent export permits main-thread `CWOwner`
+keyword-value reads, exposed separately as vanilla Civil War context, never district sides.
+Civil War organizations match existing `CWImperialFaction`/`CWSonsFaction` IDs.
+The active-only prompt forbids organization battles from inventing territory transfers.
 
 Run `PoliticalEngineReadJSONCheck` and
 `python SKSE/tests/RunPoliticalEngineBridgeCheck.py <vcpkg-triplet-dir> <private-sample-directory>`

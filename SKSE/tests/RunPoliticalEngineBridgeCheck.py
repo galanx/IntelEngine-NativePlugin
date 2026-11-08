@@ -51,6 +51,13 @@ static json state;
 static unsigned api = 3;
 static bool installed = true;
 static bool journalExport = true;
+static bool sidesExport = true;
+static json sides = {{"political_sides080",{{"territory_rule","current_owner_realm"},{"realms",json::array({{{"realm_id",3},{"side_id",1}},{{"realm_id",9},{"side_id",2}}})}}}};
+static unsigned ReadSides(char* out,unsigned capacity) {
+    auto text=sides.dump(); auto size=static_cast<unsigned>(text.size()+1);
+    if(out && capacity>=size) std::memcpy(out,text.c_str(),size);
+    return size;
+}
 static json journal = {{"intel_initiatives080",{{"events",json::array({{{"id","old"},{"event_type","pe_visit"},{"source",20},{"target",104641},{"relation_delta",0},{"text","A prior public visit."}}})}}}};
 static unsigned ReadJournal(char* out,unsigned capacity) {
     auto text=journal.dump(); auto size=static_cast<unsigned>(text.size()+1);
@@ -70,6 +77,7 @@ static void* GetProcAddress(void*, const char* name) {
     if (std::string_view(name) == "PE_GetApiVersion") return reinterpret_cast<void*>(&Version);
     if (std::string_view(name) == "PE_GetSnapshotJSON") return reinterpret_cast<void*>(&Read);
     if (journalExport && std::string_view(name) == "PE_GetIntelInitiatives080JSON") return reinterpret_cast<void*>(&ReadJournal);
+    if (sidesExport && std::string_view(name) == "PE_GetPoliticalSides080JSON") return reinterpret_cast<void*>(&ReadSides);
     return nullptr;
 }
 ''' + source + r'''
@@ -79,6 +87,7 @@ int main(int argc, char** argv) { try {
     const auto before = Load(argv[1]), after = Load(argv[2]);
     auto* bridge = IntelEngine::PoliticalEngineBridge::GetSingleton();
     if (argc>3 && std::string(argv[3])=="nojournal") { journalExport=false; argc=3; }
+    if (argc>3 && std::string(argv[3])=="nosides") { sidesExport=false; argc=3; }
     for (unsigned version : {0u, 2u, 4u}) {
         api = version; state = before;
         // Separate processes exercise the one-shot detection gate.
@@ -96,10 +105,30 @@ int main(int argc, char** argv) { try {
     api = 3; state = before; bridge->Initialize();
     Require(bridge->Poll() == json::array() && bridge->IsActive(), "attachment replayed news");
     Require(bridge->Context()["territory"]["11"]["owner"]==3 && bridge->Context()["realms"]["9"]=="Fellburg", "active public territory context");
+    if(sidesExport) Require(bridge->Context()["territory"]["11"]["side_id"]==1,"original current owner side from optional export");
+    else Require(!bridge->Context()["territory"]["11"].contains("side_id"),"missing export must not invent district side");
     state = after; bridge->MarkDirty(); auto changes = bridge->Poll();
     Require(changes.size() == 1 && changes[0]["type"] == "pe_territory" &&
         changes[0]["changes"] == json::array({{{"district","11"},{"name","Southern Reach"},{"from",3},{"to",9}}}), "real owner transition");
     Require(IntelEngine::PEEventText(changes[0]) == "Fellburg took Southern Reach from Markarth.", "factual realm-name rumor");
+    if(sidesExport) {
+        Require(bridge->Context()["territory"]["11"]["side_id"]==2,"captured district follows current owner, not original hold");
+        sides["political_sides080"]["realms"][1]["side_id"]=3;
+        SKSE::ModCallbackEvent sideChanged{"PL_StateChanged","[\"political_sides080\"]"};
+        bridge->ProcessEvent(&sideChanged,nullptr);
+        Require(bridge->Poll()==json::array() && bridge->Context()["territory"]["11"]["side_id"]==3,"sides-only event refreshes context without news");
+        sides["political_sides080"]["realms"][1]["side_id"]=0;
+        bridge->MarkDirty(); bridge->Poll();
+        Require(bridge->Context()["territory"]["11"]["side_id"]==0,"independent is a known side, not missing");
+        sides["political_sides080"]["realms"][1]["side_id"]=7;
+        bridge->MarkDirty(); bridge->Poll();
+        Require(!bridge->Context()["territory"]["11"].contains("side_id"),"invalid allegiance omitted");
+        const auto valid=sides; sides=nullptr; bridge->MarkDirty(); bridge->Poll();
+        Require(!bridge->Context()["territory"]["11"].contains("side_id") &&
+                bridge->Context()["side_source"]=="political_sides080", "malformed present export never falls back");
+        sides=valid; sides["political_sides080"]["realms"][1]["side_id"]=2;
+        bridge->MarkDirty(); bridge->Poll();
+    }
     bridge->MarkDirty(); Require(bridge->Poll() == json::array(), "duplicate re-read");
     state = before; SKSE::ModCallbackEvent loaded{"PL_StateChanged", "[\"loaded\"]"};
     bridge->ProcessEvent(&loaded, nullptr); Require(bridge->Poll() == json::array(), "load replayed news");
@@ -164,5 +193,5 @@ int main(int argc, char** argv) { try {
     subprocess.run(["cl", "/nologo", "/EHsc", "/std:c++latest", "/I"+str(work),
                     "/I"+str(src), "/I"+str(deps/"include"), "check.cpp", "/Fe:check.exe"], cwd=work, check=True)
     args = [str(work/"check.exe"), str((samples/"before-snapshot.json").resolve()), str((samples/"after-snapshot.json").resolve())]
-    for suffix in ([], ["nojournal"], ["0"], ["2"], ["4"], ["absent"]):
+    for suffix in ([], ["nojournal"], ["nosides"], ["0"], ["2"], ["4"], ["absent"]):
         subprocess.run(args + suffix, cwd=work, check=True)
