@@ -80,7 +80,7 @@ def parse_functions(text):
                               section[head.end():], re.M | re.S):
             instructions.append((op.group(1), [atom(x) for x in split_args(op.group(2))]))
         require(len(instructions) == int(head.group(1)), f"disassembly parse mismatch in {m.group(1)}")
-        funcs[m.group(1)] = (names, instructions)
+        funcs[m.group(1)] = (names, instructions, {name: typ for typ, name in re.findall(r"^\s*(\S+) (\S+)\s*$", section[:head.start()], re.M)})
     return funcs
 
 
@@ -112,7 +112,7 @@ class VM:
         self.properties.update({"NPCTickIntervalHours": 1.5, "MONITOR_INTERVAL": 5.0, "IDLE_POLL_INTERVAL": 30.0})
         self.properties.update({"IsActive": True, "ArrivalHandling": False, "DispatchGeneration": 0,
             "ActiveStoryNPC": self.agent, "ActiveStoryType": "seek_player",
-            "ActiveSecondNPC": None, "ActiveNarration": "A message about the road"})
+            "ActiveSecondNPC": None, "ActiveNarration": "A message about the road", "NPCSocialGeneration": 0})
         self.call_counts, self.reenter_story = {}, False
         self.storage.update({(self.agent, "Intel_Message"): "Meet me at the bridge",
             (self.agent, "Intel_Result"): "", (self.agent, "Intel_DeliveryMeetLocation"): "none",
@@ -135,7 +135,7 @@ class VM:
         return self.properties.get(name.removeprefix("::").removesuffix("_var"))
 
     def invoke(self, script, name, args=()):
-        params, code = self.scripts[script][name]
+        params, code, _ = self.scripts[script][name]
         require(len(params) == len(args), f"call arity mismatch for {script}.{name}")
         self.call_counts[(script, name)] = self.call_counts.get((script, name), 0) + 1
         env = {"self": script, "::Core_var": "IntelEngine_Core", "::Schedule_var": None,
@@ -275,6 +275,7 @@ class VM:
             nextpc = pc + 1
             if op in ("assign", "cast"):
                 env[a[0][1]] = v(a[1])
+                if op == "cast" and self.scripts[script][name][2].get(a[0][1]) == "String": env[a[0][1]] = str(env[a[0][1]])
                 if a[0][1].startswith("::") and a[0][1].endswith("_var"):
                     self.properties[a[0][1][2:-4]] = env[a[0][1]]
                 elif a[0][1] in self.properties:
@@ -356,6 +357,14 @@ class DirectorVM(VM):
         return super().invoke(script, name, args)
 
     def external(self, method, args, script):
+        if method == "GetActorHoldName": return "Whiterun"
+        if method == "GetDistance" and hasattr(self, "distance"): return self.distance
+        if method == "GetLength": return len(args[0])
+        if method == "StoryResponseShouldAct": return json.loads(args[0]).get("should_act", False)
+        if method == "ResolveStoryCandidate": return self.target
+        if method in ("IsHighStatusNPC", "IsJarl"): return False
+        if method == "ValidateStoryResponse": return '{"valid":"true"}'
+        if method in ("NotifyStoryTypePicked", "RecordStoryDispatch", "NotifyStoryCooldown", "FormListAdd"): self.effects.append((method, tuple(args))); return None
         if method == "StoryResponseGetField": return json.loads(args[0]).get(args[1], "")
         if method == "ResolveDirectorActor": return self.agent if args[0] == self.agent.name else self.target
         if method == "ParseFormID": return int(args[0])
@@ -766,6 +775,23 @@ def run_director_lite_checks(files, history):
     require(not failures, "Failed Director cases: " + ", ".join(failures))
 
 
+def run_replacement_checks(files, history):
+    for social in (False, True):
+        for mode in ("same", "different", "no-slot", "invalid", "stale"):
+            vm = DirectorVM(files, history); vm.distance = 1000.0; vm.properties.update({"NPCSocialGeneration": 0, "IntelEngine_TravelTarget": "link"})
+            if social: vm.invoke("IntelEngine_StoryEngine", "DispatchNPCSocial", (vm.agent, vm.target, "Old trip", "npc_interaction", vm.agent, vm.target, "", "", "", "Director"))
+            else: vm.seek("Old story")
+            vm.storage[(vm.agent, "Intel_WasFollower")] = 1; vm.storage[(vm.agent, "Intel_MessageContent")] = "Old message"; before = vm.task_snapshot(); vm.effects.clear()
+            if mode == "no-slot": vm.properties["SlotStates"][0] = 0; vm.properties["AgentAlias00"].actor = None
+            payload = {"npc1Name": vm.target.name if mode == "different" else vm.agent.name, "npc2Name": vm.agent.name if mode == "different" else vm.target.name, "socialType": "npc_interaction"} if social else {"npcName": vm.target.name if mode == "different" else vm.agent.name, "storyType": "seek_player"}
+            payload.update({"narration": "" if mode == "invalid" else "Replacement", "response": "{}", "replaceGeneration": "0" if mode == "stale" else "1"})
+            vm.invoke("IntelEngine_Core", "OnDashboardDispatchNpcSocial" if social else "OnDashboardDispatchStory", ("", json.dumps(payload), 0.0, None))
+            if mode in ("invalid", "stale"): require(vm.task_snapshot() == before, "invalid/stale replacement changed old work")
+            else:
+                require(vm.properties["NPCSocialTraveler" if social else "ActiveStoryNPC"] is (vm.target if mode == "different" else vm.agent) and vm.properties["NPCSocialGeneration" if social else "DispatchGeneration"] == 2 and sum(s != 0 for s in vm.properties["SlotStates"]) == 1, "replacement did not admit exactly one new dispatch")
+                require(any(e[0] == "SetPlayerTeammate" for e in vm.effects) and (social or (vm.agent, "Intel_MessageContent") not in vm.storage), "replacement lost follower restoration or old message cleanup")
+                require(next(i for i,e in enumerate(vm.effects) if e[0] == "SetLinkedRef" and e[1][1] is None) < next(i for i,e in enumerate(vm.effects) if e[0] == "Trace" and "Allocated slot" in e[1]), "new allocation preceded old linked-ref cleanup")
+    print("actual PEX replacement: Story/Social same/different actor, no-slot, invalid/stale, follower and cleanup-before-allocation PASS")
 def main():
     if len(sys.argv) != 4:
         raise SystemExit(__doc__)
@@ -1053,6 +1079,7 @@ def main():
             "latched ambush-combat dispatch skipped ongoing combat monitoring")
     print("actual PEX arrival poll: cleanup/replacement interleavings and latched combat monitor passed")
     run_director_lite_checks(files, history)
+    run_replacement_checks(files, history)
 
 
 if __name__ == "__main__":

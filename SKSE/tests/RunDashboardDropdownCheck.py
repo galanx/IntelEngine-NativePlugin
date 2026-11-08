@@ -81,6 +81,22 @@ SCRIPT = r"""
     await pause();
     const reloadReady = location.hash === '#director_live_polish2' && localStorage.getItem('__directorLivePolish2Reload') === 'ready';
     if (!reloadReady) { clickText('Director'); await pause(); }
+    if (location.hash === '#replacement_confirm') {
+      const fixture = (storyGeneration, socialGeneration) => ({config:{},pluginConfig:{},tasks:[{index:7,state:1,agentName:'Unrelated'}],scheduled:[],story:{enabled:true,isActive:true,generation:storyGeneration,activeNPC:'Old Story',activeType:'seek_player'},social:{enabled:true,isActive:true,generation:socialGeneration,traveler:'Old Traveler',target:'Old Target',type:'npc_interaction'},loadedNpcs:[{formId:1,name:'New Story'},{formId:2,name:'New Traveler'},{formId:3,name:'New Target'}],actions:[]});
+      const section = i => document.querySelectorAll('section')[i-1], button = i => [...section(i).querySelectorAll('button')].find(e=>/Replace|Dispatch|confirm replacement/.test(e.textContent));
+      const sent = name => payloads.filter(([n])=>n===name), click = async i => { check(button(i) && !button(i).disabled,'replacement submit unavailable'); button(i).click(); await pause(); };
+      await window.updateFullState(JSON.stringify(fixture(4,8))); await pause();
+      await fill('input[placeholder="e.g. Saadia"]','New Story',section(1)); await fill('textarea','A replacement story',section(1)); await click(1);
+      check(!sent('dispatchStory').length && !sent('cancelTask').length,'Story first click dispatched or cancelled a task');
+      await fill('textarea','Changed story request',section(1)); await click(1); check(!sent('dispatchStory').length,'changed Story request retained confirmation');
+      await click(1); check(JSON.parse(sent('dispatchStory').at(-1)[1]).replaceGeneration==='4' && !sent('cancelTask').length,'Story replacement payload or no-cancel contract failed');
+      await fill('input[placeholder="e.g. Mikael"]','New Traveler',section(2)); await fill('input[placeholder="e.g. Sven"]','New Target',section(2)); await fill('textarea','A replacement social trip',section(2)); await fill('input[placeholder="e.g. confronted Sven about stolen goods"]','discussed the road',section(2)); await fill('input[placeholder="e.g. was accused by Mikael of stealing goods"]','heard about the road',section(2)); check(!button(2).disabled,'valid Social replacement disabled'); await click(2);
+      check(!sent('dispatchNpcSocial').length,'Social first click dispatched');
+      await window.updateFullState(JSON.stringify(fixture(4,9))); await pause(); await click(2);
+      check(!sent('dispatchNpcSocial').length,'changed active Social dispatch retained confirmation');
+      await click(2); check(JSON.parse(sent('dispatchNpcSocial').at(-1)[1]).replaceGeneration==='9' && !sent('cancelTask').length,'Social replacement payload or no-cancel contract failed');
+      document.getElementById('result').textContent=JSON.stringify({status:'PASS',checks:['replacement_confirm']}); return;
+    }
     if (location.hash === '#nearby_picks') {
       Math.random=()=>0.999;
       const fixture = {config:{},pluginConfig:{'ui.scale':1},tasks:[],scheduled:[],story:{enabled:true},social:{enabled:true},
@@ -1476,45 +1492,12 @@ SCRIPT = r"""
         {index:4,state:1,agentName:'Guard 1',agentFormId:108197}
       ])); await pause();
       const submit = section => document.querySelector(`section:nth-of-type(${section}) button.w-full`);
-      const arm = async (section, expectedLabel) => {
-        const count = payloads.length;
-        submit(section).click(); await pause();
-        check(payloads.length === count && submit(section).textContent.trim() === 'Busy — you sure?',
-          `busy_confirm_cancel_dispatch: first ${expectedLabel} click dispatched instead of confirming`);
-      };
       const confirm = async (section, expected) => {
         const count = payloads.length;
         submit(section).click(); await pause();
         check(JSON.stringify(payloads.slice(count).map(([name,json])=>[name,JSON.parse(json)])) === JSON.stringify(expected),
           'busy_confirm_cancel_dispatch: cancel/dispatch order or payload changed: '+JSON.stringify(payloads.slice(count)));
       };
-      const setSocialField = (name,value) => {
-        const control=[...document.querySelectorAll('section:nth-of-type(2) label')].find(e=>e.textContent.trim().startsWith(name))?.parentElement?.querySelector('input,textarea');
-        Object.getOwnPropertyDescriptor(control.tagName==='TEXTAREA'?HTMLTextAreaElement.prototype:HTMLInputElement.prototype,'value').set.call(control,value);
-        control.dispatchEvent(new Event('input',{bubbles:true}));
-      };
-      await choose('Story type','Seek Player');
-      await fill('input[placeholder="e.g. Saadia"]',' nazeem ');
-      await fill('section:nth-of-type(1) textarea','Busy story');
-      await arm(1,'Story');
-      await fill('input[placeholder="e.g. Saadia"]','Saadia');
-      check(submit(1).textContent.trim()==='Dispatch Story','busy_confirm_cancel_dispatch: Story NPC change retained confirmation');
-      await fill('input[placeholder="e.g. Saadia"]',' nazeem ');
-      await arm(1,'Story');
-      await confirm(1,[['cancelTask',{slot:2}],['dispatchStory',{npcName:'nazeem',storyType:'seek_player',narration:'Busy story'}]]);
-      await choose('Social type','Gossip');
-      for (const [first,second,slots] of [['Nazeem','Sven',[2]],['Mikael','Nazeem',[2]],['Nazeem','Guard 1',[2,4]]]) {
-        await fill('input[placeholder="e.g. Mikael"]',first);
-        await fill('input[placeholder="e.g. Sven"]',second);
-        await fill('section:nth-of-type(2) textarea','Busy social');
-        setSocialField('Gossip','heard a rumor about a shipment');
-        await arm(2,'Social');
-        await fill('input[placeholder="e.g. Sven"]','Saadia');
-        check(['Dispatch Social','Queued'].includes(submit(2).textContent.trim()),'busy_confirm_cancel_dispatch: Social NPC change retained confirmation');
-        await fill('input[placeholder="e.g. Sven"]',second);
-        await arm(2,'Social');
-        await confirm(2,[...slots.map(slot=>['cancelTask',{slot}]),['dispatchNpcSocial',{npc1Name:first,npc2Name:second,socialType:'npc_gossip',narration:'Busy social',gossip:'heard a rumor about a shipment'}]]);
-      }
       await choose('Action NPC','Nazeem'); await choose('Action','ChangeSpeed');
       await choose('New speed','Jog');
       // ChangeSpeed/CancelCurrentTask act on the busy task: one click, no pre-cancel.
