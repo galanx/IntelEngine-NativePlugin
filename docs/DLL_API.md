@@ -643,41 +643,21 @@ Dynamic save-layer bios remain offline-only. File edits or newly generated bios 
 not promised visible until cache invalidation.
 Cache invalidation across save loads remains to be qualified.
 
-### Political Engine bridge — reader and temporary capture
+### Political Engine bridge — change intake
 
-Optional, read-only `PoliticalLetters.dll` integration resolves `PE_GetApiVersion`
-and `PE_GetSnapshotJSON` on `kDataLoaded`, requiring API v3. Missing/wrong-version exports
-disable it for the session with one info line. No Papyrus API, settings, political
-events, reactions or prompt changes are added by this step.
+Optional read-only `PoliticalLetters.dll` detection requires API v3 and the snapshot export.
+Missing or incompatible PE disables the bridge for the session. The bounded reader retains
+four attempts, the 64 MiB limit, NUL validation and nonthrowing JSON parsing.
 
-`PoliticalEngineReadJSON.h` follows PE API-GUIDE section 3: four total attempts,
-caller-owned size-query/growth buffers, a 64 MiB cap, required trailing NUL and
-nonthrowing JSON parsing. `IsActive()` reflects typed `data_ready` and
-`status.bEnabled` from the last read; unavailable/malformed reads make it false.
+`PL_StateChanged` only marks dirty state. The political-context worker polls comparable public
+district owners, war phases and present rulers. Initial attachment, loads and inactive reads
+establish a fresh baseline without news. At most four comparable records are returned per revision;
+district changes in one read are combined. Private puppet state, draft proposals and military
+detail are excluded. The temporary snapshot files/event-log writer has been removed.
 
-Temporary capture queues work through `AsyncDispatch` on attachment,
-`PL_StateChanged`, `kPostLoadGame` and `kNewGame`. It writes the full pretty-printed
-snapshot as `Data/SKSE/Plugins/IntelEngine/pe_snapshots/pe_snapshot_<revision>.json`.
-When an unsigned top-level revision is unavailable, the filename uses a UTC
-timestamp (`YYYYMMDDTHHMMSS.fractionZ`) instead, including for non-object JSON.
-Each written snapshot path is logged once at info. `pe_events.log` appends the
-revision or timestamp plus event `strArg` sections. Lifecycle reads use synthetic
-`attached`, `post_load_game` and `new_game` labels.
-Only the 50 most recently written snapshot files remain; the event log is append-only.
-Under MO2, new captures are expected in
-`<instance>/overwrite/SKSE/Plugins/IntelEngine/pe_snapshots/` unless a configured
-executable output mod or an existing virtual-file provider redirects writes.
-This path is specified, not observed in a running game.
-
-Build/run the production-reader check with the configured CMake tree:
-`cmake --build <build> --target PoliticalEngineReadJSONCheck`, then
-`<build>/PoliticalEngineReadJSONCheck.exe`. Its five named cases cover growth
-(including the four-attempt ceiling), short-buffer queries, missing NUL, zero and over-cap replies.
-Run `python SKSE/tests/RunPoliticalEngineCaptureCheck.py <vcpkg-triplet-dir>`
-in a VS2022 developer shell for the production capture's filesystem roundtrip,
-typed readiness, UTC fallback, repeated-path logging and retention even if the event log cannot open.
-Neither check proves SKSE delivery, PE detection or MO2 redirection in-game.
-The capture is temporary until a real active snapshot defines D2's diff fields.
+Run `PoliticalEngineReadJSONCheck` and
+`python SKSE/tests/RunPoliticalEngineBridgeCheck.py <vcpkg-triplet-dir> <private-sample-directory>`
+from a VS2022 developer shell. These are offline checks, not provider/runtime verification.
 
 ### Source-level checks
 

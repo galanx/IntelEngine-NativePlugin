@@ -1,0 +1,135 @@
+"""Offline production bridge check; samples remain outside this repository.
+Usage (VS2022 shell): python SKSE/tests/RunPoliticalEngineBridgeCheck.py <triplet> <sample-dir>
+Only DLL lookup, SKSE event types and async scheduling are modeled.
+"""
+import hashlib
+import json
+import pathlib
+import subprocess
+import sys
+import tempfile
+
+src = pathlib.Path(__file__).resolve().parents[1] / "src"
+deps, samples = map(pathlib.Path, sys.argv[1:3])
+for name, expected in json.loads((samples / "MANIFEST.json").read_text()).items():
+    assert hashlib.sha256((samples / name).read_bytes()).hexdigest() == expected, name
+print("PASS all private sample MANIFEST hashes", flush=True)
+with tempfile.TemporaryDirectory(prefix="pe-bridge-") as directory:
+    work = pathlib.Path(directory)
+    header = (src / "PoliticalEngineBridge.h").read_text().replace('#include "Plugin.h"', '#include "FakePlugin.h"')
+    (work / "PoliticalEngineBridge.h").write_text(header)
+    (work / "FakePlugin.h").write_text(r'''
+#pragma once
+#include <string>
+namespace RE {
+enum class BSEventNotifyControl { kContinue };
+template<class T> struct BSTEventSource {};
+template<class T> struct BSTEventSink { virtual BSEventNotifyControl ProcessEvent(const T*, BSTEventSource<T>*) = 0; };
+}
+namespace SKSE {
+struct ModCallbackEvent { std::string eventName, strArg; };
+struct Source { template<class T> void AddEventSink(T*) {} };
+inline Source* GetModCallbackEventSource() { return nullptr; }
+}
+namespace logger { template<class... T> void info(T&&...) {} }
+namespace IntelEngine::AsyncDispatch { template<class F> void Submit(F f) { f(); } }
+''')
+    source = (src / "PoliticalEngineBridge.cpp").read_text()
+    source = source[source.index("namespace IntelEngine {"):]
+    code = r'''
+#include "PoliticalEngineBridge.h"
+#include "PoliticalEngineReadJSON.h"
+#include "PoliticalEngineChanges.h"
+#include <algorithm>
+#include <cstring>
+#include <fstream>
+#include <iostream>
+#include <stdexcept>
+#include <string_view>
+using nlohmann::json;
+static json state;
+static unsigned api = 3;
+static bool installed = true;
+static IntelEngine::PoliticalEngineBridge* resetDuringRead = nullptr;
+static unsigned Version() { return api; }
+static unsigned Read(char* out, unsigned capacity) {
+    if (resetDuringRead) { resetDuringRead->MarkDirty(true); resetDuringRead = nullptr; }
+    auto text = state.dump(); auto size = static_cast<unsigned>(text.size()+1);
+    if (out && capacity >= size) std::memcpy(out, text.c_str(), size);
+    return size;
+}
+static void* GetModuleHandleW(const wchar_t*) { return installed ? reinterpret_cast<void*>(1) : nullptr; }
+static void* GetProcAddress(void*, const char* name) {
+    if (std::string_view(name) == "PE_GetApiVersion") return reinterpret_cast<void*>(&Version);
+    if (std::string_view(name) == "PE_GetSnapshotJSON") return reinterpret_cast<void*>(&Read);
+    return nullptr;
+}
+''' + source + r'''
+static void Require(bool b, const char* message) { if (!b) throw std::runtime_error(message); }
+static json Load(const char* path) { std::ifstream file(path); json value; file >> value; return value; }
+int main(int argc, char** argv) { try {
+    const auto before = Load(argv[1]), after = Load(argv[2]);
+    auto* bridge = IntelEngine::PoliticalEngineBridge::GetSingleton();
+    for (unsigned version : {0u, 2u, 4u}) {
+        api = version; state = before;
+        // Separate processes exercise the one-shot detection gate.
+        if (argc > 3 && std::string(argv[3]) == std::to_string(version)) {
+            bridge->Initialize(); bridge->MarkDirty();
+            Require(bridge->Poll() == json::array() && !bridge->IsActive(), "old/wrong API emitted changes");
+            std::cout << "PASS incompatible API " << version << '\n'; return 0;
+        }
+    }
+    if (argc > 3) {
+        installed = false; bridge->Initialize(); bridge->MarkDirty();
+        Require(bridge->Poll() == json::array() && !bridge->IsActive(), "absent PE emitted changes");
+        std::cout << "PASS absent PE\n"; return 0;
+    }
+    api = 3; state = before; bridge->Initialize();
+    Require(bridge->Poll() == json::array() && bridge->IsActive(), "attachment replayed news");
+    state = after; bridge->MarkDirty(); auto changes = bridge->Poll();
+    Require(changes.size() == 1 && changes[0]["type"] == "pe_territory" &&
+        changes[0]["changes"] == json::array({{{"district","11"},{"name","Southern Reach"},{"from",3},{"to",9}}}), "real owner transition");
+    bridge->MarkDirty(); Require(bridge->Poll() == json::array(), "duplicate re-read");
+    state = before; SKSE::ModCallbackEvent loaded{"PL_StateChanged", "[\"loaded\"]"};
+    bridge->ProcessEvent(&loaded, nullptr); Require(bridge->Poll() == json::array(), "load replayed news");
+    // LABELLED SYNTHETIC six-district turn, using the genuine before capture.
+    state = before; state["revision"] = 100;
+    for (int i=0;i<6;++i) state["campaign070"]["regions"][i]["owner_realm_id"] = 9;
+    bridge->MarkDirty(); changes = bridge->Poll();
+    Require(changes.size()==1 && changes[0]["changes"].size()==6, "six districts must combine");
+    state = before; state["status"]["bEnabled"] = false; bridge->MarkDirty();
+    Require(bridge->Poll()==json::array() && !bridge->IsActive(), "disabled PE");
+    state = after; bridge->MarkDirty(); Require(bridge->Poll()==json::array(), "reenable replay");
+    state["data_ready"] = false; bridge->MarkDirty();
+    Require(bridge->Poll()==json::array() && !bridge->IsActive(), "not-ready PE");
+    state = before; bridge->MarkDirty(); Require(bridge->Poll()==json::array(), "ready baseline");
+    state = after; resetDuringRead = bridge; bridge->MarkDirty();
+    Require(bridge->Poll()==json::array() && !bridge->IsActive(), "load during export read");
+    Require(bridge->Poll()==json::array(), "post-race baseline");
+    using IntelEngine::PEComparable; using IntelEngine::PEDiff;
+    auto base = PEComparable(before);
+    auto synthetic = before; synthetic["campaign080"]["wars"]["wars"][0]["phase"] = 0;
+    Require(PEDiff(base, PEComparable(synthetic))==json::array(), "ultimatum is not war news");
+    synthetic = before; auto& war = synthetic["campaign080"]["wars"]["wars"][0];
+    war["phase"]=3; war["settlement_applied"]=true; war["applied_turn"]=39;
+    war["settlement"]={{"outcome","white_peace"}};
+    changes=PEDiff(base,PEComparable(synthetic));
+    Require(changes.size()==1 && changes[0]["type"]=="pe_campaign", "applied peace cessation");
+    war["settlement"]["outcome"]="puppet";
+    Require(PEDiff(base,PEComparable(synthetic))==json::array(), "private puppet settlement");
+    synthetic=after; synthetic["campaign080"]["governments"][9]["kind"]=2;
+    Require(PEDiff(base,PEComparable(synthetic))==json::array(), "private puppet ownership");
+    for (const auto& malformed : {json(),json::array(),json("bad"),json(5)}) {
+        synthetic=before; synthetic["campaign070"]=malformed; synthetic["rulers"]=malformed;
+        synthetic["campaign080"]=malformed;
+        Require(PEDiff(base,PEComparable(synthetic))==json::array(), "malformed section emitted news");
+    }
+    std::cout << "PASS production bridge: real owner, load baseline, duplicate, synthetic six-district batch, inactivity, load fence, peace/privacy, malformed sections\n";
+} catch (const std::exception& e) { std::cerr << e.what() << '\n'; return 1; } }
+'''
+    (work / "check.cpp").write_text(code)
+    subprocess.run(["cl", "/nologo", "/EHsc", "/std:c++latest", "/I"+str(work),
+                    "/I"+str(src), "/I"+str(deps/"include"), "check.cpp", "/Fe:check.exe"], cwd=work, check=True)
+    args = [str(work/"check.exe"), str((samples/"before-snapshot.json").resolve()), str((samples/"after-snapshot.json").resolve())]
+    for suffix in ([], ["0"], ["2"], ["4"], ["absent"]):
+        subprocess.run(args + suffix, cwd=work, check=True)

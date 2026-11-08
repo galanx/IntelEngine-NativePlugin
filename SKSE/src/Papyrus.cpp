@@ -40,6 +40,7 @@
 #include "DialogueTracker.h"
 #include "QuestStateTracker.h"
 #include "AsyncDispatch.h"
+#include "PoliticalEngineBridge.h"
 #include <Windows.h>
 #include <nlohmann/json.hpp>
 
@@ -4014,7 +4015,10 @@ namespace IntelEngine::Papyrus {
         AsyncDispatch::Submit([snap = std::move(snap),
                                questEditorId = std::move(questEditorId),
                                scriptName = std::move(scriptName),
-                               functionName = std::move(functionName)]() mutable {
+                               functionName = std::move(functionName),
+                               generation = SlotTracker::GetSingleton()->loadGeneration.load()]() mutable {
+            if (generation != SlotTracker::GetSingleton()->loadGeneration.load()) return;
+            PoliticalEngineBridge::GetSingleton()->Poll();
             std::string requestJson = FactionPolitics::GetSingleton()->BuildPoliticalContextFromSnapshot(snap);
             auto* task = SKSE::GetTaskInterface();
             if (!task) {

@@ -529,7 +529,7 @@ Automatic rejection diagnostics remain unverified live.
 
 > **Courier/Messenger substitution (offline only):** faction-first then sender-messenger is retained; sender identity uses strict candidate resolution. Substitutions log original rejection/dead/disabled reason, route and actor; failed attempts log as failures. Native rejection warnings retain subtype detail; no new status API or live qualification.
 
-> **Unreleased — Political Engine reader (offline only):** optional API v3 detection and temporary full-snapshot capture; no political event/reaction or prompt changes yet. With PE present, attachment, save/new-game notifications and `PL_StateChanged` queue captures to `Data/SKSE/Plugins/IntelEngine/pe_snapshots/` (MO2: `overwrite/SKSE/Plugins/IntelEngine/pe_snapshots/`). Keeps 50 snapshots plus an append-only event log. Not installed or game-verified.
+> **Unreleased — Political Engine bridge (offline only):** optional API v3 detection and public comparable-state intake. Initial attachment, loads and inactive reads establish baselines without news. Temporary snapshot capture has been removed; game behavior remains unverified.
 
 > **Unreleased — localized place-name prompts (source/offline only):** action and DM/scheduling prompts require exact in-game/context place names in the game's language, never translations; semantic keywords stay English. GoToLocation lists nearby names through SkyrimNet's `get_place_names("nearby")` decorator. This is prompt guidance only, not Unicode/alias resolver support or custom named-Place routing; localized-install acceptance remains pending.
 
