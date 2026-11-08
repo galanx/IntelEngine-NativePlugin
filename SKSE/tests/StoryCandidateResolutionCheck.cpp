@@ -42,6 +42,23 @@ int main() {
     }
     Require(ResolveStoryCandidateFormID("Maering", {{"maering", 42}}, {{"maering", 0}}) == 0,
             "zero ID mixed with a valid reference must reject");
+    StoryCandidatePool twins{{"guard", 1}, {"guard", 2}, {"guard", 2}, {"guard", 3}};
+    const auto nearest = [&](const StoryCandidatePool& pool, double anchor, std::uint32_t self = 0) {
+        return ResolveStoryCandidateFormID("Guard", pool, {}, nullptr, [=](std::uint32_t id) {
+            const double x = id == 1 ? 0 : id == 2 ? 10 : 20;
+            return id == self || id > 3 ? -1.0 : (x - anchor) * (x - anchor);
+        });
+    };
+    Require(nearest(twins, 9) == 2, "NPC 1 nearest player despite repeated ID");
+    Require(nearest(twins, 10, 2) == 1, "NPC 2 nearest partner excludes self and ties by lowest ID");
+    Require(nearest(twins, 20, 3) == 2, "partner, not player, determines NPC 2");
+    StoryCandidatePool reversed;
+    for (const auto id : {3u, 2u, 1u}) reversed.emplace("guard", id);
+    Require(nearest(reversed, 10, 2) == nearest(twins, 10, 2), "candidate order must not affect ranking");
+    Require(nearest({{"guard", 2}}, 10, 2) == 0, "self-only pair rejects");
+    Require(nearest({{"guard", 4}, {"guard", 5}}, 10) == 0, "incomparable or invalid candidates reject");
+    Require(nearest({{"guard", 0}, {"guard", 2}}, 10) == 0, "proximity must preserve zero-ID rejection");
+    std::cout << "PASS: production proximity ranking, ambiguous names, partner anchor, ties, duplicates and exclusions\n";
     for (const auto branch : {"empty-pools", "no-match", "ambiguous", "zero-formid"}) {
         StoryCandidateRejection diagnostic;
         const std::string_view expected = branch;
