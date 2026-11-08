@@ -19,7 +19,8 @@ namespace IntelEngine {
     // Lifecycle
     // =========================================================================
 
-    bool PoliticalDB::Initialize(const std::string& dbPath) {
+    bool PoliticalDB::Initialize(const std::string& dbPath, const std::string& saveId) {
+        BeginLoad();
         std::lock_guard<std::mutex> lock(mutex_);
 
         if (db_) return true;  // Already open
@@ -40,7 +41,11 @@ namespace IntelEngine {
         Execute("PRAGMA journal_mode=WAL");
         Execute("PRAGMA foreign_keys=ON");
 
-        if (!CreateTables()) {
+        saveId_ = saveId;
+        dbUuid_.clear();
+        if (!CreateTables() || sqlite3_exec(db_, "SELECT db_uuid FROM ie_feed_metadata WHERE id=1",
+            [](void* out, int, char** values, char**) { *static_cast<std::string*>(out) = values[0]; return 0; },
+            &dbUuid_, nullptr) != SQLITE_OK || dbUuid_.empty()) {
             logger::error("PoliticalDB: Failed to create tables");
             sqlite3_close(db_);
             db_ = nullptr;
@@ -53,6 +58,7 @@ namespace IntelEngine {
 
     void PoliticalDB::Shutdown() {
         std::lock_guard<std::mutex> lock(mutex_);
+        feedReady_ = false;
         if (db_) {
             sqlite3_close(db_);
             db_ = nullptr;
@@ -141,7 +147,14 @@ namespace IntelEngine {
             CREATE INDEX IF NOT EXISTS idx_battles_war ON war_battles(war_id);
         )SQL";
 
-        return Execute(schema);
+        if (!Execute(schema) || !Execute("CREATE TABLE IF NOT EXISTS ie_feed_metadata "
+            "(id INTEGER PRIMARY KEY CHECK(id=1), db_uuid TEXT NOT NULL); "
+            "INSERT OR IGNORE INTO ie_feed_metadata VALUES(1, lower(hex(randomblob(16))));")) return false;
+        for (const auto* column : {"location_name", "position"}) {
+            if (sqlite3_table_column_metadata(db_, nullptr, "faction_events", column, nullptr, nullptr, nullptr, nullptr, nullptr) != SQLITE_OK &&
+                !Execute(std::string("ALTER TABLE faction_events ADD COLUMN ") + column + " TEXT")) return false;
+        }
+        return true;
     }
 
     // =========================================================================
@@ -156,6 +169,62 @@ namespace IntelEngine {
     static std::string SafeColumnText(sqlite3_stmt* stmt, int col) {
         auto* text = sqlite3_column_text(stmt, col);
         return text ? reinterpret_cast<const char*>(text) : "";
+    }
+
+    void PoliticalDB::BeginLoad() {
+        std::lock_guard<std::mutex> lock(mutex_);
+        feedReady_ = cleanupFailed_ = false;
+        unsigned char bytes[16];
+        sqlite3_randomness(sizeof(bytes), bytes);
+        loadId_.clear();
+        for (auto byte : bytes) {
+            loadId_ += "0123456789abcdef"[byte >> 4];
+            loadId_ += "0123456789abcdef"[byte & 15];
+        }
+    }
+
+    nlohmann::json PoliticalDB::FeedIdentityLocked() const {
+        return {{"schema_version", 1}, {"save_id", saveId_}, {"db_uuid", dbUuid_},
+                {"load_id", loadId_}, {"ready", db_ && feedReady_}};
+    }
+
+    nlohmann::json PoliticalDB::FeedIdentity() {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return FeedIdentityLocked();
+    }
+
+    nlohmann::json PoliticalDB::GetPoliticalEventsAfter(int afterId, int limit) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto out = FeedIdentityLocked();
+        afterId = std::max(0, afterId);
+        limit = limit <= 0 ? 50 : std::min(limit, 200);
+        out["events"] = nlohmann::json::array();
+        out["next_cursor"] = afterId;
+        out["has_more"] = false;
+        if (!out["ready"].get<bool>()) return out;
+        sqlite3_stmt* stmt = nullptr;
+        const char* sql = "SELECT id,faction_a,faction_b,event_type,description,relation_delta,game_time,"
+                          "location_name,position FROM faction_events WHERE id>? ORDER BY id LIMIT ?";
+        if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK) { out["ready"] = false; return out; }
+        sqlite3_bind_int(stmt, 1, afterId);
+        sqlite3_bind_int(stmt, 2, limit + 1);
+        int rc;
+        while ((rc = sqlite3_step(stmt)) == SQLITE_ROW) {
+            if (static_cast<int>(out["events"].size()) == limit) { out["has_more"] = true; break; }
+            auto position = nlohmann::json::parse(SafeColumnText(stmt, 8), nullptr, false);
+            const int id = sqlite3_column_int(stmt, 0);
+            out["events"].push_back({{"id", id}, {"faction_a", SafeColumnText(stmt, 1)},
+                {"faction_b", SafeColumnText(stmt, 2)}, {"type", SafeColumnText(stmt, 3)},
+                {"description", SafeColumnText(stmt, 4)}, {"delta", sqlite3_column_int(stmt, 5)},
+                {"game_time", sqlite3_column_type(stmt, 6) == SQLITE_NULL ? nlohmann::json(nullptr) : nlohmann::json(sqlite3_column_double(stmt, 6))},
+                {"location_name", SafeColumnText(stmt, 7)}, {"position", position.is_object() ? position : nlohmann::json(nullptr)}});
+            out["next_cursor"] = id;
+        }
+        sqlite3_finalize(stmt);
+        if (rc != SQLITE_DONE && rc != SQLITE_ROW) {
+            out["ready"] = false; out["events"] = nlohmann::json::array(); out["next_cursor"] = afterId; out["has_more"] = false;
+        }
+        return out;
     }
 
     static FactionEvent ReadEventRow(sqlite3_stmt* stmt) {
@@ -312,7 +381,8 @@ namespace IntelEngine {
     int PoliticalDB::RecordEvent(const std::string& factionA, const std::string& factionB,
                                   const std::string& eventType, const std::string& description,
                                   int relationDelta, float gameTime,
-                                  const std::string& instigatorNpc) {
+                                  const std::string& instigatorNpc,
+                                  const std::string& locationName, const nlohmann::json& position) {
         std::lock_guard<std::mutex> lock(mutex_);
         if (!db_ || IsSameFactionPair(factionA, factionB)) return -1;
 
@@ -320,8 +390,8 @@ namespace IntelEngine {
         std::string safeDescription = TruncateUtf8Bytes(description, MAX_EVENT_DESCRIPTION_LENGTH, "...");
 
         const char* sql = R"SQL(
-            INSERT INTO faction_events (faction_a, faction_b, event_type, description, relation_delta, game_time, instigator_npc)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO faction_events (faction_a, faction_b, event_type, description, relation_delta, game_time, instigator_npc, location_name, position)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         )SQL";
 
         sqlite3_stmt* stmt = nullptr;
@@ -338,6 +408,10 @@ namespace IntelEngine {
         sqlite3_bind_int(stmt, 5, relationDelta);
         sqlite3_bind_double(stmt, 6, gameTime);
         sqlite3_bind_text(stmt, 7, instigatorNpc.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(stmt, 8, locationName.c_str(), -1, SQLITE_TRANSIENT);
+        const auto positionText = position.dump();
+        if (position.is_null()) sqlite3_bind_null(stmt, 9);
+        else sqlite3_bind_text(stmt, 9, positionText.c_str(), -1, SQLITE_TRANSIENT);
 
         int eventId = -1;
         if (sqlite3_step(stmt) == SQLITE_DONE) {
@@ -650,9 +724,13 @@ namespace IntelEngine {
 
     int PoliticalDB::CleanupFutureEvents(float currentGameTime) {
         std::lock_guard<std::mutex> lock(mutex_);
-        if (!db_) return 0;
-
-        sqlite3_exec(db_, "BEGIN", nullptr, nullptr, nullptr);
+        feedReady_ = false;
+        if (!db_ || !Execute("BEGIN")) {
+            cleanupFailed_ = true;
+            logger::warn("PoliticalDB: Timeline cleanup could not start; pipe 2 remains not ready");
+            return -1;
+        }
+        bool ok = true;
 
         int totalDeleted = 0;
         double gameTime = static_cast<double>(currentGameTime);
@@ -666,8 +744,10 @@ namespace IntelEngine {
                 if (sqlite3_step(stmt) == SQLITE_DONE) {
                     totalDeleted += sqlite3_changes(db_);
                 }
+                else ok = false;
                 sqlite3_finalize(stmt);
             }
+            else ok = false;
         }
 
         // Delete battles from future wars (before deleting the wars themselves)
@@ -679,8 +759,10 @@ namespace IntelEngine {
                 if (sqlite3_step(stmt) == SQLITE_DONE) {
                     totalDeleted += sqlite3_changes(db_);
                 }
+                else ok = false;
                 sqlite3_finalize(stmt);
             }
+            else ok = false;
         }
 
         // Delete wars that started in the future
@@ -692,8 +774,10 @@ namespace IntelEngine {
                 if (sqlite3_step(stmt) == SQLITE_DONE) {
                     totalDeleted += sqlite3_changes(db_);
                 }
+                else ok = false;
                 sqlite3_finalize(stmt);
             }
+            else ok = false;
         }
 
         // Reopen wars that ended in the future (they were still active at the save point)
@@ -709,8 +793,10 @@ namespace IntelEngine {
                         logger::info("PoliticalDB: Reopened {} wars that ended in the future", reopened);
                     }
                 }
+                else ok = false;
                 sqlite3_finalize(stmt);
             }
+            else ok = false;
         }
 
         // Delete future battles within surviving wars
@@ -726,8 +812,10 @@ namespace IntelEngine {
                         logger::info("PoliticalDB: Cleaned {} future battles from surviving wars", cleaned);
                     }
                 }
+                else ok = false;
                 sqlite3_finalize(stmt);
             }
+            else ok = false;
         }
 
         // Delete future player standing history entries
@@ -743,8 +831,10 @@ namespace IntelEngine {
                         logger::info("PoliticalDB: Cleaned {} future player standing entries", cleaned);
                     }
                 }
+                else ok = false;
                 sqlite3_finalize(stmt);
             }
+            else ok = false;
         }
 
         // Reset last_event_time entries that are in the future
@@ -753,9 +843,10 @@ namespace IntelEngine {
             sqlite3_stmt* stmt = nullptr;
             if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) == SQLITE_OK) {
                 sqlite3_bind_double(stmt, 1, gameTime);
-                sqlite3_step(stmt);
+                ok = (sqlite3_step(stmt) == SQLITE_DONE) && ok;
                 sqlite3_finalize(stmt);
             }
+            else ok = false;
         }
 
         // Reset player standings modified in the future
@@ -764,16 +855,21 @@ namespace IntelEngine {
             sqlite3_stmt* stmt = nullptr;
             if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) == SQLITE_OK) {
                 sqlite3_bind_double(stmt, 1, gameTime);
-                sqlite3_step(stmt);
+                ok = (sqlite3_step(stmt) == SQLITE_DONE) && ok;
                 sqlite3_finalize(stmt);
             }
+            else ok = false;
         }
 
         if (totalDeleted > 0) {
             logger::info("PoliticalDB: Timeline cleanup deleted {} future rows (game_time > {:.2f})", totalDeleted, currentGameTime);
         }
-        sqlite3_exec(db_, "COMMIT", nullptr, nullptr, nullptr);
-        return totalDeleted;
+        ok = ok && Execute("COMMIT");
+        if (!ok) Execute("ROLLBACK");
+        cleanupFailed_ = cleanupFailed_ || !ok;
+        feedReady_ = !cleanupFailed_;
+        if (cleanupFailed_) logger::warn("PoliticalDB: Timeline cleanup failed; pipe 2 remains not ready for this load");
+        return ok ? totalDeleted : -1;
     }
 
     bool PoliticalDB::SeedDefaultRelation(const std::string& factionA, const std::string& factionB, int score) {
