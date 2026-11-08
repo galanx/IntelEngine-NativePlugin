@@ -802,6 +802,30 @@ def run_callback_checks(files, history):
         require(vm.task_snapshot() == before and len(vm.effects) == effects if mode == "active" else vm.properties["ActiveStoryNPC"] is (vm.replacement if mode == "validation-race" else vm.target) and vm.properties["DispatchGeneration"] == 1, "automatic callback ownership: " + mode)
         require(mode == "idle" or not any(e[0] in ("RecordStoryDispatch", "NotifyStoryCooldown") for e in vm.effects[effects:]), "rejected callback changed history/cooldown")
     print("actual PEX automatic callback: active preserved; idle admitted; validation replacement preserved PASS")
+def run_courier_checks(files, history):
+    for reason in ("rejected", "dead", "disabled"):
+        for route in ("faction", "sender", "unknown", "ambiguous", "no-messenger"):
+            class CourierVM(DirectorVM):
+                def external(self, method, args, script):
+                    if method == "ResolveStoryCandidate": return (None if reason == "rejected" else self.agent) if args[0] == "Courier" else (self.player if route in ("sender", "no-messenger") else None)
+                    if method == "FindNPCByName": raise AssertionError("courier sender used global lookup")
+                    if method in ("IsDead", "IsDisabled"): return args[0] is self.agent and method == {"dead": "IsDead", "disabled": "IsDisabled"}.get(reason)
+                    if method == "StringToLower": return args[0].lower()
+                    if method in ("FindFactionMember", "FindMessengerForSender"):
+                        self.routes.append(method)
+                        return self.target if (method == "FindFactionMember" and route == "faction") or (method == "FindMessengerForSender" and route == "sender") else None
+                    if method == "MarkLastDispatchFailed": return None
+                    return super().external(method, args, script)
+            vm = CourierVM(files, history)
+            vm.routes = []
+            vm.invoke("IntelEngine_StoryEngine", "OnDungeonMasterResponse", (json.dumps({"should_act": True, "type": "seek_player", "npc": "Courier", "narration": "Courier story", "alliedFaction": "Guards", "sender": route}), 1))
+            logs = str(vm.effects)
+            success = route in ("faction", "sender")
+            require(vm.properties["ActiveStoryNPC"] is (vm.target if success else None), f"courier selection {reason}/{route}")
+            require(vm.routes == ["FindFactionMember"] + (["FindMessengerForSender"] if route in ("sender", "no-messenger") else []), "faction-first cascade changed")
+            require(("substitution reason=" in logs) == success and "reason=" + reason in logs, "missing/misleading substitution reason")
+            require(("route=faction" if route == "faction" else "route=sender-messenger") in logs and ("actor=Recipient" in logs if success else "fallback failed" in logs), "missing route/actor or failure log")
+    print("actual PEX courier: faction-first, strict sender, rejected/dead/disabled reasons and failed attempts PASS")
 def run_resume_checks(files, history):
     class ResumeVM(DirectorVM):
         def invoke(self, script, name, args=()):
@@ -1129,6 +1153,7 @@ def main():
     run_resume_checks(files, history)
     run_callback_checks(files, history)
     run_replacement_checks(files, history)
+    run_courier_checks(files, history)
 
 
 if __name__ == "__main__":

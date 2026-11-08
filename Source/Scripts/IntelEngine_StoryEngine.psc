@@ -1550,24 +1550,36 @@ Function OnDungeonMasterResponse(String response, Int success)
             ;     near the sender, same cascade real messages use)
             String lowerNpcName = IntelEngine.StringToLower(npcName)
             If lowerNpcName == "courier" || lowerNpcName == "messenger"
+                String substReason = "rejected (see native ResolveStoryCandidate diagnostics)"
+                If npc != None
+                    substReason = "disabled"
+                    If npc.IsDead()
+                        substReason = "dead"
+                    EndIf
+                EndIf
                 ; Clear the disabled/dead Courier so the fallback paths overwrite it.
                 npc = None
                 String substFaction = ExtractJsonField(response, "alliedFaction")
                 If substFaction != ""
                     npc = IntelEngine.FindFactionMember(substFaction)
                     If npc != None
-                        Core.DebugMsg("Story DM: substituting disabled '" + npcName + "' with " + substFaction + " member " + npc.GetDisplayName())
+                        Core.DebugMsg("Story DM: substitution reason=" + substReason + " route=faction " + substFaction + " actor=" + npc.GetDisplayName())
+                    Else
+                        Core.DebugMsg("Story DM: fallback failed reason=" + substReason + " route=faction " + substFaction)
                     EndIf
                 EndIf
                 If npc == None
                     String substSender = ExtractJsonField(response, "sender")
                     If substSender != ""
-                        Actor senderActor = IntelEngine.FindNPCByName(substSender)
+                        Actor senderActor = IntelEngine.ResolveStoryCandidate(substSender)
                         If senderActor != None && !senderActor.IsDead() && !senderActor.IsDisabled()
                             npc = IntelEngine.FindMessengerForSender(senderActor)
                             If npc != None
-                                Core.DebugMsg("Story DM: substituting disabled '" + npcName + "' with " + npc.GetDisplayName() + " (messenger near " + substSender + ")")
+                                Core.DebugMsg("Story DM: substitution reason=" + substReason + " route=sender-messenger " + substSender + " actor=" + npc.GetDisplayName())
                             EndIf
+                        EndIf
+                        If npc == None
+                            Core.DebugMsg("Story DM: fallback failed reason=" + substReason + " route=sender-messenger " + substSender + " (sender rejected/dead/disabled or no messenger)")
                         EndIf
                     EndIf
                 EndIf
