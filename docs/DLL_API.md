@@ -657,6 +657,9 @@ detail are excluded. The temporary snapshot files/event-log writer has been remo
 The worker records factual `pe_territory`, `pe_campaign` and `pe_ruler` rumors with zero
 relation delta. Empty faction IDs are allowed only for `pe_*`; invalid nonempty IDs and
 same-faction pairs still reject. Public PE news is visible to unaffiliated NPCs through 0810.
+Optional `PE_GetIntelInitiatives080JSON` supplies public visits, gifts and disputes.
+IE baselines the bounded journal on attach/load and deduplicates string IDs; PE must
+not also call `RecordPoliticalEvent` for these initiatives. Missing export disables only this intake.
 
 Run `PoliticalEngineReadJSONCheck` and
 `python SKSE/tests/RunPoliticalEngineBridgeCheck.py <vcpkg-triplet-dir> <private-sample-directory>`

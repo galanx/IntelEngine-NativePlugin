@@ -1,5 +1,6 @@
 #pragma once
 #include <nlohmann/json.hpp>
+#include <unordered_set>
 namespace IntelEngine {
 inline const nlohmann::json& PEField(const nlohmann::json& value, const char* key) {
     static const nlohmann::json missing;
@@ -86,6 +87,8 @@ inline nlohmann::json PEDiff(const nlohmann::json& before, const nlohmann::json&
     return changes;
 }
 inline std::string PEEventText(const nlohmann::json& change) {
+    if (PEField(change, "type") == "pe_visit" || PEField(change, "type") == "pe_gift" || PEField(change, "type") == "pe_dispute")
+        return PEField(change, "text").is_string() ? PEField(change, "text").get<std::string>() : "";
     const auto realm = [&](const nlohmann::json& id) {
         const auto& name = PEField(PEField(change, "realms"), id.is_string() ? id.get<std::string>().c_str() : id.dump().c_str());
         return name.is_string() ? name.get<std::string>() : std::string{};
@@ -109,5 +112,25 @@ inline std::string PEEventText(const nlohmann::json& change) {
             text += (text.empty() ? "" : " ") + to + " took " + name.get<std::string>() + " from " + from + ".";
     }
     return text;
+}
+inline nlohmann::json PEInitiatives(const nlohmann::json& entries, std::unordered_set<std::string>& known, bool baseline) {
+    auto changes = nlohmann::json::array();
+    std::unordered_set<std::string> current;
+    if (entries.is_array()) for (auto it = entries.begin() + (entries.size() > 256 ? entries.size() - 256 : 0); it != entries.end(); ++it) {
+        const auto& id = PEField(*it, "id");
+        if (!id.is_string() || id.get_ref<const std::string&>().empty() || !current.insert(id.get<std::string>()).second) continue;
+        const auto& type = PEField(*it, "event_type");
+        const auto& source = PEField(*it, "source");
+        const auto& target = PEField(*it, "target");
+        const auto& delta = PEField(*it, "relation_delta");
+        if (!baseline && !known.contains(id.get<std::string>()) &&
+            (type == "pe_visit" || type == "pe_gift" || type == "pe_dispute") &&
+            source.is_number_integer() && source > 0 && source <= UINT32_MAX &&
+            target.is_number_integer() && target > 0 && target <= UINT32_MAX &&
+            delta.is_number_integer() && delta == 0 && PEField(*it, "text").is_string() && !PEField(*it, "text").get_ref<const std::string&>().empty())
+            changes.push_back({{"type", type}, {"text", PEField(*it, "text")}, {"id", id}, {"source", source}, {"target", target}});
+    }
+    known = std::move(current);
+    return changes;
 }
 }

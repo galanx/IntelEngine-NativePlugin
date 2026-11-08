@@ -17,6 +17,7 @@ namespace IntelEngine {
             return;
         }
         reader_ = reader;
+        initiativeReader_ = reinterpret_cast<Reader>(GetProcAddress(dll, "PE_GetIntelInitiatives080JSON"));
         if (auto* source = SKSE::GetModCallbackEventSource()) source->AddEventSink(this);
         logger::info("PoliticalEngineBridge: detected API v3");
         MarkDirty(true);
@@ -43,13 +44,19 @@ namespace IntelEngine {
         auto snapshot = ReadJSON(reader_);
         active_.store(snapshot && PEField(*snapshot, "data_ready") == true &&
             PEField(PEField(*snapshot, "status"), "bEnabled") == true);
-        if (!active_ || epoch != resetEpoch_.load()) { active_.store(false); baseline_ = nullptr; return changes; }
+        auto journal = active_ && initiativeReader_ ? ReadJSON(initiativeReader_) : std::nullopt;
+        if (!active_ || epoch != resetEpoch_.load()) { active_.store(false); baseline_ = nullptr; initiativeReady_ = false; return changes; }
         auto current = PEComparable(*snapshot);
         const auto& revision = current["revision"];
         if (!baseline_.is_object() || baselineEpoch_ != epoch) { revision_ = nullptr; revisionCount_ = 0; }
+        const nlohmann::json missing;
+        const auto& entries = journal ? PEField(PEField(*journal, "intel_initiatives080"), "events") : missing;
+        auto initiatives = PEInitiatives(entries, initiativeIds_, !initiativeReady_ || !baseline_.is_object() || baselineEpoch_ != epoch);
+        initiativeReady_ = entries.is_array();
         if (baseline_.is_object() && baselineEpoch_ == epoch && revision.is_number_unsigned()) {
             if (revision_ != revision) { revision_ = revision; revisionCount_ = 0; }
             changes = PEDiff(baseline_, current);
+            changes.insert(changes.end(), initiatives.begin(), initiatives.end());
             for (auto& change : changes) change["realms"] = current["realms"];
             // ponytail: four public records per revision; raise only if real news is lost.
             if (changes.size() > 4 - revisionCount_) changes.erase(changes.begin() + (4 - revisionCount_), changes.end());
