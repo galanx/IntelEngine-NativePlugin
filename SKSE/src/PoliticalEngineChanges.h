@@ -47,6 +47,11 @@ inline nlohmann::json PEComparable(const nlohmann::json& snapshot) {
             phase.is_number_integer() && phase >= 0 && phase <= 3 && PEField(settlement, "outcome") != "puppet")
             result["wars"][id.dump()] = {{"phase", phase}, {"first", first}, {"second", second}};
     }
+    const auto& factions = PEField(snapshot, "factions");
+    if (factions.is_array()) for (const auto& row : factions) {
+        const auto& id = PEField(row, "realm_id");
+        if (publicRealm(id) && PEField(row, "name").is_string()) result["realms"][id.dump()] = PEField(row, "name");
+    }
     result["revision"] = PEField(snapshot, "revision");
     return result;
 }
@@ -79,5 +84,30 @@ inline nlohmann::json PEDiff(const nlohmann::json& before, const nlohmann::json&
             changes.push_back({{"type", "pe_ruler"}, {"realm", id}, {"actor", actor}});
     }
     return changes;
+}
+inline std::string PEEventText(const nlohmann::json& change) {
+    const auto realm = [&](const nlohmann::json& id) {
+        const auto& name = PEField(PEField(change, "realms"), id.is_string() ? id.get<std::string>().c_str() : id.dump().c_str());
+        return name.is_string() ? name.get<std::string>() : std::string{};
+    };
+    const auto type = PEField(change, "type");
+    if (type == "pe_ruler") {
+        auto name = realm(PEField(change, "realm"));
+        return name.empty() ? "" : name + " appointed a new ruler.";
+    }
+    if (type == "pe_campaign") {
+        const auto& war = PEField(change, "state");
+        auto first = realm(PEField(war, "first")), second = realm(PEField(war, "second"));
+        if (first.empty() || second.empty()) return "";
+        return first + " and " + second + (PEField(war, "phase") == 1 ? " went to war." : " ended their war.");
+    }
+    std::string text;
+    if (type == "pe_territory") for (const auto& capture : PEField(change, "changes")) {
+        auto from = realm(PEField(capture, "from")), to = realm(PEField(capture, "to"));
+        const auto& name = PEField(capture, "name");
+        if (!from.empty() && !to.empty() && name.is_string())
+            text += (text.empty() ? "" : " ") + to + " took " + name.get<std::string>() + " from " + from + ".";
+    }
+    return text;
 }
 }

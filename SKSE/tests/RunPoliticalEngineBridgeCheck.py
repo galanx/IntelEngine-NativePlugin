@@ -89,6 +89,7 @@ int main(int argc, char** argv) { try {
     state = after; bridge->MarkDirty(); auto changes = bridge->Poll();
     Require(changes.size() == 1 && changes[0]["type"] == "pe_territory" &&
         changes[0]["changes"] == json::array({{{"district","11"},{"name","Southern Reach"},{"from",3},{"to",9}}}), "real owner transition");
+    Require(IntelEngine::PEEventText(changes[0]) == "Fellburg took Southern Reach from Markarth.", "factual realm-name rumor");
     bridge->MarkDirty(); Require(bridge->Poll() == json::array(), "duplicate re-read");
     state = before; SKSE::ModCallbackEvent loaded{"PL_StateChanged", "[\"loaded\"]"};
     bridge->ProcessEvent(&loaded, nullptr); Require(bridge->Poll() == json::array(), "load replayed news");
@@ -106,6 +107,14 @@ int main(int argc, char** argv) { try {
     state = after; resetDuringRead = bridge; bridge->MarkDirty();
     Require(bridge->Poll()==json::array() && !bridge->IsActive(), "load during export read");
     Require(bridge->Poll()==json::array(), "post-race baseline");
+    state=after; state["revision"]=200;
+    for (int i=0;i<8;++i) state["rulers"][i]["actor_id"] = state["rulers"][i]["actor_id"].get<unsigned>()+1;
+    bridge->MarkDirty(); Require(bridge->Poll().size()==4, "four-record revision cap");
+    state["campaign070"]["regions"][0]["owner_realm_id"]=9; bridge->MarkDirty();
+    Require(bridge->Poll()==json::array(), "cap applies across reads of one revision");
+    bridge->MarkDirty(true); Require(bridge->Poll()==json::array(), "load baseline at same revision");
+    state["campaign070"]["regions"][1]["owner_realm_id"]=9; bridge->MarkDirty();
+    Require(bridge->Poll().size()==1, "load resets revision accounting");
     using IntelEngine::PEComparable; using IntelEngine::PEDiff;
     auto base = PEComparable(before);
     auto synthetic = before; synthetic["campaign080"]["wars"]["wars"][0]["phase"] = 0;

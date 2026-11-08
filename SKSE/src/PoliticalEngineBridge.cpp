@@ -50,6 +50,7 @@ namespace IntelEngine {
         if (baseline_.is_object() && baselineEpoch_ == epoch && revision.is_number_unsigned()) {
             if (revision_ != revision) { revision_ = revision; revisionCount_ = 0; }
             changes = PEDiff(baseline_, current);
+            for (auto& change : changes) change["realms"] = current["realms"];
             // ponytail: four public records per revision; raise only if real news is lost.
             if (changes.size() > 4 - revisionCount_) changes.erase(changes.begin() + (4 - revisionCount_), changes.end());
             revisionCount_ += changes.size();

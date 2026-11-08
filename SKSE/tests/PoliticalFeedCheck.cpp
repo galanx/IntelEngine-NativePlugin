@@ -182,6 +182,18 @@ int main() try {
     Require(examples["events"][1]["position"].is_null() && examples["events"][1]["type"] == "battle_result", "unknown physical location explicit null");
     std::cout << "EVENTS_EXAMPLE=" << examples.dump() << '\n';
     std::cout << "FACTIONS_EXAMPLE=" << politics->GetFactionsJson() << '\n';
+    Require(politics->ValidateEvent("", "", "pe_territory", 0), "faction-less PE news allowed");
+    Require(!politics->ValidateEvent("", "", "insult", 0) &&
+            !politics->ValidateEvent("missing", "", "pe_ruler", 0) &&
+            !politics->ValidateEvent("", "missing", "pe_ruler", 0) &&
+            !politics->ValidateEvent("A", "A", "pe_campaign", 0) &&
+            !politics->ValidateEvent("", "B", "pe_gift", 5), "PE exception preserves invalid-pair and zero-delta boundaries");
+    const int relationBeforePE = db->GetRelation("A", "B");
+    const int publicNews = politics->RecordPoliticalEvent("", "", "pe_territory", "Fellburg took Southern Reach from Markarth.", 0, 3.f);
+    auto publicRow = db->GetPoliticalEventsAfter(publicNews-1, 1)["events"][0];
+    Require(publicNews > 0 && publicRow["type"] == "pe_territory" && publicRow["faction_a"] == "" &&
+            publicRow["delta"] == 0 && publicRow["description"] == "Fellburg took Southern Reach from Markarth." &&
+            db->GetRelation("A", "B") == relationBeforePE, "public factual PE event persists without relation changes");
     const auto priorLoad = db->FeedIdentity()["load_id"];
     db->Shutdown();
     Require(db->Initialize("./feed.db", "same-save") && db->FeedIdentity()["db_uuid"] == uuid &&

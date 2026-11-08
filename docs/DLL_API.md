@@ -654,6 +654,9 @@ district owners, war phases and present rulers. Initial attachment, loads and in
 establish a fresh baseline without news. At most four comparable records are returned per revision;
 district changes in one read are combined. Private puppet state, draft proposals and military
 detail are excluded. The temporary snapshot files/event-log writer has been removed.
+The worker records factual `pe_territory`, `pe_campaign` and `pe_ruler` rumors with zero
+relation delta. Empty faction IDs are allowed only for `pe_*`; invalid nonempty IDs and
+same-faction pairs still reject. Public PE news is visible to unaffiliated NPCs through 0810.
 
 Run `PoliticalEngineReadJSONCheck` and
 `python SKSE/tests/RunPoliticalEngineBridgeCheck.py <vcpkg-triplet-dir> <private-sample-directory>`
