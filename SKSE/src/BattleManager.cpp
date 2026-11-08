@@ -115,6 +115,21 @@ namespace IntelEngine {
         ba.alive = true;
 
         activeBattle_->actors.push_back(ba);
+        if (activeBattle_->physicalPosition.is_null()) {
+            auto* cell = actor->GetParentCell();
+            auto* world = actor->GetWorldspace();
+            const float x = actor->GetPositionX(), y = actor->GetPositionY(), z = actor->GetPositionZ();
+            if (cell && std::isfinite(x) && std::isfinite(y) && std::isfinite(z)) {
+                RE::TESForm* space = cell->IsInteriorCell() ? static_cast<RE::TESForm*>(cell) : world;
+                auto* file = space ? space->GetFile(0) : nullptr;
+                if (file && !space->IsDynamicForm()) {
+                    const nlohmann::json identity = {{"plugin", file->fileName}, {"local_id", space->GetLocalFormID()}};
+                    activeBattle_->physicalPosition = {
+                        {"worldspace", cell->IsInteriorCell() ? nlohmann::json(nullptr) : identity},
+                        {"cell", cell->IsInteriorCell() ? identity : nlohmann::json(nullptr)}, {"x", x}, {"y", y}, {"z", z}};
+                }
+            }
+        }
         return true;
     }
 
@@ -713,7 +728,7 @@ namespace IntelEngine {
         std::string playerSideWas;
         std::string factionA, factionB;
         int playerKillsA = 0, playerKillsB = 0;
-
+        nlohmann::json physicalPosition = nullptr;
         {
             std::lock_guard<std::mutex> lock(mutex_);
             if (!activeBattle_ || activeBattle_->id != battleId) {
@@ -725,6 +740,7 @@ namespace IntelEngine {
             factionB = activeBattle_->factionB;
             playerKillsA = activeBattle_->playerKillsA;
             playerKillsB = activeBattle_->playerKillsB;
+            physicalPosition = activeBattle_->physicalPosition;
         }
 
         auto* fp = FactionPolitics::GetSingleton();
@@ -807,11 +823,11 @@ namespace IntelEngine {
         // If no war, record a single political event. Never both — prevents duplicate notifications.
         int warId = fp->GetActiveWarId(factionA, factionB);
         if (warId > 0) {
-            fp->RecordOffScreenBattle(factionA, factionB, locationName, result, narrative, deadA, deadB, victor);
+            fp->RecordOffScreenBattle(factionA, factionB, locationName, result, narrative, deadA, deadB, victor, &physicalPosition);
         } else {
             // Single combined event with both factions — adjusts inter-faction relation via delta
             int relationDelta = -10;  // battles worsen relations between the two factions
-            fp->RecordPoliticalEvent(factionA, factionB, "battle_result", narrative, relationDelta, gameTime);
+            fp->RecordPoliticalEvent(factionA, factionB, "battle_result", narrative, relationDelta, gameTime, locationName, physicalPosition);
             logger::info("Battle: No active war — recorded battle_result event (relation {} between {} and {})",
                 relationDelta, factionA, factionB);
         }
@@ -822,7 +838,7 @@ namespace IntelEngine {
             std::string allyName = fp->GetFactionDisplayName(playerSideWas);
             std::string participationDesc = playerDesc + " fought for the " + allyName +
                 " at " + locationName + " (" + (playerWon ? "victory" : "defeat") + ")";
-            fp->RecordPoliticalEvent(playerSideWas, "", "player_battle", participationDesc, allyChange, gameTime);
+            fp->RecordPoliticalEvent(playerSideWas, "", "player_battle", participationDesc, allyChange, gameTime, locationName, physicalPosition);
         }
 
         // Record friendly fire as a SEPARATE event (only if it happened)
@@ -830,7 +846,7 @@ namespace IntelEngine {
             int penalty = friendlyKills * KILL_STANDING_PENALTY_PER_SOLDIER;
             std::string killDesc = playerDesc + " reportedly attacked " + std::to_string(friendlyKills) +
                 " allied " + fp->GetFactionDisplayName(friendlyFaction) + " soldiers during the battle at " + locationName;
-            fp->RecordPoliticalEvent(friendlyFaction, "", "friendly_fire", killDesc, penalty, gameTime);
+            fp->RecordPoliticalEvent(friendlyFaction, "", "friendly_fire", killDesc, penalty, gameTime, locationName, physicalPosition);
         }
 
         // --- Inject witness memories ---
@@ -1516,7 +1532,6 @@ namespace IntelEngine {
 
         // --- Step 7: Snapshot bounties before combat starts ---
         SnapshotBounties();
-
         int paired = static_cast<int>(std::min(soldiersA.size(), soldiersB.size()));
         logger::info("ExecuteFullBattleSpawn: {} vs {}, {} combat pairs, playerJoined={}",
                     soldiersA.size(), soldiersB.size(), paired, playerJoined);

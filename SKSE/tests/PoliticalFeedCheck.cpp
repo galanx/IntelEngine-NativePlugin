@@ -1,0 +1,215 @@
+// RunPoliticalFeedCheck.py compiles actual persistence and getter implementations.
+#include "FactionPolitics.h"
+#include "FactionConfigLoader.h"
+#include "FactionPairValidation.h"
+#include "BattleManager.h"
+#include <algorithm>
+#include <cmath>
+#include <filesystem>
+#include <fstream>
+#include <iostream>
+#include <limits>
+#include <stdexcept>
+namespace IntelEngine {
+class NPCIndex {
+public:
+    RE::Actor leader;
+    static NPCIndex* GetSingleton() { static NPCIndex value; return &value; }
+    RE::FormID FindFactionLeaderFormId(const std::string&) { return 1; }
+    RE::Actor* GetActorFromFormId(RE::FormID) { return &leader; }
+};
+}
+#include "PoliticalFeedMethods.inc"
+#include "PhysicalPosition.inc"
+using nlohmann::json;
+static void Require(bool condition, const char* message) {
+    if (!condition) throw std::runtime_error(message);
+}
+static json CapturePosition(const std::vector<RE::Actor*>& a, const std::vector<RE::Actor*>& b) {
+    auto* battle = IntelEngine::BattleManager::GetSingleton();
+    battle->activeBattle_.reset();
+    Require(battle->StartBattle("A", "B", "spawn", 0) > 0, "start isolated battle");
+    for (auto* actor : a) Require(battle->RegisterActor(actor, "A", 0), "register side A");
+    for (auto* actor : b) Require(battle->RegisterActor(actor, "B", 0), "register side B");
+    return battle->activeBattle_->physicalPosition;
+}
+static void Sql(sqlite3* db, const char* sql) {
+    Require(sqlite3_exec(db, sql, nullptr, nullptr, nullptr) == SQLITE_OK, sqlite3_errmsg(db));
+}
+static void Config(const std::string& name) {
+    std::filesystem::create_directories("Data/SKSE/Plugins/SkyrimNet/config/plugins/IntelEngine");
+    std::ofstream file("Data/SKSE/Plugins/SkyrimNet/config/plugins/IntelEngine/factions.yaml");
+    file << "factions:\n  - id: A\n    name: " << name << "\n    hold: Whiterun\n"
+            "    skyrim_faction_id: TestFaction\n    leader_names: [Leader]\n    allies: [B]\n    rivals: [C]\n"
+            "  - id: B\n    name: Other\n    leader_names: []\n";
+}
+int main() try {
+    using namespace IntelEngine;
+    auto* db = PoliticalDB::GetSingleton();
+    auto* politics = FactionPolitics::GetSingleton();
+    Require(!db->GetPoliticalEventsAfter(0, 1)["ready"].get<bool>(), "uninitialized feed must gate");
+    sqlite3* raw = nullptr;
+    Require(sqlite3_open("./feed.db", &raw) == SQLITE_OK, "create legacy DB");
+    Sql(raw, "CREATE TABLE faction_events(id INTEGER PRIMARY KEY AUTOINCREMENT,faction_a TEXT NOT NULL,"
+             "faction_b TEXT,event_type TEXT NOT NULL,description TEXT NOT NULL,relation_delta INTEGER DEFAULT 0,"
+             "game_time REAL,instigator_npc TEXT);"
+             "INSERT INTO faction_events(faction_a,event_type,description,game_time) VALUES('A','insult','legacy',1);");
+    sqlite3_close(raw);
+    Require(db->Initialize("./feed.db", "same-save"), "upgrade legacy DB in place");
+    const auto first = db->FeedIdentity();
+    const auto uuid = first["db_uuid"];
+    Require(first["save_id"] == "same-save" && uuid.get<std::string>().size() == 32 &&
+            first["load_id"].get<std::string>().size() == 32 && !first["ready"].get<bool>(), "initial identity/readiness");
+    Require(db->GetPoliticalEventsAfter(0, 20)["events"].empty(), "no data before cleanup");
+    Require(db->CleanupFutureEvents(10.f) == 0, "clean legacy timeline");
+    Require(db->GetPoliticalEventsAfter(0, 20)["events"][0]["description"] == "legacy", "migration preserves rows");
+    // An explicit 3.7-style reader/writer must remain compatible after upgrade.
+    Require(sqlite3_open("./feed.db", &raw) == SQLITE_OK, "open older reader");
+    Sql(raw, "INSERT INTO faction_events(faction_a,faction_b,event_type,description,relation_delta,game_time,instigator_npc) "
+             "VALUES('A',NULL,'brawl','old writer',0,2,'');");
+    sqlite3_stmt* old = nullptr;
+    Require(sqlite3_prepare_v2(raw, "SELECT id,faction_a,faction_b,event_type,description,relation_delta,game_time,instigator_npc "
+            "FROM faction_events ORDER BY id", -1, &old, nullptr) == SQLITE_OK, "prepare 3.7 column list");
+    Require(sqlite3_step(old) == SQLITE_ROW && std::string(reinterpret_cast<const char*>(sqlite3_column_text(old, 4))) == "legacy",
+            "old reader preserves first row");
+    Require(sqlite3_step(old) == SQLITE_ROW && std::string(reinterpret_cast<const char*>(sqlite3_column_text(old, 4))) == "old writer",
+            "old reader reads its new row");
+    Require(sqlite3_step(old) == SQLITE_DONE, "old reader sees exactly both rows");
+    sqlite3_finalize(old);
+    sqlite3_close(raw);
+    const int pe = db->RecordEvent("A", "", "pe_territory", "Public PE news", 0, 3.f);
+    Require(pe == 3, "PE fixture cursor");
+    auto page = db->GetPoliticalEventsAfter(-1, 2);
+    Require(page["events"][0]["id"] == 1 && page["events"][1]["id"] == 2 &&
+            page["next_cursor"] == 2 && page["has_more"] == true, "ascending ID pagination");
+    page = db->GetPoliticalEventsAfter(2, 2);
+    Require(page["events"].size() == 1 && page["events"][0]["type"] == "pe_territory" &&
+            page["events"][0]["position"].is_null() && page["next_cursor"] == pe && !page["has_more"].get<bool>(),
+            "PE events retained, narrative position null, exact end");
+    page = db->GetPoliticalEventsAfter(999, 1);
+    Require(page["events"].empty() && page["next_cursor"] == 999 && !page["has_more"].get<bool>(), "empty cursor preserved");
+    for (int i = 0; i < 205; ++i) Require(db->RecordEvent("A", "", "insult", "pagination", 0, 20.f) > pe, "insert future event");
+    for (int limit : {0, -1}) {
+        page = db->GetPoliticalEventsAfter(pe, limit);
+        Require(page["events"].size() == 50 && page["next_cursor"] == pe + 50 && page["has_more"] == true,
+                "nonpositive limit defaults to 50");
+    }
+    page = db->GetPoliticalEventsAfter(pe, std::numeric_limits<int>::max());
+    Require(page["events"].size() == 200 && page["next_cursor"] == pe + 200 && page["has_more"] == true, "limit capped at 200");
+    page = db->GetPoliticalEventsAfter(pe + 200, 5);
+    Require(page["events"].size() == 5 && !page["has_more"].get<bool>(), "exact-limit terminal page");
+    const int oldCursor = page["next_cursor"];
+    const auto oldLoad = db->FeedIdentity()["load_id"];
+    db->BeginLoad();
+    Require(!db->FeedIdentity()["ready"].get<bool>() && db->FeedIdentity()["load_id"] != oldLoad, "revert gates and changes load identity");
+    Require(db->CleanupFutureEvents(3.f) == 205, "rollback removes future rows");
+    Require(db->GetPoliticalEventsAfter(oldCursor, 5)["events"].empty(), "old future cursor yields empty page");
+    const int freshId = db->RecordEvent("A", "", "insult", "after rollback", 0, 3.f);
+    Require(freshId > oldCursor && db->GetPoliticalEventsAfter(oldCursor, 1)["events"][0]["id"] == freshId,
+            "AUTOINCREMENT never reuses deleted future IDs");
+    // Full config reload and real serialization; modeled leader liveness is the engine seam.
+    Config("Organization A");
+    Require(politics->LoadConfig(), "load real faction config");
+    politics->initialized_ = true;
+    auto factions = json::parse(politics->GetFactionsJson());
+    Require(factions["ready"] == true && factions["db_uuid"] == uuid && factions["load_id"] == db->FeedIdentity()["load_id"],
+            "getters share identities");
+    Require(factions["factions"][0]["disbanded"] == false && factions["factions"][0]["allies"] == json::array({"B"}) &&
+            factions["factions"][0]["rivals"] == json::array({"C"}) && factions["factions"][0]["skyrim_faction_id"] == "TestFaction",
+            "organization fields");
+    auto revision = factions["revision"].get<unsigned long long>();
+    Config("Renamed A");
+    Require(politics->LoadConfig(), "reload changed config");
+    factions = json::parse(politics->GetFactionsJson());
+    Require(factions["revision"].get<unsigned long long>() > revision && factions["factions"][0]["name"] == "Renamed A", "config reload revision");
+    revision = factions["revision"].get<unsigned long long>();
+    NPCIndex::GetSingleton()->leader.dead = true;
+    factions = json::parse(politics->GetFactionsJson());
+    Require(factions["revision"].get<unsigned long long>() > revision && factions["factions"][0]["disbanded"] == true &&
+            factions["factions"][0]["hold"] == "Whiterun", "disband retained and revision advanced");
+    revision = factions["revision"].get<unsigned long long>();
+    Require(json::parse(politics->GetFactionsJson())["revision"] == revision, "unchanged read stable revision");
+    NPCIndex::GetSingleton()->leader.dead = false;
+    Require(json::parse(politics->GetFactionsJson())["revision"].get<unsigned long long>() > revision, "undisband revision");
+    RE::World world{0x3C};
+    RE::Cell exterior{0x1234, false, &world}, interior{0x5678, true, nullptr};
+    RE::Actor soldier;
+    soldier.cell = &exterior; soldier.x = 120; soldier.y = -250; soldier.z = 32;
+    auto position = CapturePosition({&soldier}, {});
+    Require(position["worldspace"] == json({{"plugin", "Fixture.esm"}, {"local_id", 0x3C}}) &&
+            position["cell"].is_null() && position["x"] == 120, "actual exterior spawn position");
+    world.id = 0x0500003C;
+    Require(CapturePosition({}, {&soldier}) == position, "late-arrival registration and load-order-independent identity");
+    auto* battle = BattleManager::GetSingleton();
+    soldier.x = 999;
+    Require(battle->RegisterActor(&soldier, "A", 0) && battle->activeBattle_->physicalPosition == position,
+            "reinforcement registration preserves occurrence position");
+    soldier.x = 120;
+    Require(db->StartWar("A", "B", 1.f) > 0, "start physical battle war");
+    const auto beforeBattle = db->GetPoliticalEventsAfter(0, 200)["next_cursor"].get<int>();
+    Require(politics->RecordOffScreenBattle("A", "B", "Real spawn", "draw", "Physical war battle", 0, 0, "", &position) > 0,
+            "record physical active-war battle");
+    page = db->GetPoliticalEventsAfter(beforeBattle, 10);
+    Require(page["events"].size() == 1 && page["events"][0]["type"] == "battle_result" && page["events"][0]["delta"] == -10 &&
+            page["events"][0]["position"] == position && page["events"][0]["location_name"] == "Real spawn", "war battle position/delta round trip");
+    politics->RecalculateRelationScores();
+    Require(db->GetRelation("A", "B") == -10, "physical battle replay applies delta once");
+    soldier.cell = &interior;
+    position = CapturePosition({&soldier}, {});
+    Require(position["worldspace"].is_null() && position["cell"] == json({{"plugin", "Fixture.esm"}, {"local_id", 0x5678}}),
+            "interior cell identity");
+    const int noWar = politics->RecordPoliticalEvent("A", "", "battle_result", "Physical no-war battle", 0, 3.f, "Interior spawn", position);
+    Require(db->GetPoliticalEventsAfter(noWar - 1, 1)["events"][0]["position"] == position, "no-war position round trip");
+    soldier.x = std::numeric_limits<float>::infinity();
+    Require(CapturePosition({&soldier}, {}).is_null(), "nonfinite position unknown");
+    soldier.x = 0; soldier.cell = nullptr;
+    Require(CapturePosition({&soldier}, {}).is_null(), "missing cell position unknown");
+    Require(battle->RegisterActor(&soldier, "A", 0) && battle->activeBattle_->physicalPosition.is_null(), "unknown late actor stays null");
+    soldier.cell = &exterior;
+    Require(battle->RegisterActor(&soldier, "A", 0) && !battle->activeBattle_->physicalPosition.is_null(),
+            "first later reliable registration fills unknown position");
+    world.file = nullptr;
+    Require(CapturePosition({&soldier}, {}).is_null(), "unowned worldspace unknown");
+    world.file = &RE::fixtureFile; world.id = 0xFF00003C;
+    Require(CapturePosition({&soldier}, {}).is_null(), "dynamic worldspace unknown");
+    world.id = 0x0500003C;
+    soldier.cell = &exterior; exterior.world = nullptr;
+    Require(CapturePosition({&soldier}, {}).is_null(), "missing exterior worldspace unknown");
+    const json unknown = nullptr;
+    Require(politics->RecordOffScreenBattle("A", "B", "Unknown", "draw", "Unknown physical position", 0, 0, "", &unknown) > 0,
+            "unknown physical battle still records");
+    const auto examples = db->GetPoliticalEventsAfter(noWar - 1, 10);
+    Require(examples["events"][1]["position"].is_null() && examples["events"][1]["type"] == "battle_result", "unknown physical location explicit null");
+    std::cout << "EVENTS_EXAMPLE=" << examples.dump() << '\n';
+    std::cout << "FACTIONS_EXAMPLE=" << politics->GetFactionsJson() << '\n';
+    const auto priorLoad = db->FeedIdentity()["load_id"];
+    db->Shutdown();
+    Require(db->Initialize("./feed.db", "same-save") && db->FeedIdentity()["db_uuid"] == uuid &&
+            db->FeedIdentity()["load_id"] != priorLoad && !db->FeedIdentity()["ready"].get<bool>(), "same-save reload changes load only");
+    Require(!json::parse(politics->GetFactionsJson())["ready"].get<bool>(), "factions gate with DB");
+    Require(db->CleanupFutureEvents(3.f) >= 0, "reload cleanup");
+    Require(json::parse(politics->GetFactionsJson())["revision"] == 0, "faction revision resets per load");
+    Require(sqlite3_open("./feed.db", &raw) == SQLITE_OK, "open failure fixture");
+    Sql(raw, "CREATE TRIGGER fail_cleanup BEFORE DELETE ON faction_events BEGIN SELECT RAISE(ABORT,'injected cleanup failure'); END;");
+    const int future = db->RecordEvent("A", "", "insult", "must survive failed transaction", 0, 99.f);
+    const int warnings = logger::warnings;
+    db->BeginLoad();
+    Require(db->CleanupFutureEvents(3.f) == -1 && !db->FeedIdentity()["ready"].get<bool>() && logger::warnings > warnings,
+            "cleanup failure warns and keeps readiness false");
+    Sql(raw, "DROP TRIGGER fail_cleanup;");
+    sqlite3_close(raw);
+    Require(db->CleanupFutureEvents(100.f) == 0 && !db->FeedIdentity()["ready"].get<bool>(), "failure latched for load");
+    db->BeginLoad();
+    Require(db->CleanupFutureEvents(100.f) == 0 && db->GetPoliticalEventsAfter(future - 1, 1)["events"][0]["id"] == future,
+            "failed cleanup rolled back and new load recovers");
+    db->Shutdown();
+    std::filesystem::remove("./feed.db");
+    Require(db->Initialize("./feed.db", "same-save") && db->FeedIdentity()["db_uuid"] != uuid &&
+            db->FeedIdentity()["save_id"] == "same-save", "DB recreation changes generation with same save ID");
+    db->Shutdown();
+    std::cout << "PASS: feed pagination/limits, rollback cursors, identities/readiness/failure latch, legacy upgrade/3.7 compatibility, "
+                 "PE retention/null narratives, faction revisions/disband, actual spawn positions and both battle recording paths\n";
+} catch (const std::exception& error) {
+    std::cerr << "FAIL: " << error.what() << '\n';
+    return 1;
+}

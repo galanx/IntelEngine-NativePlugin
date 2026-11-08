@@ -426,6 +426,10 @@ namespace IntelEngine::Papyrus {
     /** Build full political context JSON for the Political DM prompt. */
     RE::BSFixedString BuildPoliticalContext(RE::StaticFunctionTag*, float currentGameTime);
 
+    /** Read-only pipe-2 JSON feeds, including identity and readiness metadata. */
+    RE::BSFixedString GetPoliticalEventsAfter(RE::StaticFunctionTag*, int afterId, int limit);
+    RE::BSFixedString GetFactionsJson(RE::StaticFunctionTag*);
+
     /** Build compact political dashboard JSON for PrismaUI. */
     RE::BSFixedString BuildPoliticalDashboardJson(RE::StaticFunctionTag*);
 

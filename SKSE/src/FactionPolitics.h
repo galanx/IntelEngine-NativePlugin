@@ -126,7 +126,9 @@ namespace IntelEngine {
         /** Record a political event. Returns event ID. */
         int RecordPoliticalEvent(const std::string& factionA, const std::string& factionB,
                                  const std::string& eventType, const std::string& description,
-                                 int delta, float gameTime);
+                                 int delta, float gameTime, const std::string& locationName = "",
+                                 const nlohmann::json& position = nullptr);
+        std::string GetFactionsJson();
 
         // =================================================================
         // Phase 2 Migration: Politics logic moved from Papyrus to C++
@@ -362,7 +364,8 @@ namespace IntelEngine {
         int RecordOffScreenBattle(const std::string& factionA, const std::string& factionB,
                                   const std::string& location, const std::string& result,
                                   const std::string& narrative, int attackerLosses, int defenderLosses,
-                                  const std::string& victor);
+                                  const std::string& victor,
+                                  const nlohmann::json* physicalPosition = nullptr);
 
         // =================================================================
         // Player Standing Mechanics
@@ -428,6 +431,9 @@ namespace IntelEngine {
         mutable std::mutex configMutex_;
         std::vector<FactionConfig> factions_;
         std::vector<DefaultRelation> defaultRelations_;
+        uint64_t factionRevision_ = 0;
+        std::string revisionLoadId_;
+        std::unordered_map<std::string, bool> disbandedSnapshot_;
         std::unordered_map<std::string, size_t> factionIndex_;  // id -> index in factions_
         std::unordered_map<std::string, std::string> nameToId_; // lowercase name -> id
 
