@@ -26,6 +26,8 @@ with tempfile.TemporaryDirectory(prefix="political-feed-") as directory:
 #pragma once
 #include <atomic>
 #include <cstdint>
+#include <string>
+#include <vector>
 namespace RE {
 using FormID = std::uint32_t;
 class TESFaction;
@@ -40,6 +42,20 @@ struct TESForm {
     FormID GetFormID() const { return id; }
     FormID GetLocalFormID() const { return local; }
     bool IsDynamicForm() const { return id >= 0xFF000000; }
+    template<class T> static T* LookupByID(FormID id) { static T value{}; return id == 0x2A456 ? &value : nullptr; }
+};
+struct BGSKeyword : TESForm {};
+struct BGSLocation : TESForm {
+    struct KeywordData { BGSKeyword* keyword; float data; };
+    std::string name;
+    std::vector<KeywordData> keywordData;
+    const char* GetName() const { return name.c_str(); }
+};
+struct TESDataHandler {
+    std::vector<BGSLocation*> locations;
+    int reads = 0;
+    static TESDataHandler* GetSingleton() { static TESDataHandler value; return &value; }
+    template<class T> const auto& GetFormArray() { ++reads; return locations; }
 };
 struct World : TESForm {
     World(FormID value) : TESForm{value, value, &fixtureFile} {}
@@ -80,6 +96,8 @@ template<class... T> void error(T&&...) {}
         if name in ("FactionPolitics.h", "BattleManager.h"):
             text = text.replace("    private:", "    public:")
         (work / name).write_text(text, encoding="utf-8")
+    header = (work / "FactionPolitics.h").read_text()
+    (work / "FactionPolitics.h").write_text(header.replace("    public:", "    public:\n        nlohmann::json TestPEContext();", 1))
     source = (src / "FactionPolitics.cpp").read_text(encoding="utf-8")
     signatures = (
         "std::string ToLower(",
@@ -94,10 +112,19 @@ template<class... T> void error(T&&...) {}
         "std::string FactionPolitics::GetFactionsJson(",
         "int FactionPolitics::RecordOffScreenBattle(",
         "void FactionPolitics::RecalculateRelationScores(",
+        "std::string FactionPolitics::ProcessPoliticalDMResponse(",
+        "int FactionPolitics::DecayPlayerStandings(",
+        "std::string FactionPolitics::GetFactionDisplayName(",
     )
     (work / "PoliticalFeedMethods.inc").write_text(
         "namespace IntelEngine {\n" + "\n".join(method(source, s) for s in signatures) +
         "\nvoid FactionPolitics::WritePoliticalStateFile() {}\n}\n", encoding="utf-8")
+    context_start = source.index("        auto pe = PoliticalEngineBridge::GetSingleton()->Context();")
+    context_end = source.index("        // Active wars", context_start)
+    (work / "PEContext.inc").write_text(source[context_start:context_end])
+    vanilla_start = source.index("        if (PoliticalEngineBridge::GetSingleton()->IsActive() && !PoliticalEngineBridge::GetSingleton()->HasSidesExport())")
+    vanilla_end = source.index("        auto* npcIndex", vanilla_start)
+    (work / "PEVanillaSides.inc").write_text(source[vanilla_start:vanilla_end])
     battle = (src / "BattleManager.cpp").read_text(encoding="utf-8")
     (work / "PhysicalPosition.inc").write_text(
         "namespace IntelEngine {\n" +

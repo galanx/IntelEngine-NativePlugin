@@ -40,6 +40,8 @@
 #include "DialogueTracker.h"
 #include "QuestStateTracker.h"
 #include "AsyncDispatch.h"
+#include "PoliticalEngineBridge.h"
+#include "PoliticalEngineChanges.h"
 #include <Windows.h>
 #include <nlohmann/json.hpp>
 
@@ -117,6 +119,8 @@ namespace IntelEngine::Papyrus {
     int SyncVanillaFactionStandings(RE::StaticFunctionTag*);
     void WritePoliticalStateFile(RE::StaticFunctionTag*);
     void SetPoliticsEnabled(RE::StaticFunctionTag*, bool);
+    bool GetPEReactionsMoveRelations(RE::StaticFunctionTag*);
+    void SetPEReactionsMoveRelations(RE::StaticFunctionTag*, bool);
     void SetPoliticsTickInterval(RE::StaticFunctionTag*, int);
     int DeclareWar(RE::StaticFunctionTag*, RE::BSFixedString, RE::BSFixedString, float);
     RE::BSFixedString ProcessWarTick(RE::StaticFunctionTag*, float);
@@ -467,6 +471,8 @@ namespace IntelEngine::Papyrus {
         a_vm->RegisterFunction("SyncVanillaFactionStandings", SCRIPT_NAME, SyncVanillaFactionStandings); ++count;
         a_vm->RegisterFunction("WritePoliticalStateFile", SCRIPT_NAME, WritePoliticalStateFile); ++count;
         a_vm->RegisterFunction("SetPoliticsEnabled", SCRIPT_NAME, SetPoliticsEnabled); ++count;
+        a_vm->RegisterFunction("GetPEReactionsMoveRelations", SCRIPT_NAME, GetPEReactionsMoveRelations); ++count;
+        a_vm->RegisterFunction("SetPEReactionsMoveRelations", SCRIPT_NAME, SetPEReactionsMoveRelations); ++count;
 
         // Phase 2 Migration: FactionPolitics C++ logic
         a_vm->RegisterFunction("ProcessPoliticalDMResponse", SCRIPT_NAME, ProcessPoliticalDMResponse); ++count;
@@ -4014,7 +4020,11 @@ namespace IntelEngine::Papyrus {
         AsyncDispatch::Submit([snap = std::move(snap),
                                questEditorId = std::move(questEditorId),
                                scriptName = std::move(scriptName),
-                               functionName = std::move(functionName)]() mutable {
+                               functionName = std::move(functionName),
+                               generation = SlotTracker::GetSingleton()->loadGeneration.load()]() mutable {
+            if (generation != SlotTracker::GetSingleton()->loadGeneration.load()) return;
+            auto changes = PoliticalEngineBridge::GetSingleton()->Poll();
+            if (generation != SlotTracker::GetSingleton()->loadGeneration.load()) return;
             std::string requestJson = FactionPolitics::GetSingleton()->BuildPoliticalContextFromSnapshot(snap);
             auto* task = SKSE::GetTaskInterface();
             if (!task) {
@@ -4024,7 +4034,14 @@ namespace IntelEngine::Papyrus {
             task->AddTask([questEditorId = std::move(questEditorId),
                            scriptName = std::move(scriptName),
                            functionName = std::move(functionName),
-                           requestJson = std::move(requestJson)]() mutable {
+                           requestJson = std::move(requestJson), changes = std::move(changes),
+                           gameTime = snap.currentGameTime, generation]() mutable {
+                if (generation != SlotTracker::GetSingleton()->loadGeneration.load()) return;
+                for (const auto& change : changes) {
+                    const auto text = PEEventText(change);
+                    if (!text.empty()) FactionPolitics::GetSingleton()->RecordPoliticalEvent(
+                        "", "", change.value("type", ""), text, 0, gameTime);
+                }
                 AsyncDispatch::ExecuteQuestFunctionString(questEditorId, scriptName, functionName, requestJson);
             });
         });
@@ -4390,6 +4407,8 @@ namespace IntelEngine::Papyrus {
     void SetPoliticsEnabled(RE::StaticFunctionTag*, bool enabled) {
         FactionPolitics::GetSingleton()->SetEnabled(enabled);
     }
+    bool GetPEReactionsMoveRelations(RE::StaticFunctionTag*) { return FactionPolitics::GetSingleton()->GetPEReactionsMoveRelations(); }
+    void SetPEReactionsMoveRelations(RE::StaticFunctionTag*, bool val) { FactionPolitics::GetSingleton()->SetPEReactionsMoveRelations(val); }
 
     void SetPoliticsTickInterval(RE::StaticFunctionTag*, int hours) {
         FactionPolitics::GetSingleton()->SetTickIntervalHours(hours);

@@ -24,6 +24,7 @@
 #include "StringUtils.h"
 #include "AsyncDispatch.h"
 #include "ProximityMonitor.h"
+#include "PoliticalEngineBridge.h"
 
 #include <fstream>
 #include <chrono>
@@ -123,6 +124,7 @@ namespace IntelEngine {
     }
 
     void RevertCallback(SKSE::SerializationInterface*) {
+        PoliticalEngineBridge::GetSingleton()->MarkDirty(true);
         PoliticalDB::GetSingleton()->BeginLoad();
         g_currentSaveID.clear();
         g_hasReverted = true;
@@ -351,6 +353,7 @@ namespace IntelEngine {
                 logger::info("Data loaded - initializing SkyrimNet API and NPC index");
                 MemoryDB::GetSingleton()->InitializeAPI();
                 DialogueTracker::GetSingleton()->Initialize();
+                PoliticalEngineBridge::GetSingleton()->Initialize();
 
                 // Register quest decorator with SkyrimNet (soft dependency — skipped if API unavailable)
                 if (SkyrimNetAPI::RegisterDecorator) {
@@ -379,6 +382,7 @@ namespace IntelEngine {
             case SKSE::MessagingInterface::kNewGame:
                 // New game — clear SlotTracker state, force DB re-discovery
                 logger::info("New game - clearing SlotTracker, clearing MemoryDB caches");
+                PoliticalEngineBridge::GetSingleton()->MarkDirty(true);
                 SlotTracker::GetSingleton()->ClearAll();
                 ProximityMonitor::GetSingleton()->DisarmAll();
                 NPCIndex::GetSingleton()->RefreshIndex();
@@ -399,6 +403,7 @@ namespace IntelEngine {
                 // Game loaded — SlotTracker already populated from co-save (LoadCallback).
                 // ClearAll moved to RevertCallback to avoid wiping co-save data.
                 logger::info("Game loaded - refreshing indexes, clearing MemoryDB caches");
+                PoliticalEngineBridge::GetSingleton()->MarkDirty(true);
                 NPCIndex::GetSingleton()->RefreshIndex();
                 MemoryDB::GetSingleton()->ClearCaches();
                 // Initialize per-save political DB (save ID restored via serialization)
@@ -525,6 +530,7 @@ SKSEPluginLoad(const SKSE::LoadInterface* skse) {
     // Register Shutdown via atexit so the worker is joined before static destructors
     // tear down singletons / SQLite connections / spdlog. Without this, an in-flight
     // Phase B task could touch destroyed state at process exit.
+    IntelEngine::PoliticalEngineBridge::GetSingleton(); // Outlive the async worker's atexit drain.
     IntelEngine::AsyncDispatch::Initialize();
     std::atexit([]() { IntelEngine::AsyncDispatch::Shutdown(); });
 
