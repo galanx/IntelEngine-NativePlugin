@@ -363,10 +363,13 @@ class DirectorVM(VM):
         if method == "StoryResponseShouldAct": return json.loads(args[0]).get("should_act", False)
         if method == "ResolveStoryCandidate": return self.target
         if method in ("IsHighStatusNPC", "IsJarl"): return False
-        if method == "ValidateStoryResponse": return '{"valid":"true"}'
+        if method == "ValidateStoryResponse":
+            response = json.loads(args[0])
+            return json.dumps({"valid": "true" if response.get("should_act") is True and response.get("type") else "false"})
         if method in ("NotifyStoryTypePicked", "RecordStoryDispatch", "NotifyStoryCooldown", "FormListAdd"): self.effects.append((method, tuple(args))); return None
         if method == "StoryResponseGetField": return json.loads(args[0]).get(args[1], "")
         if method == "ResolveDirectorActor": return self.agent if args[0] == self.agent.name else self.target
+        if method == "FindNPCByName": return next((actor for actor in (self.agent, self.target) if actor.name == args[0]), None)
         if method == "ParseFormID": return int(args[0])
         if method == "GetForm": return self.agent
         if method in ("UnregisterForUpdate", "UnregisterForUpdateGameTime"):
@@ -776,17 +779,22 @@ def run_director_lite_checks(files, history):
 
 
 def run_replacement_checks(files, history):
-    for social in (False, True):
+    for social, story_type in ((False, "seek_player"), (False, "informant"), (True, "npc_interaction")):
         for mode in ("same", "different", "no-slot", "invalid", "stale"):
             vm = DirectorVM(files, history); vm.distance = 1000.0; vm.properties.update({"NPCSocialGeneration": 0, "IntelEngine_TravelTarget": "link"})
             if social: vm.invoke("IntelEngine_StoryEngine", "DispatchNPCSocial", (vm.agent, vm.target, "Old trip", "npc_interaction", vm.agent, vm.target, "", "", "", "Director"))
             else: vm.seek("Old story")
             vm.storage[(vm.agent, "Intel_WasFollower")] = 1; vm.storage[(vm.agent, "Intel_MessageContent")] = "Old message"; before = vm.task_snapshot(); vm.effects.clear()
             if mode == "no-slot": vm.properties["SlotStates"][0] = 0; vm.properties["AgentAlias00"].actor = None
-            payload = {"npc1Name": vm.target.name if mode == "different" else vm.agent.name, "npc2Name": vm.agent.name if mode == "different" else vm.target.name, "socialType": "npc_interaction"} if social else {"npcName": vm.target.name if mode == "different" else vm.agent.name, "storyType": "seek_player"}
-            payload.update({"narration": "" if mode == "invalid" else "Replacement", "response": "{}", "replaceGeneration": "0" if mode == "stale" else "1"})
+            payload = {"npc1Name": vm.target.name if mode == "different" else vm.agent.name, "npc2Name": vm.agent.name if mode == "different" else vm.target.name, "socialType": story_type} if social else {"npcName": vm.target.name if mode == "different" else vm.agent.name, "storyType": story_type}
+            response = dict.fromkeys(("sender", "subject", "gossip", "destination", "msgContent", "meetTime", "questLocation", "enemyType", "questSubType", "victimName", "itemName", "itemDesc"), "")
+            response.update({"replaceGeneration": "0" if mode == "stale" else "1"})
+            if story_type == "informant": response.update({"subject": vm.target.name, "gossip": "Knows the way"})
+            payload.update({"narration": "" if mode == "invalid" else "Replacement", "response": json.dumps(response), "replaceGeneration": response["replaceGeneration"]})
             vm.invoke("IntelEngine_Core", "OnDashboardDispatchNpcSocial" if social else "OnDashboardDispatchStory", ("", json.dumps(payload), 0.0, None))
-            if mode in ("invalid", "stale"): require(vm.task_snapshot() == before, "invalid/stale replacement changed old work")
+            if mode in ("invalid", "stale"):
+                require(vm.task_snapshot() == before, "invalid/stale replacement changed old work")
+                require(any(e[0] == "Notification" for e in vm.effects), "replacement refusal was silent")
             else:
                 require(vm.properties["NPCSocialTraveler" if social else "ActiveStoryNPC"] is (vm.target if mode == "different" else vm.agent) and vm.properties["NPCSocialGeneration" if social else "DispatchGeneration"] == 2 and sum(s != 0 for s in vm.properties["SlotStates"]) == 1, "replacement did not admit exactly one new dispatch")
                 require(any(e[0] == "SetPlayerTeammate" for e in vm.effects) and (social or (vm.agent, "Intel_MessageContent") not in vm.storage), "replacement lost follower restoration or old message cleanup")

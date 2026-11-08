@@ -2356,10 +2356,12 @@ Event OnDashboardDispatchStory(String eventName, String strArg, Float numArg, Fo
     EndIf
     If narration == ""
         DebugMsg("Director: Empty narration, aborting")
+        NotifyPlayer("Story dispatch refused: narration is empty.")
         Return
     EndIf
     If !StoryEngine
         DebugMsg("Director: StoryEngine not available")
+        NotifyPlayer("Story dispatch refused: StoryEngine is unavailable.")
         Return
     EndIf
     Actor replacing = None
@@ -2370,10 +2372,9 @@ Event OnDashboardDispatchStory(String eventName, String strArg, Float numArg, Fo
         Return
     EndIf
     If replacing
-        String validation = IntelEngine.ValidateStoryResponse(response, 16383, 0)
-        If IntelEngine.StoryResponseGetField(validation, "valid") != "true" || \
-            (storyType != "seek_player" && storyType != "informant" && storyType != "ambush" && storyType != "stalker" && storyType != "quest" && storyType != "message" && storyType != "road_encounter") || \
+        If (storyType != "seek_player" && storyType != "informant" && storyType != "ambush" && storyType != "stalker" && storyType != "quest" && storyType != "message" && storyType != "road_encounter") || \
             (storyType == "message" && StoryEngine.ExtractJsonField(response, "msgContent") == "") || (storyType == "informant" && (StoryEngine.ExtractJsonField(response, "subject") == "" || StoryEngine.ExtractJsonField(response, "gossip") == ""))
+            NotifyPlayer("Story replacement refused: unknown type or missing message content / informant subject and gossip.")
             Return
         EndIf
         CancelCurrentTask(replacing, true)
@@ -2384,6 +2385,7 @@ Event OnDashboardDispatchStory(String eventName, String strArg, Float numArg, Fo
             StoryEngine.CleanupStoryDispatch()
         EndIf
         If StoryEngine.IsActive || FindSlotByAgent(replacing) >= 0
+            NotifyPlayer("Story replacement refused: previous story or task is still active after cancellation.")
             Return
         EndIf
     EndIf
@@ -2470,18 +2472,21 @@ Event OnDashboardDispatchNpcSocial(String eventName, String strArg, Float numArg
         replacing = StoryEngine.NPCSocialTraveler
     EndIf
     If narration == "" || (socialType != "npc_interaction" && socialType != "npc_gossip") || npc1 == npc2 || !StoryEngine
+        NotifyPlayer("Social dispatch refused: missing narration, invalid type, identical NPCs, or unavailable StoryEngine.")
         Return
     EndIf
     If !DirectorCanDispatch(npc1, false, replacing) || !DirectorCanDispatch(npc2, false, replacing)
         Return
     EndIf
     If StoryEngine.IsNPCStoryActive && !replacing
+        NotifyPlayer("Social replacement refused: active trip changed; refresh and confirm replacement.")
         Return
     EndIf
     If replacing
         CancelCurrentTask(replacing, true)
         StoryEngine.CleanupNPCSocialDispatch()
         If StoryEngine.IsNPCStoryActive || FindSlotByAgent(replacing) >= 0
+            NotifyPlayer("Social replacement refused: previous trip or task is still active after cancellation.")
             Return
         EndIf
     EndIf
