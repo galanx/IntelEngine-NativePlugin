@@ -680,7 +680,7 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
     <div className="director-tab p-3 space-y-4">
       {/* Story Dispatch */}
       <section>
-        {generateControls('story')}{pending?.form === 'story' && <small>Generating…</small>}{generateError && !pending && <small>{generateError}</small>}
+        {generateControls('story')}{pending?.form === 'story' && <small className="text-gray-400">Generating…</small>}{generateError && !pending && <small className="text-red-400">{generateError}</small>}
         <fieldset disabled={pending?.form === 'story'} className="space-y-2 border-0 p-0 m-0 min-w-0" inert={pending?.form === 'story' ? '' : undefined}>
           <div className="flex gap-2">
             <Field label="NPC" required hint="Exact display name.">
@@ -760,7 +760,7 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
 
       {/* NPC Social Dispatch */}
       <section>
-        {generateControls('social')}{pending?.form === 'social' && <small>Generating…</small>}{generateError && !pending && <small>{generateError}</small>}
+        {generateControls('social')}{pending?.form === 'social' && <small className="text-gray-400">Generating…</small>}{generateError && !pending && <small className="text-red-400">{generateError}</small>}
         <fieldset disabled={pending?.form === 'social'} className="space-y-2 border-0 p-0 m-0 min-w-0" inert={pending?.form === 'social' ? '' : undefined}>
           <div className="flex gap-2">
             <Field label="NPC 1" required hint="The traveler/teller.">
@@ -835,7 +835,7 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
 
       {/* Political Dispatch */}
       <section>
-        {generateControls('political')}{pending?.form === 'political' && <small>Generating…</small>}{generateError && !pending && <small>{generateError}</small>}
+        {generateControls('political')}{pending?.form === 'political' && <small className="text-gray-400">Generating…</small>}{generateError && !pending && <small className="text-red-400">{generateError}</small>}
         <fieldset disabled={pending?.form === 'political'} className="space-y-2 border-0 p-0 m-0 min-w-0" inert={pending?.form === 'political' ? '' : undefined}>
           <div className="flex gap-2">
             <Field label="Faction A" required hint="First side.">
@@ -903,7 +903,7 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
 
       {/* Action Execution */}
       <section>
-        {generateControls('action')}{pending?.form === 'action' && <small>Generating…</small>}{generateError && !pending && <small>{generateError}</small>}
+        {generateControls('action')}{pending?.form === 'action' && <small className="text-gray-400">Generating…</small>}{generateError && !pending && <small className="text-red-400">{generateError}</small>}
         <fieldset disabled={pending?.form === 'action'} className="space-y-2 border-0 p-0 m-0 min-w-0" inert={pending?.form === 'action' ? '' : undefined}>
           <div className="flex gap-2">
             <Field label="NPC (nearby only)" required hint="Nearby actor who performs the action.">

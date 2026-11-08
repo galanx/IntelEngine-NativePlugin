@@ -528,8 +528,8 @@ Both preserved legacy pairs reproduced their verified converted bytes through th
 Automatic rejection diagnostics remain unverified live.
 
 > **Courier/Messenger substitution (offline only):** faction-first then sender-messenger is retained; sender identity uses strict candidate resolution. Substitutions log original rejection/dead/disabled reason, route and actor; failed attempts log as failures. Native rejection warnings retain subtype detail; no new status API or live qualification.
-> **Unreleased — Director replacement (offline only):** manual Story replacement validates Director fields without requiring the automatic DM envelope. Rejected replacements report their reason and leave the current dispatch intact; cancellation must finish before the replacement starts. Compiled-bytecode checks do not establish live behavior.
 
+> **Unreleased — Director fixes (offline only):** manual Story replacement validates Director fields without requiring the automatic DM envelope; refusals name the reason, and cancellation must finish before replacement. Story/Social dispatch requests the existing dashboard refresh without a queued-on-close claim. NPC suggestions rank exact names, then prefixes, and highlight the keyboard choice. Generate status is gray and errors red. Compiled-bytecode and browser checks do not establish live behavior.
 
 > **Unreleased — Political Engine bridge (offline only):** optional API v3 intake records public territory, campaign, ruler and initiative news without relation deltas or load replay. Active-only Political DM context supports one next-tick organization reaction per development and authoritative current-owner sides. The persisted MCM/dashboard reaction toggle affects only tagged reaction relation/player-standing deltas; absent sides exports permit vanilla-only CWOwner context. Existing IE wars and battles remain independent. DLL/PEX/dashboard builds and offline checks do not establish installed or game behavior.
 
