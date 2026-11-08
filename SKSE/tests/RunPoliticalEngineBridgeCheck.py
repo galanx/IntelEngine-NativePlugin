@@ -95,6 +95,7 @@ int main(int argc, char** argv) { try {
     }
     api = 3; state = before; bridge->Initialize();
     Require(bridge->Poll() == json::array() && bridge->IsActive(), "attachment replayed news");
+    Require(bridge->Context()["territory"]["11"]["owner"]==3 && bridge->Context()["realms"]["9"]=="Fellburg", "active public territory context");
     state = after; bridge->MarkDirty(); auto changes = bridge->Poll();
     Require(changes.size() == 1 && changes[0]["type"] == "pe_territory" &&
         changes[0]["changes"] == json::array({{{"district","11"},{"name","Southern Reach"},{"from",3},{"to",9}}}), "real owner transition");
@@ -109,6 +110,7 @@ int main(int argc, char** argv) { try {
     Require(changes.size()==1 && changes[0]["changes"].size()==6, "six districts must combine");
     state = before; state["status"]["bEnabled"] = false; bridge->MarkDirty();
     Require(bridge->Poll()==json::array() && !bridge->IsActive(), "disabled PE");
+    Require(bridge->Context().is_null(), "disabled context omitted");
     state = after; bridge->MarkDirty(); Require(bridge->Poll()==json::array(), "reenable replay");
     state["data_ready"] = false; bridge->MarkDirty();
     Require(bridge->Poll()==json::array() && !bridge->IsActive(), "not-ready PE");
@@ -121,7 +123,8 @@ int main(int argc, char** argv) { try {
     bridge->MarkDirty(); Require(bridge->Poll().size()==4, "four-record revision cap");
     state["campaign070"]["regions"][0]["owner_realm_id"]=9; bridge->MarkDirty();
     Require(bridge->Poll()==json::array(), "cap applies across reads of one revision");
-    bridge->MarkDirty(true); Require(bridge->Poll()==json::array(), "load baseline at same revision");
+    bridge->MarkDirty(true); Require(bridge->Context().is_null(), "load immediately hides context");
+    Require(bridge->Poll()==json::array(), "load baseline at same revision");
     state["campaign070"]["regions"][1]["owner_realm_id"]=9; bridge->MarkDirty();
     Require(bridge->Poll().size()==1, "load resets revision accounting");
     if (journalExport) {

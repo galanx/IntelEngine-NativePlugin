@@ -17,7 +17,12 @@ Your ENTIRE response must be a single JSON object — nothing before it, nothing
 
 ## Current Political State
 
-{{ politicalContext }}
+{{ politicalContext }}{% if exists("peActive") and peActive %}
+
+## Political Engine developments
+Territory in political_engine is authoritative. Prefer at most ONE supported organization reaction from political_engine.react_to, only on this tick; otherwise keep IE's own politics. Ground any reaction in the listed realm names, existing allies/rivals and hold facts; never guess a realm-to-organization match. Rule 8 and mandatory IE war decisions still take priority.
+For a reaction only, use event_type:"political_reaction" and add "reacts_to":<listed PE event id>. Never use pe_* for a reaction. Use the existing faction IDs, description and relation_delta fields; the engine records it even when reaction relation/standing changes are toggled off.
+{% endif %}
 
 ## Available Event Types
 

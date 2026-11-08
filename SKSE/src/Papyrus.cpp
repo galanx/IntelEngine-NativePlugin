@@ -119,6 +119,8 @@ namespace IntelEngine::Papyrus {
     int SyncVanillaFactionStandings(RE::StaticFunctionTag*);
     void WritePoliticalStateFile(RE::StaticFunctionTag*);
     void SetPoliticsEnabled(RE::StaticFunctionTag*, bool);
+    bool GetPEReactionsMoveRelations(RE::StaticFunctionTag*);
+    void SetPEReactionsMoveRelations(RE::StaticFunctionTag*, bool);
     void SetPoliticsTickInterval(RE::StaticFunctionTag*, int);
     int DeclareWar(RE::StaticFunctionTag*, RE::BSFixedString, RE::BSFixedString, float);
     RE::BSFixedString ProcessWarTick(RE::StaticFunctionTag*, float);
@@ -469,6 +471,8 @@ namespace IntelEngine::Papyrus {
         a_vm->RegisterFunction("SyncVanillaFactionStandings", SCRIPT_NAME, SyncVanillaFactionStandings); ++count;
         a_vm->RegisterFunction("WritePoliticalStateFile", SCRIPT_NAME, WritePoliticalStateFile); ++count;
         a_vm->RegisterFunction("SetPoliticsEnabled", SCRIPT_NAME, SetPoliticsEnabled); ++count;
+        a_vm->RegisterFunction("GetPEReactionsMoveRelations", SCRIPT_NAME, GetPEReactionsMoveRelations); ++count;
+        a_vm->RegisterFunction("SetPEReactionsMoveRelations", SCRIPT_NAME, SetPEReactionsMoveRelations); ++count;
 
         // Phase 2 Migration: FactionPolitics C++ logic
         a_vm->RegisterFunction("ProcessPoliticalDMResponse", SCRIPT_NAME, ProcessPoliticalDMResponse); ++count;
@@ -4399,6 +4403,8 @@ namespace IntelEngine::Papyrus {
     void SetPoliticsEnabled(RE::StaticFunctionTag*, bool enabled) {
         FactionPolitics::GetSingleton()->SetEnabled(enabled);
     }
+    bool GetPEReactionsMoveRelations(RE::StaticFunctionTag*) { return FactionPolitics::GetSingleton()->GetPEReactionsMoveRelations(); }
+    void SetPEReactionsMoveRelations(RE::StaticFunctionTag*, bool val) { FactionPolitics::GetSingleton()->SetPEReactionsMoveRelations(val); }
 
     void SetPoliticsTickInterval(RE::StaticFunctionTag*, int hours) {
         FactionPolitics::GetSingleton()->SetTickIntervalHours(hours);

@@ -28,6 +28,11 @@ namespace IntelEngine {
         if (reset) { resetEpoch_.fetch_add(1); active_.store(false); }
         dirty_.store(true);
     }
+    nlohmann::json PoliticalEngineBridge::Context() {
+        std::lock_guard lock(mutex_);
+        if (!active_ || baselineEpoch_ != resetEpoch_.load()) return nullptr;
+        return {{"territory", baseline_["regions"]}, {"realms", baseline_["realms"]}};
+    }
 
     RE::BSEventNotifyControl PoliticalEngineBridge::ProcessEvent(const SKSE::ModCallbackEvent* event,
         RE::BSTEventSource<SKSE::ModCallbackEvent>*) {

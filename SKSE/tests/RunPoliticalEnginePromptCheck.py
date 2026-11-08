@@ -48,6 +48,17 @@ int main() { try {
     Require(result.find("Fellburg took Southern Reach from Markarth.")!=std::string::npos,"unaffiliated NPC cannot hear PE news");
     political["recent_events"].back()["type"]="pe_visit";
     Require(env.render(npc,data).find("Fellburg took Southern Reach from Markarth.")!=std::string::npos,"public initiative visibility");
+    json dm={{"politicalContext",json{{"recent_events",json::array()}}.dump(2)},
+        {"tickHours","6"},{"maxActiveWars","2"},{"maxRelationChange","15"},{"peActive",false}};
+    const auto dmTemplate=Read("current1.prompt"), oldDm=Read("baseline1.prompt");
+    auto inactive=env.render(dmTemplate,dm);
+    Require(inactive==env.render(oldDm,dm) && inactive.find("Study the political state")!=std::string::npos,
+            "inactive DM prompt must remain byte-identical");
+    dm["peActive"]=true;
+    Require(env.render(dmTemplate,dm).find("political_reaction")!=std::string::npos &&
+            env.render(dmTemplate,dm).find("reacts_to")!=std::string::npos, "active DM reaction rule");
+    dm["politicalContext"]="";
+    Require(env.render(dmTemplate,dm)==env.render(oldDm,dm), "empty context sentinel remains unchanged");
     std::cout << "PASS real Inja: inactive NPC prompt byte-identical; unaffiliated PE territory/initiative rumors visible\n";
 } catch(const std::exception& e) { std::cerr<<e.what()<<'\n'; return 1; } }
 ''')

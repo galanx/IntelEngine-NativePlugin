@@ -17,6 +17,8 @@ namespace IntelEngine {
         void Initialize();
         void MarkDirty(bool reset = false);
         nlohmann::json Poll();
+        bool IsDetected() const { return reader_ != nullptr; }
+        nlohmann::json Context();
         bool IsActive() const { return active_.load(); }
         RE::BSEventNotifyControl ProcessEvent(const SKSE::ModCallbackEvent* event,
             RE::BSTEventSource<SKSE::ModCallbackEvent>*) override;

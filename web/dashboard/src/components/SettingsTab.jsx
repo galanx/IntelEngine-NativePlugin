@@ -354,6 +354,10 @@ function SettingsTab({ config, onSettingChange, pluginConfig, onPluginConfigChan
       <Accordion title="Faction Politics" isOpen={openSections.politics} onToggle={() => toggle('politics')}>
         {pluginConfig && onPluginConfigChange ? (
           <>
+            <p className="text-xs text-gray-400">Political Engine detected: {pluginConfig['politics.pe_detected'] ? 'Yes' : 'No'}</p>
+            <ToggleRow label="PE reactions move relations" value={pluginConfig['politics.pe_reactions_move_relations'] !== false && pluginConfig['politics.pe_reactions_move_relations'] !== 'false'}
+              onChange={v => onPluginConfigChange('politics.pe_reactions_move_relations', v)}
+              hint="When off, PE reactions are recorded without changing relations or player standing." />
             <ToggleRow
               label="Politics Enabled"
               value={pluginConfig['politics.enabled'] !== false && pluginConfig['politics.enabled'] !== 'false'}

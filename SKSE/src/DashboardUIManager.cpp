@@ -12,6 +12,7 @@
 #include "DashboardUIManager.h"
 #include "DashboardConfig.h"
 #include "FactionPolitics.h"
+#include "PoliticalEngineBridge.h"
 #include "SkyrimNetAPI.h"
 #include "NPCIndex.h"
 #include "SlotTracker.h"
@@ -470,6 +471,8 @@ namespace IntelEngine {
             pc["politics.tick_interval_hours"] = politics->GetTickIntervalHours();
             pc["politics.max_relation_change_per_tick"] = politics->GetMaxRelationChangePerTick();
             pc["politics.max_active_wars"] = politics->GetMaxActiveWars();
+            pc["politics.pe_reactions_move_relations"] = politics->GetPEReactionsMoveRelations();
+            pc["politics.pe_detected"] = PoliticalEngineBridge::GetSingleton()->IsDetected();
             parsed["pluginConfig"] = pc;
 
             // Include nearby actors across exterior cell borders, but never across worldspaces.
@@ -949,6 +952,8 @@ namespace IntelEngine {
                     saved = politics->SetMaxRelationChangePerTick(val.get<int>());
                 } else if (key == "max_active_wars" && val.is_number_integer()) {
                     saved = politics->SetMaxActiveWars(val.get<int>());
+                } else if (key == "pe_reactions_move_relations" && val.is_boolean()) {
+                    saved = politics->SetPEReactionsMoveRelations(val.get<bool>());
                 } else {
                     logger::warn("[Dashboard] Invalid politics setting value: {}", path);
                 }

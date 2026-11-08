@@ -18,6 +18,7 @@
 #include "NPCIndex.h"
 #include "SkyrimNetAPI.h"
 #include "ProcessUtils.h"
+#include "PoliticalEngineBridge.h"
 
 #include <fstream>
 #include <filesystem>
@@ -359,6 +360,11 @@ default_relations:
         maxActiveWars_.store(val);
         return true;
     }
+    bool FactionPolitics::SetPEReactionsMoveRelations(bool val) {
+        if (!DashboardConfig::GetSingleton()->WriteYamlValue("politics", "pe_reactions_move_relations", val ? "true" : "false")) return false;
+        peReactionsMoveRelations_.store(val);
+        return true;
+    }
 
     void FactionPolitics::LoadSettings() {
         auto* config = DashboardConfig::GetSingleton();
@@ -378,6 +384,7 @@ default_relations:
         maxActiveWars_.store(std::clamp(readInt("max_active_wars", 2), 1, 5));
         warDeclarationCooldownDays_.store(readInt("war_declaration_cooldown_days", 7));
         moraleDecayPerTick_.store(readInt("morale_decay_per_tick", 2));
+        peReactionsMoveRelations_.store(readBool("pe_reactions_move_relations", true));
 
         logger::info("FactionPolitics: Settings loaded - enabled={}, tick={}h, maxDelta={}, maxWars={}, warCooldown={}d, moraleDecay={}",
                      enabled_.load(), tickIntervalHours_.load(),
@@ -483,6 +490,12 @@ default_relations:
             db->AdjustRelation(factionA, factionB, delta);
         }
         if (eventId >= 0) {
+            if (eventType.starts_with("pe_")) {
+                std::lock_guard lock(peMutex_);
+                auto load = db->FeedIdentity().value("load_id", "");
+                if (peLoadId_ != load) { peLoadId_ = load; pendingPE_.clear(); eligiblePE_.clear(); }
+                pendingPE_[std::to_string(eventId)] = description;
+            }
             WritePoliticalStateFile();
         }
         return eventId;
@@ -858,6 +871,19 @@ default_relations:
             eventsJson.push_back(ej);
         }
         state["recent_events"] = eventsJson;
+        auto pe = PoliticalEngineBridge::GetSingleton()->Context();
+        {
+            std::lock_guard lock(peMutex_);
+            auto load = db->FeedIdentity().value("load_id", "");
+            if (peLoadId_ != load) { peLoadId_ = load; pendingPE_.clear(); eligiblePE_.clear(); }
+            eligiblePE_ = std::move(pendingPE_); pendingPE_ = nlohmann::json::object();
+            if (!pe.is_null()) {
+                pe["react_to"] = eligiblePE_;
+                pe["recent_developments"] = nlohmann::json::array();
+                for (const auto& e : recentEvents) if (e.eventType.starts_with("pe_")) pe["recent_developments"].push_back({{"id", e.id}, {"description", e.description}});
+                state["political_engine"] = std::move(pe);
+            } else eligiblePE_.clear();
+        }
 
         // Active wars
         auto activeWars = db->GetActiveWars();
@@ -995,6 +1021,7 @@ default_relations:
         wrapper["tickHours"] = std::to_string(tickIntervalHours_.load());
         wrapper["maxActiveWars"] = std::to_string(maxActiveWars_.load());
         wrapper["maxRelationChange"] = std::to_string(maxRelationChangePerTick_.load());
+        wrapper["peActive"] = state.contains("political_engine");
 
         return wrapper.dump();
     }
@@ -2440,6 +2467,19 @@ default_relations:
         std::string eventType = resp.value("event_type", "");
         std::string description = resp.value("description", "");
         int delta = resp.value("relation_delta", 0);
+        const auto reactionId = resp.find("reacts_to");
+        const bool reaction = reactionId != resp.end();
+        const bool moveReactionRelations = GetPEReactionsMoveRelations();
+        std::unique_lock peLock(peMutex_, std::defer_lock);
+        if (reaction) {
+            peLock.lock();
+            if (!reactionId->is_number_integer() || !PoliticalEngineBridge::GetSingleton()->IsActive() ||
+                peLoadId_ != PoliticalDB::GetSingleton()->FeedIdentity().value("load_id", "") ||
+                !eligiblePE_.contains(reactionId->dump()) || eventType != "political_reaction") {
+                out["error"] = "stale or invalid PE reaction"; return out.dump();
+            }
+            if (!moveReactionRelations) delta = 0;
+        } else if (eventType == "political_reaction") { out["error"] = "reaction requires reacts_to"; return out.dump(); }
 
         logger::info("Politics DM: factionA={}, factionB={}, type={}, delta={}, desc={}",
             factionA, factionB, eventType, delta, description.substr(0, 80));
@@ -2463,6 +2503,7 @@ default_relations:
             out["error"] = "event recording failed";
             return out.dump();
         }
+        if (reaction) { eligiblePE_.erase(reactionId->dump()); out["reacts_to"] = *reactionId; peLock.unlock(); }
         logger::info("Politics DM: Event #{} recorded — {} vs {} ({}), delta={}",
             eventId, factionA, factionB, eventType, delta);
 
@@ -2554,7 +2595,7 @@ default_relations:
         }
 
         // --- Apply player standing changes from DM response ---
-        if (resp.contains("player_standing_changes") && resp["player_standing_changes"].is_array()) {
+        if ((!reaction || moveReactionRelations) && resp.contains("player_standing_changes") && resp["player_standing_changes"].is_array()) {
             auto* db = PoliticalDB::GetSingleton();
             int maxDelta = GetMaxRelationChangePerTick();
             int applied = 0;
