@@ -60,7 +60,7 @@ inline std::uint32_t ResolveStoryCandidateFormID(std::string_view name,
         for (const auto* pool : {&dm, &npc}) {
             for (const auto& [candidate, formId] : *pool) {
                 if (exact ? candidate != lower : NormalizeStoryCandidateName(candidate) != normalized) continue;
-                if (formId == 0 || found) {
+                if (formId == 0 || (found && match != formId)) {
                     if (rejection) rejection->branch = formId == 0 ? "zero-formid" : "ambiguous";
                     return 0;
                 }
