@@ -404,7 +404,7 @@ ObjectReference Function GetEditorLocationRef(Actor akActor) Global Native
 ; Automatic DM/social responses resolve only within the latest candidate pools.
 ; Exact names precede unique case/whitespace/role-normalized matches.
 ; Unknown names and distinct-ID matches reject; repeated reference IDs resolve, with no global fallback.
-Actor Function ResolveStoryCandidate(String name) Global Native
+Actor Function ResolveStoryCandidate(String name, String partnerName = "", Actor anchor = None) Global Native
 
 ; Manual Director only: exact full display name across indexed actor references.
 ; Same-reference duplicates are allowed; distinct-reference clashes and dead/disabled/deleted actors reject.

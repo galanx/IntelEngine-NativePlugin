@@ -273,9 +273,9 @@ namespace IntelEngine {
         /**
          * Resolve uniquely within the latest DM/social pools, exact display name first,
          * then case/whitespace-normalized name with a trailing role suffix removed.
-         * Unknown or ambiguous names are rejected; no global name search.
+         * Strict unless automatic Social supplies partner context; no global name search.
          */
-        RE::Actor* ResolveStoryCandidate(const std::string& name);
+        RE::Actor* ResolveStoryCandidate(const std::string& name, const std::string& partnerName = "", RE::Actor* anchor = nullptr);
 
         /** Manual Director only: exact full name, unique actor-reference identity across the full index. */
         RE::Actor* ResolveDirectorActor(const std::string& name);

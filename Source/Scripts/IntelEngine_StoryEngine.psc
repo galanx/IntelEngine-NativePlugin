@@ -904,8 +904,11 @@ Function OnNPCInteractionResponse(String response, Int success)
 
     IntelEngine.NotifyStoryTypePicked(storyType)
 
-    Actor npc1 = IntelEngine.ResolveStoryCandidate(npc1Name)
-    Actor npc2 = IntelEngine.ResolveStoryCandidate(npc2Name)
+    Actor npc1 = IntelEngine.ResolveStoryCandidate(npc1Name, npc2Name)
+    Actor npc2 = None
+    If npc1 != None
+        npc2 = IntelEngine.ResolveStoryCandidate(npc2Name, npc1Name, npc1)
+    EndIf
     If npc1 == None || npc1.IsDead() || npc1.IsDisabled()
         return
     EndIf

@@ -886,12 +886,26 @@ namespace IntelEngine {
         return actor;
     }
 
-    RE::Actor* NPCIndex::ResolveStoryCandidate(const std::string& name) {
+    RE::Actor* NPCIndex::ResolveStoryCandidate(const std::string& name, const std::string& partnerName, RE::Actor* anchor) {
         std::shared_lock lock(m_mutex);
         // ponytail: latest-tick pools cannot isolate overlapping requests;
         // upgrade to request-bound resolution via the Papyrus contract.
         StoryCandidateRejection rejection;
-        const auto formId = ResolveStoryCandidateFormID(name, m_dmCandidatePool, m_npcCandidatePool, &rejection);
+        auto formId = ResolveStoryCandidateFormID(name, m_dmCandidatePool, m_npcCandidatePool, &rejection);
+        if (!partnerName.empty() && (anchor || std::string_view(rejection.branch) == "ambiguous")) {
+            // ponytail: NPC 1 anchors NPC 2, not a closest-pair search; explicit reference labels fix intent.
+            auto* anchorActor = anchor ? anchor : RE::PlayerCharacter::GetSingleton();
+            formId = ResolveStoryCandidateFormID(name, m_dmCandidatePool, m_npcCandidatePool, &rejection, [anchorActor](std::uint32_t id) -> double {
+                auto* candidate = RE::TESForm::LookupByID<RE::Actor>(id);
+                if (!anchorActor || !candidate || candidate == anchorActor || candidate->IsDeleted() || candidate->IsDead() || candidate->IsDisabled()) return -1;
+                auto* cell = candidate->GetParentCell();
+                auto* nearCell = anchorActor->GetParentCell();
+                if (!cell || !nearCell || (nearCell->IsInteriorCell() ? cell != nearCell :
+                    cell->IsInteriorCell() || !anchorActor->GetWorldspace() || candidate->GetWorldspace() != anchorActor->GetWorldspace())) return -1;
+                const auto delta = candidate->GetPosition() - anchorActor->GetPosition();
+                return delta.x * delta.x + delta.y * delta.y + delta.z * delta.z;
+            });
+        }
         // Candidate IDs are actor references, never base forms or global name aliases.
         auto* actor = formId ? RE::TESForm::LookupByID<RE::Actor>(formId) : nullptr;
         if (!actor || actor->IsDeleted() || actor->GetFormID() != formId) {
