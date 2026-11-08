@@ -1465,6 +1465,10 @@ EndFunction
 ; =============================================================================
 
 Function OnDungeonMasterResponse(String response, Int success)
+    If IsActive
+        return
+    EndIf
+    Int admittedGeneration = DispatchGeneration
     ClearPending()
 
     If success != 1
@@ -1528,11 +1532,6 @@ Function OnDungeonMasterResponse(String response, Int success)
             typeWithSub = "quest/" + subTypeForTracking
         EndIf
     EndIf
-    IntelEngine.NotifyStoryTypePicked(typeWithSub)
-
-    ; Record full dispatch detail for the rolling history block in the next DM tick prompt.
-    ; Lets the DM verify "vary type/dispatcher" and "don't strike at the same beloved NPC twice".
-    IntelEngine.RecordStoryDispatch(typeWithSub, npcName, narration)
 
     ; Resolve primary NPC from candidate pool (exact FormID, no name ambiguity)
     ; For faction quests with empty npc, FindFactionMember provides the NPC in HandleQuestDispatch
@@ -1594,11 +1593,6 @@ Function OnDungeonMasterResponse(String response, Int success)
         If !IntelEngine.CheckHoldRestriction(npc, storyType)
             Core.DebugMsg("Story DM: " + npc.GetDisplayName() + " rejected — hold restriction for " + storyType)
             IntelEngine.MarkLastDispatchFailed("hold restriction")
-            return
-        EndIf
-        If !ApplyCooldownCheck(npc)
-            Core.DebugMsg("Story DM: " + npc.GetDisplayName() + " on cooldown")
-            IntelEngine.MarkLastDispatchFailed("on story cooldown")
             return
         EndIf
 
@@ -1670,6 +1664,16 @@ Function OnDungeonMasterResponse(String response, Int success)
         EndIf
     EndIf
 
+    If IsActive || DispatchGeneration != admittedGeneration
+        return
+    EndIf
+    If npc != None && !ApplyCooldownCheck(npc)
+        Core.DebugMsg("Story DM: " + npc.GetDisplayName() + " on cooldown")
+        IntelEngine.MarkLastDispatchFailed("on story cooldown")
+        return
+    EndIf
+    IntelEngine.NotifyStoryTypePicked(typeWithSub)
+    IntelEngine.RecordStoryDispatch(typeWithSub, npcName, narration)
 
     ; Route by type
     If storyType == "seek_player"
