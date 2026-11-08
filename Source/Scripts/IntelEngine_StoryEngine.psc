@@ -2316,8 +2316,8 @@ EndFunction
 ; ARRIVAL MONITORING
 ; =============================================================================
 
-Bool Function StillOwns(Actor npc, Int gen, String storyType)
-    return IsActive && ActiveStoryNPC == npc && DispatchGeneration == gen && ActiveStoryType == storyType && (!ArrivalHandling || storyType == "ambush_combat")
+Bool Function StillOwns(Actor npc, Int gen, String storyType, Bool arrivalContinuation = false)
+    return IsActive && ActiveStoryNPC == npc && DispatchGeneration == gen && ActiveStoryType == storyType && (arrivalContinuation || !ArrivalHandling || storyType == "ambush_combat")
 EndFunction
 
 Function CheckStoryNPCArrival()
@@ -2593,6 +2593,9 @@ Function CheckStoryNPCArrival()
                 return
             EndIf
             ImmersiveTeleportToTarget(storyNPC, arrivalTarget)
+            If !StillOwns(storyNPC, claimedGeneration, storyType)
+                return
+            EndIf
             ; Prevent timeout from re-firing while NPC walks the last stretch
             StorageUtil.UnsetFloatValue(storyNPC, "Intel_TaskStartTime")
         EndIf
@@ -2609,6 +2612,9 @@ Function CheckStoryNPCArrival()
     ElseIf stuckStatus >= 3 && StillOwns(storyNPC, claimedGeneration, storyType)
         If AllowStuckTeleport
             ImmersiveTeleportToTarget(storyNPC, arrivalTarget)
+            If !StillOwns(storyNPC, claimedGeneration, storyType)
+                return
+            EndIf
             ; Prevent timeout from re-firing while NPC walks the last stretch
             StorageUtil.UnsetFloatValue(storyNPC, "Intel_TaskStartTime")
         Else
@@ -2665,6 +2671,9 @@ Function OnStoryNPCArrived()
     If !IsActive || ActiveStoryNPC == None || ArrivalHandling
         return
     EndIf
+    Actor claimedNPC = ActiveStoryNPC
+    Int claimedGeneration = DispatchGeneration
+    String claimedType = ActiveStoryType
     ; Latch before side effects or latent calls so concurrent callback/poll stacks cannot both handle arrival.
     ArrivalHandling = true
     If ActiveStoryType == "message" || ActiveStoryType == "quest"
@@ -2698,6 +2707,9 @@ Function OnStoryNPCArrived()
         ActiveStoryNPC.SetLookAt(ActiveSecondNPC)
         ActiveSecondNPC.SetLookAt(ActiveStoryNPC)
         Utility.Wait(0.5)
+        If !StillOwns(claimedNPC, claimedGeneration, claimedType, true)
+            return
+        EndIf
         Core.SendTaskNarration(ActiveStoryNPC, BuildInteractionSummary(ActiveStoryNPC, ActiveNarration, ActiveSecondNPC), ActiveSecondNPC)
     Else
         ; seek_player / informant: narrate on arrival (single narration, no early phase)
@@ -3076,6 +3088,9 @@ Function CheckFactionAmbushCleanup()
 EndFunction
 
 Function OnAmbushConfront()
+    Actor claimedNPC = ActiveStoryNPC
+    Int claimedGeneration = DispatchGeneration
+    String claimedType = ActiveStoryType
     If ActiveStoryNPC.IsSneaking()
         ActiveStoryNPC.StartSneaking()
     EndIf
@@ -3086,6 +3101,9 @@ Function OnAmbushConfront()
     ; Narrate confrontation -- triggers SkyrimNet dialogue with hostile context
     Core.SendTaskNarration(ActiveStoryNPC, ActiveNarration, Game.GetPlayer())
     Utility.Wait(1.5)
+    If !StillOwns(claimedNPC, claimedGeneration, claimedType, true)
+        return
+    EndIf
 
     ; Make essential so they bleedout instead of dying -- gives yield a chance to fire
     ActiveStoryNPC.GetActorBase().SetEssential(true)

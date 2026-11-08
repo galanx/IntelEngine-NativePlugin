@@ -802,6 +802,43 @@ def run_callback_checks(files, history):
         require(vm.task_snapshot() == before and len(vm.effects) == effects if mode == "active" else vm.properties["ActiveStoryNPC"] is (vm.replacement if mode == "validation-race" else vm.target) and vm.properties["DispatchGeneration"] == 1, "automatic callback ownership: " + mode)
         require(mode == "idle" or not any(e[0] in ("RecordStoryDispatch", "NotifyStoryCooldown") for e in vm.effects[effects:]), "rejected callback changed history/cooldown")
     print("actual PEX automatic callback: active preserved; idle admitted; validation replacement preserved PASS")
+def run_resume_checks(files, history):
+    class ResumeVM(DirectorVM):
+        def invoke(self, script, name, args=()):
+            if name == "ImmersiveTeleportToTarget": return self.external("Wait", (), script)
+            if name == "FinishArrivalWithLinger": self.effects.append(("finished",)); return None
+            return super().invoke(script, name, args)
+        def external(self, method, args, script):
+            if method in ("Is3DLoaded", "CheckOffScreenProgress", "CheckStuckStatus"): return group != "offscreen" if method == "Is3DLoaded" else loaded
+            if method == "GetDistance": return 1000.0
+            if method == "IsSneaking": return False
+            if method == "GetActorBase": return self.agent
+            if method in ("SetEssential", "StartCombat"): self.effects.append((method, tuple(args))); return None
+            result = super().external(method, args, script)
+            if method == "Wait" and self.replacement:
+                self.storage[(self.agent, "Intel_TaskStartTime")] = 99.0
+                self.resume_snapshot, self.resume_effects = (self.task_snapshot(), dict(self.properties)), len(self.effects)
+            return result
+    for group, loaded, story_type, entry in (
+            ("offscreen", 1, "seek_player", "CheckStoryNPCArrival"),
+            ("stuck", 3, "seek_player", "CheckStoryNPCArrival"),
+            ("arrival", 0, "npc_interaction", "OnStoryNPCArrived"),
+            ("confront", 0, "ambush", "OnAmbushConfront")):
+        for replacement in (False, True):
+            vm = ResumeVM(files, history); vm.loaded = loaded
+            vm.properties.update({"IsActive": True, "ActiveStoryNPC": vm.agent, "ActiveStoryType": story_type,
+                "ActiveSecondNPC": vm.target, "AllowStuckTeleport": True, "STUCK_DISTANCE_THRESHOLD": 1.0, "SlotStates": [1,0,0,0,0]})
+            vm.properties["AgentAlias00"].actor = vm.agent; vm.player.cell = None
+            vm.storage[(vm.agent, "Intel_TaskStartTime")] = 99.0
+            vm.arrival_interleave_method, vm.arrival_interleave_action = ("Wait", "replace") if replacement else (None, None)
+            vm.invoke("IntelEngine_StoryEngine", entry)
+            if replacement:
+                require((vm.task_snapshot(), vm.properties) == vm.resume_snapshot and len(vm.effects) == vm.resume_effects,
+                        group + ": stale continuation changed replacement storage, actor, slot, phase or effects")
+            else:
+                require((vm.agent, "Intel_TaskStartTime") not in vm.storage if loaded else any(
+                    e[0] == ("finished" if group == "arrival" else "StartCombat") for e in vm.effects), group + ": normal continuation failed")
+        print("actual PEX resume " + group + ": replacement preserved; normal continuation PASS")
 def main():
     if len(sys.argv) != 4:
         raise SystemExit(__doc__)
@@ -1089,6 +1126,7 @@ def main():
             "latched ambush-combat dispatch skipped ongoing combat monitoring")
     print("actual PEX arrival poll: cleanup/replacement interleavings and latched combat monitor passed")
     run_director_lite_checks(files, history)
+    run_resume_checks(files, history)
     run_callback_checks(files, history)
     run_replacement_checks(files, history)
 
