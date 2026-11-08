@@ -115,6 +115,7 @@ Float Property NPCSocialCooldownHours = 24.0 Auto Hidden
 
 ; === NPC Social Dispatch (independent travel, does NOT touch IsActive) ===
 Bool Property IsNPCStoryActive = false Auto Hidden
+Int Property NPCSocialGeneration = 0 Auto Hidden
 Actor Property NPCSocialTraveler = None Auto Hidden
 Actor Property NPCSocialTarget = None Auto Hidden
 String Property NPCSocialNarration = "" Auto Hidden
@@ -1011,6 +1012,7 @@ Bool Function DispatchNPCSocial(Actor npc, Actor target, String narration, Strin
     Core.AllocateSlot(slot, npc, "npc_social", target.GetDisplayName(), 1, taskOrigin, narration)
 
     NPCSocialTraveler = npc
+    NPCSocialGeneration += 1
     NPCSocialTarget = target
     NPCSocialNarration = narration
     NPCSocialType = storyType
@@ -1167,11 +1169,11 @@ EndFunction
 Function CleanupNPCSocialDispatch()
     If NPCSocialTraveler != None
         Int slot = Core.FindSlotByAgent(NPCSocialTraveler)
-        If slot >= 0
-            Core.ClearSlot(slot)  ; handles packages, linked refs, StorageUtil keys
-        Else
-            Core.RemoveAllPackages(NPCSocialTraveler, false)
+        If slot < 0
+            Core.RemoveIntelPackages(NPCSocialTraveler)
+            Core.ClearLinkedRefs(NPCSocialTraveler)
         EndIf
+        Core.ClearSlotRestoreFollower(slot, NPCSocialTraveler)
     EndIf
     ResetNPCSocialDispatchState()
 EndFunction
@@ -1463,6 +1465,10 @@ EndFunction
 ; =============================================================================
 
 Function OnDungeonMasterResponse(String response, Int success)
+    If IsActive
+        return
+    EndIf
+    Int admittedGeneration = DispatchGeneration
     ClearPending()
 
     If success != 1
@@ -1526,11 +1532,6 @@ Function OnDungeonMasterResponse(String response, Int success)
             typeWithSub = "quest/" + subTypeForTracking
         EndIf
     EndIf
-    IntelEngine.NotifyStoryTypePicked(typeWithSub)
-
-    ; Record full dispatch detail for the rolling history block in the next DM tick prompt.
-    ; Lets the DM verify "vary type/dispatcher" and "don't strike at the same beloved NPC twice".
-    IntelEngine.RecordStoryDispatch(typeWithSub, npcName, narration)
 
     ; Resolve primary NPC from candidate pool (exact FormID, no name ambiguity)
     ; For faction quests with empty npc, FindFactionMember provides the NPC in HandleQuestDispatch
@@ -1592,11 +1593,6 @@ Function OnDungeonMasterResponse(String response, Int success)
         If !IntelEngine.CheckHoldRestriction(npc, storyType)
             Core.DebugMsg("Story DM: " + npc.GetDisplayName() + " rejected — hold restriction for " + storyType)
             IntelEngine.MarkLastDispatchFailed("hold restriction")
-            return
-        EndIf
-        If !ApplyCooldownCheck(npc)
-            Core.DebugMsg("Story DM: " + npc.GetDisplayName() + " on cooldown")
-            IntelEngine.MarkLastDispatchFailed("on story cooldown")
             return
         EndIf
 
@@ -1668,6 +1664,16 @@ Function OnDungeonMasterResponse(String response, Int success)
         EndIf
     EndIf
 
+    If IsActive || DispatchGeneration != admittedGeneration
+        return
+    EndIf
+    If npc != None && !ApplyCooldownCheck(npc)
+        Core.DebugMsg("Story DM: " + npc.GetDisplayName() + " on cooldown")
+        IntelEngine.MarkLastDispatchFailed("on story cooldown")
+        return
+    EndIf
+    IntelEngine.NotifyStoryTypePicked(typeWithSub)
+    IntelEngine.RecordStoryDispatch(typeWithSub, npcName, narration)
 
     ; Route by type
     If storyType == "seek_player"
@@ -2310,8 +2316,8 @@ EndFunction
 ; ARRIVAL MONITORING
 ; =============================================================================
 
-Bool Function StillOwns(Actor npc, Int gen, String storyType)
-    return IsActive && ActiveStoryNPC == npc && DispatchGeneration == gen && ActiveStoryType == storyType && (!ArrivalHandling || storyType == "ambush_combat")
+Bool Function StillOwns(Actor npc, Int gen, String storyType, Bool arrivalContinuation = false)
+    return IsActive && ActiveStoryNPC == npc && DispatchGeneration == gen && ActiveStoryType == storyType && (arrivalContinuation || !ArrivalHandling || storyType == "ambush_combat")
 EndFunction
 
 Function CheckStoryNPCArrival()
@@ -2587,6 +2593,9 @@ Function CheckStoryNPCArrival()
                 return
             EndIf
             ImmersiveTeleportToTarget(storyNPC, arrivalTarget)
+            If !StillOwns(storyNPC, claimedGeneration, storyType)
+                return
+            EndIf
             ; Prevent timeout from re-firing while NPC walks the last stretch
             StorageUtil.UnsetFloatValue(storyNPC, "Intel_TaskStartTime")
         EndIf
@@ -2603,6 +2612,9 @@ Function CheckStoryNPCArrival()
     ElseIf stuckStatus >= 3 && StillOwns(storyNPC, claimedGeneration, storyType)
         If AllowStuckTeleport
             ImmersiveTeleportToTarget(storyNPC, arrivalTarget)
+            If !StillOwns(storyNPC, claimedGeneration, storyType)
+                return
+            EndIf
             ; Prevent timeout from re-firing while NPC walks the last stretch
             StorageUtil.UnsetFloatValue(storyNPC, "Intel_TaskStartTime")
         Else
@@ -2659,6 +2671,9 @@ Function OnStoryNPCArrived()
     If !IsActive || ActiveStoryNPC == None || ArrivalHandling
         return
     EndIf
+    Actor claimedNPC = ActiveStoryNPC
+    Int claimedGeneration = DispatchGeneration
+    String claimedType = ActiveStoryType
     ; Latch before side effects or latent calls so concurrent callback/poll stacks cannot both handle arrival.
     ArrivalHandling = true
     If ActiveStoryType == "message" || ActiveStoryType == "quest"
@@ -2692,6 +2707,9 @@ Function OnStoryNPCArrived()
         ActiveStoryNPC.SetLookAt(ActiveSecondNPC)
         ActiveSecondNPC.SetLookAt(ActiveStoryNPC)
         Utility.Wait(0.5)
+        If !StillOwns(claimedNPC, claimedGeneration, claimedType, true)
+            return
+        EndIf
         Core.SendTaskNarration(ActiveStoryNPC, BuildInteractionSummary(ActiveStoryNPC, ActiveNarration, ActiveSecondNPC), ActiveSecondNPC)
     Else
         ; seek_player / informant: narrate on arrival (single narration, no early phase)
@@ -3070,6 +3088,9 @@ Function CheckFactionAmbushCleanup()
 EndFunction
 
 Function OnAmbushConfront()
+    Actor claimedNPC = ActiveStoryNPC
+    Int claimedGeneration = DispatchGeneration
+    String claimedType = ActiveStoryType
     If ActiveStoryNPC.IsSneaking()
         ActiveStoryNPC.StartSneaking()
     EndIf
@@ -3080,6 +3101,9 @@ Function OnAmbushConfront()
     ; Narrate confrontation -- triggers SkyrimNet dialogue with hostile context
     Core.SendTaskNarration(ActiveStoryNPC, ActiveNarration, Game.GetPlayer())
     Utility.Wait(1.5)
+    If !StillOwns(claimedNPC, claimedGeneration, claimedType, true)
+        return
+    EndIf
 
     ; Make essential so they bleedout instead of dying -- gives yield a chance to fire
     ActiveStoryNPC.GetActorBase().SetEssential(true)

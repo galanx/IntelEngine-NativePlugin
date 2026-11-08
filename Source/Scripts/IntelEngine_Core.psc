@@ -2315,18 +2315,18 @@ Event OnDashboardSetting(String eventName, String strArg, Float numArg, Form sen
     ; No PushDashboardState() — React updates optimistically
 EndEvent
 
-Bool Function DirectorCanDispatch(Actor npc, Bool storyDispatch = false)
+Bool Function DirectorCanDispatch(Actor npc, Bool storyDispatch = false, Actor replacing = None)
     ; Include aliases retained during task completion, not just nonzero slot states.
     Int slot = 0
     While slot < MAX_SLOTS
         ReferenceAlias taskAlias = GetAgentAlias(slot)
-        If taskAlias && taskAlias.GetActorReference() == npc
+        If taskAlias && taskAlias.GetActorReference() == npc && npc != replacing
             NotifyPlayer(npc.GetDisplayName() + " is already busy (" + IntelEngine.FriendlyKey(SlotTaskTypes[slot]) + "). Cancel it first.")
             Return false
         EndIf
         slot += 1
     EndWhile
-    If storyDispatch && StoryEngine && StoryEngine.IsActive
+    If storyDispatch && StoryEngine && StoryEngine.IsActive && (!replacing || StoryEngine.ActiveStoryNPC != replacing)
         Actor activeNPC = StoryEngine.ActiveStoryNPC
         String activeName = "an unknown NPC"
         If activeNPC
@@ -2354,9 +2354,6 @@ Event OnDashboardDispatchStory(String eventName, String strArg, Float numArg, Fo
         NotifyPlayer("Couldn't find NPC '" + npcName + "' (no unique match).")
         Return
     EndIf
-    If !DirectorCanDispatch(npc, true)
-        Return
-    EndIf
     If narration == ""
         DebugMsg("Director: Empty narration, aborting")
         Return
@@ -2364,6 +2361,31 @@ Event OnDashboardDispatchStory(String eventName, String strArg, Float numArg, Fo
     If !StoryEngine
         DebugMsg("Director: StoryEngine not available")
         Return
+    EndIf
+    Actor replacing = None
+    If StoryEngine.IsActive && IntelEngine.StoryResponseGetField(strArg, "replaceGeneration") == StoryEngine.DispatchGeneration as String
+        replacing = StoryEngine.ActiveStoryNPC
+    EndIf
+    If !DirectorCanDispatch(npc, true, replacing)
+        Return
+    EndIf
+    If replacing
+        String validation = IntelEngine.ValidateStoryResponse(response, 16383, 0)
+        If IntelEngine.StoryResponseGetField(validation, "valid") != "true" || \
+            (storyType != "seek_player" && storyType != "informant" && storyType != "ambush" && storyType != "stalker" && storyType != "quest" && storyType != "message" && storyType != "road_encounter") || \
+            (storyType == "message" && StoryEngine.ExtractJsonField(response, "msgContent") == "") || (storyType == "informant" && (StoryEngine.ExtractJsonField(response, "subject") == "" || StoryEngine.ExtractJsonField(response, "gossip") == ""))
+            Return
+        EndIf
+        CancelCurrentTask(replacing, true)
+        If StoryEngine.ActiveStoryNPC == replacing
+            RemoveIntelPackages(replacing)
+            ClearLinkedRefs(replacing)
+            ClearSlotRestoreFollower(-1, replacing)
+            StoryEngine.CleanupStoryDispatch()
+        EndIf
+        If StoryEngine.IsActive || FindSlotByAgent(replacing) >= 0
+            Return
+        EndIf
     EndIf
 
     DebugMsg("Director: Dispatching " + storyType + " with " + npc.GetDisplayName() + " - " + narration)
@@ -2443,8 +2465,25 @@ Event OnDashboardDispatchNpcSocial(String eventName, String strArg, Float numArg
         NotifyPlayer("Couldn't find NPC '" + npc2Name + "' (no unique match).")
         Return
     EndIf
-    If !DirectorCanDispatch(npc1) || !DirectorCanDispatch(npc2)
+    Actor replacing = None
+    If StoryEngine && StoryEngine.IsNPCStoryActive && IntelEngine.StoryResponseGetField(strArg, "replaceGeneration") == StoryEngine.NPCSocialGeneration as String
+        replacing = StoryEngine.NPCSocialTraveler
+    EndIf
+    If narration == "" || (socialType != "npc_interaction" && socialType != "npc_gossip") || npc1 == npc2 || !StoryEngine
         Return
+    EndIf
+    If !DirectorCanDispatch(npc1, false, replacing) || !DirectorCanDispatch(npc2, false, replacing)
+        Return
+    EndIf
+    If StoryEngine.IsNPCStoryActive && !replacing
+        Return
+    EndIf
+    If replacing
+        CancelCurrentTask(replacing, true)
+        StoryEngine.CleanupNPCSocialDispatch()
+        If StoryEngine.IsNPCStoryActive || FindSlotByAgent(replacing) >= 0
+            Return
+        EndIf
     EndIf
 
     DebugMsg("Director: NPC Social " + socialType + " — " + npc1Name + " -> " + npc2Name + ": " + narration)
@@ -2731,6 +2770,7 @@ String Function BuildDashboardStateJson()
     If StoryEngine
         json += "\"enabled\":" + BoolToJson(IsStoryEngineEnabled())
         json += ",\"isActive\":" + BoolToJson(StoryEngine.IsActive)
+        json += ",\"generation\":" + StoryEngine.DispatchGeneration
         json += ",\"activeNPC\":\"" + EscapeJson(GetActorName(StoryEngine.ActiveStoryNPC)) + "\""
         json += ",\"activeType\":\"" + StoryEngine.ActiveStoryType + "\""
         json += ",\"activeNarration\":\"" + EscapeJson(StoryEngine.ActiveNarration) + "\""
@@ -2790,6 +2830,7 @@ String Function BuildDashboardStateJson()
     If StoryEngine
         json += "\"enabled\":" + BoolToJson(StoryEngine.NPCTickEnabled)
         json += ",\"isActive\":" + BoolToJson(StoryEngine.IsNPCStoryActive)
+        json += ",\"generation\":" + StoryEngine.NPCSocialGeneration
         json += ",\"traveler\":\"" + EscapeJson(GetActorName(StoryEngine.NPCSocialTraveler)) + "\""
         json += ",\"target\":\"" + EscapeJson(GetActorName(StoryEngine.NPCSocialTarget)) + "\""
         json += ",\"type\":\"" + StoryEngine.NPCSocialType + "\""

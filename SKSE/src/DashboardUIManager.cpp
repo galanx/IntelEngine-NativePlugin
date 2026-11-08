@@ -1050,6 +1050,7 @@ namespace IntelEngine {
             std::string npcName = j.value("npcName", "");
             std::string type = j.value("storyType", "");
             std::string narration = j.value("narration", "");
+            std::string replaceGeneration = j.value("replaceGeneration", "-1");
             if (npcName.empty() || type.empty() || narration.empty()) return;
         
             // Build response JSON with proper escaping (all optional fields default to "")
@@ -1073,6 +1074,7 @@ namespace IntelEngine {
             eventPayload["narration"] = narration;
             eventPayload["npcName"] = npcName;
             eventPayload["response"] = SafeDump(response);
+            eventPayload["replaceGeneration"] = replaceGeneration;
         
             DashboardUIManager::GetSingleton()->SendModEvent(
                 "IntelEngine_DashboardDispatchStory", SafeDump(eventPayload), 0.0f);
@@ -1100,6 +1102,7 @@ namespace IntelEngine {
             std::string type = j.value("socialType", "");
             std::string narration = j.value("narration", "");
             if (npc1.empty() || npc2.empty() || type.empty() || narration.empty()) return;
+            std::string replaceGeneration = j.value("replaceGeneration", "-1");
         
             // Build response JSON matching what the NPC DM would return
             nlohmann::json response;
@@ -1123,6 +1126,7 @@ namespace IntelEngine {
             eventPayload["npc1Name"] = npc1;
             eventPayload["npc2Name"] = npc2;
             eventPayload["response"] = SafeDump(response);
+            eventPayload["replaceGeneration"] = replaceGeneration;
         
             DashboardUIManager::GetSingleton()->SendModEvent(
                 "IntelEngine_DashboardDispatchNpcSocial", SafeDump(eventPayload), 0.0f);
