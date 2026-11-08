@@ -105,10 +105,14 @@ namespace IntelEngine {
                     continue;
                 }
                 uint32_t strLen = 0;
-                a_intfc->ReadRecordData(&strLen, sizeof(strLen));
+                if (a_intfc->ReadRecordData(&strLen, sizeof(strLen)) != sizeof(strLen)) {
+                    continue;
+                }
                 if (strLen > 0 && strLen < 256) {
                     std::string id(strLen, '\0');
-                    a_intfc->ReadRecordData(id.data(), strLen);
+                    if (a_intfc->ReadRecordData(id.data(), strLen) != strLen) {
+                        continue;
+                    }
                     g_currentSaveID = id;
                     logger::info("LoadCallback: Loaded save ID '{}'", g_currentSaveID);
                 }
