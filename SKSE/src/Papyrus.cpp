@@ -41,6 +41,7 @@
 #include "QuestStateTracker.h"
 #include "AsyncDispatch.h"
 #include "PoliticalEngineBridge.h"
+#include "PoliticalEngineChanges.h"
 #include <Windows.h>
 #include <nlohmann/json.hpp>
 
@@ -4018,7 +4019,11 @@ namespace IntelEngine::Papyrus {
                                functionName = std::move(functionName),
                                generation = SlotTracker::GetSingleton()->loadGeneration.load()]() mutable {
             if (generation != SlotTracker::GetSingleton()->loadGeneration.load()) return;
-            PoliticalEngineBridge::GetSingleton()->Poll();
+            for (const auto& change : PoliticalEngineBridge::GetSingleton()->Poll()) {
+                const auto text = PEEventText(change);
+                if (!text.empty()) FactionPolitics::GetSingleton()->RecordPoliticalEvent(
+                    "", "", change.value("type", ""), text, 0, snap.currentGameTime);
+            }
             std::string requestJson = FactionPolitics::GetSingleton()->BuildPoliticalContextFromSnapshot(snap);
             auto* task = SKSE::GetTaskInterface();
             if (!task) {

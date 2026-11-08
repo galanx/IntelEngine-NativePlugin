@@ -521,13 +521,14 @@ default_relations:
     bool FactionPolitics::ValidateEvent(const std::string& factionA, const std::string& factionB,
                                          const std::string& eventType, int relationDelta) {
         if (!initialized_.load()) return false;
+        if (eventType.starts_with("pe_") && relationDelta != 0) return false;
 
         if (IsSameFactionPair(factionA, factionB)) {
             logger::warn("FactionPolitics: Rejected political event with same faction on both sides: {}", factionA);
             return false;
         }
 
-        if (!GetFaction(factionA)) {
+        if (!(eventType.starts_with("pe_") && factionA.empty()) && !GetFaction(factionA)) {
             logger::warn("FactionPolitics: Invalid faction_a: {}", factionA);
             return false;
         }
