@@ -643,6 +643,46 @@ Dynamic save-layer bios remain offline-only. File edits or newly generated bios 
 not promised visible until cache invalidation.
 Cache invalidation across save loads remains to be qualified.
 
+### Political Engine bridge — change intake
+
+Optional read-only `PoliticalLetters.dll` detection requires API v3 and the snapshot export.
+Missing or incompatible PE disables the bridge for the session. The bounded reader retains
+four attempts, the 64 MiB limit, NUL validation and nonthrowing JSON parsing.
+
+`PL_StateChanged` only marks dirty state. The political-context worker polls comparable public
+district owners, war phases and present rulers. Initial attachment, loads and inactive reads
+establish a fresh baseline without news. At most four comparable records are returned per revision;
+district changes in one read are combined. Private puppet state, draft proposals and military
+detail are excluded. The temporary snapshot files/event-log writer has been removed.
+The worker records factual `pe_territory`, `pe_campaign` and `pe_ruler` rumors with zero
+relation delta. Empty faction IDs are allowed only for `pe_*`; invalid nonempty IDs and
+same-faction pairs still reject. Public PE news is visible to unaffiliated NPCs through 0810.
+Optional `PE_GetIntelInitiatives080JSON` supplies public visits, gifts and disputes.
+IE baselines the bounded journal on attach/load and deduplicates string IDs; PE must
+not also call `RecordPoliticalEvent` for these initiatives. Missing export disables only this intake.
+Active PE adds authoritative territory and recent public developments to the Political DM
+context. A development is eligible for one `political_reaction` on the next tick through
+`reacts_to`; expiry, load identity and duplicate responses reject stale reactions.
+`politics.pe_reactions_move_relations` defaults true. Its persisted Papyrus/MCM/dashboard
+toggle controls only tagged reaction relation and player-standing deltas, not IE's own
+politics, standing decay or war/battle mechanics. Disabled still records the reaction.
+Dashboard settings also report optional-provider detection. All of this remains offline-verified.
+Optional `PE_GetPoliticalSides080JSON` joins current district owner IDs to realm sides;
+both ownership and sides-only changes refresh context. A present but unreadable export
+never invokes vanilla fallback. Only an absent export permits main-thread `CWOwner`
+keyword-value reads, exposed separately as vanilla Civil War context, never district sides.
+Civil War organizations match existing `CWImperialFaction`/`CWSonsFaction` IDs.
+The active-only prompt forbids organization battles from inventing territory transfers.
+PE territory/development context is Political-DM-only. NPC 0810 retains organization
+events/relations and public PE news, without duplicating PE bio ranks, offices or reputation.
+The worker polls/builds context; the existing game-thread callback commits news, then
+dispatches the DM, only for the captured load generation. New news is eligible on the following tick.
+
+Run `PoliticalEngineReadJSONCheck` and
+`python SKSE/tests/RunPoliticalEngineBridgeCheck.py <vcpkg-triplet-dir> <private-sample-directory>`
+from a VS2022 developer shell. These are offline checks, not provider/runtime verification.
+`python SKSE/tests/RunPoliticalEngineTickCheck.py <vcpkg-triplet-dir>` exercises that thread/load boundary.
+
 ### Source-level checks
 
 From Native in a VS2022 amd64 developer shell, create the detached check directory and run:

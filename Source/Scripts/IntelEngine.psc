@@ -864,6 +864,8 @@ String Function RunStandingMechanics() Global Native
 
 ; Runtime politics settings
 Function SetPoliticsEnabled(Bool enabled) Global Native
+Bool Function GetPEReactionsMoveRelations() Global Native
+Function SetPEReactionsMoveRelations(Bool enabled) Global Native
 Function SetPoliticsTickInterval(Int hours) Global Native
 
 ; === War Lifecycle ===
