@@ -951,6 +951,40 @@ def run_near_player_checks(files, history):
     print("actual PEX near-player arrival: dwell, interruption, range, linger and native races passed")
 
 
+def run_hold_restriction_checks(files, history):
+    for origin in ("Director", "Story engine"):
+        vm = NearPlayerVM(files, history)
+        vm.properties.update({"IsActive": False, "ActiveStoryNPC": None,
+            "ActiveStoryType": "informant", "SlotStates": [0] * 5})
+        vm.properties["AgentAlias00"].actor = None
+        if origin == "Director":
+            payload = json.dumps({"storyType": "informant", "npcName": vm.agent.name,
+                "narration": "brought news", "response": json.dumps({"subject": vm.target.name, "gossip": "knows the road"})})
+            vm.invoke("IntelEngine_Core", "OnDashboardDispatchStory", ("", payload, 0.0, None))
+        else:
+            vm.invoke("IntelEngine_StoryEngine", "DispatchToTarget",
+                (vm.agent, vm.player, "brought news", "story", origin))
+        require(vm.storage.get((vm.agent, "Intel_TaskOrigin")) == origin, "dispatch origin not retained")
+        vm.hold_allowed = False
+        vm.effects.clear()
+        vm.invoke("IntelEngine_StoryEngine", "CheckStoryNPCArrival")
+        notices = [e for e in vm.effects if e[0] == "Notification" and "hold restriction" in e[1]]
+        if origin == "Director":
+            require(vm.properties["IsActive"] and vm.properties["SlotStates"][0] == 1 and not notices,
+                    "Director informant was aborted by MCM hold restriction")
+        else:
+            require(not vm.properties["IsActive"] and vm.properties["SlotStates"][0] == 0 and
+                    len(notices) == 1 and vm.agent.name in notices[0][1],
+                    "automatic hold abort did not clean up with an NPC/reason notification")
+    vm = NearPlayerVM(files, history)
+    vm.hold_allowed = False
+    vm.invoke("IntelEngine_StoryEngine", "ShouldAbortForHoldRestriction",
+        (vm.agent, vm.player, "seek_player", "", -1))
+    require(vm.properties["IsActive"] and not any(e[0] == "Notification" for e in vm.effects),
+            "stale hold check aborted or notified for a replacement")
+    print("actual PEX hold restriction: Director informant retained, automatic abort notified, stale guard passed")
+
+
 def main():
     if len(sys.argv) != 4:
         raise SystemExit(__doc__)
@@ -1243,6 +1277,7 @@ def main():
     run_replacement_checks(files, history)
     run_courier_checks(files, history)
     run_near_player_checks(files, history)
+    run_hold_restriction_checks(files, history)
 
 
 if __name__ == "__main__":
