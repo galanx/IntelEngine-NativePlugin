@@ -317,8 +317,8 @@ namespace IntelEngine {
             bool playerParticipated = false;  // true if player joined at any point (survives side changes)
             int playerKillsA = 0;            // soldiers from factionA killed by player
             int playerKillsB = 0;            // soldiers from factionB killed by player
+            nlohmann::json physicalPosition = nullptr;
         };
-
         /** Spawn soldiers for one faction side. Shared by ExecuteFullBattleSpawn and SpawnReinforcements. */
         std::vector<RE::Actor*> SpawnSoldiersForFaction(
             const std::string& factionId, RE::TESFaction* battleFaction,

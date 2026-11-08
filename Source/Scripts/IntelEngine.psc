@@ -783,6 +783,11 @@ String Function BuildPoliticalDashboardJson() Global Native
 
 ; Record a political event between factions, returns event ID (-1 on failure)
 Int Function RecordPoliticalEvent(String factionA, String factionB, String eventType, String description, Int delta, Float gameTime) Global Native
+; Return political events after an ID with feed identity and pagination metadata.
+String Function GetPoliticalEventsAfter(Int afterId, Int limit = 50) Global Native
+; Return configured political factions as JSON.
+String Function GetFactionsJson() Global Native
+
 
 ; Check if a political event should physically manifest near the player.
 ; Returns JSON spawn instructions or empty string if player is not at the event location.

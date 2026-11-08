@@ -220,10 +220,16 @@ default_relations:
             return false;
         }
 
+        const auto loadId = PoliticalDB::GetSingleton()->FeedIdentity().value("load_id", std::string{});
         std::lock_guard<std::mutex> lock(configMutex_);
+        if (revisionLoadId_ != loadId) {
+            revisionLoadId_ = loadId;
+            factionRevision_ = 0;
+            disbandedSnapshot_.clear();
+        }
         factions_ = std::move(result.factions);
         defaultRelations_ = std::move(result.defaultRelations);
-
+        ++factionRevision_;
         factionIndex_.clear();
         nameToId_.clear();
         std::string loadedIds;
@@ -463,7 +469,8 @@ default_relations:
 
     int FactionPolitics::RecordPoliticalEvent(const std::string& factionA, const std::string& factionB,
                                                const std::string& eventType, const std::string& description,
-                                               int delta, float gameTime) {
+                                               int delta, float gameTime, const std::string& locationName,
+                                               const nlohmann::json& position) {
         auto* db = PoliticalDB::GetSingleton();
         if (!db || !db->IsReady()) return -1;
         if (!ValidateEvent(factionA, factionB, eventType, delta)) return -1;
@@ -471,8 +478,7 @@ default_relations:
         int maxDelta = GetMaxRelationChangePerTick();
         delta = std::clamp(delta, -maxDelta, maxDelta);
 
-        int eventId = db->RecordEvent(factionA, factionB, eventType, description, delta, gameTime);
-
+        int eventId = db->RecordEvent(factionA, factionB, eventType, description, delta, gameTime, "", locationName, position);
         if (!factionB.empty() && delta != 0) {
             db->AdjustRelation(factionA, factionB, delta);
         }
@@ -595,6 +601,46 @@ default_relations:
             if (!actor) return {false, false};
             return {true, actor->IsDead() && !actor->IsEssential()};
         });
+    }
+
+    std::string FactionPolitics::GetFactionsJson() {
+        auto* db = PoliticalDB::GetSingleton();
+        auto out = db->FeedIdentity();
+        auto organizations = nlohmann::json::array();
+        {
+            std::lock_guard<std::mutex> lock(configMutex_);
+            const auto loadId = out.value("load_id", std::string{});
+            if (revisionLoadId_ != loadId) {
+                revisionLoadId_ = loadId;
+                factionRevision_ = 0;
+                disbandedSnapshot_.clear();
+            }
+            if (!out["ready"].get<bool>() || !initialized_.load()) {
+                out["ready"] = false;
+                out["revision"] = factionRevision_;
+                out["factions"] = std::move(organizations);
+                return out.dump();
+            }
+            // ponytail: liveness polling misses transitions between reads; add leader death/resurrection hooks if needed.
+            for (const auto& f : factions_) {
+                auto fj = FactionToJson(f);
+                const bool disbanded = fj.empty();
+                const auto previous = disbandedSnapshot_.find(f.id);
+                if (previous != disbandedSnapshot_.end() && previous->second != disbanded) ++factionRevision_;
+                disbandedSnapshot_[f.id] = disbanded;
+                if (disbanded) fj = {{"id", f.id}, {"name", f.name}, {"hold", f.hold}};
+                fj["disbanded"] = disbanded;
+                fj["skyrim_faction_id"] = f.skyrimFactionId;
+                fj["allies"] = f.allies;
+                fj["rivals"] = f.rivals;
+                organizations.push_back(std::move(fj));
+            }
+            out["revision"] = factionRevision_;
+        }
+        const auto current = db->FeedIdentity();
+        if (out["load_id"] != current["load_id"] || !initialized_.load()) out["ready"] = false;
+        out["factions"] = out["ready"].get<bool>() ? std::move(organizations) : nlohmann::json::array();
+        return out.dump();
     }
 
     std::unordered_map<std::string, std::string> FactionPolitics::BuildIdToNameMap() const {
@@ -1909,7 +1955,8 @@ default_relations:
     int FactionPolitics::RecordOffScreenBattle(const std::string& factionA, const std::string& factionB,
                                                 const std::string& location, const std::string& result,
                                                 const std::string& narrative, int attackerLosses,
-                                                int defenderLosses, const std::string& victor) {
+                                                int defenderLosses, const std::string& victor,
+                                                const nlohmann::json* physicalPosition) {
         auto* db = PoliticalDB::GetSingleton();
         if (!db->IsReady()) return -1;
 
@@ -1955,8 +2002,10 @@ default_relations:
 
         db->UpdateWarState(war->id, moraleA, moraleB, strengthA, strengthB, war->battlesFought + 1);
 
-        // Worsen inter-faction relations after each battle
-        db->RecordEvent(factionA, factionB, "relation_adjustment", "Battle resolved", -10, gameTime);
+        // Physical battles are visible events; replay-only battles keep their legacy event type.
+        db->RecordEvent(factionA, factionB, physicalPosition ? "battle_result" : "relation_adjustment",
+                        physicalPosition ? narrative : "Battle resolved", -10, gameTime, "",
+                        physicalPosition ? location : "", physicalPosition ? *physicalPosition : nullptr);
         db->AdjustRelation(factionA, factionB, -10);
 
         WritePoliticalStateFile();
@@ -2404,6 +2453,8 @@ default_relations:
         float gameTime = cal ? cal->GetCurrentGameTime() : 0.f;
 
         // Record event (handles validation, clamping, relation adjustment, state file)
+        // ponytail: manifested events stay null because this row precedes spawn and the forward cursor cannot deliver updates;
+        // upgrade after successful spawn or with an updated-events feed when that seam is available.
         int eventId = RecordPoliticalEvent(factionA, factionB, eventType, description, delta, gameTime);
         if (eventId < 0) {
             logger::error("Politics DM: RecordPoliticalEvent FAILED for {} vs {} (type={})",
