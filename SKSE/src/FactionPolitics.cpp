@@ -693,6 +693,17 @@ default_relations:
         std::string playerHold = NPCIndex::GetNPCHoldName(player);
         if (!playerHold.empty()) snap.playerHold = playerHold;
 
+        if (PoliticalEngineBridge::GetSingleton()->IsActive() && !PoliticalEngineBridge::GetSingleton()->HasSidesExport()) {
+            auto* keyword = RE::TESForm::LookupByID<RE::BGSKeyword>(0x2A456);
+            auto* data = RE::TESDataHandler::GetSingleton();
+            if (keyword && data) for (auto* location : data->GetFormArray<RE::BGSLocation>()) {
+                if (!location) continue;
+                for (const auto& value : location->keywordData) if (value.keyword == keyword && (value.data == 1.f || value.data == 2.f)) {
+                    snap.vanillaSides.push_back({{"location_id", location->GetFormID()}, {"name", location->GetName()}, {"side_id", static_cast<int>(value.data)}});
+                    break;
+                }
+            }
+        }
         auto* npcIndex = NPCIndex::GetSingleton();
         if (!npcIndex) return snap;
 
@@ -878,6 +889,11 @@ default_relations:
             if (peLoadId_ != load) { peLoadId_ = load; pendingPE_.clear(); eligiblePE_.clear(); }
             eligiblePE_ = std::move(pendingPE_); pendingPE_ = nlohmann::json::object();
             if (!pe.is_null()) {
+                if (!PoliticalEngineBridge::GetSingleton()->HasSidesExport()) pe["vanilla_civil_war"] = snap.vanillaSides;
+                for (const auto& f : factionsCopy) {
+                    if (f.skyrimFactionId == "CWImperialFaction") pe["civil_war_organizations"]["1"] = f.id;
+                    if (f.skyrimFactionId == "CWSonsFaction") pe["civil_war_organizations"]["2"] = f.id;
+                }
                 pe["react_to"] = eligiblePE_;
                 pe["recent_developments"] = nlohmann::json::array();
                 for (const auto& e : recentEvents) if (e.eventType.starts_with("pe_")) pe["recent_developments"].push_back({{"id", e.id}, {"description", e.description}});

@@ -22,10 +22,17 @@ public:
 class PoliticalEngineBridge {
 public:
     bool active = true;
+    bool sidesExport = false;
+    bool HasSidesExport() const { return sidesExport; }
     static PoliticalEngineBridge* GetSingleton() { static PoliticalEngineBridge value; return &value; }
     bool IsActive() const { return active; }
     nlohmann::json Context() const { return active ? nlohmann::json{{"territory", nlohmann::json::object()}} : nlohmann::json{}; }
 };
+FactionPolitics::PoliticsTickSnapshot VanillaSnapshot() {
+    FactionPolitics::PoliticsTickSnapshot snap;
+#include "PEVanillaSides.inc"
+    return snap;
+}
 int FactionPolitics::DeclareWar(const std::string&, const std::string&, float) { throw std::runtime_error("unexpected war reaction"); }
 bool FactionPolitics::EndWar(const std::string&, const std::string&, const std::string&, float) { throw std::runtime_error("unexpected surrender reaction"); }
 int FactionPolitics::GetActiveWarId(const std::string&, const std::string&) { throw std::runtime_error("unexpected scheduled battle reaction"); }
@@ -37,6 +44,8 @@ nlohmann::json FactionPolitics::TestPEContext() {
     auto* db = PoliticalDB::GetSingleton();
     auto recentEvents = db->GetRecentEvents(15);
     nlohmann::json state;
+    auto snap = VanillaSnapshot();
+    auto factionsCopy = GetAllFactions();
 #include "PEContext.inc"
     return state;
 }
@@ -210,6 +219,22 @@ int main() try {
             !politics->ValidateEvent("", "missing", "pe_ruler", 0) &&
             !politics->ValidateEvent("A", "A", "pe_campaign", 0) &&
             !politics->ValidateEvent("", "B", "pe_gift", 5), "PE exception preserves invalid-pair and zero-delta boundaries");
+    auto* keyword=RE::TESForm::LookupByID<RE::BGSKeyword>(0x2A456);
+    RE::BGSKeyword wrong{};
+    RE::BGSLocation empire{{1,1,&RE::fixtureFile},"Imperial hold",{{&wrong,2.f},{keyword,1.f}}};
+    RE::BGSLocation storm{{2,2,&RE::fixtureFile},"Stormcloak hold",{{keyword,2.f}}};
+    RE::BGSLocation invalid{{3,3,&RE::fixtureFile},"Unknown hold",{{keyword,1.5f}}};
+    auto* forms=RE::TESDataHandler::GetSingleton(); forms->locations={nullptr,&empire,&storm,&invalid};
+    Require(VanillaSnapshot().vanillaSides==json::array({{{"location_id",1},{"name","Imperial hold"},{"side_id",1}},
+            {{"location_id",2},{"name","Stormcloak hold"},{"side_id",2}}}), "fallback reads actual CWOwner values, not keyword presence");
+    politics->factions_[0].skyrimFactionId="CWImperialFaction"; politics->factions_[1].skyrimFactionId="CWSonsFaction";
+    auto fallback=politics->TestPEContext()["political_engine"];
+    Require(fallback["vanilla_civil_war"]==VanillaSnapshot().vanillaSides &&
+            fallback["civil_war_organizations"]==json{{"1","A"},{"2","B"}}, "fallback is vanilla-only and organizations match engine faction IDs");
+    PoliticalEngineBridge::GetSingleton()->sidesExport=true; const int reads=forms->reads;
+    Require(!politics->TestPEContext()["political_engine"].contains("vanilla_civil_war") &&
+            forms->reads==reads, "present optional export forbids CWOwner fallback reads and context");
+    PoliticalEngineBridge::GetSingleton()->sidesExport=false;
     const int relationBeforePE = db->GetRelation("A", "B");
     const int publicNews = politics->RecordPoliticalEvent("", "", "pe_territory", "Fellburg took Southern Reach from Markarth.", 0, 3.f);
     auto publicRow = db->GetPoliticalEventsAfter(publicNews-1, 1)["events"][0];
