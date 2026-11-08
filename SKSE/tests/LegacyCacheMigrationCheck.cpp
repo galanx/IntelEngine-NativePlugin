@@ -304,6 +304,21 @@ void filesystemCheck(const fs::path& area, const Bytes& input, const Bytes& conv
     const Bytes ess{'T','E','S','V','_','S','A','V','E','G','A','M','E',0,9,255};
     write(source/"test.ess",ess); write(source/"test.skse",input);
     const auto essHash=sha256(ess), skseHash=sha256(input);
+    const auto noTargetArea=area/"no-targets";
+    fs::create_directory(noTargetArea);
+    const auto noTargets=fixture("1 0 1 unrelated x");
+    write(noTargetArea/"test.ess",ess); write(noTargetArea/"test.skse",noTargets);
+    require(fix(noTargetArea/"test.ess")==2,"no-target fix did not return no-output exit 2");
+    require(std::distance(fs::directory_iterator(noTargetArea),fs::directory_iterator{})==2,
+        "no-target fix created backup, staging or outputs");
+    require(Source(noTargetArea/"test.ess").bytes()==ess &&
+        Source(noTargetArea/"test.skse").bytes()==noTargets,"no-target fix changed originals");
+    std::cout << "PASS: present STRV without IE targets returns 2; no outputs; originals unchanged.\n";
+    for (const auto& payload : {std::string("2 0 1 unrelated x"),std::string("1 0 1 unrelated"),
+            std::string("1 0 1 \tintel_factsrendered legacy\nline"),std::string("1 0 1 \tintel_factsrendered")+std::string("\0junk",5)+" x"}) {
+        write(noTargetArea/"test.skse",fixture(payload));
+        refuses([&] { fix(noTargetArea/"test.ess"); },"malformed or native-only cache target");
+    }
     const auto vr=source/"vr";
     fs::create_directory(vr);
     auto vrInput=fixture("1 "+std::to_string((std::uint64_t{62}<<32)|0x123456)
