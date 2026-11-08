@@ -44,6 +44,7 @@ function FactionInput({ value, onChange: change, onInput, factions = [], options
   const filtered = useMemo(() => {
     const lc = showAll ? '' : text.toLowerCase();
     const matches = entries.filter(f => f.id.toLowerCase().includes(lc) || f.name.toLowerCase().includes(lc));
+    matches.sort((a, b) => (a.name.toLowerCase() === lc ? -2 : a.name.toLowerCase().startsWith(lc) ? -1 : 0) - (b.name.toLowerCase() === lc ? -2 : b.name.toLowerCase().startsWith(lc) ? -1 : 0));
     const factionMatches = matches.filter(f => f.kind === 'faction').slice(0, 10);
     return [...matches.filter(f => f.kind !== 'faction').slice(0, 50 - factionMatches.length), ...factionMatches];
   }, [entries, text, showAll]);
@@ -75,12 +76,12 @@ function FactionInput({ value, onChange: change, onInput, factions = [], options
       )}
       {expanded && (
         <div role={npc ? 'listbox' : undefined} ref={menuRef} style={{ maxHeight }} className={`${dropdownClass} ${openUp ? 'bottom-full mb-0.5' : 'top-full mt-0.5'}`}>
-          {filtered.map(f => (
+          {filtered.map((f, index) => (
             <div
               key={f.id}
               role={npc ? 'option' : undefined} aria-selected={npc ? f.id === String(value) : undefined} onMouseDown={e => e.preventDefault()}
               onClick={() => { onChange(f.id); setQuery(null); setOpen(false); }}
-              className="px-2 py-1 text-xs text-gray-300 hover:bg-white/10 cursor-pointer truncate"
+              className={`px-2 py-1 text-xs text-gray-300 hover:bg-white/10 cursor-pointer truncate ${active === index ? 'bg-white/10' : ''}`}
             >
               {f.name} {(!npc || f.kind) && <span className="text-gray-600">({npc ? f.kind : f.id})</span>}
             </div>
