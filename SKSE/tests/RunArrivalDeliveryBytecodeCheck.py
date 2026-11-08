@@ -792,6 +792,16 @@ def run_replacement_checks(files, history):
                 require(any(e[0] == "SetPlayerTeammate" for e in vm.effects) and (social or (vm.agent, "Intel_MessageContent") not in vm.storage), "replacement lost follower restoration or old message cleanup")
                 require(next(i for i,e in enumerate(vm.effects) if e[0] == "SetLinkedRef" and e[1][1] is None) < next(i for i,e in enumerate(vm.effects) if e[0] == "Trace" and "Allocated slot" in e[1]), "new allocation preceded old linked-ref cleanup")
     print("actual PEX replacement: Story/Social same/different actor, no-slot, invalid/stale, follower and cleanup-before-allocation PASS")
+def run_callback_checks(files, history):
+    for mode in ("active", "idle", "validation-race"):
+        vm = DirectorVM(files, history)
+        if mode == "active": vm.seek("Director story")
+        if mode == "validation-race": vm.arrival_interleave_method, vm.arrival_interleave_action = "CheckHoldRestriction", "replace"
+        before, effects = vm.task_snapshot(), len(vm.effects)
+        vm.invoke("IntelEngine_StoryEngine", "OnDungeonMasterResponse", ('{"should_act":true,"type":"seek_player","npc":"Recipient","narration":"Automatic story"}', 1))
+        require(vm.task_snapshot() == before and len(vm.effects) == effects if mode == "active" else vm.properties["ActiveStoryNPC"] is (vm.replacement if mode == "validation-race" else vm.target) and vm.properties["DispatchGeneration"] == 1, "automatic callback ownership: " + mode)
+        require(mode == "idle" or not any(e[0] in ("RecordStoryDispatch", "NotifyStoryCooldown") for e in vm.effects[effects:]), "rejected callback changed history/cooldown")
+    print("actual PEX automatic callback: active preserved; idle admitted; validation replacement preserved PASS")
 def main():
     if len(sys.argv) != 4:
         raise SystemExit(__doc__)
@@ -1079,6 +1089,7 @@ def main():
             "latched ambush-combat dispatch skipped ongoing combat monitoring")
     print("actual PEX arrival poll: cleanup/replacement interleavings and latched combat monitor passed")
     run_director_lite_checks(files, history)
+    run_callback_checks(files, history)
     run_replacement_checks(files, history)
 
 
