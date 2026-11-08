@@ -673,10 +673,15 @@ never invokes vanilla fallback. Only an absent export permits main-thread `CWOwn
 keyword-value reads, exposed separately as vanilla Civil War context, never district sides.
 Civil War organizations match existing `CWImperialFaction`/`CWSonsFaction` IDs.
 The active-only prompt forbids organization battles from inventing territory transfers.
+PE territory/development context is Political-DM-only. NPC 0810 retains organization
+events/relations and public PE news, without duplicating PE bio ranks, offices or reputation.
+The worker polls/builds context; the existing game-thread callback commits news, then
+dispatches the DM, only for the captured load generation. New news is eligible on the following tick.
 
 Run `PoliticalEngineReadJSONCheck` and
 `python SKSE/tests/RunPoliticalEngineBridgeCheck.py <vcpkg-triplet-dir> <private-sample-directory>`
 from a VS2022 developer shell. These are offline checks, not provider/runtime verification.
+`python SKSE/tests/RunPoliticalEngineTickCheck.py <vcpkg-triplet-dir>` exercises that thread/load boundary.
 
 ### Source-level checks
 

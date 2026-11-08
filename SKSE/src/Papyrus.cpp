@@ -4023,11 +4023,8 @@ namespace IntelEngine::Papyrus {
                                functionName = std::move(functionName),
                                generation = SlotTracker::GetSingleton()->loadGeneration.load()]() mutable {
             if (generation != SlotTracker::GetSingleton()->loadGeneration.load()) return;
-            for (const auto& change : PoliticalEngineBridge::GetSingleton()->Poll()) {
-                const auto text = PEEventText(change);
-                if (!text.empty()) FactionPolitics::GetSingleton()->RecordPoliticalEvent(
-                    "", "", change.value("type", ""), text, 0, snap.currentGameTime);
-            }
+            auto changes = PoliticalEngineBridge::GetSingleton()->Poll();
+            if (generation != SlotTracker::GetSingleton()->loadGeneration.load()) return;
             std::string requestJson = FactionPolitics::GetSingleton()->BuildPoliticalContextFromSnapshot(snap);
             auto* task = SKSE::GetTaskInterface();
             if (!task) {
@@ -4037,7 +4034,14 @@ namespace IntelEngine::Papyrus {
             task->AddTask([questEditorId = std::move(questEditorId),
                            scriptName = std::move(scriptName),
                            functionName = std::move(functionName),
-                           requestJson = std::move(requestJson)]() mutable {
+                           requestJson = std::move(requestJson), changes = std::move(changes),
+                           gameTime = snap.currentGameTime, generation]() mutable {
+                if (generation != SlotTracker::GetSingleton()->loadGeneration.load()) return;
+                for (const auto& change : changes) {
+                    const auto text = PEEventText(change);
+                    if (!text.empty()) FactionPolitics::GetSingleton()->RecordPoliticalEvent(
+                        "", "", change.value("type", ""), text, 0, gameTime);
+                }
                 AsyncDispatch::ExecuteQuestFunctionString(questEditorId, scriptName, functionName, requestJson);
             });
         });
