@@ -228,8 +228,10 @@ class VM:
         if method == "GetPoliticsTickInterval": return 6.0
         if method == "IntListFind": return -1
         if method in ("IntListAdd", "GetForm"): return None
-        if method in ("FormListCount", "IntListCount"):
-            return len(self.storage.get((args[0], args[1]), []))
+        if method in ("FormListCount", "IntListCount"): return len(self.storage.get((args[0], args[1]), []))
+        if method == "FormListGet": return self.storage[(args[0], args[1])][args[2]]
+        if method == "FormListAdd": self.storage.setdefault((args[0], args[1]), []).append(args[2]); return None
+        if method == "FormListRemoveAt": self.storage[(args[0], args[1])].pop(args[2]); return None
         if method == "EncodeRenderedCache": return args[0]
         if method == "RenderTaskHistorySection": return ""
         if method == "IsIndexLoaded": return True
@@ -283,10 +285,10 @@ class VM:
                 if self.stop_on_dispatch_reset and script == "IntelEngine_StoryEngine" and name == "DispatchToTarget" and a[0][1] == "::ArrivalHandling_var" and not env[a[0][1]]:
                     self.dispatch_reset_seen = True
                     return None
-            elif op in ("iadd", "fadd", "fsub", "fmul", "fdiv"):
+            elif op in ("iadd", "isub", "fadd", "fsub", "fmul", "fdiv"):
                 x, y = v(a[1]), v(a[2])
                 env[a[0][1]] = {"iadd": lambda: x + y, "fadd": lambda: x + y,
-                    "fsub": lambda: x - y, "fmul": lambda: x * y, "fdiv": lambda: x / y}[op]()
+                    "isub": lambda: x - y, "fsub": lambda: x - y, "fmul": lambda: x * y, "fdiv": lambda: x / y}[op]()
             elif op == "fneg": env[a[0][1]] = -v(a[1])
             elif op == "strcat":
                 env[a[0][1]] = str(v(a[1])) + str(v(a[2]))
@@ -1015,6 +1017,52 @@ def run_soft_stuck_checks(files, history):
     print("actual PEX SoftStuckRecovery: no Wait/PathToReference; travel package and EvaluatePackage retained (player/None, loaded/unloaded)")
 
 
+def run_linger_teammate_checks(files, history):
+    class LingerVM(VM):
+        teammate = False
+        linked = "existing-link"
+
+        def external(self, method, args, script):
+            if method == "IsPlayerTeammate": return self.teammate
+            if method == "Is3DLoaded": return True
+            if method == "GetDistance":
+                self.effects.append((method, tuple(args)))
+                return 100.0
+            if method == "SetLinkedRef":
+                self.linked = args[1]
+                self.effects.append((method, tuple(args)))
+                return None
+            return super().external(method, args, script)
+
+    vm = LingerVM(files, history)
+    npc = vm.agent
+    actors = [npc]
+    vm.storage[(vm.player, "Intel_StoryLingerActors")] = actors
+    vm.storage[(npc, "Intel_StoryLingerStart")] = 455.0
+    vm.properties.update({"LINGER_TIMEOUT_SECONDS": 300.0, "IntelEngine_TravelTarget": "travel-link",
+                          "SandboxNearPlayerPackage": object()})
+    vm.invoke("IntelEngine_StoryEngine", "CheckStoryLingerCleanup")
+    require(actors == [npc] and not any(e[0] == "RemovePackageOverride" for e in vm.effects),
+            "nearby non-teammate linger was released")
+    vm.teammate = True
+    vm.effects.clear()
+    vm.invoke("IntelEngine_StoryEngine", "CheckStoryLingerCleanup")
+    require(actors == [] and (npc, "Intel_StoryLingerStart") not in vm.storage,
+            "teammate linger cleanup did not remove list entry and start time")
+    require(not any(e[0] in ("Wait", "GetDistance") for e in vm.effects),
+            "teammate linger cleanup waited or checked distance before release")
+    require(("RemovePackageOverride", (npc, vm.properties.get("SandboxNearPlayerPackage"))) in vm.effects,
+            "actual Core.ReleaseLinger teammate branch did not remove the sandbox override")
+    require(vm.linked is None and any(e[0] == "SetLinkedRef" and e[1][1] is None for e in vm.effects),
+            "actual Core.ReleaseLinger teammate branch did not clear the linked ref")
+    require(not any(e[0] in ("ResolveAnyDestination", "GetEditorLocationRef", "MoveTo", "AddPackageOverride")
+                    for e in vm.effects),
+            "teammate linger release unexpectedly attempted home travel")
+    require(any(e[0] == "EvaluatePackage" for e in vm.effects),
+            "actual Core.ReleaseLinger did not evaluate the teammate package")
+    print("actual PEX linger cleanup: nearby non-teammate retained; teammate released next pass without timeout/distance, home travel skipped")
+
+
 def main():
     if len(sys.argv) != 4:
         raise SystemExit(__doc__)
@@ -1309,6 +1357,7 @@ def main():
     run_near_player_checks(files, history)
     run_hold_restriction_checks(files, history)
     run_soft_stuck_checks(files, history)
+    run_linger_teammate_checks(files, history)
 
 
 if __name__ == "__main__":
