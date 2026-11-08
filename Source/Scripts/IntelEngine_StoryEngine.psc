@@ -115,6 +115,7 @@ Float Property NPCSocialCooldownHours = 24.0 Auto Hidden
 
 ; === NPC Social Dispatch (independent travel, does NOT touch IsActive) ===
 Bool Property IsNPCStoryActive = false Auto Hidden
+Int Property NPCSocialGeneration = 0 Auto Hidden
 Actor Property NPCSocialTraveler = None Auto Hidden
 Actor Property NPCSocialTarget = None Auto Hidden
 String Property NPCSocialNarration = "" Auto Hidden
@@ -1011,6 +1012,7 @@ Bool Function DispatchNPCSocial(Actor npc, Actor target, String narration, Strin
     Core.AllocateSlot(slot, npc, "npc_social", target.GetDisplayName(), 1, taskOrigin, narration)
 
     NPCSocialTraveler = npc
+    NPCSocialGeneration += 1
     NPCSocialTarget = target
     NPCSocialNarration = narration
     NPCSocialType = storyType
@@ -1167,11 +1169,11 @@ EndFunction
 Function CleanupNPCSocialDispatch()
     If NPCSocialTraveler != None
         Int slot = Core.FindSlotByAgent(NPCSocialTraveler)
-        If slot >= 0
-            Core.ClearSlot(slot)  ; handles packages, linked refs, StorageUtil keys
-        Else
-            Core.RemoveAllPackages(NPCSocialTraveler, false)
+        If slot < 0
+            Core.RemoveIntelPackages(NPCSocialTraveler)
+            Core.ClearLinkedRefs(NPCSocialTraveler)
         EndIf
+        Core.ClearSlotRestoreFollower(slot, NPCSocialTraveler)
     EndIf
     ResetNPCSocialDispatchState()
 EndFunction

@@ -329,6 +329,8 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
   const [storyType, setStoryType] = useState('seek_player');
   const [storyNarration, setStoryNarration] = useState('');
   const [storyFields, setStoryFields] = useState({});
+  const [replacementConfirm, setReplacementConfirm] = useState('');
+
 
   // NPC Social dispatch state
   const [socialNpc1, setSocialNpc1] = useState('');
@@ -518,6 +520,14 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
     setBusyConfirm('');
     return true;
   };
+  const confirmReplacement = (kind, engine, request) => {
+    if (!engine?.isActive) { setReplacementConfirm(''); return '-1'; }
+    const generation = Number.isInteger(engine.generation) ? String(engine.generation) : '-1';
+    const identity = kind === 'story' ? [engine.activeNPC, engine.activeType] : [engine.traveler, engine.target, engine.type];
+    const confirmation = JSON.stringify([kind, generation, identity, request]);
+    if (replacementConfirm !== confirmation) { setReplacementConfirm(confirmation); return null; }
+    setReplacementConfirm(''); return generation;
+  };
 
   // Only show IntelEngine actions in the Director tab
   const INTEL_ACTIONS = new Set([
@@ -581,16 +591,16 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
 
   const handleDispatchStory = useCallback(() => {
     if (storyRequired.some(([, valid]) => !valid)) return;
-    if (!confirmBusy('story', storyBusy)) return;
-    sendAction('dispatchStory', {
-      npcName: storyNpc.trim(),
-      storyType,
-      narration: storyNarration.trim(),
+    const request = {
+      npcName: storyNpc.trim(), storyType, narration: storyNarration.trim(),
       ...storyFields, ...(['ambush','stalker'].includes(storyType) && storyFields.sender ? {sender:factions.find(f=>f.id===storyFields.sender || f.name===storyFields.sender)?.id || storyFields.sender} : {}),
-    });
+    };
+    const replaceGeneration = confirmReplacement('story', story, request);
+    if (replaceGeneration === null) return;
+    sendAction('dispatchStory', { ...request, replaceGeneration });
     setStoryNarration('');
     setStoryFields({});
-  }, [storyNpc, storyType, storyRequired, storyNarration, storyFields, factions, sendAction, confirmBusy, storyBusy]);
+  }, [story, storyNpc, storyType, storyRequired, storyNarration, storyFields, factions, sendAction, confirmReplacement]);
 
 
   const handleSocialTypeChange = useCallback((type) => {
@@ -600,17 +610,16 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
 
   const handleDispatchSocial = useCallback(() => {
     if (socialRequired.some(([, valid]) => !valid)) return;
-    if (!confirmBusy('social', socialBusy)) return;
-    sendAction('dispatchNpcSocial', {
-      npc1Name: socialNpc1.trim(),
-      npc2Name: socialNpc2.trim(),
-      socialType,
-      narration: socialNarration.trim(),
-      ...socialFields,
-    });
+    const request = {
+      npc1Name: socialNpc1.trim(), npc2Name: socialNpc2.trim(), socialType,
+      narration: socialNarration.trim(), ...socialFields,
+    };
+    const replaceGeneration = confirmReplacement('social', social, request);
+    if (replaceGeneration === null) return;
+    sendAction('dispatchNpcSocial', { ...request, replaceGeneration });
     setSocialNarration('');
     setSocialFields({});
-  }, [socialNpc1, socialNpc2, socialType, socialRequired, socialNarration, socialFields, sendAction, confirmBusy, socialBusy]);
+  }, [social, socialNpc1, socialNpc2, socialType, socialRequired, socialNarration, socialFields, sendAction, confirmReplacement]);
 
   const handlePolEventTypeChange = useCallback((type) => {
     setPolEventType(type);
@@ -742,10 +751,10 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
 
           <button
             onClick={handleDispatchStory}
-            disabled={story?.isActive || storyRequired.some(([, valid]) => !valid)}
+            disabled={storyRequired.some(([, valid]) => !valid)}
             className="w-full px-3 py-1.5 text-xs font-medium rounded transition-colors bg-blue-500/20 text-blue-400 hover:bg-blue-500/30 disabled:opacity-30 disabled:cursor-not-allowed"
           >
-            {story?.isActive ? 'Story engine busy' : queued === 'dispatchStory' ? 'Queued' : busyConfirm.startsWith('sent:dispatchStory:') ? 'Sent' : storyBusy.length && busyConfirm === 'story' ? 'Busy — you sure?' : 'Dispatch Story'}
+            {story?.isActive && replacementConfirm.startsWith('["story"') ? 'Busy — confirm replacement' : queued === 'dispatchStory' ? 'Queued' : busyConfirm.startsWith('sent:dispatchStory:') ? 'Sent' : story?.isActive ? 'Replace Story' : 'Dispatch Story'}
           </button>
           {missingFields(storyRequired)}
         </fieldset>
@@ -820,7 +829,7 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
             disabled={socialRequired.some(([, valid]) => !valid)}
             className="w-full px-3 py-1.5 text-xs font-medium rounded transition-colors bg-purple-500/20 text-purple-400 hover:bg-purple-500/30 disabled:opacity-30 disabled:cursor-not-allowed"
           >
-            {socialBusy.length && busyConfirm === 'social' ? 'Busy — you sure?' : queued === 'dispatchNpcSocial' ? 'Queued' : busyConfirm.startsWith('sent:dispatchNpcSocial:') ? 'Sent' : social?.isActive ? 'NPC social busy' : 'Dispatch Social'}
+            {social?.isActive && replacementConfirm.startsWith('["social"') ? 'Busy — confirm replacement' : queued === 'dispatchNpcSocial' ? 'Queued' : busyConfirm.startsWith('sent:dispatchNpcSocial:') ? 'Sent' : social?.isActive ? 'Replace Social' : 'Dispatch Social'}
           </button>
           {missingFields(socialRequired)}
         </fieldset>
