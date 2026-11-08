@@ -15,13 +15,13 @@ namespace IntelEngine {
         auto dll = GetModuleHandleW(L"PoliticalLetters.dll");
         auto version = dll ? reinterpret_cast<std::uint32_t (*)()>(GetProcAddress(dll, "PE_GetApiVersion")) : nullptr;
         auto reader = dll ? reinterpret_cast<Reader>(GetProcAddress(dll, "PE_GetSnapshotJSON")) : nullptr;
-        if (!version || !reader || version() < 2) {
+        if (!version || !reader || version() != 3) {
             logger::info("PoliticalEngineBridge: unavailable; off for this session");
             return;
         }
         reader_ = reader;
         if (auto* source = SKSE::GetModCallbackEventSource()) source->AddEventSink(this);
-        logger::info("PoliticalEngineBridge: detected API >= 2");
+        logger::info("PoliticalEngineBridge: detected API v3");
         QueueCapture("[\"attached\"]");
     }
 
@@ -56,6 +56,7 @@ namespace IntelEngine {
         try {
             std::filesystem::create_directories(folder);
             const auto path = folder / ("pe_snapshot_" + revisionText + ".json");
+            const bool existed = std::filesystem::exists(path);
             {
                 std::ofstream file;
                 file.exceptions(std::ios::failbit | std::ios::badbit);
@@ -63,18 +64,18 @@ namespace IntelEngine {
                 file << snapshot->dump(2);
                 file.close();
             }
-            logger::info("PoliticalEngineBridge: wrote snapshot {}", path.string());
-            std::ofstream events;
-            events.exceptions(std::ios::failbit | std::ios::badbit);
-            events.open(folder / "pe_events.log", std::ios::app);
-            events << revisionText << ' ' << sections << '\n';
-            events.close();
+            if (!existed) logger::info("PoliticalEngineBridge: wrote snapshot {}", path.string());
             std::vector<std::pair<std::filesystem::file_time_type, std::filesystem::path>> files;
             for (const auto& entry : std::filesystem::directory_iterator(folder))
                 if (entry.is_regular_file() && entry.path().filename().string().starts_with("pe_snapshot_") &&
                     entry.path().extension() == ".json") files.emplace_back(entry.last_write_time(), entry.path());
             std::sort(files.begin(), files.end());
             for (std::size_t i = 50; i < files.size(); ++i) std::filesystem::remove(files[i - 50].second);
+            std::ofstream events;
+            events.exceptions(std::ios::failbit | std::ios::badbit);
+            events.open(folder / "pe_events.log", std::ios::app);
+            events << revisionText << ' ' << sections << '\n';
+            events.close();
         } catch (const std::exception& e) {
             logger::warn("PoliticalEngineBridge: snapshot capture failed: {}", e.what());
         }
