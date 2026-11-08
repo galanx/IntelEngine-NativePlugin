@@ -5,6 +5,7 @@
 #include <string>
 #include <mutex>
 #include <nlohmann/json.hpp>
+#include <unordered_set>
 
 namespace IntelEngine {
     class PoliticalEngineBridge final : public RE::BSTEventSink<SKSE::ModCallbackEvent> {
@@ -22,6 +23,9 @@ namespace IntelEngine {
     private:
         PoliticalEngineBridge() = default;
         using Reader = std::uint32_t (*)(char*, std::uint32_t);
+        Reader initiativeReader_ = nullptr;
+        std::unordered_set<std::string> initiativeIds_;
+        bool initiativeReady_ = false;
         Reader reader_ = nullptr;
         bool initialized_ = false;
         std::atomic<bool> active_{false};

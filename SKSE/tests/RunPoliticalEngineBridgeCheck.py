@@ -50,6 +50,13 @@ using nlohmann::json;
 static json state;
 static unsigned api = 3;
 static bool installed = true;
+static bool journalExport = true;
+static json journal = {{"intel_initiatives080",{{"events",json::array({{{"id","old"},{"event_type","pe_visit"},{"source",20},{"target",104641},{"relation_delta",0},{"text","A prior public visit."}}})}}}};
+static unsigned ReadJournal(char* out,unsigned capacity) {
+    auto text=journal.dump(); auto size=static_cast<unsigned>(text.size()+1);
+    if(out && capacity>=size) std::memcpy(out,text.c_str(),size);
+    return size;
+}
 static IntelEngine::PoliticalEngineBridge* resetDuringRead = nullptr;
 static unsigned Version() { return api; }
 static unsigned Read(char* out, unsigned capacity) {
@@ -62,6 +69,7 @@ static void* GetModuleHandleW(const wchar_t*) { return installed ? reinterpret_c
 static void* GetProcAddress(void*, const char* name) {
     if (std::string_view(name) == "PE_GetApiVersion") return reinterpret_cast<void*>(&Version);
     if (std::string_view(name) == "PE_GetSnapshotJSON") return reinterpret_cast<void*>(&Read);
+    if (journalExport && std::string_view(name) == "PE_GetIntelInitiatives080JSON") return reinterpret_cast<void*>(&ReadJournal);
     return nullptr;
 }
 ''' + source + r'''
@@ -70,6 +78,7 @@ static json Load(const char* path) { std::ifstream file(path); json value; file 
 int main(int argc, char** argv) { try {
     const auto before = Load(argv[1]), after = Load(argv[2]);
     auto* bridge = IntelEngine::PoliticalEngineBridge::GetSingleton();
+    if (argc>3 && std::string(argv[3])=="nojournal") { journalExport=false; argc=3; }
     for (unsigned version : {0u, 2u, 4u}) {
         api = version; state = before;
         // Separate processes exercise the one-shot detection gate.
@@ -115,6 +124,18 @@ int main(int argc, char** argv) { try {
     bridge->MarkDirty(true); Require(bridge->Poll()==json::array(), "load baseline at same revision");
     state["campaign070"]["regions"][1]["owner_realm_id"]=9; bridge->MarkDirty();
     Require(bridge->Poll().size()==1, "load resets revision accounting");
+    if (journalExport) {
+        state=before; state["revision"]=300; bridge->MarkDirty(true);
+        Require(bridge->Poll()==json::array(), "initial initiative journal baseline");
+        journal["intel_initiatives080"]["events"].push_back({{"id","new"},{"event_type","pe_visit"},{"source",20},{"target",104641},{"relation_delta",0},{"text","Rulers met for a public visit."}});
+        state["revision"]=301; bridge->MarkDirty(); changes=bridge->Poll();
+        Require(changes.size()==1 && changes[0]["type"]=="pe_visit" &&
+                IntelEngine::PEEventText(changes[0])=="Rulers met for a public visit.", "new public initiative must be ingested exactly once");
+        bridge->MarkDirty(); Require(bridge->Poll()==json::array(), "journal ID dedupe");
+        bridge->MarkDirty(true); Require(bridge->Poll()==json::array(), "loaded journal baseline");
+        journal["intel_initiatives080"]["events"].push_back({{"id","bad"},{"event_type","pe_gift"},{"source",20},{"target",104641},{"relation_delta",7},{"text","Invalid delta"}});
+        state["revision"]=302; bridge->MarkDirty(); Require(bridge->Poll()==json::array(), "initiative cannot move relations");
+    }
     using IntelEngine::PEComparable; using IntelEngine::PEDiff;
     auto base = PEComparable(before);
     auto synthetic = before; synthetic["campaign080"]["wars"]["wars"][0]["phase"] = 0;
@@ -140,5 +161,5 @@ int main(int argc, char** argv) { try {
     subprocess.run(["cl", "/nologo", "/EHsc", "/std:c++latest", "/I"+str(work),
                     "/I"+str(src), "/I"+str(deps/"include"), "check.cpp", "/Fe:check.exe"], cwd=work, check=True)
     args = [str(work/"check.exe"), str((samples/"before-snapshot.json").resolve()), str((samples/"after-snapshot.json").resolve())]
-    for suffix in ([], ["0"], ["2"], ["4"], ["absent"]):
+    for suffix in ([], ["nojournal"], ["0"], ["2"], ["4"], ["absent"]):
         subprocess.run(args + suffix, cwd=work, check=True)
