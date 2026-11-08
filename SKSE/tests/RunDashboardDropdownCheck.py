@@ -71,6 +71,8 @@ SCRIPT = r"""
     window.magelight = { send: (name, value) => escapeCapture.push([name, value]) };
     for (const name of ['dispatchStory','dispatchNpcSocial','dispatchPolitics','executeAction','cancelTask','changePluginConfig','toggleAction','generateDirector'])
       window['onDashboard_' + name] = json => payloads.push([name, json]);
+    window.refreshRequests = 0; window.refreshState = null;
+    window.onRequestRefresh = () => { window.refreshRequests++; if (window.refreshState) window.updateFullState(window.refreshState); };
     window.updateFullState(JSON.stringify({config:{}, pluginConfig:{'ui.scale':1},
       tasks:[{index:0,state:0,cooldownRemaining:30}], scheduled:[],
       story:{enabled:true}, quest:{active:true}, social:{enabled:true},
@@ -81,10 +83,47 @@ SCRIPT = r"""
     await pause();
     const reloadReady = location.hash === '#director_live_polish2' && localStorage.getItem('__directorLivePolish2Reload') === 'ready';
     if (!reloadReady) { clickText('Director'); await pause(); }
+    if (location.hash === '#picker_rank') {
+      await window.updateFullState(JSON.stringify({config:{},pluginConfig:{},tasks:[],scheduled:[],story:{enabled:true},social:{enabled:true},knownNpcs:['Snow-Shod','Asgeir Snow-Shod','Hod'],loadedNpcs:[{formId:1,name:'Asgeir Snow-Shod'}],actions:[]})); await pause();
+      const npc = document.querySelector('input[placeholder="e.g. Saadia"]');
+      await fill('input[placeholder="e.g. Saadia"]','Hod');
+      npc.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true})); await pause();
+      check(npc.value==='Hod','typing Hod and pressing Enter selected the wrong NPC');
+      await fill('input[placeholder="e.g. Saadia"]','Ho'); await fill('input[placeholder="e.g. Saadia"]','Hod');
+      const options = [...document.querySelectorAll('[role=option]')];
+      npc.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowDown',bubbles:true})); await pause();
+      check(getComputedStyle(options[1]).backgroundColor!==getComputedStyle(options[0]).backgroundColor,'ArrowDown did not visibly highlight the next NPC');
+      document.getElementById('result').textContent=JSON.stringify({status:'PASS',checks:['picker_rank','picker_keyboard_highlight']}); return;
+    }
+    if (location.hash === '#status_visuals') {
+      const generate = [...document.querySelectorAll('section')][0].querySelector('button[data-expand-section]');
+      generate.click(); await pause();
+      check([...document.querySelectorAll('small')].some(e=>e.textContent==='Generating…'&&e.className.includes('text-gray-400')),'Generate status is not gray');
+      const request=JSON.parse(payloads.filter(([name])=>name==='generateDirector').at(-1)[1]);
+      window.directorGenerateResult(JSON.stringify({requestId:request.requestId,form:request.form,ok:false,error:'test error'})); await pause();
+      check([...document.querySelectorAll('small')].some(e=>e.textContent==='test error'&&e.className.includes('text-red-400')),'Generate error is not red');
+      document.getElementById('result').textContent=JSON.stringify({status:'PASS',checks:['status_visuals']}); return;
+    }
     if (location.hash === '#replacement_confirm') {
       const fixture = (storyGeneration, socialGeneration) => ({config:{},pluginConfig:{},tasks:[{index:7,state:1,agentName:'Unrelated'}],scheduled:[],story:{enabled:true,isActive:true,generation:storyGeneration,activeNPC:'Old Story',activeType:'seek_player'},social:{enabled:true,isActive:true,generation:socialGeneration,traveler:'Old Traveler',target:'Old Target',type:'npc_interaction'},loadedNpcs:[{formId:1,name:'New Story'},{formId:2,name:'New Traveler'},{formId:3,name:'New Target'}],actions:[]});
       const section = i => document.querySelectorAll('section')[i-1], button = i => [...section(i).querySelectorAll('button')].find(e=>/Replace|Dispatch|confirm replacement/.test(e.textContent));
       const sent = name => payloads.filter(([n])=>n===name), click = async i => { check(button(i) && !button(i).disabled,'replacement submit unavailable'); button(i).click(); await pause(); };
+      const idle = {...fixture(0,0),story:{enabled:true,isActive:false},social:{enabled:true,isActive:false}};
+      await window.updateFullState(JSON.stringify(idle)); await pause();
+      await fill('input[placeholder="e.g. Saadia"]','New Story',section(1)); await fill('textarea','Initial story',section(1));
+      window.refreshState=JSON.stringify(fixture(10,11)); const storyRefreshes=window.refreshRequests; await click(1);
+      check(window.refreshRequests===storyRefreshes+1 && button(1).textContent.includes('Replace Story'),'Story dispatch did not request or receive refreshed active state');
+      const storyDispatches=sent('dispatchStory').length; await fill('textarea','Replace refreshed story',section(1)); await click(1);
+      check(sent('dispatchStory').length===storyDispatches,'first refreshed click dispatched instead of arming confirmation');
+      await click(1);
+      check(JSON.parse(sent('dispatchStory').at(-1)[1]).replaceGeneration==='10','refreshed Story replacement did not dispatch on confirmation');
+      window.refreshState=JSON.stringify(fixture(12,13)); await window.updateFullState(JSON.stringify({...idle,story:fixture(12,13).story})); await pause();
+      await fill('input[placeholder="e.g. Mikael"]','New Traveler',section(2)); await fill('input[placeholder="e.g. Sven"]','New Target',section(2)); await fill('textarea','Initial social trip',section(2)); await fill('input[placeholder="e.g. confronted Sven about stolen goods"]','discussed the road',section(2)); await fill('input[placeholder="e.g. was accused by Mikael of stealing goods"]','heard about the road',section(2));
+      const socialRefreshes=window.refreshRequests; await click(2);
+      check(window.refreshRequests===socialRefreshes+1 && button(2).textContent.includes('Replace Social'),'Social dispatch did not request or receive refreshed active state');
+      await fill('textarea','Replace refreshed social',section(2)); await fill('input[placeholder="e.g. confronted Sven about stolen goods"]','discussed the updated road'); await fill('input[placeholder="e.g. was accused by Mikael of stealing goods"]','heard the updated road'); await click(2); await click(2);
+      check(JSON.parse(sent('dispatchNpcSocial').at(-1)[1]).replaceGeneration==='13','refreshed Social replacement did not dispatch on confirmation');
+      payloads.length=0; window.refreshState=null;
       await window.updateFullState(JSON.stringify(fixture(4,8))); await pause();
       await fill('input[placeholder="e.g. Saadia"]','New Story',section(1)); await fill('textarea','A replacement story',section(1)); await click(1);
       check(!sent('dispatchStory').length && !sent('cancelTask').length,'Story first click dispatched or cancelled a task');
@@ -95,7 +134,7 @@ SCRIPT = r"""
       await window.updateFullState(JSON.stringify(fixture(4,9))); await pause(); await click(2);
       check(!sent('dispatchNpcSocial').length,'changed active Social dispatch retained confirmation');
       await click(2); check(JSON.parse(sent('dispatchNpcSocial').at(-1)[1]).replaceGeneration==='9' && !sent('cancelTask').length,'Social replacement payload or no-cancel contract failed');
-      document.getElementById('result').textContent=JSON.stringify({status:'PASS',checks:['replacement_confirm']}); return;
+      document.getElementById('result').textContent=JSON.stringify({status:'PASS',checks:['replacement_confirm','dispatch_refresh_replacement']}); return;
     }
     if (location.hash === '#nearby_picks') {
       Math.random=()=>0.999;
