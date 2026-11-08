@@ -25,6 +25,26 @@ The `IntelEngine.dll` SKSE plugin provides high-performance functions that would
 
 All functions are exposed to Papyrus via the `IntelEngine` script namespace.
 
+### Read-only political feeds (pipe 2)
+
+```papyrus
+String Function GetPoliticalEventsAfter(Int afterId, Int limit = 50) Global Native
+String Function GetFactionsJson() Global Native
+```
+
+Both return JSON with `schema_version: 1`, `save_id`, `db_uuid`, `load_id`, and `ready`. `db_uuid` is persisted per database generation and changes on deletion/recreation even with the same save ID. `load_id` changes on every load, including reloading the same save. Discard both caches and reset the event cursor when either identity changes; wait for `ready: true` before reading a new baseline. Readiness drops at load/revert and remains false until DB initialization and timeline cleanup succeed. A cleanup error logs a warning and keeps that load not ready. Not-ready responses contain empty data arrays.
+
+`GetPoliticalEventsAfter` reads events in ascending ID order, strictly after `afterId` (negative cursors mean zero). `limit <= 0` means 50; limits above 200 are capped at 200. It returns `events`, `next_cursor` (last returned ID, or the normalized input cursor when empty), and `has_more`. IDs are not reused after timeline rollback. The feed retains all event types, including `pe_*` and replay-only `relation_adjustment`; consumers decide which to ignore. Loading a save does not create historical news.
+
+Each event contains `id`, nullable `game_time`, `type`, `faction_a`, `faction_b`, `delta`, `description`, `location_name` (empty when unknown), and `position`. Position is explicitly null unless a reliable physical battle spawn was captured. Otherwise it contains `worldspace` (exterior) or `cell` (interior), the unused identity set to null, and finite `x`, `y`, `z` in game units. Each identity is `{plugin: "Origin.esm", local_id: 123}`: the originating filename and numeric plugin-local FormID, independent of load-order indices. Dynamic or unowned spaces remain null. Capture uses shared actor registration, including late-arrival spawns. Battle results record this position on both active-war and no-war finalization paths; no hold-centre or named-marker substitution is made.
+
+Manifested assassination/brawl/skirmish rows remain position-null: they precede scene spawning, and the forward-only feed cannot deliver later position updates. Offscreen/narrative events also remain null.
+
+`GetFactionsJson` returns `factions` with `id`, `name`, `hold`, `skyrim_faction_id`, `disbanded`, `allies`, and `rivals`, plus `revision`. Compare revisions only within the same `db_uuid`/`load_id`. The in-memory counter resets for a new load and advances on successful config reloads and observed disband/undisband transitions. Leader liveness is polled on getter reads; transitions entirely between reads are not tracked. A disbanded organization remains in the array.
+
+Offline production-backed check (VS developer shell): `python SKSE/tests/RunPoliticalFeedCheck.py <vcpkg-triplet-dir>`. It covers pagination/limit edges, rollback cursors, DB recreation/load identities, readiness/failure latching, legacy schema upgrade and explicit 3.7-style reader/writer compatibility, retained PE events, narrative null positions, organization revisions, and battle position capture/persistence with modeled engine objects. Offline evidence does not establish Papyrus VM or live PE integration.
+
+
 ### FriendlyKey
 ```papyrus
 String Function FriendlyKey(String key) Global Native

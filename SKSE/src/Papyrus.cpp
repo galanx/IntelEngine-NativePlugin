@@ -163,6 +163,8 @@ namespace IntelEngine::Papyrus {
     void ClearAllHoldBounties(RE::StaticFunctionTag*);
 
     // Phase 2 Migration: FactionPolitics C++ logic
+    RE::BSFixedString GetPoliticalEventsAfter(RE::StaticFunctionTag*, int afterId, int limit);
+    RE::BSFixedString GetFactionsJson(RE::StaticFunctionTag*);
     RE::BSFixedString ProcessPoliticalDMResponse(RE::StaticFunctionTag*, RE::BSFixedString, int);
     RE::BSFixedString RunStandingMechanicsNative(RE::StaticFunctionTag*);
 
@@ -451,6 +453,8 @@ namespace IntelEngine::Papyrus {
         a_vm->RegisterFunction("BuildPoliticalContext", SCRIPT_NAME, BuildPoliticalContext); ++count;
         a_vm->RegisterFunction("BuildPoliticalDashboardJson", SCRIPT_NAME, BuildPoliticalDashboardJson); ++count;
         a_vm->RegisterFunction("RecordPoliticalEvent", SCRIPT_NAME, RecordPoliticalEvent); ++count;
+        a_vm->RegisterFunction("GetPoliticalEventsAfter", SCRIPT_NAME, GetPoliticalEventsAfter); ++count;
+        a_vm->RegisterFunction("GetFactionsJson", SCRIPT_NAME, GetFactionsJson); ++count;
         a_vm->RegisterFunction("IsPoliticsEnabled", SCRIPT_NAME, IsPoliticsEnabled); ++count;
         a_vm->RegisterFunction("GetPoliticsTickInterval", SCRIPT_NAME, GetPoliticsTickInterval); ++count;
         a_vm->RegisterFunction("ReloadFactionConfig", SCRIPT_NAME, ReloadFactionConfig); ++count;
@@ -4024,6 +4028,14 @@ namespace IntelEngine::Papyrus {
                 AsyncDispatch::ExecuteQuestFunctionString(questEditorId, scriptName, functionName, requestJson);
             });
         });
+    }
+
+    RE::BSFixedString GetPoliticalEventsAfter(RE::StaticFunctionTag*, int afterId, int limit) {
+        return RE::BSFixedString(PoliticalDB::GetSingleton()->GetPoliticalEventsAfter(afterId, limit).dump());
+    }
+
+    RE::BSFixedString GetFactionsJson(RE::StaticFunctionTag*) {
+        return RE::BSFixedString(FactionPolitics::GetSingleton()->GetFactionsJson().c_str());
     }
 
     RE::BSFixedString BuildPoliticalDashboardJson(RE::StaticFunctionTag*) {
