@@ -5144,10 +5144,11 @@ Bool Function ShouldAbortForPlayerHome(Actor npc, Actor player, String storyType
 EndFunction
 
 Bool Function ShouldAbortForHoldRestriction(Actor npc, Actor player, String storyType, String logSuffix, Int claimedGeneration)
-    If !IntelEngine.CheckHoldRestriction(npc, storyType)
+    If StorageUtil.GetStringValue(npc, "Intel_TaskOrigin") != "Director" && !IntelEngine.CheckHoldRestriction(npc, storyType)
         Core.DebugMsg("Story: aborting " + storyType + " for " + npc.GetDisplayName() + " -- hold restriction" + logSuffix)
         Core.SendTaskNarration(npc, "decided the journey to find " + player.GetDisplayName() + " was too far and turned back", player)
         If StillOwns(npc, claimedGeneration, storyType)
+            Core.NotifyPlayer("Story: " + npc.GetDisplayName() + " turned back — hold restriction" + logSuffix)
             AbortStoryTravel("hold restriction" + logSuffix)
         EndIf
         return true
