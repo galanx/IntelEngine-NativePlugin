@@ -871,6 +871,86 @@ def run_resume_checks(files, history):
                 require((vm.agent, "Intel_TaskStartTime") not in vm.storage if loaded else any(
                     e[0] == ("finished" if group == "arrival" else "StartCombat") for e in vm.effects), group + ": normal continuation failed")
         print("actual PEX resume " + group + ": replacement preserved; normal continuation PASS")
+class NearPlayerVM(DirectorVM):
+    def __init__(self, files, history):
+        super().__init__(files, history)
+        self.distance, self.now, self.loaded, self.hold_allowed = 400.0, 0.0, True, True
+        self.player.cell = self.agent.cell
+        self.properties.update({"IsActive": True, "ActiveStoryNPC": self.agent,
+            "ActiveStoryType": "seek_player", "NearPlayerSince": -1.0,
+            "SlotStates": [8] + [0] * 4, "SlotTaskTypes": ["story"] + [""] * 4,
+            "SlotTargetNames": ["Player"] + [""] * 4})
+        self.properties["AgentAlias00"].actor = self.agent
+        self.storage[(self.agent, "Intel_IsStoryDispatch")] = 1
+
+    def invoke(self, script, name, args=()):
+        if name == "EnsureBuildingAccess":
+            self.effects.append((name, tuple(args)))
+            return None
+        return super().invoke(script, name, args)
+
+    def external(self, method, args, script):
+        if method == "GetCurrentRealTime": return self.now
+        if method == "Is3DLoaded": return self.loaded
+        if method in ("IsInterior", "IsSneaking"): return False
+        if method == "GetWorldSpace": return None
+        if method == "CheckHoldRestriction": return self.hold_allowed
+        if method == "FormListFind": return -1
+        if method in ("CheckStuckStatus", "CheckOffScreenProgress"): return 0
+        return super().external(method, args, script)
+
+
+def run_near_player_checks(files, history):
+    for story_type in ("seek_player", "informant"):
+        vm = NearPlayerVM(files, history)
+        vm.properties["ActiveStoryType"] = story_type
+        for now in (0.0, 3.0, 6.0, 9.0, 12.0, 14.9):
+            vm.now = now
+            vm.invoke("IntelEngine_StoryEngine", "CheckStoryNPCArrival")
+            require(vm.properties["IsActive"], "near-player fallback arrived before 15 seconds")
+        vm.now = 15.0
+        vm.invoke("IntelEngine_StoryEngine", "CheckStoryNPCArrival")
+        vm.invoke("IntelEngine_StoryEngine", "OnProximityArrived", ("0",))
+        vm.invoke("IntelEngine_StoryEngine", "CheckStoryNPCArrival")
+        require(not vm.properties["IsActive"] and
+                vm.call_counts.get(("IntelEngine_Core", "ClearSlot"), 0) == 1,
+                "400u / 15s fallback did not finish exactly once")
+        require(vm.storage.get((vm.agent, "Intel_StoryLingerStart")) == 15.0 and
+                vm.call_counts.get(("IntelEngine_Core", "RemoveAllPackages"), 0) == 1,
+                "fallback did not remove travel packages and start linger")
+    for interruption in ("distance", "unloaded", "cell"):
+        vm = NearPlayerVM(files, history)
+        vm.invoke("IntelEngine_StoryEngine", "CheckStoryNPCArrival")
+        vm.now = 12.0
+        if interruption == "distance": vm.distance = 600.0
+        if interruption == "unloaded": vm.loaded = False
+        if interruption == "cell": vm.player.cell = None
+        vm.invoke("IntelEngine_StoryEngine", "CheckStoryNPCArrival")
+        vm.distance, vm.loaded, vm.player.cell = 400.0, True, vm.agent.cell
+        for now in (15.0, 27.0, 29.9):
+            vm.now = now
+            vm.invoke("IntelEngine_StoryEngine", "CheckStoryNPCArrival")
+            require(vm.properties["IsActive"], f"{interruption} did not reset near-player dwell")
+        vm.now = 30.0
+        vm.invoke("IntelEngine_StoryEngine", "CheckStoryNPCArrival")
+        require(not vm.properties["IsActive"], f"{interruption} recovery never arrived")
+    vm = NearPlayerVM(files, history)
+    vm.distance = 600.0
+    for now in (0.0, 15.0, 60.0):
+        vm.now = now
+        vm.invoke("IntelEngine_StoryEngine", "CheckStoryNPCArrival")
+    require(vm.properties["IsActive"], "600u fallback incorrectly arrived")
+    vm = NearPlayerVM(files, history)
+    vm.invoke("IntelEngine_StoryEngine", "CheckStoryNPCArrival")
+    vm.now, vm.distance = 10.0, 100.0
+    vm.invoke("IntelEngine_StoryEngine", "OnProximityArrived", ("0",))
+    vm.now = 20.0
+    vm.invoke("IntelEngine_StoryEngine", "CheckStoryNPCArrival")
+    require(vm.call_counts.get(("IntelEngine_Core", "ClearSlot"), 0) == 1,
+            "native-first arrival and fallback duplicated completion")
+    print("actual PEX near-player arrival: dwell, interruption, range, linger and native races passed")
+
+
 def main():
     if len(sys.argv) != 4:
         raise SystemExit(__doc__)
@@ -1162,6 +1242,7 @@ def main():
     run_callback_checks(files, history)
     run_replacement_checks(files, history)
     run_courier_checks(files, history)
+    run_near_player_checks(files, history)
 
 
 if __name__ == "__main__":

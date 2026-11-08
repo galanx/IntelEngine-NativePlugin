@@ -30,6 +30,7 @@ Bool Property IsActive = false Auto Hidden
 Actor Property ActiveStoryNPC = None Auto Hidden
 Int Property DispatchGeneration = 0 Auto Hidden
 Bool Property ArrivalHandling = false Auto Hidden
+Float Property NearPlayerSince = -1.0 Auto Hidden
 String Property ActiveNarration = "" Auto Hidden
 String Property PendingStoryType = "" Auto Hidden
 Actor Property ActiveSecondNPC = None Auto Hidden
@@ -1841,6 +1842,7 @@ Bool Function DispatchToTarget(Actor npc, Actor target, String narration, String
     DispatchGeneration += 1
     Int claimedGeneration = DispatchGeneration
     ArrivalHandling = false
+    NearPlayerSince = -1.0
     ActiveNarration = narration
     IsActive = true
     IntelEngine.MarkSystemPending("storyDM", Utility.GetCurrentGameTime())
@@ -2493,6 +2495,7 @@ Function CheckStoryNPCArrival()
 
     ; Pause arrival during combat (don't greet while fighting)
     If arrivalTarget == player && player.IsInCombat()
+        NearPlayerSince = -1.0
         return
     EndIf
 
@@ -2546,6 +2549,22 @@ Function CheckStoryNPCArrival()
     EndIf
 
     Float dist = storyNPC.GetDistance(arrivalTarget)
+    ; ponytail: sampled 500u/15s talking-range fallback; native proximity remains the fast path.
+    Cell nearCell = storyNPC.GetParentCell()
+    Bool nearPlayer = arrivalTarget == player && storyNPC.Is3DLoaded() && player.Is3DLoaded() && dist >= 0.0 && dist <= 500.0
+    nearPlayer = nearPlayer && ((nearCell != None && nearCell == player.GetParentCell()) || (storyNPC.GetWorldSpace() != None && storyNPC.GetWorldSpace() == player.GetWorldSpace()))
+    If !StillOwns(storyNPC, claimedGeneration, storyType)
+        return
+    EndIf
+    Float nearNow = Utility.GetCurrentRealTime()
+    If !nearPlayer
+        NearPlayerSince = -1.0
+    ElseIf NearPlayerSince < 0.0 || NearPlayerSince > nearNow
+        NearPlayerSince = nearNow
+    ElseIf nearNow - NearPlayerSince >= 15.0 && StillOwns(storyNPC, claimedGeneration, storyType)
+        OnStoryNPCArrived()
+        return
+    EndIf
 
     ; Arrived when within standard arrival distance
     If (dist <= IntelEngine.GetArrivalThreshold(storyNPC, arrivalTarget as ObjectReference) && dist > 0.0) && StillOwns(storyNPC, claimedGeneration, storyType)
@@ -5186,6 +5205,7 @@ Function CleanupStoryDispatch()
     ActiveStoryType = ""
     IsActive = false
     ArrivalHandling = false
+    NearPlayerSince = -1.0
     IntelEngine.ClearSystemPending("storyDM")
     ClearPending()
     ; Re-register game-time scheduling so TickScheduler keeps firing.
