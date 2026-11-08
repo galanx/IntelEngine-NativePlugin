@@ -325,6 +325,31 @@ SCRIPT = r"""
       control(4,'Execute Action').click(); await pause();
       check(payloads.at(-1)[0]==='executeAction' && JSON.parse(payloads.at(-1)[1]).npcFormId===4,
         'Generate changed the selected duplicate actor FormID');
+      for (const generatedNpc of ['Natch [Merchant]', 'Twin [Guard]']) {
+        control(4,'Generate').click(); await pause();
+        check(requests().at(-1).fields.npcName==='Twin [Guard]','Generate lost selection changed after mount');
+        await reply('action',{npcName:generatedNpc,destination:'Whiterun',reason:'Wanted another trip'});
+        const execute=host(4).querySelector('button.w-full'); check(execute && !execute.disabled,'Generated Action not executable'); execute.click(); await pause();
+        check(payloads.at(-1)[0]==='executeAction' && JSON.parse(payloads.at(-1)[1]).npcFormId===4,'Generate replaced selected FormID with generated actor');
+      }
+      control(4,'Clear').click(); await pause(); await choose('Action','GoToLocation');
+      await fill('[aria-label="Action NPC"]','Distant Person',host(4));
+      const beforeUnmatched=requests().length, executions=payloads.filter(([name])=>name==='executeAction').length;
+      control(4,'Generate').click(); await pause();
+      if (requests().length>beforeUnmatched) await reply('action',{npcName:'Natch [Merchant]',destination:'Riften',reason:'Wanted to travel'});
+      check(requests().length===beforeUnmatched,'Unpicked typed Action actor was random-filled by Generate');
+      check(button('Action NPC').value==='Distant Person' && host(4).querySelector('button.w-full').disabled,'Typed Action query lost or became executable');
+      await fill('[aria-label="Action NPC"]','Distant',host(4)); await fill('[aria-label="Action NPC"]','Distant Person',host(4));
+      check(host(4).querySelector('[role=listbox]')?.textContent.includes('no nearby NPC matches'),'Action empty-match feedback missing');
+      host(4).querySelector('button.w-full').click(); await pause();
+      check(payloads.filter(([name])=>name==='executeAction').length===executions,'Unpicked far-away performer was submitted');
+      document.querySelector('[aria-label="Clear Action NPC"]').click(); await pause(); control(4,'Generate').click(); await pause();
+      check(requests().length===beforeUnmatched+1 && button('Action NPC').value==='Natch [Merchant]','Cleared Action query did not restore nearby auto-pick');
+      control(4,'Stop').click(); await pause(); control(4,'Clear').click(); await pause();
+      await choose('Action NPC','Natch [Merchant]'); await choose('Action','GoToLocation');
+      window.updateFullState(JSON.stringify({config:{},pluginConfig:{},tasks:[],scheduled:[],loadedNpcs:[{formId:2,name:'Twin [Guard]'}],actions:[{name:'GoToLocation'}]})); await pause();
+      const beforeMissing=requests().length; control(4,'Generate').click(); await pause();
+      check(requests().length===beforeMissing && JSON.parse(localStorage.getItem('intelengine.director.drafts')).action[0]==='1' && host(4).querySelector('button.w-full').disabled,'Missing selected FormID was replaced');
       document.getElementById('result').textContent=JSON.stringify({status:'PASS',checks:['action_generate','name_snapping'],requests:requests().length});
       return;
     }
