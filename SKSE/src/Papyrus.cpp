@@ -49,7 +49,7 @@ namespace IntelEngine::Papyrus {
     void MarkSystemPending(RE::StaticFunctionTag*, RE::BSFixedString, float);
     void ClearSystemPending(RE::StaticFunctionTag*, RE::BSFixedString);
     bool ShouldResetPending(RE::StaticFunctionTag*, RE::BSFixedString, float, float);
-    RE::Actor* ResolveStoryCandidate(RE::StaticFunctionTag*, RE::BSFixedString);
+    RE::Actor* ResolveStoryCandidate(RE::StaticFunctionTag*, RE::BSFixedString, RE::BSFixedString, RE::Actor*);
     RE::Actor* ResolveDirectorActor(RE::StaticFunctionTag*, RE::BSFixedString);
     RE::Actor* FindMessengerForSender(RE::StaticFunctionTag*, RE::Actor*);
     void NotifyStoryCooldown(RE::StaticFunctionTag*, RE::Actor*, float);
@@ -622,10 +622,10 @@ namespace IntelEngine::Papyrus {
         return NPCIndex::GetSingleton()->FindByNameNear(str, nearActor);
     }
 
-    RE::Actor* ResolveStoryCandidate(RE::StaticFunctionTag*, RE::BSFixedString name) {
+    RE::Actor* ResolveStoryCandidate(RE::StaticFunctionTag*, RE::BSFixedString name, RE::BSFixedString partnerName, RE::Actor* anchor) {
         auto* str = name.c_str();
         if (!str || !*str) return nullptr;
-        return NPCIndex::GetSingleton()->ResolveStoryCandidate(str);
+        return NPCIndex::GetSingleton()->ResolveStoryCandidate(str, partnerName.c_str() ? partnerName.c_str() : "", anchor);
     }
 
     RE::Actor* ResolveDirectorActor(RE::StaticFunctionTag*, RE::BSFixedString name) {
