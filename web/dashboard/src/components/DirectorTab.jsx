@@ -33,10 +33,9 @@ function Field({ label, required, hint, children, className = 'flex-1' }) {
 }
 
 /** Text input with dropdown suggestions. Works in Ultralight (no <datalist> needed). */
-function FactionInput({ value, onChange: change, onInput, factions = [], options: entries = factions, npc = entries !== factions, selectionOnly = false, ...inputProps }) {
+function FactionInput({ value, onChange: change, onInput, factions = [], options: entries = factions, npc = entries !== factions, selectionOnly = false, query = null, setQuery = () => {}, ...inputProps }) {
   const [open, setOpen] = useState(false);
   const [showAll, setShowAll] = useState(false);
-  const [query, setQuery] = useState(null);
   const [active, setActive] = useState(0);
   const text = query ?? (selectionOnly ? entries.find(f => f.id === String(value))?.name || '' : value);
   const openDropdown = () => setOpen(true);
@@ -86,7 +85,7 @@ function FactionInput({ value, onChange: change, onInput, factions = [], options
               {f.name} {(!npc || f.kind) && <span className="text-gray-600">({npc ? f.kind : f.id})</span>}
             </div>
           ))}
-          {!filtered.length && <div className="px-2 py-1 text-xs text-gray-500">No matches</div>}
+          {!filtered.length && <div className="px-2 py-1 text-xs text-gray-500">{selectionOnly ? 'no nearby NPC matches' : 'No matches'}</div>}
         </div>
       )}
     </div>
@@ -422,6 +421,7 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
     const enumTypes = story ? DIRECTOR_STORY_TYPES : social ? SOCIAL_TYPES : action ? executableActions.filter(a => !['CancelCurrentTask','ChangeSpeed'].includes(a.name)).map(a => ({key:a.name})) : POLITICAL_EVENT_TYPES;
     const typeKey = action ? 'actionName' : story ? 'storyType' : social ? 'socialType' : 'eventType';
     let actionNpcName = nearby.find(n => n.id === actionNpc)?.name || '';
+    if (action && (actionQuery || (actionNpc && !actionNpcName))) { setGenerateError('Pick a nearby NPC or clear the Action NPC field.'); return; }
     let actionName = selectedAction;
     if (action && !actionNpcName) { const choices = nearby.filter(n => n.name.toLowerCase() !== String(actionParams.targetName || '').trim().toLowerCase()); if (choices.length) { const npc = choices[Math.floor(Math.random() * choices.length)]; actionNpcName = npc.name; setActionNpc(npc.id); } }
     if (action && !actionName && enumTypes.length) { actionName = enumTypes[Math.floor(Math.random() * enumTypes.length)].key; setSelectedAction(actionName); }
@@ -471,11 +471,12 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
     if (form === 'story') { setStoryNpc(''); setStoryType('seek_player'); setStoryNarration(''); setStoryFields({}); }
     if (form === 'social') { setSocialNpc1(''); setSocialNpc2(''); setSocialType('npc_interaction'); setSocialNarration(''); setSocialFields({}); }
     if (form === 'political') { setPolFactionA(''); setPolFactionB(''); setPolEventType(''); setPolDescription(''); setPolDelta(8); }
-    if (form === 'action') { setActionNpc(''); setSelectedAction(''); setActionParams({}); }
+    if (form === 'action') { setActionNpc(''); setActionQuery(null); setSelectedAction(''); setActionParams({}); }
   };
 
   // Action execution state
   const [actionNpc, setActionNpc] = useState('');
+  const [actionQuery, setActionQuery] = useState(null);
   const [selectedAction, setSelectedAction] = useState('');
   const [actionParams, setActionParams] = useState({});
   const draftBindings = {
@@ -910,7 +911,7 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
           <div className="flex gap-2">
             <Field label="NPC (nearby only)" required hint="Nearby actor who performs the action.">
             <FactionInput options={nearby} selectionOnly aria-label="Action NPC" placeholder="e.g. Guard 1"
-              value={actionNpc}
+              value={actionNpc} query={actionQuery} setQuery={setActionQuery}
               onChange={e => { setActionNpc(e.target.value); setBusyConfirm(''); }}
               className="bg-white/5 border border-white/10 rounded px-2 py-1.5 text-xs text-gray-200 outline-none"
             />
