@@ -646,7 +646,7 @@ Cache invalidation across save loads remains to be qualified.
 ### Political Engine bridge — reader and temporary capture
 
 Optional, read-only `PoliticalLetters.dll` integration resolves `PE_GetApiVersion`
-and `PE_GetSnapshotJSON` on `kDataLoaded`, requiring API >= 2. Missing/old exports
+and `PE_GetSnapshotJSON` on `kDataLoaded`, requiring API v3. Missing/wrong-version exports
 disable it for the session with one info line. No Papyrus API, settings, political
 events, reactions or prompt changes are added by this step.
 
@@ -672,9 +672,10 @@ This path is specified, not observed in a running game.
 Build/run the production-reader check with the configured CMake tree:
 `cmake --build <build> --target PoliticalEngineReadJSONCheck`, then
 `<build>/PoliticalEngineReadJSONCheck.exe`. Its five named cases cover growth
-(including the four-attempt ceiling), short-buffer queries, missing NUL, zero and
-over-cap replies. An offline smoke additionally exercised the actual capture
-method's filesystem roundtrip, retention, event log and typed readiness handling.
+(including the four-attempt ceiling), short-buffer queries, missing NUL, zero and over-cap replies.
+Run `python SKSE/tests/RunPoliticalEngineCaptureCheck.py <vcpkg-triplet-dir>`
+in a VS2022 developer shell for the production capture's filesystem roundtrip,
+typed readiness, UTC fallback, repeated-path logging and retention even if the event log cannot open.
 Neither check proves SKSE delivery, PE detection or MO2 redirection in-game.
 The capture is temporary until a real active snapshot defines D2's diff fields.
 
