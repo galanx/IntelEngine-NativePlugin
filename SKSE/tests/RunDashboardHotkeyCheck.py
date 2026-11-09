@@ -4,9 +4,10 @@ Usage: python SKSE/tests/RunDashboardHotkeyCheck.py
 """
 import pathlib
 import subprocess
+import sys
 import tempfile
 
-src = pathlib.Path(__file__).resolve().parents[1] / "src" / "DashboardUIManager.cpp"
+src = pathlib.Path(sys.argv[1]) if len(sys.argv) > 1 else pathlib.Path(__file__).resolve().parents[1] / "src" / "DashboardUIManager.cpp"
 source = src.read_text(encoding="utf-8")
 start = source.index("    void DashboardUIManager::HotkeyPollLoop() {")
 end = source.index("\n    }", start) + len("\n    }")
@@ -70,10 +71,11 @@ public:
 }
 class DashboardUIManager {
 public:
-    std::atomic<bool> stopPolling_{false}, isOpen_{false};
+    std::atomic<bool> stopPolling_{false}, isOpen_{false}, textFocused_{false};
     int toggles = 0;
     static DashboardUIManager* GetSingleton() { return currentManager; }
-    void Toggle() { ++toggles; }
+    bool IsOpen() const { return isOpen_.load(); }
+    void Toggle() { ++toggles; isOpen_.store(!isOpen_.load()); }
     void HotkeyPollLoop();
 };
 namespace SKSE {
@@ -95,23 +97,34 @@ Frame makeFrame(bool key, bool shift = true, bool ctrl = false, bool alt = false
     Frame frame;
     frame.foreground = foreground;
     frame.paused = paused;
-    frame.keys[55] = key;
+    frame.keys[DashboardConfig::GetSingleton()->hotkey] = key;
     frame.keys[VK_SHIFT] = shift;
     frame.keys[VK_CONTROL] = ctrl;
     frame.keys[VK_MENU] = alt;
     return frame;
 }
-int run(std::vector<Frame> input) {
+int run(std::vector<Frame> input, bool initiallyOpen = false, bool textFocused = false) {
     frames = std::move(input);
     frames.insert(frames.begin(), 7, makeFrame(false));
     frameIndex = 0;
     FakeClock::current = FakeClock::time_point(std::chrono::milliseconds(-100000));
     DashboardUIManager manager;
+    manager.isOpen_.store(initiallyOpen);
+    manager.textFocused_.store(textFocused);
     currentManager = &manager;
     manager.HotkeyPollLoop();
     return manager.toggles;
 }
 int main() {
+    assert(run({makeFrame(true)}, true, true) == 0); // typing Shift+7 cannot close
+    assert(run({makeFrame(true)}, true, false) == 1); // blur restores closing
+    assert(run({makeFrame(true)}, false) == 1); // closed dashboard still opens
+    DashboardConfig::GetSingleton()->hotkey = 48;
+    DashboardConfig::GetSingleton()->modifiers = 0;
+    assert(run({makeFrame(true, false)}, true, true) == 0); // bare 0 in text
+    assert(run({makeFrame(true, false)}, true, false) == 1);
+    assert(run({makeFrame(true, false)}, false) == 1);
+    DashboardConfig::GetSingleton()->hotkey = 55;
     for (int configured = 0; configured < 8; ++configured) {
         DashboardConfig::GetSingleton()->modifiers = configured;
         for (int held = 0; held < 8; ++held) {
@@ -146,7 +159,7 @@ int main() {
     }) == 2); // cooldown blocks a rapid re-press, then permits a later one
     assert(run({makeFrame(true, true, false, false, 42, true)}) == 0);
     assert(run({makeFrame(true, true, false, false, 42, true), makeFrame(true)}) == 1);
-    std::cout << "PASS: exact modifiers, foreground/focus transitions, pause, and cooldown\\n";
+    std::cout << "PASS: editable-focus suppression, blur closes, closed opens, modifiers/focus/pause/cooldown\\n";
 }
 ''', encoding="utf-8")
     exe = work / "check.exe"

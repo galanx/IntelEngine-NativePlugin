@@ -60,7 +60,7 @@ def method(source, signature):
 
 manager = pathlib.Path(sys.argv[2]).read_text(encoding="utf-8") if len(sys.argv) > 2 else (SRC / "DashboardUIManager.cpp").read_text(encoding="utf-8")
 has_generate = "    void DashboardUIManager::OnGenerateDirectorStatic(" in manager
-listener_count = 15 + int(has_generate)
+listener_count = 16 + int(has_generate)
 listener_start = manager.index("        static const UiListener listeners[] = {")
 listener_end = manager.index("        };", listener_start)
 listener_entries = manager[manager.index("{", listener_start) + 1:listener_end]
@@ -71,6 +71,7 @@ for index, callback in enumerate((
     "OnChangePluginConfigStatic", "OnDispatchStoryStatic", "OnDispatchNpcSocialStatic",
     "OnDispatchPoliticsStatic", "OnExecuteActionStatic", "OnToggleActionStatic",
     "OnGenerateDirectorStatic",
+    "OnTextFocusStatic",
 )):
     listener_entries = listener_entries.replace(callback, f"listener{index}")
 callbacks = [method(manager, sig) for sig in (
@@ -85,6 +86,7 @@ callbacks = [method(manager, sig) for sig in (
     "    void DashboardUIManager::ProcessFullState(",
     "    void DashboardUIManager::FlushState(",
     "    void DashboardUIManager::OnCloseStatic(",
+    "    void DashboardUIManager::OnTextFocusStatic(",
     "    void DashboardUIManager::OnRequestRefreshStatic(",
     "    void DashboardUIManager::OnReloadUIStatic(",
     "    void DashboardUIManager::OnCancelTaskStatic(",
@@ -264,6 +266,7 @@ void route(int id,const char* arg) { ++callbackHits; routedListener=id; listener
 #define ROUTE(N) void listener##N(const char* a){route(N,a);}
 ROUTE(0) ROUTE(1) ROUTE(2) ROUTE(3) ROUTE(4) ROUTE(5) ROUTE(6) ROUTE(7)
 ROUTE(8) ROUTE(9) ROUTE(10) ROUTE(11) ROUTE(12) ROUTE(13) ROUTE(14) ROUTE(15)
+ROUTE(16)
 #undef ROUTE
 namespace IntelEngine::SkyrimNetAPI {
 inline bool (*SendCustomPromptToLLM)(const char*, const char*, const char*,
@@ -285,6 +288,7 @@ const std::array<std::string_view, ''' + str(listener_count) + r'''> expectedNam
     "onDashboard_changePluginConfig", "onDashboard_dispatchStory", "onDashboard_dispatchNpcSocial",
     "onDashboard_dispatchPolitics", "onDashboard_executeAction", "onDashboard_toggleAction",
     *(["onDashboard_generateDirector"] if has_generate else []),
+    "onDashboard_textFocus",
 )) + r'''};
 
 struct FakePrisma final : PRISMA_UI_API::IVPrismaUI1 {
@@ -709,6 +713,7 @@ public:
     std::unique_ptr<IUiHost> host_;
     std::atomic<bool> acceptingCallbacks_{true},available_{true},isOpen_{false},domReady_{false};
     std::atomic<bool> stopPolling_{false};
+    std::atomic<bool> textFocused_{false};
     bool shuttingDown_=false,requestedOpen_=false,openedEventSent_=false,pendingRefresh_=false;
     bool IsOpen() const { return isOpen_.load(); }
     bool pendingOpen_=false,pendingClose_=false,pendingReload_=false,pendingFlush_=false,pendingFullStateSet_=false;
@@ -735,6 +740,7 @@ public:
     static void OnDispatchStoryStatic(const char*); static void OnDispatchNpcSocialStatic(const char*); static void OnDispatchPoliticsStatic(const char*); static void OnExecuteActionStatic(const char*);
     static void OnChangePluginConfigStatic(const char*); static void OnToggleActionStatic(const char*);
     static void OnGenerateDirectorStatic(const char*);
+    static void OnTextFocusStatic(const char*);
 };
 }
 ''' + "namespace IntelEngine {\n" + "\n".join(callbacks) + (
@@ -755,6 +761,13 @@ void testManager() {
     assert(m->isOpen_ && eventCalls.size()==1 && eventCalls.back().name=="IntelEngine_DashboardOpened");
     m->OnHostEvent(UiHostEvent::DomReady);
     assert(eventCalls.size()==2 && eventCalls.back().name=="IntelEngine_DashboardRefresh");
+    DashboardUIManager::OnTextFocusStatic(R"({"focused":true})"); assert(m->textFocused_);
+    DashboardUIManager::OnTextFocusStatic(R"({"focused":false})"); assert(!m->textFocused_);
+    DashboardUIManager::OnTextFocusStatic(R"({"focused":true})"); m->RequestClose(); assert(!m->textFocused_);
+    DashboardUIManager::OnTextFocusStatic(R"({"focused":true})"); assert(!m->textFocused_); // late closed-page focus
+    m->textFocused_=true; m->Toggle(); assert(!m->textFocused_);
+    m->OnHostEvent(UiHostEvent::Entered); m->textFocused_=true; m->OnHostEvent(UiHostEvent::Exited); assert(!m->textFocused_);
+    m->Toggle(); m->OnHostEvent(UiHostEvent::Entered);
     auto* host=static_cast<FakeHost*>(m->host_.get());
     SkyrimNetAPI::SendCustomPromptToLLM = fakeDirectorSend;
     const char* storyRequest = R"({"requestId":"bad","form":"story","fields":{"npcName":"Brey","storyType":"seek_player","narration":""},"touched":{},"schema":{"npcName":{"type":"text"},"storyType":{"type":"select","options":["seek_player"]},"narration":{"type":"text"}},"variants":{},"options":{"npcs":["Brey"],"factions":[]}})";

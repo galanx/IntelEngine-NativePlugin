@@ -45,6 +45,7 @@ namespace IntelEngine {
         std::atomic<bool> acceptingCallbacks_{false};
         std::atomic<bool> available_{false};
         std::atomic<bool> isOpen_{false};
+        std::atomic<bool> textFocused_{false};
         std::atomic<bool> domReady_{false};
         std::atomic<bool> stopPolling_{false};
         bool initialized_ = false;
@@ -84,6 +85,7 @@ namespace IntelEngine {
         void ProcessFullState(const std::string& json, std::uint64_t generation);
 
         static void OnCloseStatic(const char* jsonArg);
+        static void OnTextFocusStatic(const char* jsonArg);
         static void OnRequestRefreshStatic(const char* jsonArg);
         static void OnReloadUIStatic(const char* jsonArg);
 
