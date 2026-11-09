@@ -331,6 +331,7 @@ Open with the configured hotkey (default: Shift+7). Skyrim must have foreground 
 
 Host selection is fixed until restart. In `Data/SKSE/Plugins/SkyrimNet/config/plugins/IntelEngine/settings.yaml`, set `ui.host` to `auto` (default, prefer Magelight), `magelight` (prefer Magelight), or `prismaui` (prefer PrismaUI). Each preference falls back to the other usable host; unknown values warn and use auto. Restart Skyrim after changing this setting; Reload UI does not switch hosts. A missing, too-old or unusable Magelight host logs the reason for PrismaUI fallback.
 
+The hotkey still toggles the dashboard, but is ignored while a text input, textarea or contenteditable has focus. Blur restores closing; opening and closing clear native focus tracking. Offline browser/native checks cover focus reporting and toggle suppression; live host timing is unverified.
 Change the dashboard hotkey in the dashboard's Settings tab or on the SkyrimNet settings page (click Save); both apply immediately. The MCM has no hotkey option.
 
 Section headers in Tasks, Story, Politics, Director, Actions and Packages toggle their bodies with ▾/▸ indicators. All sections start open; each section's choice is remembered in browser localStorage across reloads. Header controls remain usable without toggling. Offline headless regression: `python SKSE/tests/RunDashboardDropdownCheck.py "<chrome.exe>" web/dashboard/dist --scenario=dashboard_sections_collapse`; game-host behavior is not live-verified.

@@ -83,6 +83,23 @@ SCRIPT = r"""
     await pause();
     const reloadReady = location.hash === '#director_live_polish2' && localStorage.getItem('__directorLivePolish2Reload') === 'ready';
     if (!reloadReady) { clickText('Director'); await pause(); }
+    if (location.hash === '#hotkey_text_focus') {
+      const focused = [];
+      window.onDashboard_textFocus = json => focused.push(JSON.parse(json).focused);
+      const input = document.querySelector('input'), textarea = document.querySelector('textarea');
+      const rich = document.createElement('div'); rich.contentEditable = 'true'; rich.textContent = 'editable'; document.body.append(rich);
+      for (const element of [input, textarea, rich]) {
+        element.focus(); await pause();
+        check(focused.at(-1) === true, 'editable focus was not reported to native');
+        element.dispatchEvent(new KeyboardEvent('keydown', {key:'0', bubbles:true}));
+        element.blur(); await pause();
+        check(focused.at(-1) === false, 'blur did not release native hotkey suppression');
+      }
+      input.focus(); await pause(); textarea.focus(); await pause();
+      check(focused.at(-1) === true, 'editable-to-editable focus released suppression');
+      textarea.blur(); await pause(); rich.remove();
+      document.getElementById('result').textContent=JSON.stringify({status:'PASS',checks:['input_textarea_contenteditable_focus_bridge','blur_releases','editable_transfer']}); return;
+    }
     if (location.hash === '#picker_rank') {
       await window.updateFullState(JSON.stringify({config:{},pluginConfig:{},tasks:[],scheduled:[],story:{enabled:true},social:{enabled:true},knownNpcs:['Snow-Shod','Asgeir Snow-Shod','Hod'],loadedNpcs:[{formId:1,name:'Asgeir Snow-Shod'}],actions:[]})); await pause();
       const npc = document.querySelector('input[placeholder="e.g. Saadia"]');

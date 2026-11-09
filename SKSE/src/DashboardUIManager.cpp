@@ -87,6 +87,7 @@ namespace IntelEngine {
             {"onDashboard_executeAction", OnExecuteActionStatic},
             {"onDashboard_toggleAction", OnToggleActionStatic},
             {"onDashboard_generateDirector", OnGenerateDirectorStatic},
+            {"onDashboard_textFocus", OnTextFocusStatic},
         };
 
         std::unique_ptr<IUiHost> host;
@@ -160,6 +161,7 @@ namespace IntelEngine {
             openedEventSent_ = false;
             domReady_.store(false);
             isOpen_.store(false);
+            textFocused_.store(false);
             initialized_ = false;
         }
     }
@@ -173,6 +175,7 @@ namespace IntelEngine {
         {
             std::lock_guard<std::mutex> lock(mutex_);
             if (shuttingDown_ || !host_ || !available_.load()) return;
+            textFocused_.store(false);
             const bool wasRequestedOpen = requestedOpen_;
             requestedOpen_ = !requestedOpen_;
             ++generation_;
@@ -207,6 +210,7 @@ namespace IntelEngine {
         {
             std::lock_guard<std::mutex> lock(mutex_);
             if (shuttingDown_ || !host_ || !available_.load()) return;
+            textFocused_.store(false);
             logClose = requestedOpen_;
             requestedOpen_ = false;
             ++generation_;
@@ -262,6 +266,7 @@ namespace IntelEngine {
                 expectedExitPending_ = false;
                 logOpened = !isOpen_.load();
                 isOpen_.store(true);
+                textFocused_.store(false);
                 pendingFlush_ = true;
                 break;
             case UiHostEvent::Exited: {
@@ -336,6 +341,7 @@ namespace IntelEngine {
                 pendingFullStatePayload_.clear();
                 break;
             }
+            if (!isOpen_.load() || event == UiHostEvent::DomReady) textFocused_.store(false);
             if (requestedOpen_ && domReady_.load() && isOpen_.load()) {
                 if (!openedEventSent_) {
                     openedEventSent_ = true;
@@ -750,7 +756,8 @@ namespace IntelEngine {
                     auto* task = SKSE::GetTaskInterface();
                     if (task) {
                         task->AddTask([]() {
-                            DashboardUIManager::GetSingleton()->Toggle();
+                            auto* manager = DashboardUIManager::GetSingleton();
+                            if (!manager->textFocused_.load()) manager->Toggle();
                         });
                     }
                 }
@@ -765,6 +772,9 @@ namespace IntelEngine {
 
     void DashboardUIManager::OnCloseStatic(const char*) {
         GetSingleton()->RequestClose();
+    }
+    void DashboardUIManager::OnTextFocusStatic(const char* json) {
+        auto* m = GetSingleton(); std::lock_guard lock(m->mutex_); try { m->textFocused_.store(m->acceptingCallbacks_.load() && m->isOpen_.load() && nlohmann::json::parse(json ? json : "{}").value("focused", false)); } catch (...) {}
     }
 
     void DashboardUIManager::OnRequestRefreshStatic(const char*) {
