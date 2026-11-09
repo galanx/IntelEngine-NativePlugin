@@ -1717,12 +1717,7 @@ Function OnDungeonMasterResponse(String response, Int success)
             If subjectNPC != None
                 Core.InjectFact(subjectNPC, gossipText)
             EndIf
-            ; Informant must know the gossip AND its source to relay during dialogue
-            If gossipSource != ""
-                Core.InjectFact(npc, "heard from " + gossipSource + " that " + subjectName + " " + gossipText)
-            Else
-                Core.InjectFact(npc, "witnessed that " + subjectName + " " + gossipText)
-            EndIf
+            Core.InjectFact(npc, Core.FormatInformantFact(subjectName, gossipText, gossipSource))
         EndIf
         ActiveStoryType = "informant"
         DispatchToTarget(npc, Game.GetPlayer(), narration, "story")
