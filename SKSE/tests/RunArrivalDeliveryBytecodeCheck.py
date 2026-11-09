@@ -964,25 +964,32 @@ def run_last_stretch_checks(files, history):
             self.distance = 1000.0
             self.properties.update({"LastStretchSince": -1.0, "LastStretchRetry": 0,
                 "AllowStuckTeleport": True, "STUCK_DISTANCE_THRESHOLD": 1.0})
+            self.properties["TELEPORT_OFFSET_INTERIOR"] = 500.0
+            self.combat = False
             self.player.cell = None
 
         def invoke(self, script, name, args=()):
             if name == "ImmersiveTeleportToTarget":
                 self.teleports += 1
                 return None
+            if name == "TeleportBehindPlayer":
+                self.teleports += 1
+                self.effects.append(("retry-place", tuple(args)))
+                return None
             return super().invoke(script, name, args)
 
         def external(self, method, args, script):
             if method == "GetCurrentRealTime": return self.now
             if method == "Is3DLoaded": return self.loaded
+            if method == "IsInCombat": return self.combat
             if method == "CheckOffScreenProgress": return 1 if self.offscreen else 0
             if method == "CheckStuckStatus": return self.stuck
             return super().external(method, args, script)
 
-    for route in (True, False):
+    for route, loaded_after in ((True, False), (True, True), (False, True)):
         vm = StretchVM(route)
         vm.invoke("IntelEngine_StoryEngine", "CheckStoryNPCArrival")
-        vm.loaded, vm.offscreen = True, False
+        vm.loaded, vm.offscreen = loaded_after, not loaded_after
         require(vm.teleports == 1 and vm.properties["LastStretchSince"] == 0.0,
                 f"{'off-screen' if route else 'stuck'} teleport did not start last-stretch timer")
         vm.stuck = 3
@@ -998,6 +1005,9 @@ def run_last_stretch_checks(files, history):
         vm.invoke("IntelEngine_StoryEngine", "CheckStoryNPCArrival")
         require(vm.teleports == 2 and vm.properties["LastStretchRetry"] == 1,
                 "first expiry did not re-place exactly once")
+        require(("retry-place", (vm.agent, 500.0)) in vm.effects and
+                vm.effects[-1] == ("ReapplyTravelPackage", (vm.agent,)),
+                "last-stretch retry did not place at 500u and reapply travel")
         vm.now = 150.1
         vm.invoke("IntelEngine_StoryEngine", "CheckStoryNPCArrival")
         require(vm.properties["IsActive"], "last-stretch timer fired at exactly 75 seconds")
@@ -1010,6 +1020,19 @@ def run_last_stretch_checks(files, history):
                 vm.call_counts.get(("IntelEngine_StoryEngine", "AbortStoryTravel"), 0) == 1 and
                 vm.call_counts.get(("IntelEngine_StoryEngine", "OnStoryNPCArrived"), 0) == 0,
                 "second expiry did not abort and notify exactly once")
+        vm.now = 200.0
+        vm.invoke("IntelEngine_StoryEngine", "CheckStoryNPCArrival")
+        require(vm.call_counts.get(("IntelEngine_StoryEngine", "AbortStoryTravel"), 0) == 1,
+                "late poll repeated last-stretch abort")
+
+    combat = StretchVM(False)
+    combat.invoke("IntelEngine_StoryEngine", "CheckStoryNPCArrival")
+    combat.combat, combat.now = True, 30.0
+    combat.invoke("IntelEngine_StoryEngine", "CheckStoryNPCArrival")
+    require(combat.properties["LastStretchSince"] == 0.0, "combat erased last-stretch timer")
+    combat.combat, combat.now = False, 76.0
+    combat.invoke("IntelEngine_StoryEngine", "CheckStoryNPCArrival")
+    require(combat.teleports == 2, "last-stretch timer did not resume after combat")
 
     raced = StretchVM(False)
     raced.invoke("IntelEngine_StoryEngine", "CheckStoryNPCArrival")
@@ -1020,7 +1043,7 @@ def run_last_stretch_checks(files, history):
     require(raced.call_counts.get(("IntelEngine_StoryEngine", "OnStoryNPCArrived"), 0) == 1 and
             raced.call_counts.get(("IntelEngine_Core", "ClearSlot"), 0) == 1,
             "native arrival during last stretch did not win exactly once")
-    print("actual PEX last stretch: both teleport routes, >75s retry/abort, and native arrival race passed")
+    print("actual PEX last stretch: loaded/unloaded retry at 500u, abort, combat pause and native arrival passed")
 
 
 def run_hold_restriction_checks(files, history):
