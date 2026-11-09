@@ -173,12 +173,17 @@ SCRIPT = r"""
       control(4,'Generate').click(); await pause();
       check(requests().at(-1).fields.npcName==='Natch [Merchant]' && requests().at(-1).fields.targetName==='Nearby Guard','actor pre-pick duplicated a typed target');
       await stopClear(4);
-      window.updateFullState(JSON.stringify({...fixture,loadedNpcs:[fixture.loadedNpcs[0]]})); await pause();
+      window.updateFullState(JSON.stringify({...fixture,loadedNpcs:[fixture.loadedNpcs[0],{formId:3,name:'Beaunois Odette [Beggar]'}],knownNpcs:['Distant Person','Beaunois Odette [Beggar]']})); await pause();
       await choose('Story type','Informant'); control(1,'Generate').click(); await pause();
-      check(requests().at(-1).fields.npcName==='Natch [Merchant]' && requests().at(-1).blank.includes('subject'),'exhausted nearby pool fell back to known NPCs');
-      let audit=await reply({subject:'nAtCh',narration:'An individual known as [Subject NPC] was seen',gossip:'[Subject NPC] argued'});
-      check(audit.rejected.subject==='Duplicate NPC' && audit.rejected.narration==='Placeholder text' && audit.rejected.gossip==='Placeholder text','duplicate or placeholder rejection missing: '+JSON.stringify(audit));
-      check(host(1).querySelector('textarea').value==='' && requests().at(-1).followUp && requests().at(-1).blank.includes('gossip'),'rejected text was applied or follow-up missing');
+      const generated=requests().at(-1).fields, tagged=generated.npcName, subject=generated.subject;
+      let audit=await reply({narration:`${tagged} approaches`,gossip:`${subject} was seen`,npcName:tagged,subject});
+      check(audit.applied.includes('narration') && audit.applied.includes('gossip') &&
+        host(1).querySelector('textarea').value===`${tagged} approaches` && tagged.includes('[') && subject.includes('['),
+        'known tagged names were rejected or altered: '+JSON.stringify(audit));
+      await stopClear(1); await choose('Story type','Informant'); control(1,'Generate').click(); await pause();
+      audit=await reply({narration:'An [NPC Name] approaches',gossip:'A [no match] rumor',subject:requests().at(-1).fields.npcName});
+      check(audit.rejected.narration==='Placeholder text' && audit.rejected.gossip==='Placeholder text' &&
+        audit.rejected.subject==='Duplicate NPC','unknown bracket text or subject NPC rejection changed');
       await reply({subject:'Distant Person',narration:'Wanted to share news',gossip:'argued over a debt'});
       await stopClear(1); await choose('Story type','Informant');
       control(1,'Generate').click(); await pause(); const reroll=requests().at(-1), countBeforeReject=requests().length;
@@ -189,6 +194,7 @@ SCRIPT = r"""
         audit.rejected.gossip==='Placeholder NPC reference' && !audit.applied.includes('gossip') &&
         requests().length===countBeforeReject, 'native rejection retried, discarded a valid sibling, or applied rejected gossip');
       await stopClear(1);
+      window.updateFullState(JSON.stringify({...fixture,loadedNpcs:[fixture.loadedNpcs[0]]})); await pause();
       control(2,'Generate').click(); await pause();
       check(requests().at(-1).blank.includes('npc2Name'),'Social exhausted pool did not stay blank');
       audit=await reply({npc2Name:'nAtCh',socialType:'npc_interaction',narration:'Met over a debt',fact1:'asked about a debt',fact2:'discussed repayment'});

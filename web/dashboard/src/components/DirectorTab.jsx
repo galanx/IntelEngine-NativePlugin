@@ -393,7 +393,8 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
         if (allowed[key].type === 'number' ? typeof value !== 'number' : typeof value !== 'string') { audit.rejected[key] = 'Invalid type'; continue; }
         if (npcKeys.includes(key) && typeof value === 'string' && value.trim() && npcKeys.some(other => other !== key && value.trim().toLowerCase() === String(next[other] || '').trim().toLowerCase())) { audit.rejected[key] = 'Duplicate NPC'; continue; }
         if (((touched[key] === true || request.followUp || IDENTITY_KEYS.includes(key)) && old[key])) { audit.rejected[key] = 'Preserved or unchanged'; continue; }
-        if (allowed[key].type === 'text' && !IDENTITY_KEYS.includes(key) && /\[[^\]]+\]/.test(value)) { audit.rejected[key] = 'Placeholder text'; continue; }
+        const placeholderText = [...IDENTITY_KEYS.map(k => next[k]), ...IDENTITY_KEYS.map(k => result.fields[k]), ...options.npcs].filter(name => typeof name === 'string' && name).reduce((text, name) => text.split(name).join(''), String(value));
+        if (allowed[key].type === 'text' && !IDENTITY_KEYS.includes(key) && /\[[^\]]+\]/.test(placeholderText)) { audit.rejected[key] = 'Placeholder text'; continue; }
         if (form === 'action' && key === 'targetName' && !options.targets.includes(value)) { audit.rejected[key] = 'Invalid target NPC'; continue; }
         if (allowed[key].type === 'select' && !allowed[key].options.includes(value)) { audit.rejected[key] = 'Invalid option'; continue; }
         if (['factionA','factionB','factionId'].includes(key) && !value) { audit.rejected[key] = 'Invalid identity'; continue; }
