@@ -881,6 +881,7 @@ class NearPlayerVM(DirectorVM):
         self.distance, self.now, self.loaded, self.hold_allowed = 400.0, 0.0, True, True
         self.player.cell = self.agent.cell
         self.properties.update({"IsActive": True, "ActiveStoryNPC": self.agent,
+            "MONITOR_INTERVAL": 3.0,
             "ActiveStoryType": "seek_player", "NearPlayerSince": -1.0,
             "SlotStates": [8] + [0] * 4, "SlotTaskTypes": ["story"] + [""] * 4,
             "SlotTargetNames": ["Player"] + [""] * 4})
@@ -906,12 +907,25 @@ class NearPlayerVM(DirectorVM):
 
 def run_near_player_checks(files, history):
     for story_type in ("seek_player", "informant"):
+        paused = NearPlayerVM(files, history)
+        paused.properties["ActiveStoryType"] = story_type
+        paused.invoke("IntelEngine_StoryEngine", "CheckStoryNPCArrival")
+        paused.now = 3600.0
+        for tick in range(2, 6):
+            paused.invoke("IntelEngine_StoryEngine", "CheckStoryNPCArrival")
+            require(paused.properties["IsActive"] == (tick < 5),
+                    f"{story_type}: pause jump changed the 5-poll near fallback")
+        paused.invoke("IntelEngine_StoryEngine", "CheckStoryNPCArrival")
+        paused.invoke("IntelEngine_StoryEngine", "OnProximityArrived", ("0",))
+        require(paused.call_counts.get(("IntelEngine_Core", "ClearSlot"), 0) == 1,
+                "paused near fallback did not arrive exactly once")
+    for story_type in ("seek_player", "informant"):
         vm = NearPlayerVM(files, history)
         vm.properties["ActiveStoryType"] = story_type
-        for now in (0.0, 3.0, 6.0, 9.0, 12.0, 14.9):
-            vm.now = now
+        for tick in range(1, 5):
+            vm.now = tick * 3.0
             vm.invoke("IntelEngine_StoryEngine", "CheckStoryNPCArrival")
-            require(vm.properties["IsActive"], "near-player fallback arrived before 15 seconds")
+            require(vm.properties["IsActive"], "near-player fallback arrived before 5 polls")
         vm.now = 15.0
         vm.invoke("IntelEngine_StoryEngine", "CheckStoryNPCArrival")
         vm.invoke("IntelEngine_StoryEngine", "OnProximityArrived", ("0",))
@@ -931,11 +945,11 @@ def run_near_player_checks(files, history):
         if interruption == "cell": vm.player.cell = None
         vm.invoke("IntelEngine_StoryEngine", "CheckStoryNPCArrival")
         vm.distance, vm.loaded, vm.player.cell = 400.0, True, vm.agent.cell
-        for now in (15.0, 27.0, 29.9):
-            vm.now = now
+        for tick in range(1, 5):
+            vm.now = 12.0 + tick * 3.0
             vm.invoke("IntelEngine_StoryEngine", "CheckStoryNPCArrival")
             require(vm.properties["IsActive"], f"{interruption} did not reset near-player dwell")
-        vm.now = 30.0
+        vm.now = 27.0
         vm.invoke("IntelEngine_StoryEngine", "CheckStoryNPCArrival")
         require(not vm.properties["IsActive"], f"{interruption} recovery never arrived")
     vm = NearPlayerVM(files, history)
@@ -996,25 +1010,23 @@ def run_last_stretch_checks(files, history):
         require(vm.teleports == 1 and vm.properties["LastStretchSince"] == 0.0,
                 f"{'off-screen' if route else 'stuck'} teleport did not start last-stretch timer")
         vm.stuck = 3
-        vm.now = 74.9
+        vm.now = 3600.0  # Paused wall time must not advance either poll counter.
         vm.invoke("IntelEngine_StoryEngine", "CheckStoryNPCArrival")
         require(vm.teleports == 1 and vm.properties["IsActive"],
-                "last-stretch timer fired before 75 seconds")
-        vm.now = 75.0
-        vm.invoke("IntelEngine_StoryEngine", "CheckStoryNPCArrival")
-        require(vm.teleports == 1 and vm.properties["IsActive"],
-                "last-stretch timer fired at 75 seconds")
-        vm.now = 75.1
+                "one poll after pause re-placed or aborted the story")
+        for _ in range(23):
+            vm.invoke("IntelEngine_StoryEngine", "CheckStoryNPCArrival")
+            require(vm.teleports == 1 and vm.properties["IsActive"],
+                    "last-stretch timer fired before 25 polls")
         vm.invoke("IntelEngine_StoryEngine", "CheckStoryNPCArrival")
         require(vm.teleports == 2 and vm.properties["LastStretchRetry"] == 1,
                 "first expiry did not re-place exactly once")
         require(("retry-place", (vm.agent, vm.player, 300.0, 400.0, 0.0, False)) in vm.effects and
                 vm.effects[-1] == ("ReapplyTravelPackage", (vm.agent,)),
                 "last-stretch retry did not place at 500u and reapply travel")
-        vm.now = 150.1
-        vm.invoke("IntelEngine_StoryEngine", "CheckStoryNPCArrival")
-        require(vm.properties["IsActive"], "last-stretch timer fired at exactly 75 seconds")
-        vm.now = 150.2
+        for _ in range(24):
+            vm.invoke("IntelEngine_StoryEngine", "CheckStoryNPCArrival")
+            require(vm.properties["IsActive"], "retry aborted before 25 more polls")
         vm.invoke("IntelEngine_StoryEngine", "CheckStoryNPCArrival")
         vm.invoke("IntelEngine_StoryEngine", "OnProximityArrived", ("0",))
         require(not vm.properties["IsActive"] and vm.teleports == 2 and
@@ -1032,8 +1044,8 @@ def run_last_stretch_checks(files, history):
         second = StretchVM(True)
         second.properties.update({"ActiveStoryType": story_type, "ActiveSecondNPC": second.target})
         second.invoke("IntelEngine_StoryEngine", "CheckStoryNPCArrival")
-        second.now = 76.0
-        second.invoke("IntelEngine_StoryEngine", "CheckStoryNPCArrival")
+        for _ in range(25):
+            second.invoke("IntelEngine_StoryEngine", "CheckStoryNPCArrival")
         require(("GetOffsetBehind", (second.target, 500.0)) in second.effects and
                 ("retry-place", (second.agent, second.target, 300.0, 400.0, 0.0, False)) in second.effects and
                 second.effects[-1] == ("ReapplyTravelPackage", (second.agent,)),
@@ -1044,7 +1056,10 @@ def run_last_stretch_checks(files, history):
     combat.combat, combat.now = True, 30.0
     combat.invoke("IntelEngine_StoryEngine", "CheckStoryNPCArrival")
     require(combat.properties["LastStretchSince"] == 0.0, "combat erased last-stretch timer")
-    combat.combat, combat.now = False, 76.0
+    combat.combat, combat.now = False, 3600.0
+    for _ in range(24):
+        combat.invoke("IntelEngine_StoryEngine", "CheckStoryNPCArrival")
+        require(combat.teleports == 1, "combat advanced the last-stretch counter")
     combat.invoke("IntelEngine_StoryEngine", "CheckStoryNPCArrival")
     require(combat.teleports == 2, "last-stretch timer did not resume after combat")
 
