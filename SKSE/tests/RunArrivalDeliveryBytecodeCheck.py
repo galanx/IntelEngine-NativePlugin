@@ -942,13 +942,13 @@ def run_near_player_checks(files, history):
         require(paused.properties["IsActive"], "zero-time polls advanced near streak")
     vm = NearPlayerVM(files, history)
     vm.distance = 400.0
-    for now in (0.0, 15.0, 60.0):
+    for now in (0.0, 6.0, 12.0, 15.0, 60.0):
         vm.now = now
         vm.invoke("IntelEngine_StoryEngine", "CheckStoryNPCArrival")
     require(vm.properties["IsActive"], "400u fallback incorrectly arrived")
     vm = NearPlayerVM(files, history)
     vm.distance = 600.0
-    for now in (0.0, 15.0, 60.0):
+    for now in (0.0, 6.0, 12.0, 15.0, 60.0):
         vm.now = now
         vm.invoke("IntelEngine_StoryEngine", "CheckStoryNPCArrival")
     require(vm.properties["IsActive"], "600u fallback incorrectly arrived")
