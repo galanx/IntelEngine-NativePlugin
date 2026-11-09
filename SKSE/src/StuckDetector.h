@@ -16,6 +16,7 @@
 #include "Plugin.h"
 
 #include <array>
+#include <chrono>
 #include <shared_mutex>
 
 namespace IntelEngine {
@@ -82,6 +83,7 @@ namespace IntelEngine {
             int stuckCheckCount = 0;
             int recoveryAttempts = 0;
             int teleportAttempts = 0;
+            std::chrono::steady_clock::time_point lastSample{};
             bool initialized = false;
         };
 

@@ -245,6 +245,7 @@ Skyrim's pathfinding sometimes fails — doors won't open, navmesh gaps block th
 3. **Safety timeout** — force-completes the task after extended time to prevent permanent soft-locks in unloaded cells
 
 Soft recovery re-applies the travel package without `Utility.Wait` or `PathToReference`; compiled-bytecode checks retain package evaluation for player/None destinations and loaded/unloaded actors. Existing suspended save stacks and live pathfinding are not verified.
+StuckDetector samples each slot at most once every three steady-clock seconds; faster polls return no recovery action, and reset clears the sample timer. Offline checks cover rapid polling, reset and movement; live pathfinding is unverified.
 
 **Locked doors** are a common edge case — an NPC dispatched to fetch someone at night may find their target behind a locked home door. When the NPC can't reach the target and gets stuck at the entrance, the stuck detection system catches the stall, escalates through recovery, and if all else fails, narrates the failure so the NPC doesn't silently hang forever.
 
