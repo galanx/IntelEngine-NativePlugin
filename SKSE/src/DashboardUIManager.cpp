@@ -29,6 +29,7 @@
 #include <utility>
 #include <stdexcept>
 #include <string_view>
+#include <cctype>
 
 namespace IntelEngine {
 
@@ -1006,9 +1007,9 @@ namespace IntelEngine {
             { std::lock_guard<std::mutex> lock(mgr->mutex_);
               if (mgr->shuttingDown_ || !mgr->requestedOpen_ || !mgr->isOpen_ || !mgr->domReady_) return;
               generation = mgr->generation_; }
-            auto queue = [mgr, generation, id, form](nlohmann::json fields, std::string error) {
+            auto queue = [mgr, generation, id, form](nlohmann::json fields, std::string error, nlohmann::json rejected = nlohmann::json::object()) {
                 nlohmann::json result{{"requestId", id}, {"form", form}, {"ok", error.empty()},
-                                      {"fields", std::move(fields)}, {"error", std::move(error)}};
+                                      {"fields", std::move(fields)}, {"error", std::move(error)}, {"rejected", std::move(rejected)}};
                 { std::lock_guard<std::mutex> lock(mgr->mutex_);
                   if (mgr->generation_ != generation || mgr->shuttingDown_) return;
                   mgr->pendingDirectorResults_.emplace_back(generation, SafeDump(result)); }
@@ -1034,7 +1035,14 @@ namespace IntelEngine {
                         const auto first = raw.find('{'), last = raw.rfind('}');
                         auto fields = nlohmann::json::parse(first != raw.npos && last != raw.npos ? raw.substr(first, last - first + 1) : raw);
                         if (!fields.is_object() || fields.empty()) throw std::runtime_error("invalid fields");
-                        queue(std::move(fields), "");
+                        nlohmann::json rejected = nlohmann::json::object();
+                        for (const char* key : {"gossip", "narration"}) if (fields.contains(key) && fields[key].is_string()) {
+                            const auto& text = fields[key].get_ref<const std::string&>();
+                            auto has = [&](std::string_view phrase) { return std::search(text.begin(), text.end(), phrase.begin(), phrase.end(),
+                                [](unsigned char a, unsigned char b) { return std::tolower(a) == b; }) != text.end(); };
+                            if (has("subject npc") || has("another local npc")) { fields.erase(key); rejected[key] = "Placeholder NPC reference"; }
+                        }
+                        queue(std::move(fields), "", std::move(rejected));
                     } catch (...) { queue({}, "Malformed generation result: " + std::string(raw.substr(0, 120))); }
                 });
             if (!queued) queue({}, "Generation unavailable");

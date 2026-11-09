@@ -58,7 +58,7 @@ def method(source, signature):
     raise ValueError(f"unterminated method: {signature}")
 
 
-manager = (SRC / "DashboardUIManager.cpp").read_text(encoding="utf-8")
+manager = pathlib.Path(sys.argv[2]).read_text(encoding="utf-8") if len(sys.argv) > 2 else (SRC / "DashboardUIManager.cpp").read_text(encoding="utf-8")
 has_generate = "    void DashboardUIManager::OnGenerateDirectorStatic(" in manager
 listener_count = 15 + int(has_generate)
 listener_start = manager.index("        static const UiListener listeners[] = {")
@@ -654,10 +654,12 @@ struct PoliticsStub {
     int GetMaxRelationChangePerTick()const{return 15;} int GetMaxActiveWars()const{return 2;}
     bool SetEnabled(bool){return true;} bool SetTickIntervalHours(int){return true;}
     bool SetMaxRelationChangePerTick(int){return true;} bool SetMaxActiveWars(int){return true;}
+    bool GetPEReactionsMoveRelations()const{return true;} bool SetPEReactionsMoveRelations(bool){return true;}
 };
 struct SlotStub { std::string SerializeToJson()const{return "[slot]";} };
 class DashboardConfig { public: static ConfigStub* GetSingleton(){static ConfigStub c;return &c;} void Reload(){} };
 class FactionPolitics { public: static PoliticsStub* GetSingleton(){static PoliticsStub p;return &p;} };
+class PoliticalEngineBridge { public: static PoliticalEngineBridge* GetSingleton(){static PoliticalEngineBridge b;return &b;} bool IsDetected()const{return false;} };
 class SlotTracker { public: static SlotStub* GetSingleton(){static SlotStub s;return &s;} };
 
 class NPCIndex { public:
@@ -789,6 +791,14 @@ void testManager() {
     generate();
     directorCompletion(R"({"narration":"Keep valid narrative","unexpected":false})",1); drainDirector();
     auto partialResult=nlohmann::json::parse(host->calls.back().second);
+    generate();
+    directorCompletion(R"({"narration":"Jon spoke to Omega about ANOTHER LOCAL NPC","gossip":"The subject NPC was seen nearby","subject":"Carlotta Valentia","sender":"Jon Battle-Born"})",1); drainDirector();
+    auto placeholderResult=nlohmann::json::parse(host->calls.back().second);
+    assert(placeholderResult["ok"] && placeholderResult["fields"].size()==2 &&
+           placeholderResult["fields"]["subject"]=="Carlotta Valentia" &&
+           placeholderResult["fields"]["sender"]=="Jon Battle-Born" &&
+           placeholderResult["rejected"]["narration"]=="Placeholder NPC reference" &&
+           placeholderResult["rejected"]["gossip"]=="Placeholder NPC reference");
     assert(partialResult["ok"] && partialResult["fields"]["narration"]=="Keep valid narrative");
     const auto beforeStale=resultCount();
     generate();
