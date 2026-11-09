@@ -163,7 +163,14 @@ SCRIPT = r"""
       check(audit.rejected.subject==='Duplicate NPC' && audit.rejected.narration==='Placeholder text' && audit.rejected.gossip==='Placeholder text','duplicate or placeholder rejection missing: '+JSON.stringify(audit));
       check(host(1).querySelector('textarea').value==='' && requests().at(-1).followUp && requests().at(-1).blank.includes('gossip'),'rejected text was applied or follow-up missing');
       await reply({subject:'Distant Person',narration:'Wanted to share news',gossip:'argued over a debt'});
-      check(host(1).querySelector('textarea').value==='Wanted to share news','follow-up did not refill rejected text');
+      await stopClear(1); await choose('Story type','Informant');
+      control(1,'Generate').click(); await pause(); const reroll=requests().at(-1), countBeforeReject=requests().length;
+      window.directorGenerateResult(JSON.stringify({requestId:reroll.requestId,form:'story',ok:true,
+        fields:{narration:'Jon discussed a debt',subject:'Carlotta Valentia'},rejected:{gossip:'Placeholder NPC reference'}})); await pause();
+      audit=outcomeFor(reroll.requestId);
+      check(host(1).querySelector('textarea').value==='Jon discussed a debt' &&
+        audit.rejected.gossip==='Placeholder NPC reference' && !audit.applied.includes('gossip') &&
+        requests().length===countBeforeReject, 'native rejection retried, discarded a valid sibling, or applied rejected gossip');
       await stopClear(1);
       control(2,'Generate').click(); await pause();
       check(requests().at(-1).blank.includes('npc2Name'),'Social exhausted pool did not stay blank');

@@ -366,6 +366,7 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
       try { result = JSON.parse(json); } catch { pendingRef.current = null; setPending(null); setGenerateError('Invalid response; try again.'); return; }
       if (result.requestId !== request.id || result.form !== request.form) return;
       const audit = {ok:false,applied:[],rejected:{$response:result.error || 'Invalid result'}}; try {
+      Object.assign(audit.rejected, result.rejected || {});
       pendingRef.current = null; setPending(null);
       if (!result.ok || !result.fields || typeof result.fields !== 'object' || Array.isArray(result.fields)) {
         setGenerateError(String(result.error || 'Generation failed; try again.').slice(0,120)); return;
@@ -409,7 +410,7 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
       if (form === 'action') { const matches = nearby.filter(n => n.name === next.npcName); setActionNpc(nearby.find(n => n.id === actionNpc)?.name === next.npcName ? actionNpc : matches.length === 1 ? matches[0].id : ''); setSelectedAction(next.actionName); setActionParams(prev => (request.fields.actionName === 'CancelCurrentTask' || request.fields.actionName === 'ChangeSpeed') ? { ...prev, reason:next.reason || '' } : Object.fromEntries(Object.keys(allowed).filter(k => !['npcName','actionName'].includes(k)).map(k => [k,next[k] ?? '']))); }
       audit.ok = true; delete audit.rejected.$response; audit.applied = Object.keys(result.fields).filter(k=>next[k] !== old[k]); for (const k of Object.keys(result.fields)) if (!skipped.has(k) && !audit.applied.includes(k)) audit.rejected[k] ??= 'Preserved or unchanged';
       setGenerateError('');
-      if (!request.followUp && Object.entries(allowed).some(([k, f]) => f.required && !String(next[k] ?? '').trim())) {
+      if (!Object.keys(result.rejected || {}).some(k => k === 'narration' || k === 'gossip') && !request.followUp && Object.entries(allowed).some(([k, f]) => f.required && !String(next[k] ?? '').trim())) {
         const fields = Object.fromEntries(Object.keys(allowed).map(k => [k, typeof next[k] === 'string' && !next[k].trim() ? '' : next[k] ?? '']));
         submitGenerate({ ...request, id:String(++requestId.current), fields, draft:{...fields}, followUp:true });
       }
