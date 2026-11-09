@@ -878,7 +878,7 @@ def run_resume_checks(files, history):
 class NearPlayerVM(DirectorVM):
     def __init__(self, files, history):
         super().__init__(files, history)
-        self.distance, self.now, self.loaded, self.hold_allowed = 400.0, 0.0, True, True
+        self.distance, self.now, self.loaded, self.hold_allowed = 300.0, 0.0, True, True
         self.player.cell = self.agent.cell
         self.properties.update({"IsActive": True, "ActiveStoryNPC": self.agent,
             "MONITOR_INTERVAL": 3.0,
@@ -896,6 +896,7 @@ class NearPlayerVM(DirectorVM):
 
     def external(self, method, args, script):
         if method == "GetCurrentRealTime": return self.now
+        if method == "GetArrivalThreshold": return 100.0
         if method == "Is3DLoaded": return self.loaded
         if method in ("IsInterior", "IsSneaking"): return False
         if method == "GetWorldSpace": return None
@@ -935,15 +936,27 @@ def run_near_player_checks(files, history):
         for _ in range(20):
             paused.invoke("IntelEngine_StoryEngine", "CheckStoryNPCArrival")
         require(paused.properties["IsActive"], "zero-time polls advanced near streak")
+    vm = NearPlayerVM(files, history)
+    vm.distance = 400.0
+    for now in (0.0, 15.0, 60.0):
+        vm.now = now
+        vm.invoke("IntelEngine_StoryEngine", "CheckStoryNPCArrival")
+    require(vm.properties["IsActive"], "400u fallback incorrectly arrived")
+    vm = NearPlayerVM(files, history)
+    vm.distance = 600.0
+    for now in (0.0, 15.0, 60.0):
+        vm.now = now
+        vm.invoke("IntelEngine_StoryEngine", "CheckStoryNPCArrival")
+    require(vm.properties["IsActive"], "600u fallback incorrectly arrived")
     for interruption in ("distance", "unloaded", "cell"):
         vm = NearPlayerVM(files, history)
         vm.invoke("IntelEngine_StoryEngine", "CheckStoryNPCArrival")
         vm.now = 12.0
-        if interruption == "distance": vm.distance = 600.0
+        if interruption == "distance": vm.distance = 400.0
         if interruption == "unloaded": vm.loaded = False
         if interruption == "cell": vm.player.cell = None
         vm.invoke("IntelEngine_StoryEngine", "CheckStoryNPCArrival")
-        vm.distance, vm.loaded, vm.player.cell = 400.0, True, vm.agent.cell
+        vm.distance, vm.loaded, vm.player.cell = 300.0, True, vm.agent.cell
         for tick in range(6):
             vm.now = 15.0 + tick * 3.0
             vm.invoke("IntelEngine_StoryEngine", "CheckStoryNPCArrival")
@@ -952,12 +965,6 @@ def run_near_player_checks(files, history):
         vm.now = 30.0
         vm.invoke("IntelEngine_StoryEngine", "CheckStoryNPCArrival")
         require(not vm.properties["IsActive"], f"{interruption} recovery never arrived")
-    vm = NearPlayerVM(files, history)
-    vm.distance = 600.0
-    for now in (0.0, 15.0, 60.0):
-        vm.now = now
-        vm.invoke("IntelEngine_StoryEngine", "CheckStoryNPCArrival")
-    require(vm.properties["IsActive"], "600u fallback incorrectly arrived")
     vm = NearPlayerVM(files, history)
     vm.invoke("IntelEngine_StoryEngine", "CheckStoryNPCArrival")
     vm.now, vm.distance = 10.0, 100.0
