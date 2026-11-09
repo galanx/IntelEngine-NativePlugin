@@ -1215,34 +1215,88 @@ def run_linger_teammate_checks(files, history):
     class LingerVM(VM):
         teammate = False
         linked = "existing-link"
+        now = 0.5
+        distance = 100.0
 
         def external(self, method, args, script):
+            if method == "GetCurrentRealTime": return self.now
+            if method == "IntListGet": return self.storage[(args[0], args[1])][args[2]]
+            if method == "HasNonSandboxAI": return True
+            if method == "GetForm": return self.agent if args[0] == 1234 else None
             if method == "IsPlayerTeammate": return self.teammate
             if method == "Is3DLoaded": return True
             if method == "GetDistance":
                 self.effects.append((method, tuple(args)))
-                return 100.0
+                return self.distance
             if method == "SetLinkedRef":
                 self.linked = args[1]
                 self.effects.append((method, tuple(args)))
                 return None
             return super().external(method, args, script)
 
-    vm = LingerVM(files, history)
-    npc = vm.agent
+    def make_vm():
+        vm = LingerVM(files, history)
+        npc = vm.agent
+        actors = [npc]
+        vm.storage[(vm.player, "Intel_StoryLingerActors")] = actors
+        vm.now = 0.5
+        vm.storage[(npc, "Intel_StoryLingerStart")] = vm.now
+        vm.storage[(vm.player, "Intel_FakeEncounterNPCs")] = [1234]
+        vm.storage[(npc, "Intel_FakeEncounterInteracted")] = 1
+        vm.storage[(npc, "Intel_FakeEncounterGreetTime")] = vm.now
+        vm.storage[(npc, "Intel_FakeEncounterElapsed")] = 0.0
+        vm.properties.update({"LINGER_RELEASE_DISTANCE": 1500.0, "ENCOUNTER_RESUME_DISTANCE": 1500.0,
+                              "IntelEngine_TravelTarget": "travel-link", "SandboxNearPlayerPackage": object()})
+        vm.properties["LINGER_TIMEOUT_SECONDS"] = vm.invoke("IntelEngine_StoryEngine", "LINGER_TIMEOUT_SECONDS")
+        return vm, npc, actors
+
+    vm, npc, actors = make_vm()
+    vm.now = 1440.5
+    vm.invoke("IntelEngine_StoryEngine", "CheckStoryLingerCleanup")
+    story_pause_safe = actors == [npc]
     actors = [npc]
     vm.storage[(vm.player, "Intel_StoryLingerActors")] = actors
-    vm.storage[(npc, "Intel_StoryLingerStart")] = 455.0
-    vm.properties.update({"LINGER_TIMEOUT_SECONDS": 300.0, "IntelEngine_TravelTarget": "travel-link",
-                          "SandboxNearPlayerPackage": object()})
+    vm.storage[(npc, "Intel_StoryLingerStart")] = vm.now
+    vm.storage[(npc, "Intel_StoryLingerElapsed")] = 0.0
+    story_frequent_safe = True
+    for tick in range(1, 361):
+        vm.now = 1440.5 + tick * 0.5
+        vm.invoke("IntelEngine_StoryEngine", "CheckStoryLingerCleanup")
+        story_frequent_safe = story_frequent_safe and actors == [npc]
+    vm.now += 0.5
     vm.invoke("IntelEngine_StoryEngine", "CheckStoryLingerCleanup")
-    require(actors == [npc] and not any(e[0] == "RemovePackageOverride" for e in vm.effects),
-            "nearby non-teammate linger was released")
+    story_timed_out = actors == []
+
+    vm, npc, actors = make_vm()
+    vm.now = 1440.5
+    vm.invoke("IntelEngine_StoryEngine", "CheckRoadEncounterProximity")
+    road_pause_safe = vm.storage[(npc, "Intel_FakeEncounterInteracted")] == 1
+    vm.storage[(npc, "Intel_FakeEncounterInteracted")] = 1
+    vm.storage[(npc, "Intel_FakeEncounterGreetTime")] = vm.now
+    vm.storage[(npc, "Intel_FakeEncounterElapsed")] = 0.0
+    road_frequent_safe = True
+    for tick in range(1, 361):
+        vm.now = 1440.5 + tick * 0.5
+        vm.invoke("IntelEngine_StoryEngine", "CheckRoadEncounterProximity")
+        road_frequent_safe = road_frequent_safe and vm.storage[(npc, "Intel_FakeEncounterInteracted")] == 1
+    vm.now += 0.5
+    vm.invoke("IntelEngine_StoryEngine", "CheckRoadEncounterProximity")
+    road_timed_out = vm.storage[(npc, "Intel_FakeEncounterInteracted")] == 2
+    require(story_pause_safe and road_pause_safe and story_frequent_safe and road_frequent_safe
+            and story_timed_out and road_timed_out,
+            f"linger: pause story/road={story_pause_safe}/{road_pause_safe}, "
+            f"before-180 story/road={story_frequent_safe}/{road_frequent_safe}, "
+            f"after-180 story/road={story_timed_out}/{road_timed_out}")
+
+    vm, npc, actors = make_vm()
+    vm.invoke("IntelEngine_StoryEngine", "CheckStoryLingerCleanup")
+    require(actors == [npc], "nearby non-teammate linger was released")
     vm.teammate = True
     vm.effects.clear()
     vm.invoke("IntelEngine_StoryEngine", "CheckStoryLingerCleanup")
-    require(actors == [] and (npc, "Intel_StoryLingerStart") not in vm.storage,
-            "teammate linger cleanup did not remove list entry and start time")
+    require(actors == [] and (npc, "Intel_StoryLingerStart") not in vm.storage
+            and (npc, "Intel_StoryLingerElapsed") not in vm.storage,
+            "teammate linger cleanup did not remove list entry and timer state")
     require(not any(e[0] in ("Wait", "GetDistance") for e in vm.effects),
             "teammate linger cleanup waited or checked distance before release")
     require(("RemovePackageOverride", (npc, vm.properties.get("SandboxNearPlayerPackage"))) in vm.effects,
@@ -1254,7 +1308,15 @@ def run_linger_teammate_checks(files, history):
             "teammate linger release unexpectedly attempted home travel")
     require(any(e[0] == "EvaluatePackage" for e in vm.effects),
             "actual Core.ReleaseLinger did not evaluate the teammate package")
-    print("actual PEX linger cleanup: nearby non-teammate retained; teammate released next pass without timeout/distance, home travel skipped")
+
+    vm, npc, actors = make_vm()
+    vm.now = 31.5
+    vm.storage[(npc, "Intel_StoryLingerStart")] = vm.now
+    vm.storage[(npc, "Intel_StoryLingerElapsed")] = 31.0
+    vm.distance = 2000.0
+    vm.invoke("IntelEngine_StoryEngine", "CheckStoryLingerCleanup")
+    require(actors == [], "distant linger was not released")
+    print("actual PEX linger/proximity: pause-safe timeout; 0.5s accumulation; teammate and distance releases passed")
 
 
 def main():
