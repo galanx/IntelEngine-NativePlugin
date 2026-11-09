@@ -36,16 +36,24 @@ def main():
             if name == "DispatchToTarget":
                 return True
             return super().invoke(script, name, args)
+        def external(self, method, args, script):
+            if method == "Substring":
+                return args[0][args[1]:args[1] + args[2]]
+            return super().external(method, args, script)
 
     failures = []
     for automatic in (False, True):
         for sender, lead in (("Mira", "heard from Mira that "), ("", "witnessed that ")):
-            for gossip in ("Snilf was seen near the western gate.", "was seen near the western gate.",
-                           "At the western gate, Snilf was seen.", "snilf was seen near the western gate."):
+            for subject, gossip in (("Snilf", "Snilf was seen near the western gate."),
+                                    ("Snilf", "was seen near the western gate."),
+                                    ("Snilf", "At the western gate, Snilf was seen."),
+                                    ("Snilf", "snilf was seen near the western gate."),
+                                    ("Snilf [the alchemist]", "Snilf was seen near the western gate."),
+                                    ("Snilf [the alchemist]", "was seen near the western gate.")):
                 vm = FactVM(({}, core, story), pathlib.Path("unused"))
                 vm.target.name = "Snilf"
                 response = {"should_act": True, "type": "informant", "npc": vm.target.name,
-                            "narration": "Gossip from town", "subject": "Snilf",
+                            "narration": "Gossip from town", "subject": subject,
                             "gossip": gossip, "sender": sender}
                 if automatic:
                     vm.invoke("IntelEngine_StoryEngine", "OnDungeonMasterResponse",
@@ -58,10 +66,12 @@ def main():
                     vm.invoke("IntelEngine_Core", "OnDashboardDispatchStory",
                               ("", arrival.json.dumps(payload), 0.0, None))
                     recipient = vm.agent
-                expected = lead + (gossip if "Snilf" in gossip else "Snilf " + gossip)
+                untagged_subject = subject.split(" [", 1)[0]
+                expected = lead + (gossip if untagged_subject in gossip else subject + " " + gossip)
                 facts = [e[1][1] for e in vm.effects if e[0] == "InjectFact" and e[1][0] is recipient]
-                if facts != ([gossip, expected] if automatic else [expected]):
-                    failures.append((automatic, sender, gossip, facts, expected))
+                subject_fact = [gossip] if subject == "Snilf" else []
+                if facts != (subject_fact + [expected] if automatic else [expected]):
+                    failures.append((automatic, sender, subject, gossip, facts, expected))
     require(not failures, f"informant entrypoint fact mismatch: {failures!r}")
     print("actual PEX informant facts: both dispatch entrypoints, name/no-name/case, sender/no-sender PASS")
 
