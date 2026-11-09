@@ -115,6 +115,7 @@ class VM:
             "LastPollRealTime": -1.0, "LastStretchSince": -1.0, "LastStretchRetry": 0,
             "ActiveSecondNPC": None, "ActiveNarration": "A message about the road", "NPCSocialGeneration": 0})
         self.call_counts, self.reenter_story = {}, False
+        self.story_recovered = True
         self.storage.update({(self.agent, "Intel_Message"): "Meet me at the bridge",
             (self.agent, "Intel_Result"): "", (self.agent, "Intel_DeliveryMeetLocation"): "none",
             (self.agent, "Intel_DeliveryMeetTime"): "none", (self.agent, "Intel_WasFollower"): 0,
@@ -171,6 +172,9 @@ class VM:
 
     def external(self, method, args, script):
         if method == "IsDashboardOpen": return False
+        if method == "StoryLoadRecovered":
+            if args[0]: self.story_recovered = True
+            return self.story_recovered
         if method == self.arrival_interleave_method:
             self.arrival_interleave_method = None
             if self.arrival_interleave_action == "replace":
@@ -1094,6 +1098,55 @@ def run_last_stretch_checks(files, history):
     print("actual PEX last stretch: loaded/unloaded 500u target-relative retry, second-NPC target, abort, combat pause and native arrival passed")
 
 
+def run_load_recovery_checks(files, history):
+    class LoadVM(NearPlayerVM):
+        def invoke(self, script, name, args=()):
+            if name in ("WarmCooldownMirror", "WarmStoryTypeCounts", "ClearStaleRealTimeTimers",
+                        "SyncHoldRestrictionPolicies", "WarmBioLineCounts"):
+                return None
+            return super().invoke(script, name, args)
+
+        def external(self, method, args, script):
+            if method in ("SetAutoBioEnabled", "SetAutoBioThreshold"):
+                return None
+            if method in ("IntListClear", "FormListClear"):
+                self.storage.pop((args[0], args[1]), None)
+                return None
+            if method == "GetOffsetBehind": return [300.0, 400.0]
+            if method == "MoveTo":
+                self.effects.append((method, tuple(args)))
+                return None
+            return super().external(method, args, script)
+
+    for retry in (0, 1):
+        vm = LoadVM(files, history)
+        vm.story_recovered = False
+        vm.now, vm.distance = 456.0, 1000.0
+        vm.properties.update({"ActiveStoryType": "informant", "LastStretchSince": 80.0,
+            "LastStretchRetry": retry, "LastPollRealTime": 450.0, "NearPlayerSince": 12.0,
+            "IsNPCStoryActive": False, "QuestActive": False, "QuestGuideActive": False})
+        before, effects = dict(vm.properties), list(vm.effects)
+        vm.invoke("IntelEngine_StoryEngine", "CheckStoryNPCArrival")
+        vm.invoke("IntelEngine_StoryEngine", "OnProximityArrived", ("0",))
+        require(vm.properties == before and vm.effects == effects,
+                "saved story acted or accumulated time before load recovery")
+        require(not any(vm.call_counts.get(("IntelEngine_StoryEngine", name), 0)
+                        for name in ("AbortStoryTravel", "OnStoryNPCArrived")),
+                "saved story aborted or arrived before load recovery")
+        vm.invoke("IntelEngine_StoryEngine", "RestartMonitoring")
+        require(vm.story_recovered and not vm.properties["IsActive"] and
+                vm.properties["ActiveStoryNPC"] is None and
+                all(vm.properties[key] == -1.0 for key in
+                    ("LastPollRealTime", "LastStretchSince", "NearPlayerSince")),
+                "load recovery did not abandon saved story and reset arrival timers")
+        require(any(e[0] == "InjectFact" and "never finished:" in str(e)
+                    for e in vm.effects), "load recovery omitted abandonment fact")
+        vm.effects.clear()
+        vm.invoke("IntelEngine_StoryEngine", "CheckStoryNPCArrival")
+        require(not vm.effects, "abandoned story acted after recovery")
+    print("actual PEX load recovery: saved retry/abort polls inert; recovery abandons and resets timers")
+
+
 def run_hold_restriction_checks(files, history):
     for origin in ("Director", "Story engine"):
         vm = NearPlayerVM(files, history)
@@ -1497,6 +1550,7 @@ def main():
     run_courier_checks(files, history)
     run_near_player_checks(files, history)
     run_last_stretch_checks(files, history)
+    run_load_recovery_checks(files, history)
     run_hold_restriction_checks(files, history)
     run_soft_stuck_checks(files, history)
     run_linger_teammate_checks(files, history)

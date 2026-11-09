@@ -124,6 +124,7 @@ namespace IntelEngine {
     }
 
     void RevertCallback(SKSE::SerializationInterface*) {
+        intelEngineStoryLoadRecovered.store(false);
         PoliticalEngineBridge::GetSingleton()->MarkDirty(true);
         PoliticalDB::GetSingleton()->BeginLoad();
         g_currentSaveID.clear();
@@ -344,6 +345,7 @@ namespace IntelEngine {
     void MessageHandler(SKSE::MessagingInterface::Message* a_msg) {
         switch (a_msg->type) {
             case SKSE::MessagingInterface::kPreLoadGame:
+                intelEngineStoryLoadRecovered.store(false);
                 PoliticalDB::GetSingleton()->BeginLoad();
                 break;
             case SKSE::MessagingInterface::kDataLoaded:
