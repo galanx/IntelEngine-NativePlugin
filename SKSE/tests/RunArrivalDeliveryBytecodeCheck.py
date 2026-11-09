@@ -112,6 +112,7 @@ class VM:
         self.properties.update({"NPCTickIntervalHours": 1.5, "MONITOR_INTERVAL": 5.0, "IDLE_POLL_INTERVAL": 30.0})
         self.properties.update({"IsActive": True, "ArrivalHandling": False, "DispatchGeneration": 0,
             "ActiveStoryNPC": self.agent, "ActiveStoryType": "seek_player",
+            "LastStretchSince": -1.0, "LastStretchRetry": 0,
             "ActiveSecondNPC": None, "ActiveNarration": "A message about the road", "NPCSocialGeneration": 0})
         self.call_counts, self.reenter_story = {}, False
         self.storage.update({(self.agent, "Intel_Message"): "Meet me at the bridge",
@@ -953,6 +954,74 @@ def run_near_player_checks(files, history):
     print("actual PEX near-player arrival: dwell, interruption, range, linger and native races passed")
 
 
+def run_last_stretch_checks(files, history):
+    class StretchVM(NearPlayerVM):
+        def __init__(self, offscreen):
+            super().__init__(files, history)
+            self.offscreen, self.loaded, self.teleports = offscreen, not offscreen, 0
+            self.stuck = 0 if offscreen else 3
+            self.distance = 1000.0
+            self.properties.update({"LastStretchSince": -1.0, "LastStretchRetry": 0,
+                "AllowStuckTeleport": True, "STUCK_DISTANCE_THRESHOLD": 1.0})
+            self.player.cell = None
+
+        def invoke(self, script, name, args=()):
+            if name == "ImmersiveTeleportToTarget":
+                self.teleports += 1
+                return None
+            return super().invoke(script, name, args)
+
+        def external(self, method, args, script):
+            if method == "GetCurrentRealTime": return self.now
+            if method == "Is3DLoaded": return self.loaded
+            if method == "CheckOffScreenProgress": return 1 if self.offscreen else 0
+            if method == "CheckStuckStatus": return self.stuck
+            return super().external(method, args, script)
+
+    for route in (True, False):
+        vm = StretchVM(route)
+        vm.invoke("IntelEngine_StoryEngine", "CheckStoryNPCArrival")
+        vm.loaded, vm.offscreen = True, False
+        require(vm.teleports == 1 and vm.properties["LastStretchSince"] == 0.0,
+                f"{'off-screen' if route else 'stuck'} teleport did not start last-stretch timer")
+        vm.stuck = 3
+        vm.now = 74.9
+        vm.invoke("IntelEngine_StoryEngine", "CheckStoryNPCArrival")
+        require(vm.teleports == 1 and vm.properties["IsActive"],
+                "last-stretch timer fired before 75 seconds")
+        vm.now = 75.0
+        vm.invoke("IntelEngine_StoryEngine", "CheckStoryNPCArrival")
+        require(vm.teleports == 1 and vm.properties["IsActive"],
+                "last-stretch timer fired at 75 seconds")
+        vm.now = 75.1
+        vm.invoke("IntelEngine_StoryEngine", "CheckStoryNPCArrival")
+        require(vm.teleports == 2 and vm.properties["LastStretchRetry"] == 1,
+                "first expiry did not re-place exactly once")
+        vm.now = 150.1
+        vm.invoke("IntelEngine_StoryEngine", "CheckStoryNPCArrival")
+        require(vm.properties["IsActive"], "last-stretch timer fired at exactly 75 seconds")
+        vm.now = 150.2
+        vm.invoke("IntelEngine_StoryEngine", "CheckStoryNPCArrival")
+        vm.invoke("IntelEngine_StoryEngine", "OnProximityArrived", ("0",))
+        require(not vm.properties["IsActive"] and vm.teleports == 2 and
+                sum(e == ("Notification", "Story: Nazeem couldn't reach you - story ended")
+                    for e in vm.effects) == 1 and
+                vm.call_counts.get(("IntelEngine_StoryEngine", "AbortStoryTravel"), 0) == 1 and
+                vm.call_counts.get(("IntelEngine_StoryEngine", "OnStoryNPCArrived"), 0) == 0,
+                "second expiry did not abort and notify exactly once")
+
+    raced = StretchVM(False)
+    raced.invoke("IntelEngine_StoryEngine", "CheckStoryNPCArrival")
+    raced.distance, raced.now = 100.0, 20.0
+    raced.invoke("IntelEngine_StoryEngine", "OnProximityArrived", ("0",))
+    raced.now = 100.0
+    raced.invoke("IntelEngine_StoryEngine", "CheckStoryNPCArrival")
+    require(raced.call_counts.get(("IntelEngine_StoryEngine", "OnStoryNPCArrived"), 0) == 1 and
+            raced.call_counts.get(("IntelEngine_Core", "ClearSlot"), 0) == 1,
+            "native arrival during last stretch did not win exactly once")
+    print("actual PEX last stretch: both teleport routes, >75s retry/abort, and native arrival race passed")
+
+
 def run_hold_restriction_checks(files, history):
     for origin in ("Director", "Story engine"):
         vm = NearPlayerVM(files, history)
@@ -1355,6 +1424,7 @@ def main():
     run_replacement_checks(files, history)
     run_courier_checks(files, history)
     run_near_player_checks(files, history)
+    run_last_stretch_checks(files, history)
     run_hold_restriction_checks(files, history)
     run_soft_stuck_checks(files, history)
     run_linger_teammate_checks(files, history)
