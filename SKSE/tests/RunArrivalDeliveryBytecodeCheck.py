@@ -972,14 +972,17 @@ def run_last_stretch_checks(files, history):
             if name == "ImmersiveTeleportToTarget":
                 self.teleports += 1
                 return None
-            if name == "TeleportBehindPlayer":
-                self.teleports += 1
-                self.effects.append(("retry-place", tuple(args)))
-                return None
             return super().invoke(script, name, args)
 
         def external(self, method, args, script):
             if method == "GetCurrentRealTime": return self.now
+            if method == "GetOffsetBehind":
+                self.effects.append((method, tuple(args)))
+                return [300.0, 400.0]
+            if method == "MoveTo":
+                self.teleports += 1
+                self.effects.append(("retry-place", tuple(args)))
+                return None
             if method == "Is3DLoaded": return self.loaded
             if method == "IsInCombat": return self.combat
             if method == "CheckOffScreenProgress": return 1 if self.offscreen else 0
@@ -1005,7 +1008,7 @@ def run_last_stretch_checks(files, history):
         vm.invoke("IntelEngine_StoryEngine", "CheckStoryNPCArrival")
         require(vm.teleports == 2 and vm.properties["LastStretchRetry"] == 1,
                 "first expiry did not re-place exactly once")
-        require(("retry-place", (vm.agent, 500.0)) in vm.effects and
+        require(("retry-place", (vm.agent, vm.player, 300.0, 400.0, 0.0, False)) in vm.effects and
                 vm.effects[-1] == ("ReapplyTravelPackage", (vm.agent,)),
                 "last-stretch retry did not place at 500u and reapply travel")
         vm.now = 150.1
@@ -1025,6 +1028,17 @@ def run_last_stretch_checks(files, history):
         require(vm.call_counts.get(("IntelEngine_StoryEngine", "AbortStoryTravel"), 0) == 1,
                 "late poll repeated last-stretch abort")
 
+    for story_type in ("npc_interaction", "npc_gossip"):
+        second = StretchVM(True)
+        second.properties.update({"ActiveStoryType": story_type, "ActiveSecondNPC": second.target})
+        second.invoke("IntelEngine_StoryEngine", "CheckStoryNPCArrival")
+        second.now = 76.0
+        second.invoke("IntelEngine_StoryEngine", "CheckStoryNPCArrival")
+        require(("GetOffsetBehind", (second.target, 500.0)) in second.effects and
+                ("retry-place", (second.agent, second.target, 300.0, 400.0, 0.0, False)) in second.effects and
+                second.effects[-1] == ("ReapplyTravelPackage", (second.agent,)),
+                f"{story_type} last-stretch retry did not use the second-NPC target")
+
     combat = StretchVM(False)
     combat.invoke("IntelEngine_StoryEngine", "CheckStoryNPCArrival")
     combat.combat, combat.now = True, 30.0
@@ -1043,7 +1057,7 @@ def run_last_stretch_checks(files, history):
     require(raced.call_counts.get(("IntelEngine_StoryEngine", "OnStoryNPCArrived"), 0) == 1 and
             raced.call_counts.get(("IntelEngine_Core", "ClearSlot"), 0) == 1,
             "native arrival during last stretch did not win exactly once")
-    print("actual PEX last stretch: loaded/unloaded retry at 500u, abort, combat pause and native arrival passed")
+    print("actual PEX last stretch: loaded/unloaded 500u target-relative retry, second-NPC target, abort, combat pause and native arrival passed")
 
 
 def run_hold_restriction_checks(files, history):
