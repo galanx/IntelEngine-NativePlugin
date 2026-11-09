@@ -47,6 +47,7 @@
 
 namespace IntelEngine::Papyrus {
 
+    bool StoryLoadRecovered(RE::StaticFunctionTag*, bool complete) { return IntelEngineStoryLoadRecovered(complete); }
     // Forward declarations for functions defined after Register()
     void MarkSystemPending(RE::StaticFunctionTag*, RE::BSFixedString, float);
     void ClearSystemPending(RE::StaticFunctionTag*, RE::BSFixedString);
@@ -596,6 +597,7 @@ namespace IntelEngine::Papyrus {
         a_vm->RegisterFunction("MarkSystemPending", SCRIPT_NAME, MarkSystemPending); ++count;
         a_vm->RegisterFunction("ClearSystemPending", SCRIPT_NAME, ClearSystemPending); ++count;
         a_vm->RegisterFunction("ShouldResetPending", SCRIPT_NAME, ShouldResetPending); ++count;
+        a_vm->RegisterFunction("StoryLoadRecovered", SCRIPT_NAME, StoryLoadRecovered); ++count;
 
         // Utility
         a_vm->RegisterFunction("HexToInt", SCRIPT_NAME, HexToInt); ++count;

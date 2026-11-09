@@ -7,6 +7,7 @@
  */
 
 #include "Plugin.h"
+#include "StoryLoadRecovery.h"
 
 namespace IntelEngine::Papyrus {
 

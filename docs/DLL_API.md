@@ -25,6 +25,9 @@ The `IntelEngine.dll` SKSE plugin provides high-performance functions that would
 
 All functions are exposed to Papyrus via the `IntelEngine` script namespace.
 
+### Story load recovery
+`Bool Function StoryLoadRecovered(Bool complete = false) Global Native` reads a nonpersisted, atomic readiness marker. Passing `true` marks StoryEngine load recovery complete; only `RestartMonitoring` does this after cleanup. Preload and serialization revert reset it, including same-process reloads. `CheckStoryNPCArrival` does nothing while it is false. A saved Papyrus property cannot provide this per-load boundary.
+
 ### Read-only political feeds (pipe 2)
 
 ```papyrus
