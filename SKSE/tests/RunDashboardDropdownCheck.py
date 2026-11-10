@@ -712,7 +712,7 @@ SCRIPT = r"""
       const cards = [...document.querySelectorAll('.slot-card')];
       check(cards.find(e=>e.textContent.includes('Traveling') && e.textContent.includes('Courier'))?.textContent.includes('Travel (Jog)'), 'task card missing matched package type');
       check(!cards.find(e=>e.textContent.includes('No package'))?.textContent.includes('Travel (Jog)'), 'unmatched task inherited package type');
-      const section = [...document.querySelectorAll('details')].find(e=>e.querySelector('summary')?.textContent.includes('Other IE packages'));
+      const section = [...document.querySelectorAll('details')].find(e=>e.querySelector('summary')?.textContent.includes('IE packages'));
       check(section && section.open, 'orphan packages missing collapsible section');
       check(section.querySelectorAll('.slot-card').length === 1 && section.textContent.includes('Sandbox') && !section.textContent.includes('Travel (Jog)'), 'package/task identity partition failed');
       section.querySelector('summary').click(); await pause();
@@ -722,7 +722,7 @@ SCRIPT = r"""
       check(payloads.length === 1 && payloads[0][0] === 'removePackages' && JSON.parse(payloads[0][1]).formId === 108197, 'Remove sent wrong action or identity');
       check(section.querySelector('button').disabled && section.querySelector('button').textContent === 'Removing\u2026', 'pending removal state missing');
       push([packages[0]]); await pause();
-      check(![...document.querySelectorAll('h2')].some(e=>e.textContent === 'Other IE packages'), 'empty orphan section remains visible');
+      check(section.isConnected && section.textContent.includes('No NPCs currently running IntelEngine packages.') && !section.querySelector('.slot-card'), 'empty packages section hidden or missing empty state');
       push(packages); await pause();
       const remove = [...document.querySelectorAll('button')].find(e=>e.textContent === 'Remove');
       check(remove && !remove.disabled, 'server-confirmed removal did not clear pending state');
