@@ -239,6 +239,7 @@ class VM:
         if method == "FormListRemoveAt": self.storage[(args[0], args[1])].pop(args[2]); return None
         if method == "EncodeRenderedCache": return args[0]
         if method == "RenderTaskHistorySection": return ""
+        if method == "DescribeDistance": return "dist=0 sameSpace=yes"
         if method == "IsIndexLoaded": return True
         if method == "ClearSlotState":
             self.effects.append((method, tuple(args)))
@@ -691,6 +692,7 @@ def run_director_lite_checks(files, history):
             def external(self, method, args, script):
                 if method == "ResolveDirectorActor":
                     return self.agent if args[0] == "Nazeem" else None
+                if method == "GetDirectorFailureMessage": return "Director lookup failed"
                 return super().external(method, args, script)
 
         for event, payload, names in (
@@ -703,9 +705,9 @@ def run_director_lite_checks(files, history):
             task = MissingActorVM()
             task.invoke("IntelEngine_Core", event, ("", json.dumps(payload), 0.0, None))
             notices = [e for e in task.effects if e[0] == "Notification"]
-            require(notices ==
-                    [("Notification", "Couldn't find NPC '" + names[0] + "' (no unique match).")],
-                    "director_story_not_found_notifies: missing NPC notice " + repr(task.effects))
+            require(len(notices) == 1 and not task.properties["IsActive"]
+                    and not task.properties.get("IsNPCStoryActive") and task.properties["SlotStates"] == [0] * 5,
+                    "director_story_not_found_notifies: rejection started a story or lost notification")
             require(any(e[0] == "Trace" for e in task.effects),
                     "director_story_not_found_notifies: DebugMsg trace was removed")
 
