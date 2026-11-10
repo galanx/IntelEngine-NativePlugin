@@ -541,7 +541,7 @@ Automatic rejection diagnostics remain unverified live.
 - **Localized place names.** Action and DM/scheduling prompts ask for exact in-game place names in the game's language, and GoToLocation lists nearby names via SkyrimNet's `get_place_names("nearby")`. This is prompt guidance only, not new name-resolution support.
 - **Diagnostics.** Extra bounded travel and Director logging was added for bug reports.
 
-Most 3.8.0 behavior was checked with offline builds and compiled-script tests; live Skyrim acceptance is ongoing.
+3.8.0 was tested live in Skyrim for Director dispatch, story and fetch travel, off-screen placement and linger. The Political Engine bridge and the rarer stuck-recovery paths were checked offline only.
 
 > **Automatic Social proximity (offline only):** NPC 1 resolves strictly, or nearest the player when ambiguous; NPC 2 is nearest resolved NPC 1, excluding itself. Ties use lowest FormID; only shared interiors/exterior worldspaces compare, with no global/fuzzy fallback. Proximity cannot identify the model's intended same-name actor; explicit reference labels are the later full fix. If NPC 1 is the wrong twin, NPC 2 follows it. Latest-pool overlap remains; engine positions and game behavior are unverified.
 
