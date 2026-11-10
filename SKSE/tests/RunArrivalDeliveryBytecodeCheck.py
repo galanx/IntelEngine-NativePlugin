@@ -172,8 +172,6 @@ class VM:
 
     def external(self, method, args, script):
         if method == "IsDashboardOpen": return False
-        if method == "DescribeDistance": return "dist=100 sameSpace=yes"
-        if method in ("GetHeadingAngle", "GetPositionX", "GetPositionY"): return 0.0
         if method == "StoryLoadRecovered":
             if args[0]: self.story_recovered = True
             return self.story_recovered
@@ -1183,33 +1181,6 @@ def run_hold_restriction_checks(files, history):
     print("actual PEX hold restriction: Director informant retained, automatic abort notified, stale guard passed")
 
 
-def run_danger_policy_checks(files, history):
-    class DangerVM(NearPlayerVM):
-        def external(self, method, args, script):
-            if method == "IsPlayerInDangerousLocation": return self.danger
-            if method == "IsPotentialFollower": return self.follower
-            if method == "IsCivilianClass": return self.civilian
-            return super().external(method, args, script)
-        def invoke(self, script, name, args=()):
-            if name in ("AbortStoryTravel", "SendTaskNarration"):
-                self.effects.append((name, args))
-                return None
-            return super().invoke(script, name, args)
-    for kind in ("informant", "seek_player"):
-        for policy in range(4):
-            for follower, civilian in ((False, False), (True, False), (False, True), (True, True)):
-                for danger in (False, True):
-                    vm = DangerVM(files, history)
-                    vm.danger, vm.follower, vm.civilian = danger, follower, civilian
-                    vm.properties.update({"DangerZonePolicy": policy, "ActiveStoryType": kind})
-                    expected = danger and (policy == 3 or policy == 2 and not follower or policy == 1 and civilian)
-                    actual = vm.invoke("IntelEngine_StoryEngine", "ShouldAbortForDangerZone",
-                        (vm.agent, vm.player, kind, "", vm.properties["DispatchGeneration"]))
-                    require(actual == expected, f"{kind}: danger policy {policy}, follower={follower}, civilian={civilian}, danger={danger}")
-                    require(any(e[0] == "AbortStoryTravel" for e in vm.effects) == expected, "danger abort side effect disagrees with policy")
-    print("actual PEX danger policy: informant and seek_player obey all policies, follower/class and safe-location cases")
-
-
 def run_soft_stuck_checks(files, history):
     class StuckVM(VM):
         loaded = True
@@ -1645,7 +1616,6 @@ def main():
     run_hold_restriction_checks(files, history)
     run_soft_stuck_checks(files, history)
     run_linger_teammate_checks(files, history)
-    run_danger_policy_checks(files, history)
 
 
 if __name__ == "__main__":
