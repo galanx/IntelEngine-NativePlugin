@@ -1573,6 +1573,9 @@ default_relations:
 
     int FactionPolitics::ProcessPlayerConduct(RE::Actor* reporter, const std::string& factionInput,
                                                const std::string& sentiment, const std::string& reason) {
+        logger::debug("[diag:conduct] reporter='{}' FormID={} faction='{}' action='{}' details='{}' politicsEnabled={}",
+            reporter ? reporter->GetDisplayFullName() : "null",
+            reporter ? reporter->GetFormID() : 0, factionInput, sentiment, reason, enabled_.load());
         if (!initialized_.load()) {
             RE::SendHUDMessage::ShowHUDMessage("Conduct report failed: politics is not initialized.");
             return 0;

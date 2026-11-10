@@ -178,6 +178,7 @@ namespace IntelEngine::Papyrus {
         return RE::BSFixedString(FriendlyKey(std::string(key.c_str())));
     }
     RE::BSFixedString BuildTaskHistoryDesc(RE::StaticFunctionTag*, RE::BSFixedString, RE::BSFixedString, RE::BSFixedString, RE::BSFixedString, RE::BSFixedString);
+    RE::BSFixedString DescribeDistance(RE::StaticFunctionTag*, RE::TESObjectREFR*, RE::TESObjectREFR*);
     RE::BSFixedString GetSlotStatusNative(RE::StaticFunctionTag*, RE::BSFixedString, int, RE::BSFixedString, RE::BSFixedString);
     RE::BSFixedString GetPreciseTimeDescriptionNative(RE::StaticFunctionTag*, float, float);
     RE::BSFixedString GetTimeDescriptionNative(RE::StaticFunctionTag*, float);
@@ -310,6 +311,7 @@ namespace IntelEngine::Papyrus {
         // Distance / Math Utility Functions
         a_vm->RegisterFunction("GetDistance3D", SCRIPT_NAME, GetDistance3D); ++count;
         a_vm->RegisterFunction("GetDistance2D", SCRIPT_NAME, GetDistance2D); ++count;
+        a_vm->RegisterFunction("DescribeDistance", SCRIPT_NAME, DescribeDistance); ++count;
         a_vm->RegisterFunction("GetArrivalThreshold", SCRIPT_NAME, GetArrivalThreshold); ++count;
         a_vm->RegisterFunction("CalculateDeadlineFromDistance", SCRIPT_NAME, CalculateDeadlineFromDistance); ++count;
         a_vm->RegisterFunction("GetOffsetBehind", SCRIPT_NAME, GetOffsetBehind); ++count;
@@ -1089,6 +1091,16 @@ namespace IntelEngine::Papyrus {
         return std::sqrt(dx * dx + dy * dy);
     }
 
+    RE::BSFixedString DescribeDistance(RE::StaticFunctionTag*, RE::TESObjectREFR* a, RE::TESObjectREFR* b) {
+        if (!a || !b) return "sameSpace=no";
+        auto* ac = a->GetParentCell();
+        auto* bc = b->GetParentCell();
+        const bool same = ac && bc && ((ac->IsInteriorCell() && ac == bc) ||
+            (!ac->IsInteriorCell() && !bc->IsInteriorCell() && a->GetWorldspace() && a->GetWorldspace() == b->GetWorldspace()));
+        if (!same) return "sameSpace=no";
+        return RE::BSFixedString(fmt::format("dist={:.0f} sameSpace=yes", a->GetPosition().GetDistance(b->GetPosition())));
+    }
+
     float CalculateDeadlineFromDistance(RE::StaticFunctionTag*,
                                         RE::TESObjectREFR* source, RE::TESObjectREFR* target,
                                         bool isRoundTrip, float minHours, float maxHours) {
@@ -1397,8 +1409,21 @@ namespace IntelEngine::Papyrus {
                                RE::Actor* actor, float currentGameTime) {
         if (!actor) return 0;
         auto pos = actor->GetPosition();
-        return OffScreenTracker::GetSingleton()->CheckProgress(
-            slot, currentGameTime, pos.x, pos.y);
+        float movement;
+        int ticks;
+        int status = OffScreenTracker::GetSingleton()->CheckProgress(slot, currentGameTime, pos.x, pos.y, movement, ticks);
+        if (movement >= 0.0f && spdlog::default_logger()->should_log(spdlog::level::debug)) {
+            auto* player = RE::PlayerCharacter::GetSingleton();
+            auto* cell = actor->GetParentCell();
+            auto* world = actor->GetWorldspace();
+            const auto playerPos = player ? player->GetPosition() : RE::NiPoint3{};
+            logger::debug("[diag:offscreen] {} ref={:08X} slot={} xyz=({},{},{}) cell={}({:08X}) space={}({:08X}) loaded={} playerXY=({},{}) {} movement={} stationaryTicks={} return={}",
+                actor->GetName(), actor->GetFormID(), slot, pos.x, pos.y, pos.z,
+                cell ? cell->GetName() : "none", cell ? cell->GetFormID() : 0,
+                cell && cell->IsInteriorCell() ? "interior" : world ? world->GetName() : "none", world ? world->GetFormID() : 0,
+                actor->Is3DLoaded(), playerPos.x, playerPos.y, DescribeDistance(nullptr, actor, player).c_str(), movement, ticks, status);
+        }
+        return status;
     }
 
     void ResetOffScreenSlot(RE::StaticFunctionTag*, int slot) {

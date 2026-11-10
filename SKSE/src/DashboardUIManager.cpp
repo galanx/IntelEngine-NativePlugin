@@ -1,3 +1,4 @@
+#include <chrono>
 /**
  * Dashboard UI Manager Implementation
  *
@@ -998,6 +999,7 @@ namespace IntelEngine {
         modEvent.strArg = strArg;
         modEvent.numArg = numArg;
         modEvent.sender = nullptr;
+        if (eventName == "IntelEngine_DashboardRefresh") logger::debug("[diag:refresh] sent timestampMs={}", std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count());
         eventSource->SendEvent(&modEvent);
 
         logger::debug("[Dashboard] Sent ModEvent: {} str={} num={}",

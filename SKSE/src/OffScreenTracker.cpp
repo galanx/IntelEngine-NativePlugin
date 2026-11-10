@@ -24,12 +24,14 @@ namespace IntelEngine {
         state.stationaryTicks = 0;
         state.active = true;
 
-        logger::debug("OffScreenTracker: slot {} init, est. arrival={:.4f}",
+        logger::debug("[diag:offscreen] slot {} init, est. arrival={:.4f}",
                       slot, estimatedArrivalGameTime);
     }
 
     int OffScreenTracker::CheckProgress(int slot, float currentGameTime,
-                                        float npcX, float npcY) {
+                                        float npcX, float npcY, float& movement, int& stationaryTicks) {
+        movement = -1.0f;
+        stationaryTicks = 0;
         if (slot < 0 || slot >= MAX_SLOTS) return 0;
 
         std::unique_lock lock(m_mutex);
@@ -52,6 +54,8 @@ namespace IntelEngine {
         float dx = npcX - state.lastX;
         float dy = npcY - state.lastY;
         float dist = std::sqrt(dx * dx + dy * dy);
+        movement = dist;
+        stationaryTicks = dist >= MOVEMENT_THRESHOLD ? 0 : state.stationaryTicks + 1;
 
         state.lastX = npcX;
         state.lastY = npcY;
@@ -65,8 +69,6 @@ namespace IntelEngine {
         // Stationary — accumulate ticks
         state.stationaryTicks++;
         if (state.stationaryTicks >= STATIONARY_TICKS) {
-            logger::debug("OffScreenTracker: slot {} stationary for {} ticks, "
-                          "signaling teleport", slot, state.stationaryTicks);
             return 1;
         }
 

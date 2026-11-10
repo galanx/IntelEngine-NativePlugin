@@ -60,7 +60,7 @@ namespace IntelEngine {
          * @return 0=still in transit (wait), 1=should teleport to destination
          */
         int CheckProgress(int slot, float currentGameTime,
-                          float npcX, float npcY);
+                          float npcX, float npcY, float& movement, int& stationaryTicks);
 
         /**
          * Reset/clear a slot. Called on task completion, cancellation, or load.
