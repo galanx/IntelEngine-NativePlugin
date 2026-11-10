@@ -54,6 +54,7 @@ namespace IntelEngine::Papyrus {
     bool ShouldResetPending(RE::StaticFunctionTag*, RE::BSFixedString, float, float);
     RE::Actor* ResolveStoryCandidate(RE::StaticFunctionTag*, RE::BSFixedString, RE::BSFixedString, RE::Actor*);
     RE::Actor* ResolveDirectorActor(RE::StaticFunctionTag*, RE::BSFixedString);
+    RE::BSFixedString GetDirectorFailureMessage(RE::StaticFunctionTag*, RE::BSFixedString);
     RE::Actor* FindMessengerForSender(RE::StaticFunctionTag*, RE::Actor*);
     void NotifyStoryCooldown(RE::StaticFunctionTag*, RE::Actor*, float);
     void BeginAsyncNPCDMTick(RE::StaticFunctionTag*, std::int32_t, RE::TESQuest*, RE::BSFixedString, RE::BSFixedString);
@@ -255,6 +256,7 @@ namespace IntelEngine::Papyrus {
         a_vm->RegisterFunction("FindNPCByNameNear", SCRIPT_NAME, FindNPCByNameNear); ++count;
         a_vm->RegisterFunction("ResolveStoryCandidate", SCRIPT_NAME, ResolveStoryCandidate); ++count;
         a_vm->RegisterFunction("ResolveDirectorActor", SCRIPT_NAME, ResolveDirectorActor); ++count;
+        a_vm->RegisterFunction("GetDirectorFailureMessage", SCRIPT_NAME, GetDirectorFailureMessage); ++count;
         a_vm->RegisterFunction("FindMessengerForSender", SCRIPT_NAME, FindMessengerForSender); ++count;
         a_vm->RegisterFunction("GetNPCCurrentLocation", SCRIPT_NAME, GetNPCCurrentLocation); ++count;
         a_vm->RegisterFunction("IsNPCAccessible", SCRIPT_NAME, IsNPCAccessible); ++count;
@@ -640,6 +642,11 @@ namespace IntelEngine::Papyrus {
 
     RE::Actor* ResolveDirectorActor(RE::StaticFunctionTag*, RE::BSFixedString name) {
         return NPCIndex::GetSingleton()->ResolveDirectorActor(name.c_str());
+    }
+    RE::BSFixedString GetDirectorFailureMessage(RE::StaticFunctionTag*, RE::BSFixedString name) {
+        std::string reason;
+        NPCIndex::GetSingleton()->ResolveDirectorActor(name.c_str(), &reason);
+        return RE::BSFixedString(reason == "lookup-null" ? fmt::format("{} isn't loaded right now (they only exist near their home), so they can't be sent from here.", name.c_str()) : fmt::format("Couldn't find NPC '{}' (no unique match).", name.c_str()));
     }
 
     RE::Actor* FindMessengerForSender(RE::StaticFunctionTag*, RE::Actor* sender) {
@@ -1095,8 +1102,8 @@ namespace IntelEngine::Papyrus {
         if (!a || !b) return "sameSpace=no";
         auto* ac = a->GetParentCell();
         auto* bc = b->GetParentCell();
-        const bool same = ac && bc && ((ac->IsInteriorCell() && ac == bc) ||
-            (!ac->IsInteriorCell() && !bc->IsInteriorCell() && a->GetWorldspace() && a->GetWorldspace() == b->GetWorldspace()));
+        const bool same = (ac && bc && ac->IsInteriorCell() && ac == bc) ||
+            ((!ac || !ac->IsInteriorCell()) && (!bc || !bc->IsInteriorCell()) && a->GetWorldspace() && a->GetWorldspace() == b->GetWorldspace());
         if (!same) return "sameSpace=no";
         return RE::BSFixedString(fmt::format("dist={:.0f} sameSpace=yes", a->GetPosition().GetDistance(b->GetPosition())));
     }
@@ -1403,6 +1410,8 @@ namespace IntelEngine::Papyrus {
         auto pos = actor->GetPosition();
         OffScreenTracker::GetSingleton()->InitSlot(
             slot, estimatedArrivalGameTime, pos.x, pos.y);
+        logger::debug("[diag:offscreen] {} slot={} init XY=({},{}) loaded={}",
+            actor->GetName(), slot, pos.x, pos.y, actor->Is3DLoaded());
     }
 
     int CheckOffScreenProgress(RE::StaticFunctionTag*, int slot,
@@ -1411,17 +1420,18 @@ namespace IntelEngine::Papyrus {
         auto pos = actor->GetPosition();
         float movement;
         int ticks;
-        int status = OffScreenTracker::GetSingleton()->CheckProgress(slot, currentGameTime, pos.x, pos.y, movement, ticks);
+        int status = OffScreenTracker::GetSingleton()->CheckProgress(slot, currentGameTime, pos.x, pos.y, actor->Is3DLoaded(), movement, ticks);
         if (movement >= 0.0f && spdlog::default_logger()->should_log(spdlog::level::debug)) {
             auto* player = RE::PlayerCharacter::GetSingleton();
             auto* cell = actor->GetParentCell();
             auto* world = actor->GetWorldspace();
+            auto* package = actor->GetCurrentPackage();
             const auto playerPos = player ? player->GetPosition() : RE::NiPoint3{};
-            logger::debug("[diag:offscreen] {} ref={:08X} slot={} xyz=({},{},{}) cell={}({:08X}) space={}({:08X}) loaded={} playerXY=({},{}) {} movement={} stationaryTicks={} return={}",
+            logger::debug("[diag:offscreen] {} ref={:08X} slot={} xyz=({},{},{}) cell={}({:08X}) space={}({:08X}) loaded={} package={:08X} playerXY=({},{}) {} movement={} stationaryTicks={} return={}",
                 actor->GetName(), actor->GetFormID(), slot, pos.x, pos.y, pos.z,
                 cell ? cell->GetName() : "none", cell ? cell->GetFormID() : 0,
                 cell && cell->IsInteriorCell() ? "interior" : world ? world->GetName() : "none", world ? world->GetFormID() : 0,
-                actor->Is3DLoaded(), playerPos.x, playerPos.y, DescribeDistance(nullptr, actor, player).c_str(), movement, ticks, status);
+                actor->Is3DLoaded(), package ? package->GetFormID() : 0, playerPos.x, playerPos.y, DescribeDistance(nullptr, actor, player).c_str(), movement, ticks, status);
         }
         return status;
     }
