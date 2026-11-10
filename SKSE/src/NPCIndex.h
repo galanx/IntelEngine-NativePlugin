@@ -278,7 +278,7 @@ namespace IntelEngine {
         RE::Actor* ResolveStoryCandidate(const std::string& name, const std::string& partnerName = "", RE::Actor* anchor = nullptr);
 
         /** Manual Director only: exact full name, unique actor-reference identity across the full index. */
-        RE::Actor* ResolveDirectorActor(const std::string& name);
+        RE::Actor* ResolveDirectorActor(const std::string& name, std::string* rejection = nullptr);
 
         /**
          * Record that an NPC was picked by the story engine at the given game time.

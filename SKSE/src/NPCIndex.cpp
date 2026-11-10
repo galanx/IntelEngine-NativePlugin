@@ -850,7 +850,7 @@ namespace IntelEngine {
         return nullptr;
     }
 
-    RE::Actor* NPCIndex::ResolveDirectorActor(const std::string& name) {
+    RE::Actor* NPCIndex::ResolveDirectorActor(const std::string& name, std::string* rejection) {
         std::unique_lock lock(m_mutex);
         // Merge current references: actors can spawn or change display names after the load-time build.
         ProcessUtils::ForEachLoadedActor([this](RE::Actor* actor) {
@@ -873,6 +873,7 @@ namespace IntelEngine {
             actor = candidate;
             return Rejection::None;
         });
+        if (rejection) *rejection = match.clashId ? "ambiguous" : DirectorActorRejectionName(match.rejection);
         if (match.clashId) {
             logger::warn("ResolveDirectorActor('{}') -> rejected: ambiguous FormIDs=0x{:08X},0x{:08X}",
                 name, match.formId, match.clashId);
