@@ -3,9 +3,9 @@ import Select from './Select';
 
 const DANGER_POLICIES = ['Allow All', 'Block Civilians', 'Followers Only', 'Block All'];
 const DANGER_HINTS = [
-  'No filtering. All NPC types can visit you in dungeons and caves.',
-  'Farmers, merchants and civilians stay away. Warriors and mages can still visit.',
-  'Only NPCs who can be followers visit you in dangerous locations.',
+  'No filtering. All NPC types can visit you in dungeons and caves. Informants always turn back.',
+  'Farmers, merchants and civilians stay away. Warriors and mages can still visit. Informants always turn back.',
+  'Only NPCs who can be followers visit you in dangerous locations. Informants always turn back.',
   'Nobody visits you in dangerous locations.',
 ];
 const HOME_POLICIES = ['Allow All', 'Block Civilians', 'Followers Only', 'Block All'];
