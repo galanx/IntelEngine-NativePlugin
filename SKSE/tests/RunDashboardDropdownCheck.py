@@ -184,6 +184,13 @@ SCRIPT = r"""
       audit=await reply({narration:'An [NPC Name] approaches',gossip:'A [no match] rumor',subject:requests().at(-1).fields.npcName});
       check(audit.rejected.narration==='Placeholder text' && audit.rejected.gossip==='Placeholder text' &&
         audit.rejected.subject==='Duplicate NPC','unknown bracket text or subject NPC rejection changed');
+      await stopClear(1); await choose('Story type','Informant'); control(1,'Generate').click(); await pause();
+      audit=await reply({narration:'Narfi told me about a debt',subject:'Narfi',sender:'Narfi',gossip:'argued over a debt'});
+      check(audit.rejected.narration==='Wrong actor','sender/subject name at narration start was accepted');
+      await stopClear(1); await choose('Story type','Informant'); control(1,'Generate').click(); await pause();
+      const actor=requests().at(-1).fields.npcName;
+      audit=await reply({narration:`${actor} heard from Narfi about a debt`,subject:'Nearby Guard',sender:'Narfi',gossip:'argued over a debt'});
+      check(audit.applied.includes('narration'),'chosen actor prefix or later Narfi mention was rejected');
       await reply({subject:'Distant Person',narration:'Wanted to share news',gossip:'argued over a debt'});
       await stopClear(1); await choose('Story type','Informant');
       control(1,'Generate').click(); await pause(); const reroll=requests().at(-1), countBeforeReject=requests().length;
