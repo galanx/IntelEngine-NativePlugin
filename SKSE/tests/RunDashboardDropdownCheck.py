@@ -185,8 +185,10 @@ SCRIPT = r"""
       check(audit.rejected.narration==='Placeholder text' && audit.rejected.gossip==='Placeholder text' &&
         audit.rejected.subject==='Duplicate NPC','unknown bracket text or subject NPC rejection changed');
       await stopClear(1); await choose('Story type','Informant'); control(1,'Generate').click(); await pause();
-      audit=await reply({narration:'Narfi told me about a debt',subject:'Narfi',sender:'Narfi',gossip:'argued over a debt'});
-      check(audit.rejected.narration==='Wrong actor','sender/subject name at narration start was accepted');
+      const wrongApproach=await reply({narration:'Narfi approached <player name> with news of a debt',subject:'Nearby Guard',sender:'Narfi',gossip:'argued over a debt'});
+      check(wrongApproach.rejected.narration==='Wrong actor','other NPC approach narration was accepted');
+      audit=await reply({narration:'Narfi told <actor> about a debt',subject:'Nearby Guard',sender:'Narfi',gossip:'argued over a debt'});
+      check(audit.applied.includes('narration'),'NPC narration without an approach verb was rejected');
       await stopClear(1); await choose('Story type','Informant'); control(1,'Generate').click(); await pause();
       const actor=requests().at(-1).fields.npcName;
       audit=await reply({narration:`${actor} heard from Narfi about a debt`,subject:'Nearby Guard',sender:'Narfi',gossip:'argued over a debt'});
