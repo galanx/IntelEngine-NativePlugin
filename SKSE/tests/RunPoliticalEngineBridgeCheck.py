@@ -31,7 +31,8 @@ struct ModCallbackEvent { std::string eventName, strArg; };
 struct Source { template<class T> void AddEventSink(T*) {} };
 inline Source* GetModCallbackEventSource() { return nullptr; }
 }
-namespace logger { template<class... T> void info(T&&...) {} }
+namespace logger { template<class... T> void info(T&&...) {} template<class... T> void debug(T&&...) {} }
+namespace spdlog { namespace level { enum level_enum { debug }; } struct L { bool should_log(level::level_enum) { return true; } }; inline L* default_logger() { static L l; return &l; } }
 namespace IntelEngine::AsyncDispatch { template<class F> void Submit(F f) { f(); } }
 ''')
     source = (src / "PoliticalEngineBridge.cpp").read_text()
