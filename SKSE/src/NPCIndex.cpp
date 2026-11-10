@@ -881,7 +881,7 @@ namespace IntelEngine {
         }
         if (!match.formId) {
             // Indexed but not loaded this session: report lookup-null so Papyrus shows the "isn't loaded" message.
-            const bool indexedUnloaded = m_npcFormIds.find(StringUtils::ToLowerStd(name)) != m_npcFormIds.end();
+            const bool indexedUnloaded = match.rejection == DirectorActorRejection::NotFound && m_npcFormIds.find(StringUtils::ToLowerStd(name)) != m_npcFormIds.end();
             const char* branch = indexedUnloaded ? "lookup-null" : DirectorActorRejectionName(match.rejection);
             if (rejection) *rejection = branch;
             if (spdlog::default_logger()->should_log(spdlog::level::debug)) {
