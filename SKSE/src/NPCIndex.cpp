@@ -879,9 +879,33 @@ namespace IntelEngine {
             return nullptr;
         }
         if (!match.formId) {
+            if (spdlog::default_logger()->should_log(spdlog::level::debug)) {
+                const auto lowerName = StringUtils::ToLowerStd(name);
+                const auto base = m_npcFormIds.find(lowerName);
+                if (base == m_npcFormIds.end()) logger::debug("[diag:director] miss name='{}' baseFormID=none", name);
+                else {
+                    auto* indexed = RE::TESForm::LookupByID(base->second);
+                    auto* reference = indexed ? indexed->As<RE::Actor>() : nullptr;
+                    auto* npcBase = reference ? reference->GetActorBase() : indexed ? indexed->As<RE::TESNPC>() : nullptr;
+                    logger::debug("[diag:director] miss name='{}' indexedFormID=0x{:08X} baseFormID=0x{:08X}", name, base->second, npcBase ? npcBase->GetFormID() : 0);
+                }
+                for (const auto& [id, indexedName] : m_directorActorNames) {
+                    const auto lowerIndexed = StringUtils::ToLowerStd(indexedName);
+                    if (lowerIndexed == lowerName || lowerIndexed.find(lowerName) != std::string::npos ||
+                        lowerName.find(lowerIndexed) != std::string::npos) {
+                        logger::debug("[diag:director] near name='{}' indexed='{}' FormID=0x{:08X}", name, indexedName, id);
+                        break;
+                    }
+                }
+            }
             logger::warn("ResolveDirectorActor('{}') -> rejected: {} FormID=0x{:08X}",
                 name, DirectorActorRejectionName(match.rejection), match.rejectedFormId);
             return nullptr;
+        }
+        if (spdlog::default_logger()->should_log(spdlog::level::debug)) {
+            auto* cell = actor->GetParentCell();
+            logger::debug("[diag:director] resolved name='{}' ref=0x{:08X} cellFormID=0x{:08X}",
+                name, actor->GetFormID(), cell ? cell->GetFormID() : 0);
         }
         return actor;
     }

@@ -28,6 +28,11 @@ All functions are exposed to Papyrus via the `IntelEngine` script namespace.
 ### Story load recovery
 `Bool Function StoryLoadRecovered(Bool complete = false) Global Native` reads a nonpersisted, atomic readiness marker. Passing `true` marks StoryEngine load recovery complete; only `RestartMonitoring` does this after cleanup. Preload and serialization revert reset it, including same-process reloads. `CheckStoryNPCArrival` does nothing while it is false. A saved Papyrus property cannot provide this per-load boundary.
 
+### Travel diagnostics
+`String Function DescribeDistance(ObjectReference a, ObjectReference b) Global Native` returns `dist=<rounded 3D game units> sameSpace=yes` only for the same interior cell or matching nonnull exterior worldspaces. Null references, missing cells and different spaces return `sameSpace=no` without a distance.
+
+Native `[diag:*]` logs require `DebugLevel=4`; Papyrus diagnostics use the existing MCM debug toggle. Off-screen phase-2 logs include actor/player context, movement and stationary ticks; phase 1 retains only initialization logging. Caller-status and linger logs are limited to once per ten real seconds per NPC. `[diag:path]` start/end pairs bracket the three remaining latent recovery calls without changing them. Offline production logic checks: `python SKSE/tests/RunDiagnosticCheck.py <vcpkg-triplet-dir>`. These checks do not establish live behavior.
+
 ### Read-only political feeds (pipe 2)
 
 ```papyrus
