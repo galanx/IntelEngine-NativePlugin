@@ -3,7 +3,7 @@
  *
  * Lightweight position-based tracker for NPCs traveling off-screen.
  * Phase 1 (before estimated arrival): passive — just keeps baseline fresh.
- * Phase 2 (after estimated arrival): active — detects stationary NPCs.
+ * Phase 2 (after estimated arrival): place unloaded NPCs; detect loaded stalls.
  */
 
 #include "OffScreenTracker.h"
@@ -29,7 +29,7 @@ namespace IntelEngine {
     }
 
     int OffScreenTracker::CheckProgress(int slot, float currentGameTime,
-                                        float npcX, float npcY, float& movement, int& stationaryTicks) {
+                                        float npcX, float npcY, bool loaded, float& movement, int& stationaryTicks) {
         movement = -1.0f;
         stationaryTicks = 0;
         if (slot < 0 || slot >= MAX_SLOTS) return 0;
@@ -48,14 +48,14 @@ namespace IntelEngine {
             return 0;
         }
 
-        // Phase 2: Past estimated arrival — check if NPC is moving.
-        // NPCs in loaded-but-not-rendered cells may still be pathfinding
-        // (engine updates their position). Unloaded NPCs are frozen.
+        // Phase 2: Unloaded NPCs can keep following routes indefinitely.
+        // Only loaded actors need the moving/stationary check.
         float dx = npcX - state.lastX;
         float dy = npcY - state.lastY;
         float dist = std::sqrt(dx * dx + dy * dy);
         movement = dist;
         stationaryTicks = dist >= MOVEMENT_THRESHOLD ? 0 : state.stationaryTicks + 1;
+        if (!loaded) return 1;
 
         state.lastX = npcX;
         state.lastY = npcY;
