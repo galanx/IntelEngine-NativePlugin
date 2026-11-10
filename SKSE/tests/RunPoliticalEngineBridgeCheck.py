@@ -53,7 +53,8 @@ static unsigned api = 3;
 static bool installed = true;
 static bool journalExport = true;
 static bool sidesExport = true;
-static json sides = {{"political_sides080",{{"territory_rule","current_owner_realm"},{"realms",json::array({{{"realm_id",3},{"side_id",1}},{{"realm_id",9},{"side_id",2}}})}}}};
+// Live PE 0.8.0 RC2 shape (2026-11-10): fields at top level, no "political_sides080" wrapper.
+static json sides = {{"territory_rule","current_owner_realm"},{"player_side_id",1},{"realms",json::array({{{"realm_id",3},{"side_id",1}},{{"realm_id",9},{"side_id",2}}})}};
 static unsigned ReadSides(char* out,unsigned capacity) {
     auto text=sides.dump(); auto size=static_cast<unsigned>(text.size()+1);
     if(out && capacity>=size) std::memcpy(out,text.c_str(),size);
@@ -114,20 +115,20 @@ int main(int argc, char** argv) { try {
     Require(IntelEngine::PEEventText(changes[0]) == "Fellburg took Southern Reach from Markarth.", "factual realm-name rumor");
     if(sidesExport) {
         Require(bridge->Context()["territory"]["11"]["side_id"]==2,"captured district follows current owner, not original hold");
-        sides["political_sides080"]["realms"][1]["side_id"]=3;
+        sides["realms"][1]["side_id"]=3;
         SKSE::ModCallbackEvent sideChanged{"PL_StateChanged","[\"political_sides080\"]"};
         bridge->ProcessEvent(&sideChanged,nullptr);
         Require(bridge->Poll()==json::array() && bridge->Context()["territory"]["11"]["side_id"]==3,"sides-only event refreshes context without news");
-        sides["political_sides080"]["realms"][1]["side_id"]=0;
+        sides["realms"][1]["side_id"]=0;
         bridge->MarkDirty(); bridge->Poll();
         Require(bridge->Context()["territory"]["11"]["side_id"]==0,"independent is a known side, not missing");
-        sides["political_sides080"]["realms"][1]["side_id"]=7;
+        sides["realms"][1]["side_id"]=7;
         bridge->MarkDirty(); bridge->Poll();
         Require(!bridge->Context()["territory"]["11"].contains("side_id"),"invalid allegiance omitted");
         const auto valid=sides; sides=nullptr; bridge->MarkDirty(); bridge->Poll();
         Require(!bridge->Context()["territory"]["11"].contains("side_id") &&
                 bridge->Context()["side_source"]=="political_sides080", "malformed present export never falls back");
-        sides=valid; sides["political_sides080"]["realms"][1]["side_id"]=2;
+        sides=valid; sides["realms"][1]["side_id"]=2;
         bridge->MarkDirty(); bridge->Poll();
     }
     bridge->MarkDirty(); Require(bridge->Poll() == json::array(), "duplicate re-read");

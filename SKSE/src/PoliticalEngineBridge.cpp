@@ -34,7 +34,8 @@ namespace IntelEngine {
         if (!active_ || baselineEpoch_ != resetEpoch_.load()) return nullptr;
         nlohmann::json context = {{"territory", baseline_["regions"]}, {"realms", baseline_["realms"]}};
         context["side_source"] = sidesReader_ ? "political_sides080" : "vanilla_civil_war_only";
-        const auto& table = PEField(sides_, "political_sides080");
+        // PE 0.8.0 RC2 returns the sides fields at top level; accept a "political_sides080" wrapper too.
+        const auto& table = sides_.contains("political_sides080") ? PEField(sides_, "political_sides080") : sides_;
         const auto& realms = PEField(table, "realms");
         if (sidesReader_ && PEField(table, "territory_rule") == "current_owner_realm" && realms.is_array()) {
             int lookup[10]; std::fill_n(lookup, 10, -1);
