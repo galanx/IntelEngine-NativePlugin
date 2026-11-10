@@ -78,8 +78,8 @@ namespace IntelEngine {
             std::string player = "none";
             if (const auto& rulers = PEField(*snapshot, "rulers"); rulers.is_array())
                 for (const auto& r : rulers) if (PEField(r, "player_realm") == true) player = PEField(r, "realm").dump() + " id=" + PEField(r, "realm_id").dump();
-            logger::debug("[diag:pe] poll revision={} playerRealm={} sides={}", PEField(*snapshot, "revision").dump(), player,
-                PEField(sides_, "political_sides080").dump().substr(0, 1500));
+            logger::debug("[diag:pe] poll revision={} playerRealm={} sidesReader={} sidesRaw={}", PEField(*snapshot, "revision").dump(), player,
+                sidesReader_ != nullptr, sides_.dump().substr(0, 2000));
         }
         const auto& revision = current["revision"];
         if (!baseline_.is_object() || baselineEpoch_ != epoch) { revision_ = nullptr; revisionCount_ = 0; }
