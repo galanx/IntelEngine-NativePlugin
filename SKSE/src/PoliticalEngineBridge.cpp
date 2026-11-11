@@ -33,7 +33,8 @@ namespace IntelEngine {
         std::lock_guard lock(mutex_);
         if (!enabled_ || !active_ || baselineEpoch_ != resetEpoch_.load()) return nullptr;
         nlohmann::json context = {{"territory", baseline_["regions"]}, {"realms", baseline_["realms"]}};
-        context["side_source"] = sidesReader_ ? "political_sides080" : "vanilla_civil_war_only";
+        if (!playerRealm_.empty()) context["player_realm"] = playerRealm_;
+        context["side_source"] =sidesReader_ ? "political_sides080" : "vanilla_civil_war_only";
         // PE 0.8.0 RC2 returns the sides fields at top level; accept a "political_sides080" wrapper too.
         const auto& table = sides_.contains("political_sides080") ? PEField(sides_, "political_sides080") : sides_;
         const auto& realms = PEField(table, "realms");
@@ -49,6 +50,12 @@ namespace IntelEngine {
             }
         }
         return context;
+    }
+
+    nlohmann::json PoliticalEngineBridge::Rulers() {
+        std::lock_guard lock(mutex_);
+        if (!enabled_ || !active_ || baselineEpoch_ != resetEpoch_.load()) return nullptr;
+        return PEField(baseline_, "rulers");
     }
 
     RE::BSEventNotifyControl PoliticalEngineBridge::ProcessEvent(const SKSE::ModCallbackEvent* event,
@@ -76,6 +83,10 @@ namespace IntelEngine {
         }
         auto current = PEComparable(*snapshot);
         sides_ = sides ? std::move(*sides) : nlohmann::json{};
+        playerRealm_.clear();
+        if (const auto& rulers = PEField(*snapshot, "rulers"); rulers.is_array())
+            for (const auto& r : rulers)
+                if (PEField(r, "player_realm") == true && PEField(r, "realm").is_string()) playerRealm_ = PEField(r, "realm").get<std::string>();
         if (spdlog::default_logger()->should_log(spdlog::level::debug)) {
             std::string player = "none";
             if (const auto& rulers = PEField(*snapshot, "rulers"); rulers.is_array())

@@ -221,6 +221,45 @@ default_relations:
             return false;
         }
 
+        // factions.d/*.yaml fragments, in filename order: an existing faction id / unordered relation pair is
+        // replaced whole, otherwise appended. `requires: political_engine` needs PE detected + pe_integration on.
+        // ponytail: PE state is read here, so enabling pe_integration at runtime needs a reload/restart to add realms.
+        std::error_code ec;
+        std::vector<std::filesystem::path> fragments;
+        for (const auto& entry : std::filesystem::directory_iterator(std::filesystem::path(configPath).parent_path() / "factions.d", ec))
+            if (entry.path().extension() == ".yaml") fragments.push_back(entry.path());
+        std::sort(fragments.begin(), fragments.end());
+        for (const auto& file : fragments) {
+            std::ifstream in(file);
+            std::string line, first;
+            while (std::getline(in, line)) {
+                line = line.substr(0, line.find('#'));
+                const auto b = line.find_first_not_of(" \t\r"), e = line.find_last_not_of(" \t\r");
+                if (b != std::string::npos) { first = line.substr(b, e - b + 1); break; }
+            }
+            if (first == "requires: political_engine" &&
+                !(peIntegration_.load() && PoliticalEngineBridge::GetSingleton()->IsDetected())) {
+                logger::info("FactionPolitics: skipped fragment {} (Political Engine not active)", file.filename().string());
+                continue;
+            }
+            auto fragment = LoadFactionConfigFromFile(file.string());
+            if (!fragment.success || (fragment.factions.empty() && fragment.defaultRelations.empty())) {
+                logger::warn("FactionPolitics: skipped malformed fragment {}", file.filename().string());
+                continue;
+            }
+            for (auto& f : fragment.factions) {
+                auto it = std::find_if(result.factions.begin(), result.factions.end(), [&](const auto& x) { return x.id == f.id; });
+                if (it != result.factions.end()) *it = std::move(f); else result.factions.push_back(std::move(f));
+            }
+            for (auto& r : fragment.defaultRelations) {
+                auto it = std::find_if(result.defaultRelations.begin(), result.defaultRelations.end(), [&](const auto& x) {
+                    return (x.factionA == r.factionA && x.factionB == r.factionB) || (x.factionA == r.factionB && x.factionB == r.factionA); });
+                if (it != result.defaultRelations.end()) *it = std::move(r); else result.defaultRelations.push_back(std::move(r));
+            }
+            logger::info("FactionPolitics: fragment {}: {} factions, {} relations", file.filename().string(),
+                         fragment.factions.size(), fragment.defaultRelations.size());
+        }
+
         const auto loadId = PoliticalDB::GetSingleton()->FeedIdentity().value("load_id", std::string{});
         std::lock_guard<std::mutex> lock(configMutex_);
         if (revisionLoadId_ != loadId) {
@@ -365,6 +404,22 @@ default_relations:
         peIntegration_.store(val);
         PoliticalEngineBridge::GetSingleton()->SetEnabled(val);  // resets baseline: changes made while off are not replayed
         return true;
+    }
+    void FactionPolitics::SyncPERulers(const nlohmann::json& rulers) {
+        static constexpr const char* kRealms[] = {"Solitude", "Windhelm", "Whiterun", "Markarth", "Riften", "Dawnstar", "Falkreath", "Morthal", "Winterhold"};  // PE realm_id 0..8
+        if (!peIntegration_.load() || !rulers.is_object()) return;
+        for (int i = 0; i < 9; ++i) {
+            const auto ruler = rulers.find(std::to_string(i));
+            if (ruler == rulers.end() || !ruler->is_number_unsigned()) continue;
+            const auto* form = RE::TESForm::LookupByID(ruler->get<RE::FormID>());
+            const char* name = form ? form->GetName() : nullptr;
+            if (!name || !*name) continue;
+            std::lock_guard<std::mutex> lock(configMutex_);
+            const auto faction = factionIndex_.find(std::string("PE_") + kRealms[i]);
+            if (faction == factionIndex_.end() || factions_[faction->second].leaderNames == std::vector<std::string>{name}) continue;
+            factions_[faction->second].leaderNames = {name};
+            ++factionRevision_;
+        }
     }
     bool FactionPolitics::SetPEReactionsMoveRelations(bool val) {
         if (!DashboardConfig::GetSingleton()->WriteYamlValue("politics", "pe_reactions_move_relations", val ? "true" : "false")) return false;

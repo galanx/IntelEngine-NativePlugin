@@ -21,6 +21,7 @@ namespace IntelEngine {
         bool IsDetected() const { return reader_ != nullptr; }
         bool HasSidesExport() const { return sidesReader_ != nullptr; }
         nlohmann::json Context();
+        nlohmann::json Rulers();  // {"<realm_id>": actor form id} from the last active snapshot, else null
         bool IsActive() const { return active_.load(); }
         RE::BSEventNotifyControl ProcessEvent(const SKSE::ModCallbackEvent* event,
             RE::BSTEventSource<SKSE::ModCallbackEvent>*) override;
@@ -30,6 +31,7 @@ namespace IntelEngine {
         Reader initiativeReader_ = nullptr;
         Reader sidesReader_ = nullptr;
         nlohmann::json sides_;
+        std::string playerRealm_;
         std::unordered_set<std::string> initiativeIds_;
         bool initiativeReady_ = false;
         Reader reader_ = nullptr;
