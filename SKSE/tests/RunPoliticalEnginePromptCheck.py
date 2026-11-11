@@ -20,6 +20,8 @@ with tempfile.TemporaryDirectory(prefix="pe-prompts-") as directory:
                 b"warring factions may appear in consecutive ticks, but a war gets at most ONE battle_result in any two consecutive ticks \xe2\x80\x94 on the tick after a battle, that pair may appear only for surrender, otherwise pick a different pair or return should_act:false;")
             data = data.replace(b"- **Generate battle_result events** for active wars ",
                 b"- **Generate battle_result events** for active wars (subject to Rule 8: never two in a row for one war; never reuse the previous battle's `battle_location` for the same war) ")
+            data = data.replace(b"- **Low morale triggers surrender**",  # fix48 adds the per-war battle flag rule
+                b"- **No back-to-back battles** \xe2\x80\x94 never pick `battle_result` for an `active_wars` entry whose `battle_result_allowed_now` starts with \"no\"; choose another event instead.\n- **Low morale triggers surrender**")
         (work / f"baseline{i}.prompt").write_bytes(data)
     (work / "check.cpp").write_text(r'''
 #include <inja/inja.hpp>
@@ -59,6 +61,7 @@ int main() { try {
     auto inactive=env.render(dmTemplate,dm);
     Require(inactive==env.render(oldDm,dm) && inactive.find("Study the political state")!=std::string::npos,
             "inactive DM prompt must remain byte-identical");
+    Require(dmTemplate.find("battle_result_allowed_now")!=std::string::npos && dmTemplate.find("battle_result_allowed_now")==dmTemplate.rfind("battle_result_allowed_now"),"DM prompt names the per-war battle flag once");
     dm["peActive"]=true;
     Require(env.render(dmTemplate,dm).find("political_reaction")!=std::string::npos &&
             env.render(dmTemplate,dm).find("reacts_to")!=std::string::npos, "active DM reaction rule");
