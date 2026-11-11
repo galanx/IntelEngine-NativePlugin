@@ -14,6 +14,7 @@ const STATUS_COLORS = {
 
 // Political Engine side colours (political_sides080.h); the dashboard feed sends pe_side only while PE is active.
 const PE_SIDES = ['Independent #9aaba7', 'Empire #c45454', 'Stormcloaks #6095d0', 'Aldmeri Dominion #d3bc61'].map((t) => [t.split(' #')[0] + ' (Political Engine side)', '#' + t.split(' #')[1]]);
+const peSideProps = (side) => ({ style: PE_SIDES[side] && { color: PE_SIDES[side][1] }, title: PE_SIDES[side]?.[0] });
 const TYPE_LABELS = {
   military: 'Military',
   guild: 'Guild',
@@ -56,8 +57,10 @@ function PoliticsTab({ politics, calendar, sendAction }) {
 
   // Build faction name lookup
   const factionNames = {};
+  const factionSides = {};
   for (const f of factions) {
     factionNames[f.id] = f.name;
+    factionSides[f.id] = f.pe_side;
   }
 
   // Separate war events for special display
@@ -165,11 +168,11 @@ function PoliticsTab({ politics, calendar, sendAction }) {
             {relations.map((r, i) => (
               <div key={i} className="slot-card rounded px-3 py-1.5 flex items-center justify-between">
                 <div className="flex items-center gap-2 flex-1 min-w-0">
-                  <span className="text-xs text-gray-300 truncate">
+                  <span className="text-xs text-gray-300 truncate" {...peSideProps(factionSides[r.a])}>
                     {factionNames[r.a] || r.a}
                   </span>
                   <span className="text-gray-600 text-[10px]">&harr;</span>
-                  <span className="text-xs text-gray-300 truncate">
+                  <span className="text-xs text-gray-300 truncate" {...peSideProps(factionSides[r.b])}>
                     {factionNames[r.b] || r.b}
                   </span>
                 </div>
@@ -215,7 +218,7 @@ function PoliticsTab({ politics, calendar, sendAction }) {
         <div className="grid grid-cols-2 gap-1">
           {factions.map((f, i) => (
             <div key={i} className="slot-card rounded px-2 py-1.5">
-              <div className="text-xs text-gray-200 font-medium" style={PE_SIDES[f.pe_side] && { color: PE_SIDES[f.pe_side][1] }} title={PE_SIDES[f.pe_side]?.[0]}>{f.name}</div>
+              <div className="text-xs text-gray-200 font-medium" {...peSideProps(f.pe_side)}>{f.name}</div>
               <div className="text-[10px] text-gray-500">
                 {TYPE_LABELS[f.type] || f.type} &middot; {f.hold}
               </div>
