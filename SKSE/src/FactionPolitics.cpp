@@ -2611,6 +2611,13 @@ default_relations:
                 out["error"] = "duplicate of latest event";
                 return out.dump();
             }
+            // Live 2026-11-10: 7 of 10 ticks were the same war's battle_result; never two in a row for one pair.
+            if (eventType == "battle_result" && !last.empty() && last[0].eventType == "battle_result" &&
+                ((last[0].factionA == factionA && last[0].factionB == factionB) || (last[0].factionA == factionB && last[0].factionB == factionA))) {
+                logger::info("Politics DM: rejected consecutive battle_result for {} vs {}", factionA, factionB);
+                out["error"] = "consecutive battle_result for the same war";
+                return out.dump();
+            }
         }
 
         auto* cal = RE::Calendar::GetSingleton();

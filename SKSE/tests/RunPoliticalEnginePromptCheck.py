@@ -15,6 +15,11 @@ with tempfile.TemporaryDirectory(prefix="pe-prompts-") as directory:
     for i, name in enumerate(names):
         (work / f"current{i}.prompt").write_bytes((repo / (base+name)).read_bytes())
         data = subprocess.check_output(["git", "show", "origin/dev:"+base+name], cwd=repo)
+        if i == 1:  # fix38 rewords two non-PE lines on purpose; apply it to the origin/dev baseline so only PE gating is compared
+            data = data.replace(b"warring factions may appear in consecutive ticks for battle_result or surrender events;",
+                b"warring factions may appear in consecutive ticks, but a war gets at most ONE battle_result in any two consecutive ticks \xe2\x80\x94 on the tick after a battle, that pair may appear only for surrender, otherwise pick a different pair or return should_act:false;")
+            data = data.replace(b"- **Generate battle_result events** for active wars ",
+                b"- **Generate battle_result events** for active wars (subject to Rule 8: never two in a row for one war; never reuse the previous battle's `battle_location` for the same war) ")
         (work / f"baseline{i}.prompt").write_bytes(data)
     (work / "check.cpp").write_text(r'''
 #include <inja/inja.hpp>
