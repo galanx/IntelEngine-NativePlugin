@@ -2106,6 +2106,11 @@ namespace IntelEngine {
         // Pre-resolve political faction (engine-touch — must be on main thread)
         auto npcFaction = FactionPolitics::GetSingleton()->GetNPCFaction(actor);
         if (npcFaction) a.factionName = npcFaction->name;
+
+        // Restored (removed in 923d5f9): the DM must see which story types each candidate may be used for.
+        auto* pcell = RE::PlayerCharacter::GetSingleton()->GetParentCell();
+        a.eligibleTypes = NPCIndex::GetEligibleStoryTypes(actor, a.archetype,
+            CellAnalyzer::GetSingleton()->IsPlayerInDangerousLocation(), pcell && pcell->IsInteriorCell());
     }
 
     // Phase 0 — worker thread. Pre-fetch the SQL inputs Phase A needs.
@@ -2613,6 +2618,7 @@ namespace IntelEngine {
             md += "### ";  md += std::to_string(i + 1);  md += ". ";  md += a->nameDisplay;
             md += " [";    md += a->archetype;  md += ", ";  md += gender;  md += "] - ";  md += a->location;
             md += " (";    md += uuid;          md += ")\n";
+            md += "Eligible: ";   md += a->eligibleTypes;  md += "\n";
             md += "Hold: ";       md += a->npcHold;        md += "\n";
             md += "Distance: ";   md += distStr;           md += "\n";
             md += "Knows player: ";  md += familiarityStr; md += "\n";
