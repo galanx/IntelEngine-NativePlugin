@@ -194,6 +194,7 @@ int main(int argc, char** argv) { try {
     synthetic["rulers"][9]["actor_id"]=synthetic["rulers"][9]["actor_id"].get<unsigned>()+1;
     changes=PEDiff(PEComparable(before),PEComparable(synthetic));
     Require(changes.size()==1 && changes[0]["type"]=="pe_ruler" && changes[0]["realm"]=="9", "puppet ruler change, no ownership");
+    Require(PEComparable(synthetic)["realms"].contains("9"), "puppet realm keeps its public name (ruler news text)");
     // Dashboard-only ownership label: only the player's own puppet/vassal; never in Context().
     synthetic=before; synthetic["campaign080"]["governments"][3]={{"kind",2},{"overlord",9}};
     synthetic["campaign080"]["governments"][4]={{"kind",3},{"overlord",9}};

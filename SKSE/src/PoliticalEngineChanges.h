@@ -52,7 +52,8 @@ inline nlohmann::json PEComparable(const nlohmann::json& snapshot) {
     const auto& factions = PEField(snapshot, "factions");
     if (factions.is_array()) for (const auto& row : factions) {
         const auto& id = PEField(row, "realm_id");
-        if (publicRealm(id) && PEField(row, "name").is_string()) result["realms"][id.dump()] = PEField(row, "name");
+        // A puppet realm's name is public like its ruler; without it a puppet's ruler change has no news text.
+        if (publicRealm(id, true) && PEField(row, "name").is_string()) result["realms"][id.dump()] = PEField(row, "name");
     }
     result["revision"] = PEField(snapshot, "revision");
     return result;
