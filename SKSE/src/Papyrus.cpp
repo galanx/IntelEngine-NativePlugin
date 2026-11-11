@@ -4030,6 +4030,14 @@ namespace IntelEngine::Papyrus {
     // BeginAsyncPoliticalTick — main-thread leader snapshot, worker-thread JSON,
     // dispatched callback fires Papyrus OnPoliticsDMContextReady(String contextJson).
     // -------------------------------------------------------------------------
+    // Shared by the political tick and the post-load sync (Plugin.cpp). A first poll after a reset only sets the baseline (no changes).
+    nlohmann::json PollAndSyncPE() {
+        auto changes = PoliticalEngineBridge::GetSingleton()->Poll();
+        FactionPolitics::GetSingleton()->SyncPERulers(PoliticalEngineBridge::GetSingleton()->Rulers());
+        FactionPolitics::GetSingleton()->SyncPESides(PoliticalEngineBridge::GetSingleton()->RealmSides());
+        return changes;
+    }
+
     void BeginAsyncPoliticalTick(RE::StaticFunctionTag*,
                                   float currentGameTime,
                                   RE::TESQuest* callbackQuest,
@@ -4064,9 +4072,7 @@ namespace IntelEngine::Papyrus {
                                functionName = std::move(functionName),
                                generation = SlotTracker::GetSingleton()->loadGeneration.load()]() mutable {
             if (generation != SlotTracker::GetSingleton()->loadGeneration.load()) return;
-            auto changes = PoliticalEngineBridge::GetSingleton()->Poll();
-            FactionPolitics::GetSingleton()->SyncPERulers(PoliticalEngineBridge::GetSingleton()->Rulers());
-            FactionPolitics::GetSingleton()->SyncPESides(PoliticalEngineBridge::GetSingleton()->RealmSides());
+            auto changes = PollAndSyncPE();
             if (generation != SlotTracker::GetSingleton()->loadGeneration.load()) return;
             std::string requestJson = FactionPolitics::GetSingleton()->BuildPoliticalContextFromSnapshot(snap);
             auto* task = SKSE::GetTaskInterface();
