@@ -31,7 +31,7 @@ namespace IntelEngine {
     }
     nlohmann::json PoliticalEngineBridge::Context() {
         std::lock_guard lock(mutex_);
-        if (!active_ || baselineEpoch_ != resetEpoch_.load()) return nullptr;
+        if (!enabled_ || !active_ || baselineEpoch_ != resetEpoch_.load()) return nullptr;
         nlohmann::json context = {{"territory", baseline_["regions"]}, {"realms", baseline_["realms"]}};
         context["side_source"] = sidesReader_ ? "political_sides080" : "vanilla_civil_war_only";
         // PE 0.8.0 RC2 returns the sides fields at top level; accept a "political_sides080" wrapper too.
@@ -61,6 +61,7 @@ namespace IntelEngine {
     nlohmann::json PoliticalEngineBridge::Poll() {
         std::lock_guard lock(mutex_);
         auto changes = nlohmann::json::array();
+        if (!enabled_) { active_.store(false); baseline_ = nullptr; initiativeReady_ = false; return changes; }
         if (!reader_ || !dirty_.exchange(false)) return changes;
         const auto epoch = resetEpoch_.load();
         auto snapshot = ReadJSON(reader_);

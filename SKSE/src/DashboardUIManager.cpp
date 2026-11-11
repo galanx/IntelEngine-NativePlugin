@@ -479,6 +479,7 @@ namespace IntelEngine {
             pc["politics.tick_interval_hours"] = politics->GetTickIntervalHours();
             pc["politics.max_relation_change_per_tick"] = politics->GetMaxRelationChangePerTick();
             pc["politics.max_active_wars"] = politics->GetMaxActiveWars();
+            pc["politics.pe_integration"] = politics->GetPEIntegration();
             pc["politics.pe_reactions_move_relations"] = politics->GetPEReactionsMoveRelations();
             pc["politics.pe_detected"] = PoliticalEngineBridge::GetSingleton()->IsDetected();
             parsed["pluginConfig"] = pc;
@@ -964,6 +965,8 @@ namespace IntelEngine {
                     saved = politics->SetMaxRelationChangePerTick(val.get<int>());
                 } else if (key == "max_active_wars" && val.is_number_integer()) {
                     saved = politics->SetMaxActiveWars(val.get<int>());
+                } else if (key == "pe_integration" && val.is_boolean()) {
+                    saved = politics->SetPEIntegration(val.get<bool>());
                 } else if (key == "pe_reactions_move_relations" && val.is_boolean()) {
                     saved = politics->SetPEReactionsMoveRelations(val.get<bool>());
                 } else {

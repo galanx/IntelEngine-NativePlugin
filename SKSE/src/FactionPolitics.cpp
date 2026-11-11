@@ -360,6 +360,12 @@ default_relations:
         maxActiveWars_.store(val);
         return true;
     }
+    bool FactionPolitics::SetPEIntegration(bool val) {
+        if (!DashboardConfig::GetSingleton()->WriteYamlValue("politics", "pe_integration", val ? "true" : "false")) return false;
+        peIntegration_.store(val);
+        PoliticalEngineBridge::GetSingleton()->SetEnabled(val);  // resets baseline: changes made while off are not replayed
+        return true;
+    }
     bool FactionPolitics::SetPEReactionsMoveRelations(bool val) {
         if (!DashboardConfig::GetSingleton()->WriteYamlValue("politics", "pe_reactions_move_relations", val ? "true" : "false")) return false;
         peReactionsMoveRelations_.store(val);
@@ -384,6 +390,8 @@ default_relations:
         maxActiveWars_.store(std::clamp(readInt("max_active_wars", 2), 1, 5));
         warDeclarationCooldownDays_.store(readInt("war_declaration_cooldown_days", 7));
         moraleDecayPerTick_.store(readInt("morale_decay_per_tick", 2));
+        peIntegration_.store(readBool("pe_integration", true));
+        PoliticalEngineBridge::GetSingleton()->SetEnabled(peIntegration_.load());
         peReactionsMoveRelations_.store(readBool("pe_reactions_move_relations", true));
 
         logger::info("FactionPolitics: Settings loaded - enabled={}, tick={}h, maxDelta={}, maxWars={}, warCooldown={}d, moraleDecay={}",

@@ -671,6 +671,7 @@ not also call `RecordPoliticalEvent` for these initiatives. Missing export disab
 Active PE adds authoritative territory and recent public developments to the Political DM
 context. A development is eligible for one `political_reaction` on the next tick through
 `reacts_to`; expiry, load identity and duplicate responses reject stale reactions.
+`politics.pe_integration` defaults true; when false IE ignores Political Engine (no polling, no context, no `pe_*` events) and re-enabling resets the baseline.
 `politics.pe_reactions_move_relations` defaults true. Its persisted Papyrus/MCM/dashboard
 toggle controls only tagged reaction relation and player-standing deltas, not IE's own
 politics, standing decay or war/battle mechanics. Disabled still records the reaction.

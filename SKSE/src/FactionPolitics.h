@@ -319,6 +319,8 @@ namespace IntelEngine {
         int GetMaxActiveWars() const { return maxActiveWars_.load(); }
         int GetWarDeclarationCooldownDays() const { return warDeclarationCooldownDays_.load(); }
         int GetMoraleDecayPerTick() const { return moraleDecayPerTick_.load(); }
+        bool GetPEIntegration() const { return peIntegration_.load(); }
+        bool SetPEIntegration(bool val);
         bool GetPEReactionsMoveRelations() const { return peReactionsMoveRelations_.load(); }
         bool SetPEReactionsMoveRelations(bool val);
 
@@ -447,6 +449,7 @@ namespace IntelEngine {
         std::atomic<int> maxActiveWars_{2};
         std::atomic<int> warDeclarationCooldownDays_{7};
         std::atomic<int> moraleDecayPerTick_{2};
+        std::atomic<bool> peIntegration_{true};
         std::atomic<bool> peReactionsMoveRelations_{true};
         std::mutex peMutex_;
         nlohmann::json pendingPE_ = nlohmann::json::object(), eligiblePE_ = nlohmann::json::object();

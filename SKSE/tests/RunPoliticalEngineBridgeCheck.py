@@ -143,6 +143,10 @@ int main(int argc, char** argv) { try {
     Require(bridge->Poll()==json::array() && !bridge->IsActive(), "disabled PE");
     Require(bridge->Context().is_null(), "disabled context omitted");
     state = after; bridge->MarkDirty(); Require(bridge->Poll()==json::array(), "reenable replay");
+    state = before; bridge->MarkDirty(); bridge->Poll(); Require(bridge->Context().is_object(), "active before integration toggle");
+    bridge->SetEnabled(false); state = after;
+    Require(bridge->Context().is_null() && bridge->Poll()==json::array() && !bridge->IsActive(), "integration off: no context, no changes");
+    bridge->SetEnabled(true); Require(bridge->Poll()==json::array() && bridge->IsActive(), "integration on: fresh baseline, no replay");
     state["data_ready"] = false; bridge->MarkDirty();
     Require(bridge->Poll()==json::array() && !bridge->IsActive(), "not-ready PE");
     state = before; bridge->MarkDirty(); Require(bridge->Poll()==json::array(), "ready baseline");
