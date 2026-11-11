@@ -172,6 +172,15 @@ int main() try {
             "  - id: Pe2\n    name: Pe2\n    pe_side: 2\n    leader_names: []\n  - id: Bad\n    name: Bad\n    pe_side: 9\n    leader_names: []\n";
         Require(politics->LoadConfig() && OrganizationPESide(*politics->GetFaction("Thal")) == 3 && OrganizationPESide(*politics->GetFaction("Pe2")) == 2 &&
                 OrganizationPESide(*politics->GetFaction("Bad")) == -1, "pe_side parsed; Thalmor defaults to Aldmeri Dominion; out-of-range ignored");
+        {   // live PE side -> realm allies/rivals (pure mapping)
+            std::vector<FactionConfig> orgs(3);
+            orgs[0].id = "Imp"; orgs[0].skyrimFactionId = "CWImperialFaction";
+            orgs[1].id = "Storm"; orgs[1].skyrimFactionId = "CWSonsFaction";
+            orgs[2].id = "Guild";
+            auto empire = PESideRelations(1, orgs), independent = PESideRelations(0, orgs);
+            Require(empire.first == std::vector<std::string>{"Imp"} && empire.second == std::vector<std::string>{"Storm"} &&
+                    independent.first.empty() && independent.second.empty(), "Empire realm: ally Imperial, rival Stormcloak; Independent: none");
+        }
         PoliticalEngineBridge::GetSingleton()->detected = false;
         std::filesystem::remove_all(dir);
         Config("Renamed A");

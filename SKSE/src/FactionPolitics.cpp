@@ -445,6 +445,22 @@ default_relations:
             ++factionRevision_;
         }
     }
+    void FactionPolitics::SyncPESides(const nlohmann::json& sides) {
+        if (!peIntegration_.load() || !sides.is_object()) return;
+        std::lock_guard<std::mutex> lock(configMutex_);
+        for (int i = 0; i < 9; ++i) {
+            const auto side = sides.find(std::to_string(i));
+            const auto faction = factionIndex_.find(std::string("PE_") + kRealms[i]);
+            if (side == sides.end() || !side->is_number_integer() || faction == factionIndex_.end()) continue;
+            auto [allies, rivals] = PESideRelations(side->get<int>(), factions_);
+            auto& f = factions_[faction->second];
+            if (f.allies == allies && f.rivals == rivals) continue;
+            logger::info("FactionPolitics: PE_{} side {} -> allies {} rivals {}", kRealms[i], side->get<int>(), allies.size(), rivals.size());
+            f.allies = std::move(allies);
+            f.rivals = std::move(rivals);
+            ++factionRevision_;
+        }
+    }
     bool FactionPolitics::SetPEReactionsMoveRelations(bool val) {
         if (!DashboardConfig::GetSingleton()->WriteYamlValue("politics", "pe_reactions_move_relations", val ? "true" : "false")) return false;
         peReactionsMoveRelations_.store(val);

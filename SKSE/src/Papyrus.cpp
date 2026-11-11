@@ -4066,6 +4066,7 @@ namespace IntelEngine::Papyrus {
             if (generation != SlotTracker::GetSingleton()->loadGeneration.load()) return;
             auto changes = PoliticalEngineBridge::GetSingleton()->Poll();
             FactionPolitics::GetSingleton()->SyncPERulers(PoliticalEngineBridge::GetSingleton()->Rulers());
+            FactionPolitics::GetSingleton()->SyncPESides(PoliticalEngineBridge::GetSingleton()->RealmSides());
             if (generation != SlotTracker::GetSingleton()->loadGeneration.load()) return;
             std::string requestJson = FactionPolitics::GetSingleton()->BuildPoliticalContextFromSnapshot(snap);
             auto* task = SKSE::GetTaskInterface();
