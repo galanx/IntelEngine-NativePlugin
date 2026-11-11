@@ -80,8 +80,11 @@ namespace IntelEngine {
 
     RE::BSEventNotifyControl PoliticalEngineBridge::ProcessEvent(const SKSE::ModCallbackEvent* event,
         RE::BSTEventSource<SKSE::ModCallbackEvent>*) {
-        if (event && event->eventName == "PL_StateChanged")
-            MarkDirty(std::string_view(event->strArg.c_str()).find("\"loaded\"") != std::string_view::npos);
+        if (event && event->eventName == "PL_StateChanged") {
+            const bool loaded = std::string_view(event->strArg.c_str()).find("\"loaded\"") != std::string_view::npos;
+            MarkDirty(loaded);
+            if (loaded && onLoaded) AsyncDispatch::Submit(onLoaded);  // PE data just (re)loaded: first poll only sets the baseline
+        }
         return RE::BSEventNotifyControl::kContinue;
     }
 

@@ -133,7 +133,10 @@ int main(int argc, char** argv) { try {
     }
     bridge->MarkDirty(); Require(bridge->Poll() == json::array(), "duplicate re-read");
     state = before; SKSE::ModCallbackEvent loaded{"PL_StateChanged", "[\"loaded\"]"};
-    bridge->ProcessEvent(&loaded, nullptr); Require(bridge->Poll() == json::array(), "load replayed news");
+    static int hooked = 0; bridge->onLoaded = [] { ++hooked; };
+    bridge->ProcessEvent(&loaded, nullptr); Require(hooked == 1, "PE loaded event runs the post-load sync");
+    Require(bridge->Poll() == json::array(), "load replayed news");
+    Require(bridge->Rulers().is_object() && (!sidesExport || bridge->RealmSides()["3"] == 1), "first poll after load yields rulers/sides, no changes");
     // LABELLED SYNTHETIC six-district turn, using the genuine before capture.
     state = before; state["revision"] = 100;
     for (int i=0;i<6;++i) state["campaign070"]["regions"][i]["owner_realm_id"] = 9;

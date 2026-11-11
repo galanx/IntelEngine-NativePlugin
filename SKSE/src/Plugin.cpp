@@ -355,6 +355,7 @@ namespace IntelEngine {
                 logger::info("Data loaded - initializing SkyrimNet API and NPC index");
                 MemoryDB::GetSingleton()->InitializeAPI();
                 DialogueTracker::GetSingleton()->Initialize();
+                PoliticalEngineBridge::GetSingleton()->onLoaded = [] { Papyrus::PollAndSyncPE(); };
                 PoliticalEngineBridge::GetSingleton()->Initialize();
 
                 // Register quest decorator with SkyrimNet (soft dependency — skipped if API unavailable)
@@ -406,6 +407,7 @@ namespace IntelEngine {
                 // ClearAll moved to RevertCallback to avoid wiping co-save data.
                 logger::info("Game loaded - refreshing indexes, clearing MemoryDB caches");
                 PoliticalEngineBridge::GetSingleton()->MarkDirty(true);
+                AsyncDispatch::Submit([] { Papyrus::PollAndSyncPE(); });  // no-op unless PE data is already ready; PE's own "loaded" event covers the other order
                 NPCIndex::GetSingleton()->RefreshIndex();
                 MemoryDB::GetSingleton()->ClearCaches();
                 // Initialize per-save political DB (save ID restored via serialization)

@@ -24,6 +24,7 @@ namespace IntelEngine {
         nlohmann::json Rulers();  // {"<realm_id>": actor form id} from the last active snapshot, else null
         nlohmann::json OwnedRealms();  // dashboard only: {"<realm_id>": "puppet"|"vassal"} of the player's realm, else {}
         nlohmann::json RealmSides();  // live PE side: {"<realm_id>": 0-3}; null when PE is off/inactive
+        void (*onLoaded)() = nullptr;  // set by the plugin: Poll + sync factions once PE reports a (re)load
         bool IsActive() const { return active_.load(); }
         RE::BSEventNotifyControl ProcessEvent(const SKSE::ModCallbackEvent* event,
             RE::BSTEventSource<SKSE::ModCallbackEvent>*) override;
