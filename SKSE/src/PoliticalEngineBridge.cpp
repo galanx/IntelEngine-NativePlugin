@@ -58,6 +58,12 @@ namespace IntelEngine {
         return PEField(baseline_, "rulers");
     }
 
+    nlohmann::json PoliticalEngineBridge::OwnedRealms() {
+        std::lock_guard lock(mutex_);
+        if (!enabled_ || !active_ || baselineEpoch_ != resetEpoch_.load()) return nlohmann::json::object();
+        return owned_;
+    }
+
     RE::BSEventNotifyControl PoliticalEngineBridge::ProcessEvent(const SKSE::ModCallbackEvent* event,
         RE::BSTEventSource<SKSE::ModCallbackEvent>*) {
         if (event && event->eventName == "PL_StateChanged")
@@ -83,6 +89,7 @@ namespace IntelEngine {
         }
         auto current = PEComparable(*snapshot);
         sides_ = sides ? std::move(*sides) : nlohmann::json{};
+        owned_ = PEOwnedRealms(*snapshot);
         playerRealm_.clear();
         if (const auto& rulers = PEField(*snapshot, "rulers"); rulers.is_array())
             for (const auto& r : rulers)

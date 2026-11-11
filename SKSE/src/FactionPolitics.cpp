@@ -405,8 +405,8 @@ default_relations:
         PoliticalEngineBridge::GetSingleton()->SetEnabled(val);  // resets baseline: changes made while off are not replayed
         return true;
     }
+    static constexpr const char* kRealms[] = {"Solitude", "Windhelm", "Whiterun", "Markarth", "Riften", "Dawnstar", "Falkreath", "Morthal", "Winterhold"};  // PE realm_id 0..8
     void FactionPolitics::SyncPERulers(const nlohmann::json& rulers) {
-        static constexpr const char* kRealms[] = {"Solitude", "Windhelm", "Whiterun", "Markarth", "Riften", "Dawnstar", "Falkreath", "Morthal", "Winterhold"};  // PE realm_id 0..8
         if (!peIntegration_.load() || !rulers.is_object()) {
             logger::debug("[diag:pe] ruler sync skipped: integration={} rulers={}", peIntegration_.load(), rulers.dump().substr(0, 200));
             return;
@@ -1144,8 +1144,13 @@ default_relations:
         {
             std::lock_guard<std::mutex> lock(configMutex_);
             nlohmann::json factionsJson = nlohmann::json::array();
+            // Dashboard only (never a prompt): label the player's own puppet/vassal realms.
+            const auto owned = peIntegration_.load() ? PoliticalEngineBridge::GetSingleton()->OwnedRealms() : nlohmann::json::object();
             for (const auto& f : factions_) {
                 auto fj = FactionToJson(f);
+                for (int i = 0; i < 9; ++i)
+                    if (!fj.empty() && f.id == std::string("PE_") + kRealms[i] && owned.contains(std::to_string(i)))
+                        fj["pe_owned"] = owned[std::to_string(i)];
                 if (fj.empty()) {
                     // Show disbanded factions in dashboard with a flag
                     fj["id"] = f.id;

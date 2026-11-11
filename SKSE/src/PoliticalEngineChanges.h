@@ -57,6 +57,23 @@ inline nlohmann::json PEComparable(const nlohmann::json& snapshot) {
     result["revision"] = PEField(snapshot, "revision");
     return result;
 }
+// Dashboard only, never a prompt: {"<realm_id>": "puppet"|"vassal"} for realms whose overlord is the player's realm.
+inline nlohmann::json PEOwnedRealms(const nlohmann::json& snapshot) {
+    nlohmann::json owned = nlohmann::json::object();
+    const auto& rulers = PEField(snapshot, "rulers");
+    const auto& governments = PEField(PEField(snapshot, "campaign080"), "governments");
+    if (!rulers.is_array() || !governments.is_array()) return owned;
+    for (const auto& r : rulers) {
+        if (PEField(r, "player_realm") != true) continue;
+        for (std::size_t i = 0; i < governments.size(); ++i) {
+            const auto& kind = PEField(governments[i], "kind");
+            if (PEField(governments[i], "overlord") == PEField(r, "realm_id") && PEField(r, "realm_id").is_number_integer() &&
+                kind.is_number_integer() && (kind == 2 || kind == 3))
+                owned[std::to_string(i)] = kind == 2 ? "puppet" : "vassal";
+        }
+    }
+    return owned;
+}
 inline nlohmann::json PEDiff(const nlohmann::json& before, const nlohmann::json& after) {
     using nlohmann::json;
     json changes = json::array(), captures = json::array();

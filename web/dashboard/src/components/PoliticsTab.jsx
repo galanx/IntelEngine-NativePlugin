@@ -220,6 +220,11 @@ function PoliticsTab({ politics, calendar, sendAction }) {
               {f.leaders?.length > 0 && (
                 <div className="text-[10px] text-gray-400 mt-0.5">Leaders: {f.leaders.join(', ')}</div>
               )}
+              {f.pe_owned && (
+                <div className="text-[10px] text-amber-400 mt-0.5" title="Private: only you see this; NPCs and the AI don't">
+                  {'\u{1F512}'} {f.pe_owned === 'puppet' ? 'Governor (your puppet)' : 'Vassal jarl (your vassal)'}
+                </div>
+              )}
             </div>
           ))}
         </div>
