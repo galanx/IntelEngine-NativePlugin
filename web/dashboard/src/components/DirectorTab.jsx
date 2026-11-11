@@ -841,7 +841,7 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
         {generateControls('political')}{pending?.form === 'political' && <small className="text-gray-400">Generating…</small>}{generateError && !pending && <small className="text-red-400">{generateError}</small>}
         <fieldset disabled={pending?.form === 'political'} className="space-y-2 border-0 p-0 m-0 min-w-0" inert={pending?.form === 'political' ? '' : undefined}>
           <div className="flex gap-2">
-            <Field label="Faction A" required hint="First side.">
+            <Field label={polEventType === 'surrender' ? 'Surrendering faction' : 'Faction A'} required hint={polEventType === 'surrender' ? 'The side that gives up. Needs an active IE war with the victor.' : 'First side.'}>
             <FactionInput
               value={polFactionA}
               onChange={value => { setTouched(t=>({...t,factionA:true})); setPolFactionA(value); }}
@@ -849,7 +849,7 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
               placeholder="e.g. StormcloakFaction"
             />
             </Field>
-            <Field label="Faction B" required hint="Other side. Pick two different faction IDs.">
+            <Field label={polEventType === 'surrender' ? 'Victor' : 'Faction B'} required hint={polEventType === 'surrender' ? 'The side that wins.' : 'Other side. Pick two different faction IDs.'}>
             <FactionInput
               value={polFactionB}
               onChange={value => { setTouched(t=>({...t,factionB:true})); setPolFactionB(value); }}

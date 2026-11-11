@@ -2517,6 +2517,12 @@ default_relations:
             return out.dump();
         }
 
+        // Live 2026-11-10: a Director surrender with no IE war still logged "WAR ENDED"; reject it before recording.
+        if (eventType == "surrender" && !PoliticalDB::GetSingleton()->GetActiveWar(factionA, factionB)) {
+            logger::warn("Politics DM: rejected surrender — no active war between {} and {}", factionA, factionB);
+            out["error"] = "surrender requires an active war";
+            return out.dump();
+        }
         // Live 2026-11-10: the DM repeated event #19 verbatim as #20; drop an exact repeat of the latest event.
         if (auto* db = PoliticalDB::GetSingleton(); db && db->IsReady()) {
             auto last = db->GetRecentEvents(1);
