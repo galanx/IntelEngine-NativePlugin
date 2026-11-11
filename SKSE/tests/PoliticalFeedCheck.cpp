@@ -289,6 +289,14 @@ int main() try {
             db->GetPlayerStanding("A")==8, "toggle does not suppress IE's own untagged politics");
     { auto s=reaction; s["event_type"]="surrender"; s["faction_b"]="C"; s["description"]="A surrenders without a war.";
       Require(json::parse(politics->ProcessPoliticalDMResponse(s.dump(),1))["error"]=="surrender requires an active war", "surrender without active war rejected before EndWar"); }
+    // Seed at game_time 100/101 (calendar stub gives 0, fixture events 3) so "latest" is deterministic.
+    { json b={{"should_act",true},{"faction_a","B"},{"faction_b","A"},{"event_type","battle_result"},{"description","Second clash."},{"relation_delta",-8}};
+      politics->RecordPoliticalEvent("A","B","battle_result","First clash.",-8,100.f);
+      Require(json::parse(politics->ProcessPoliticalDMResponse(b.dump(),1))["error"]=="consecutive battle_result for the same war", "consecutive battle_result for one pair rejected");
+      politics->RecordPoliticalEvent("A","B","trade_deal","Truce goods.",5,101.f);
+      // Passing the backstop reaches the war handlers, whose fixture stubs throw; a rejection returns an error instead.
+      try { Require(!json::parse(politics->ProcessPoliticalDMResponse(b.dump(),1)).contains("error"), "battle_result allowed after a different event"); }
+      catch (const std::runtime_error& e) { Require(std::string(e.what()).find("battle")!=std::string::npos, "battle_result allowed after a different event"); } }
     PoliticalEngineBridge::GetSingleton()->active=false;
     Require(!politics->TestPEContext().contains("political_engine") && politics->eligiblePE_.empty(), "inactive PE omits context and clears eligibility");
     PoliticalEngineBridge::GetSingleton()->active=true;
