@@ -918,9 +918,11 @@ Function OnNPCInteractionResponse(String response, Int success)
         npc2 = IntelEngine.ResolveStoryCandidate(npc2Name, npc1Name, npc1)
     EndIf
     If npc1 == None || npc1.IsDead() || npc1.IsDisabled()
+        Core.DebugMsg("NPC DM: dropped - unresolved, dead or disabled for '" + npc1Name + "'")
         return
     EndIf
     If npc2 == None || npc2.IsDead() || npc2.IsDisabled()
+        Core.DebugMsg("NPC DM: dropped - unresolved, dead or disabled for '" + npc2Name + "'")
         return
     EndIf
 
