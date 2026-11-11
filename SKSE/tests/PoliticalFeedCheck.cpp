@@ -317,7 +317,10 @@ int main() try {
       json c=b; c["faction_b"]="C";
       // Passing the backstop is enough here: the fixture then fails recording or throws from a war handler.
       try { Require(json::parse(politics->ProcessPoliticalDMResponse(c.dump(),1)).value("error","")!="battle_result while a battle for the same war is scheduled", "other pair unaffected by schedule"); }
-      catch (const std::runtime_error&) {} }
+      catch (const std::runtime_error&) {}
+      // Fix 55: a schedule older than one game day (lost on reload) stops blocking.
+      FactionEvent s; s.factionA="A"; s.factionB="B"; s.eventType="battle_scheduled"; s.gameTime=102.f;
+      Require(BattleResultBlockedReason({s},"A","B",102.5f)!=nullptr && BattleResultBlockedReason({s},"B","A",103.5f)==nullptr, "stale battle schedule expires after a game day"); }
     PoliticalEngineBridge::GetSingleton()->active=false;
     Require(!politics->TestPEContext().contains("political_engine") && politics->eligiblePE_.empty(), "inactive PE omits context and clears eligibility");
     PoliticalEngineBridge::GetSingleton()->active=true;
