@@ -12,6 +12,8 @@ const STATUS_COLORS = {
   War: 'text-red-400',
 };
 
+// Political Engine side colours (political_sides080.h); the dashboard feed sends pe_side only while PE is active.
+const PE_SIDES = ['Independent #9aaba7', 'Empire #c45454', 'Stormcloaks #6095d0', 'Aldmeri Dominion #d3bc61'].map((t) => [t.split(' #')[0] + ' (Political Engine side)', '#' + t.split(' #')[1]]);
 const TYPE_LABELS = {
   military: 'Military',
   guild: 'Guild',
@@ -213,7 +215,7 @@ function PoliticsTab({ politics, calendar, sendAction }) {
         <div className="grid grid-cols-2 gap-1">
           {factions.map((f, i) => (
             <div key={i} className="slot-card rounded px-2 py-1.5">
-              <div className="text-xs text-gray-200 font-medium">{f.name}</div>
+              <div className="text-xs text-gray-200 font-medium" style={PE_SIDES[f.pe_side] && { color: PE_SIDES[f.pe_side][1] }} title={PE_SIDES[f.pe_side]?.[0]}>{f.name}</div>
               <div className="text-[10px] text-gray-500">
                 {TYPE_LABELS[f.type] || f.type} &middot; {f.hold}
               </div>

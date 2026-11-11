@@ -1145,8 +1145,15 @@ default_relations:
             nlohmann::json factionsJson = nlohmann::json::array();
             // Dashboard only (never a prompt): label the player's own puppet/vassal realms.
             const auto owned = peIntegration_.load() ? PoliticalEngineBridge::GetSingleton()->OwnedRealms() : nlohmann::json::object();
+            const auto sides = peIntegration_.load() ? PoliticalEngineBridge::GetSingleton()->RealmSides() : nlohmann::json(nullptr);
             for (const auto& f : factions_) {
                 auto fj = FactionToJson(f);
+                if (!fj.empty() && !sides.is_null()) {  // dashboard colour only: live side for a PE realm, else the organization's side
+                    int side = OrganizationPESide(f);
+                    for (int i = 0; i < 9; ++i)
+                        if (f.id == std::string("PE_") + kRealms[i] && sides.contains(std::to_string(i))) side = sides[std::to_string(i)];
+                    if (side >= 0) fj["pe_side"] = side;
+                }
                 for (int i = 0; i < 9; ++i)
                     if (!fj.empty() && f.id == std::string("PE_") + kRealms[i] && owned.contains(std::to_string(i)))
                         fj["pe_owned"] = owned[std::to_string(i)];
