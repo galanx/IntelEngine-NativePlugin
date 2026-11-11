@@ -417,8 +417,12 @@ default_relations:
                 logger::debug("[diag:pe] ruler sync {}: no present ruler", kRealms[i]);
                 continue;
             }
-            const auto* form = RE::TESForm::LookupByID(ruler->get<RE::FormID>());
-            const char* name = form ? form->GetName() : nullptr;
+            // PE sends the ruler's reference; a reference has no name of its own, so read the base NPC's
+            // (matches the YAML style, e.g. "Skald"). The player's base NPC is generic, so use its display name.
+            auto* form = RE::TESForm::LookupByID(ruler->get<RE::FormID>());
+            auto* ref = form ? form->As<RE::TESObjectREFR>() : nullptr;
+            auto* base = ref ? ref->GetBaseObject() : form;
+            const char* name = ref && ref->IsPlayerRef() ? ref->GetDisplayFullName() : (base ? base->GetName() : nullptr);
             if (!name || !*name) {
                 logger::debug("[diag:pe] ruler sync {}: form {:08X} unresolved (form={})", kRealms[i], ruler->get<RE::FormID>(), form != nullptr);
                 continue;
