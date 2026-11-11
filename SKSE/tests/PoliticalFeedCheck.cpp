@@ -168,6 +168,10 @@ int main() try {
         Require(!politics->GetFaction("PE_X"), "PE fragment skipped when PE absent");
         PoliticalEngineBridge::GetSingleton()->detected = true;
         Require(politics->LoadConfig() && politics->GetFaction("PE_X"), "PE fragment loaded when PE detected");
+        std::ofstream(dir + "/d.yaml") << "factions:\n  - id: Thal\n    name: Thal\n    skyrim_faction_id: ThalmorFaction\n    leader_names: []\n"
+            "  - id: Pe2\n    name: Pe2\n    pe_side: 2\n    leader_names: []\n  - id: Bad\n    name: Bad\n    pe_side: 9\n    leader_names: []\n";
+        Require(politics->LoadConfig() && OrganizationPESide(*politics->GetFaction("Thal")) == 3 && OrganizationPESide(*politics->GetFaction("Pe2")) == 2 &&
+                OrganizationPESide(*politics->GetFaction("Bad")) == -1, "pe_side parsed; Thalmor defaults to Aldmeri Dominion; out-of-range ignored");
         PoliticalEngineBridge::GetSingleton()->detected = false;
         std::filesystem::remove_all(dir);
         Config("Renamed A");

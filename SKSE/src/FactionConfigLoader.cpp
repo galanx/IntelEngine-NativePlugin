@@ -212,6 +212,7 @@ namespace IntelEngine {
                         else if (key == "leader_names") currentFaction.leaderNames = ParseInlineArray(StripComment(lines[i].substr(lines[i].find(':')+1)));
                         else if (key == "rivals") currentFaction.rivals = ParseInlineArray(StripComment(lines[i].substr(lines[i].find(':')+1)));
                         else if (key == "allies") currentFaction.allies = ParseInlineArray(StripComment(lines[i].substr(lines[i].find(':')+1)));
+                        else if (key == "pe_side") { int v = ParseInt(value, -1); currentFaction.peSide = (v >= 0 && v <= 3) ? v : -1; }
                         else if (key == "base_army_strength") currentFaction.baseArmyStrength = ParseInt(value, 0);
                         else if (key == "war_threshold") currentFaction.warThreshold = ParseInt(value, -50);
                         else if (key == "conflict_style") currentFaction.conflictStyle = value;

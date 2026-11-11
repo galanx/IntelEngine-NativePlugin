@@ -54,7 +54,17 @@ namespace IntelEngine {
         std::string soldierTemplate; // EditorID of leveled actor list for battle spawning
         std::string prisonLocation;  // Cell EditorID for prisoner holding (Phase 4)
         float prisonMarker[3] = {};  // [x, y, z] position within prison cell (Phase 4)
+        int peSide = -1;            // optional Political Engine side (0-3); -1 = derive from skyrimFactionId
     };
+
+    /** Political Engine side of an organization: its pe_side if set, else its engine-faction default (-1 = none). */
+    inline int OrganizationPESide(const FactionConfig& f) {
+        if (f.peSide >= 0) return f.peSide;
+        if (f.skyrimFactionId == "CWImperialFaction") return 1;
+        if (f.skyrimFactionId == "CWSonsFaction") return 2;
+        if (f.skyrimFactionId == "ThalmorFaction") return 3;
+        return -1;
+    }
 
     struct DefaultRelation {
         std::string factionA;

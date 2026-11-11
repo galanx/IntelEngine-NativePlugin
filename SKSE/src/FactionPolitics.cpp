@@ -978,8 +978,7 @@ default_relations:
             if (!pe.is_null()) {
                 if (!PoliticalEngineBridge::GetSingleton()->HasSidesExport()) pe["vanilla_civil_war"] = snap.vanillaSides;
                 for (const auto& f : factionsCopy) {
-                    if (f.skyrimFactionId == "CWImperialFaction") pe["civil_war_organizations"]["1"] = f.id;
-                    if (f.skyrimFactionId == "CWSonsFaction") pe["civil_war_organizations"]["2"] = f.id;
+                    if (int side = OrganizationPESide(f); side >= 1) pe["civil_war_organizations"][std::to_string(side)] = f.id;
                 }
                 pe["react_to"] = eligiblePE_;
                 pe["recent_developments"] = nlohmann::json::array();
