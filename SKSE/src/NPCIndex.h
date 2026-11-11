@@ -482,6 +482,7 @@ namespace IntelEngine {
             std::string bio;
             std::string npcHold;       // settlement (city/town) or hold fallback
             std::string factionName;   // pre-resolved political faction display name (empty if none)
+            std::string eligibleTypes; // story types this candidate may be used for (GetEligibleStoryTypes)
             bool        isFemale      = false;
             bool        is3DLoaded    = false;
             float       posX          = 0.f;
