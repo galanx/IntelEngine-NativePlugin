@@ -191,6 +191,19 @@ int main(int argc, char** argv) { try {
     synthetic["rulers"][9]["actor_id"]=synthetic["rulers"][9]["actor_id"].get<unsigned>()+1;
     changes=PEDiff(PEComparable(before),PEComparable(synthetic));
     Require(changes.size()==1 && changes[0]["type"]=="pe_ruler" && changes[0]["realm"]=="9", "puppet ruler change, no ownership");
+    // Dashboard-only ownership label: only the player's own puppet/vassal; never in Context().
+    synthetic=before; synthetic["campaign080"]["governments"][3]={{"kind",2},{"overlord",9}};
+    synthetic["campaign080"]["governments"][4]={{"kind",3},{"overlord",9}};
+    synthetic["campaign080"]["governments"][5]={{"kind",2},{"overlord",1}};
+    auto owned=IntelEngine::PEOwnedRealms(synthetic);
+    Require(owned==json::object({{"3","puppet"},{"4","vassal"}}), "player's puppet/vassal labelled, other realm's puppet absent");
+    Require(IntelEngine::PEOwnedRealms(before)==json::object() && IntelEngine::PEOwnedRealms(json())==json::object(), "no owned realms by default / malformed");
+    state=synthetic; bridge->MarkDirty(true); bridge->Poll();
+    Require(bridge->OwnedRealms()==owned, "bridge exposes owned realms");
+    Require(bridge->Context().dump().find("overlord")==std::string::npos && bridge->Context().dump().find("puppet")==std::string::npos &&
+            bridge->Context().dump().find("vassal")==std::string::npos && bridge->Context().dump().find("kind")==std::string::npos, "context carries no government data");
+    bridge->SetEnabled(false); Require(bridge->OwnedRealms()==json::object(), "integration off: no owned realms");
+    bridge->SetEnabled(true); state=before; bridge->MarkDirty(true); bridge->Poll();
     for (const auto& malformed : {json(),json::array(),json("bad"),json(5)}) {
         synthetic=before; synthetic["campaign070"]=malformed; synthetic["rulers"]=malformed;
         synthetic["campaign080"]=malformed;
