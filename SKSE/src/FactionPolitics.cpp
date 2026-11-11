@@ -38,10 +38,18 @@ namespace IntelEngine {
             return result;
         }
 
-        // True when the latest event is a battle_result for this pair (either order); the DM backstop and its input flag share it.
-        bool LastEventWasBattleFor(const std::vector<FactionEvent>& last, const std::string& a, const std::string& b) {
-            return !last.empty() && last[0].eventType == "battle_result" &&
-                   ((last[0].factionA == a && last[0].factionB == b) || (last[0].factionA == b && last[0].factionB == a));
+        // Why a battle_result is not allowed for this pair (either order), or nullptr. Events arrive newest first; the newest battle
+        // event for the pair decides: battle_result = just had one; battle_scheduled = on-screen battle not yet fought (the fight
+        // records its own battle_result). Papyrus owns the schedule, so the event log is the only C++ source of truth.
+        // ponytail: window of the newest events stands in for expiry; use game-time expiry if a stale schedule blocks a war.
+        const char* BattleResultBlockedReason(const std::vector<FactionEvent>& recent, const std::string& a, const std::string& b) {
+            for (const auto& e : recent) {
+                if ((e.factionA == a && e.factionB == b) || (e.factionA == b && e.factionB == a)) {
+                    if (e.eventType == "battle_result") return &e == &recent[0] ? "this war just had a battle" : nullptr;
+                    if (e.eventType == "battle_scheduled") return "a battle for this war is scheduled";
+                }
+            }
+            return nullptr;
         }
 
     }  // anonymous namespace
@@ -1023,8 +1031,8 @@ default_relations:
             wj["strength_b"] = w.factionBStrength;
             float warDays = currentGameTime - w.startTime;
             wj["war_days"] = static_cast<int>(warDays);
-            wj["battle_result_allowed_now"] = LastEventWasBattleFor(db->GetRecentEvents(1), w.factionA, w.factionB)
-                ? "no (this war just had a battle)" : "yes";
+            const char* blocked = BattleResultBlockedReason(db->GetRecentEvents(10), w.factionA, w.factionB);
+            wj["battle_result_allowed_now"] = blocked ? std::string("no (") + blocked + ")" : "yes";
 
             auto battles = db->GetBattlesForWar(w.id, 5);
             if (!battles.empty()) {
@@ -2639,7 +2647,7 @@ default_relations:
         }
         // Live 2026-11-10: the DM repeated event #19 verbatim as #20; drop an exact repeat of the latest event.
         if (auto* db = PoliticalDB::GetSingleton(); db && db->IsReady()) {
-            auto last = db->GetRecentEvents(1);
+            auto last = db->GetRecentEvents(10);
             if (!last.empty() && last[0].factionA == factionA && last[0].factionB == factionB &&
                 last[0].eventType == eventType && last[0].description == description) {
                 logger::info("Politics DM: rejected duplicate of event #{}", last[0].id);
@@ -2647,9 +2655,10 @@ default_relations:
                 return out.dump();
             }
             // Live 2026-11-10: 7 of 10 ticks were the same war's battle_result; never two in a row for one pair.
-            if (eventType == "battle_result" && LastEventWasBattleFor(last, factionA, factionB)) {
-                logger::info("Politics DM: rejected consecutive battle_result for {} vs {}", factionA, factionB);
-                out["error"] = "consecutive battle_result for the same war";
+            if (const char* why = eventType == "battle_result" ? BattleResultBlockedReason(last, factionA, factionB) : nullptr) {
+                logger::info("Politics DM: rejected battle_result for {} vs {} — {}", factionA, factionB, why);
+                out["error"] = std::string(why).find("scheduled") != std::string::npos
+                    ? "battle_result while a battle for the same war is scheduled" : "consecutive battle_result for the same war";
                 return out.dump();
             }
         }
