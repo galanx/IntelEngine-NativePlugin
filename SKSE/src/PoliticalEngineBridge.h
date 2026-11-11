@@ -23,6 +23,7 @@ namespace IntelEngine {
         nlohmann::json Context();
         nlohmann::json Rulers();  // {"<realm_id>": actor form id} from the last active snapshot, else null
         nlohmann::json OwnedRealms();  // dashboard only: {"<realm_id>": "puppet"|"vassal"} of the player's realm, else {}
+        nlohmann::json RealmSides();  // live PE side: {"<realm_id>": 0-3}; null when PE is off/inactive
         bool IsActive() const { return active_.load(); }
         RE::BSEventNotifyControl ProcessEvent(const SKSE::ModCallbackEvent* event,
             RE::BSTEventSource<SKSE::ModCallbackEvent>*) override;

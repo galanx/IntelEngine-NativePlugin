@@ -58,6 +58,20 @@ namespace IntelEngine {
         return PEField(baseline_, "rulers");
     }
 
+    nlohmann::json PoliticalEngineBridge::RealmSides() {
+        std::lock_guard lock(mutex_);
+        if (!enabled_ || !active_ || baselineEpoch_ != resetEpoch_.load() || !sidesReader_) return nullptr;
+        auto out = nlohmann::json::object();
+        const auto& table = sides_.contains("political_sides080") ? PEField(sides_, "political_sides080") : sides_;
+        const auto& realms = PEField(table, "realms");
+        if (realms.is_array())
+            for (const auto& realm : realms) {
+                const auto& id = PEField(realm, "realm_id"); const auto& side = PEField(realm, "side_id");
+                if (id.is_number_integer() && id >= 0 && id <= 9 && side.is_number_integer() && side >= 0 && side <= 3) out[std::to_string(id.get<int>())] = side.get<int>();
+            }
+        return out;
+    }
+
     nlohmann::json PoliticalEngineBridge::OwnedRealms() {
         std::lock_guard lock(mutex_);
         if (!enabled_ || !active_ || baselineEpoch_ != resetEpoch_.load()) return nlohmann::json::object();
