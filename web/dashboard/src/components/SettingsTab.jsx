@@ -240,7 +240,7 @@ function SettingsTab({ config, onSettingChange, pluginConfig, onPluginConfigChan
         <SliderRow
           label="Release Distance"
           value={config.releaseDistance}
-          min={200} max={2000} step={100}
+          min={300} max={2000} step={100}
           unit="u"
           onCommit={v => onSettingChange('releaseDistance', v)}
           hint="How far you must walk before an NPC stops lingering."
