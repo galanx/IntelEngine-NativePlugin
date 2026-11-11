@@ -1477,11 +1477,12 @@ SCRIPT = r"""
     await fill('input[placeholder="e.g. Mikael"]','Mikael');
     await fill('input[placeholder="e.g. Sven"]','Sven');
     await fill('section:nth-of-type(2) textarea','Social proof');
+    await filterPick('Social type','Gossip'); // the Gossip field exists only once the type is picked
     const gossipLabel=[...document.querySelectorAll('section:nth-of-type(2) label')].find(e=>e.textContent.trim().startsWith('Gossip'));
     const gossipControl=gossipLabel?.parentElement?.querySelector('input,textarea');
     Object.getOwnPropertyDescriptor(gossipControl.tagName==='TEXTAREA'?HTMLTextAreaElement.prototype:HTMLInputElement.prototype,'value').set.call(gossipControl,'heard a rumor about a shipment');
     gossipControl.dispatchEvent(new Event('input',{bubbles:true})); await pause();
-    await filterPick('Social type','Gossip'); clickText('Dispatch Social'); await pause();
+    clickText('Dispatch Social'); await pause();
     await fill('input[placeholder="e.g. StormcloakFaction"]','StormcloakFaction');
     await fill('input[placeholder="e.g. ThalmorFaction"]','ThalmorFaction');
     await fill('section:nth-of-type(3) textarea','Politics proof');
