@@ -38,6 +38,12 @@ namespace IntelEngine {
             return result;
         }
 
+        // True when the latest event is a battle_result for this pair (either order); the DM backstop and its input flag share it.
+        bool LastEventWasBattleFor(const std::vector<FactionEvent>& last, const std::string& a, const std::string& b) {
+            return !last.empty() && last[0].eventType == "battle_result" &&
+                   ((last[0].factionA == a && last[0].factionB == b) || (last[0].factionA == b && last[0].factionB == a));
+        }
+
     }  // anonymous namespace
 
     // =========================================================================
@@ -1017,6 +1023,8 @@ default_relations:
             wj["strength_b"] = w.factionBStrength;
             float warDays = currentGameTime - w.startTime;
             wj["war_days"] = static_cast<int>(warDays);
+            wj["battle_result_allowed_now"] = LastEventWasBattleFor(db->GetRecentEvents(1), w.factionA, w.factionB)
+                ? "no (this war just had a battle)" : "yes";
 
             auto battles = db->GetBattlesForWar(w.id, 5);
             if (!battles.empty()) {
@@ -2639,8 +2647,7 @@ default_relations:
                 return out.dump();
             }
             // Live 2026-11-10: 7 of 10 ticks were the same war's battle_result; never two in a row for one pair.
-            if (eventType == "battle_result" && !last.empty() && last[0].eventType == "battle_result" &&
-                ((last[0].factionA == factionA && last[0].factionB == factionB) || (last[0].factionA == factionB && last[0].factionB == factionA))) {
+            if (eventType == "battle_result" && LastEventWasBattleFor(last, factionA, factionB)) {
                 logger::info("Politics DM: rejected consecutive battle_result for {} vs {}", factionA, factionB);
                 out["error"] = "consecutive battle_result for the same war";
                 return out.dump();
