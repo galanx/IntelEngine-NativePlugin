@@ -2509,6 +2509,17 @@ default_relations:
             return out.dump();
         }
 
+        // Live 2026-11-10: the DM repeated event #19 verbatim as #20; drop an exact repeat of the latest event.
+        if (auto* db = PoliticalDB::GetSingleton(); db && db->IsReady()) {
+            auto last = db->GetRecentEvents(1);
+            if (!last.empty() && last[0].factionA == factionA && last[0].factionB == factionB &&
+                last[0].eventType == eventType && last[0].description == description) {
+                logger::info("Politics DM: rejected duplicate of event #{}", last[0].id);
+                out["error"] = "duplicate of latest event";
+                return out.dump();
+            }
+        }
+
         auto* cal = RE::Calendar::GetSingleton();
         float gameTime = cal ? cal->GetCurrentGameTime() : 0.f;
 
