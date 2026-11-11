@@ -565,9 +565,10 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
   const storyGuidance = touched.storyType ? STORY_TYPE_FIELDS[storyType] : null, currentFields = STORY_TYPE_FIELDS[storyType]?.fields || [];
   const currentSocialFields = SOCIAL_TYPE_FIELDS[socialType] || [];
   const variantRequired = (defs, values) => defs.filter(f => f.required).map(f => [f.label, !!(values[f.key] || '').trim()]);
-  const storyTypeValid = DIRECTOR_STORY_TYPES.some(type => type.key === storyType);
-  const socialTypeValid = SOCIAL_TYPES.some(type => type.key === socialType);
-  const polEventTypeValid = POLITICAL_EVENT_TYPES.some(type => type.key === polEventType);
+  // An unpicked type shows "(auto)", which only Generate honours, so Dispatch needs a picked (or generated) type.
+  const storyTypeValid = !!touched.storyType && DIRECTOR_STORY_TYPES.some(type => type.key === storyType);
+  const socialTypeValid = !!touched.socialType && SOCIAL_TYPES.some(type => type.key === socialType);
+  const polEventTypeValid = !!touched.eventType && POLITICAL_EVENT_TYPES.some(type => type.key === polEventType);
   const storyRequired = [['NPC', !!storyNpc.trim()], ['Story type', storyTypeValid], ['Narration', !!storyNarration.trim()], ...variantRequired(currentFields, storyFields)];
   const socialRequired = [['NPC 1', !!socialNpc1.trim()], ['NPC 2', !!socialNpc2.trim()], ['Social type', socialTypeValid], ['Narration', !!socialNarration.trim()], ...variantRequired(currentSocialFields, socialFields)];
   const politicalRequired = [['Faction A', !!polFactionA.trim()], ['Faction B', !!polFactionB.trim() && polFactionA.trim() !== polFactionB.trim()], ['Political event type', polEventTypeValid], ['Description', !!polDescription.trim()]];
