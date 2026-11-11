@@ -321,6 +321,8 @@ namespace IntelEngine {
         int GetMoraleDecayPerTick() const { return moraleDecayPerTick_.load(); }
         bool GetPEIntegration() const { return peIntegration_.load(); }
         bool SetPEIntegration(bool val);
+        /** Sets each PE_<realm> faction's leader to the realm's current ruler ({"<realm_id>": actor form id}). */
+        void SyncPERulers(const nlohmann::json& rulers);
         bool GetPEReactionsMoveRelations() const { return peReactionsMoveRelations_.load(); }
         bool SetPEReactionsMoveRelations(bool val);
 

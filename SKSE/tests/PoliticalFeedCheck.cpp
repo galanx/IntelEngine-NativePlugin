@@ -23,6 +23,8 @@ class PoliticalEngineBridge {
 public:
     bool active = true;
     bool sidesExport = false;
+    bool detected = false;
+    bool IsDetected() const { return detected; }
     bool HasSidesExport() const { return sidesExport; }
     static PoliticalEngineBridge* GetSingleton() { static PoliticalEngineBridge value; return &value; }
     bool IsActive() const { return active; }
@@ -154,6 +156,24 @@ int main() try {
     factions = json::parse(politics->GetFactionsJson());
     Require(factions["revision"].get<unsigned long long>() > revision && factions["factions"][0]["name"] == "Renamed A", "config reload revision");
     revision = factions["revision"].get<unsigned long long>();
+    {   // factions.d fragments: replace id, add id, replace relation pair; PE-gated fragment follows detection
+        const std::string dir = "Data/SKSE/Plugins/SkyrimNet/config/plugins/IntelEngine/factions.d";
+        std::filesystem::create_directories(dir);
+        std::ofstream(dir + "/a.yaml") << "factions:\n  - id: B\n    name: Fragment B\n    leader_names: []\n  - id: D\n    name: New D\n    leader_names: []\n"
+            "default_relations:\n  - faction_a: B\n    faction_b: D\n    relation: 5\n";
+        std::ofstream(dir + "/b.yaml") << "default_relations:\n  - faction_a: D\n    faction_b: B\n    relation: 9\n";
+        std::ofstream(dir + "/c.yaml") << "# note\n\nrequires: political_engine\nfactions:\n  - id: PE_X\n    name: PE X\n    leader_names: []\n";
+        Require(politics->LoadConfig() && politics->GetFaction("B")->name == "Fragment B" && politics->GetFaction("D") &&
+                politics->defaultRelations_.size() == 1 && politics->defaultRelations_[0].relation == 9, "fragment replaces id, adds id, replaces relation pair");
+        Require(!politics->GetFaction("PE_X"), "PE fragment skipped when PE absent");
+        PoliticalEngineBridge::GetSingleton()->detected = true;
+        Require(politics->LoadConfig() && politics->GetFaction("PE_X"), "PE fragment loaded when PE detected");
+        PoliticalEngineBridge::GetSingleton()->detected = false;
+        std::filesystem::remove_all(dir);
+        Config("Renamed A");
+        Require(politics->LoadConfig() && !politics->GetFaction("D"), "fragments gone after removal");
+        revision = json::parse(politics->GetFactionsJson())["revision"].get<unsigned long long>();
+    }
     NPCIndex::GetSingleton()->leader.dead = true;
     factions = json::parse(politics->GetFactionsJson());
     Require(factions["revision"].get<unsigned long long>() > revision && factions["factions"][0]["disbanded"] == true &&
