@@ -5055,8 +5055,9 @@ namespace IntelEngine::Papyrus {
 
     RE::BSFixedString ValidateStoryResponse(RE::StaticFunctionTag*, RE::BSFixedString responseJson,
                                              int toggleBitmask, int envFlags) {
-        return RE::BSFixedString(FactionPolitics::ValidateStoryResponse(
-            responseJson.c_str(), toggleBitmask, envFlags));
+        std::string s = responseJson.c_str();
+        StripToJson(s);  // same stripping as the field readers; a ```json fence used to fail validation
+        return RE::BSFixedString(FactionPolitics::ValidateStoryResponse(s, toggleBitmask, envFlags));
     }
 
     RE::BSFixedString BuildFactionBattleDispatchFact(RE::StaticFunctionTag*,
