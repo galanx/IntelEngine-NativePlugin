@@ -185,8 +185,12 @@ int main(int argc, char** argv) { try {
     Require(changes.size()==1 && changes[0]["type"]=="pe_campaign", "applied peace cessation");
     war["settlement"]["outcome"]="puppet";
     Require(PEDiff(base,PEComparable(synthetic))==json::array(), "private puppet settlement");
-    synthetic=after; synthetic["campaign080"]["governments"][9]["kind"]=2;
+    synthetic=after; synthetic["campaign080"]["governments"][9]["kind"]=2; synthetic["rulers"]=before["rulers"];
     Require(PEDiff(base,PEComparable(synthetic))==json::array(), "private puppet ownership");
+    synthetic=before; synthetic["campaign080"]["governments"][9]["kind"]=2; synthetic["campaign070"]["regions"][0]["owner_realm_id"]=9;
+    synthetic["rulers"][9]["actor_id"]=synthetic["rulers"][9]["actor_id"].get<unsigned>()+1;
+    changes=PEDiff(PEComparable(before),PEComparable(synthetic));
+    Require(changes.size()==1 && changes[0]["type"]=="pe_ruler" && changes[0]["realm"]=="9", "puppet ruler change, no ownership");
     for (const auto& malformed : {json(),json::array(),json("bad"),json(5)}) {
         synthetic=before; synthetic["campaign070"]=malformed; synthetic["rulers"]=malformed;
         synthetic["campaign080"]=malformed;
