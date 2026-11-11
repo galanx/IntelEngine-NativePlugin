@@ -415,6 +415,12 @@ default_relations:
             const auto ruler = rulers.find(std::to_string(i));
             if (ruler == rulers.end() || !ruler->is_number_unsigned()) {
                 logger::debug("[diag:pe] ruler sync {}: no present ruler", kRealms[i]);
+                std::lock_guard<std::mutex> lock(configMutex_);
+                const auto f = factionIndex_.find(std::string("PE_") + kRealms[i]);
+                if (f == factionIndex_.end() || factions_[f->second].leaderNames.empty()) continue;
+                logger::info("FactionPolitics: PE_{} leader cleared (no PE ruler)", kRealms[i]);
+                factions_[f->second].leaderNames.clear();
+                ++factionRevision_;
                 continue;
             }
             // PE sends the ruler's reference; a reference has no name of its own, so read the base NPC's
