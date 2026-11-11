@@ -1041,7 +1041,7 @@ namespace IntelEngine {
             } else request["currentLocation"] = "";
             if (!SkyrimNetAPI::SendCustomPromptToLLM) { queue({}, "Generate unavailable"); return; }
             const auto context = SafeDump(request);
-            const bool queued = SkyrimNetAPI::SendCustomPromptToLLM("intel_director_generate", "", context.c_str(),
+            const bool queued = SkyrimNetAPI::SendCustomPromptToLLM("intel_director_generate", "intel_story_dm", context.c_str(),
                 [queue, form, id](const char* response, int success) mutable {
                     std::string_view raw = response ? response : "";
                     logger::info("[Dashboard] Generate form={} request={} raw={}", form, id, raw.substr(0, 600));
