@@ -101,7 +101,7 @@ template<class... T> void error(T&&...) {}
     source = (src / "FactionPolitics.cpp").read_text(encoding="utf-8")
     signatures = (
         "std::string ToLower(",
-        "bool LastEventWasBattleFor(",
+        "const char* BattleResultBlockedReason(",
         "std::string FactionPolitics::GetConfigPath(",
         "std::string FactionPolitics::GetDefaultFactionConfig(",
         "bool FactionPolitics::LoadConfig(",

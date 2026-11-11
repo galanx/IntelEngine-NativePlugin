@@ -309,7 +309,15 @@ int main() try {
       politics->RecordPoliticalEvent("A","B","trade_deal","Truce goods.",5,101.f);
       // Passing the backstop reaches the war handlers, whose fixture stubs throw; a rejection returns an error instead.
       try { Require(!json::parse(politics->ProcessPoliticalDMResponse(b.dump(),1)).contains("error"), "battle_result allowed after a different event"); }
-      catch (const std::runtime_error& e) { Require(std::string(e.what()).find("battle")!=std::string::npos, "battle_result allowed after a different event"); } }
+      catch (const std::runtime_error& e) { Require(std::string(e.what()).find("battle")!=std::string::npos, "battle_result allowed after a different event"); }
+      // Fix 50: a scheduled battle blocks battle_result for its pair even after other events; other pairs unaffected.
+      politics->RecordPoliticalEvent("A","B","battle_scheduled","Armies march.",0,102.f);
+      politics->RecordPoliticalEvent("A","C","trade_deal","Other goods.",5,103.f);
+      Require(json::parse(politics->ProcessPoliticalDMResponse(b.dump(),1))["error"]=="battle_result while a battle for the same war is scheduled", "battle_result rejected while battle scheduled");
+      json c=b; c["faction_b"]="C";
+      // Passing the backstop is enough here: the fixture then fails recording or throws from a war handler.
+      try { Require(json::parse(politics->ProcessPoliticalDMResponse(c.dump(),1)).value("error","")!="battle_result while a battle for the same war is scheduled", "other pair unaffected by schedule"); }
+      catch (const std::runtime_error&) {} }
     PoliticalEngineBridge::GetSingleton()->active=false;
     Require(!politics->TestPEContext().contains("political_engine") && politics->eligiblePE_.empty(), "inactive PE omits context and clears eligibility");
     PoliticalEngineBridge::GetSingleton()->active=true;
