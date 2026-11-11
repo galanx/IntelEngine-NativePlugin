@@ -267,6 +267,8 @@ int main() try {
     reacted=json::parse(politics->ProcessPoliticalDMResponse(reaction.dump(),1));
     Require(reacted["acted"]==true && db->GetRelation("A","B")==relationBeforePE+10 &&
             db->GetPlayerStanding("A")==8, "toggle does not suppress IE's own untagged politics");
+    { auto s=reaction; s["event_type"]="surrender"; s["faction_b"]="C"; s["description"]="A surrenders without a war.";
+      Require(json::parse(politics->ProcessPoliticalDMResponse(s.dump(),1))["error"]=="surrender requires an active war", "surrender without active war rejected before EndWar"); }
     PoliticalEngineBridge::GetSingleton()->active=false;
     Require(!politics->TestPEContext().contains("political_engine") && politics->eligiblePE_.empty(), "inactive PE omits context and clears eligibility");
     PoliticalEngineBridge::GetSingleton()->active=true;
