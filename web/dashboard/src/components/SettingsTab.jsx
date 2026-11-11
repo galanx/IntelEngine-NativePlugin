@@ -355,6 +355,9 @@ function SettingsTab({ config, onSettingChange, pluginConfig, onPluginConfigChan
         {pluginConfig && onPluginConfigChange ? (
           <>
             <p className="text-xs text-gray-400">Political Engine detected: {pluginConfig['politics.pe_detected'] ? 'Yes' : 'No'}</p>
+            <ToggleRow label="Political Engine integration" value={pluginConfig['politics.pe_integration'] !== false && pluginConfig['politics.pe_integration'] !== 'false'}
+              onChange={v => onPluginConfigChange('politics.pe_integration', v)}
+              hint="When off, IE ignores Political Engine even if installed." />
             <ToggleRow label="PE reactions move relations" value={pluginConfig['politics.pe_reactions_move_relations'] !== false && pluginConfig['politics.pe_reactions_move_relations'] !== 'false'}
               onChange={v => onPluginConfigChange('politics.pe_reactions_move_relations', v)}
               hint="When off, PE reactions are recorded without changing relations or player standing." />

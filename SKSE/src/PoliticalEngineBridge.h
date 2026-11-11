@@ -16,6 +16,7 @@ namespace IntelEngine {
         }
         void Initialize();
         void MarkDirty(bool reset = false);
+        void SetEnabled(bool on) { enabled_.store(on); MarkDirty(true); }
         nlohmann::json Poll();
         bool IsDetected() const { return reader_ != nullptr; }
         bool HasSidesExport() const { return sidesReader_ != nullptr; }
@@ -34,6 +35,7 @@ namespace IntelEngine {
         Reader reader_ = nullptr;
         bool initialized_ = false;
         std::atomic<bool> active_{false};
+        std::atomic<bool> enabled_{true};
         std::mutex mutex_;
         std::atomic<bool> dirty_{false};
         std::atomic<unsigned> resetEpoch_{0};

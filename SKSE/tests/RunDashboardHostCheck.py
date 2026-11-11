@@ -658,6 +658,7 @@ struct PoliticsStub {
     int GetMaxRelationChangePerTick()const{return 15;} int GetMaxActiveWars()const{return 2;}
     bool SetEnabled(bool){return true;} bool SetTickIntervalHours(int){return true;}
     bool SetMaxRelationChangePerTick(int){return true;} bool SetMaxActiveWars(int){return true;}
+    bool GetPEIntegration()const{return true;} bool SetPEIntegration(bool){return true;}
     bool GetPEReactionsMoveRelations()const{return true;} bool SetPEReactionsMoveRelations(bool){return true;}
 };
 struct SlotStub { std::string SerializeToJson()const{return "[slot]";} };
