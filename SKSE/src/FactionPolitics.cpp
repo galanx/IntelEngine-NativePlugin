@@ -407,16 +407,30 @@ default_relations:
     }
     void FactionPolitics::SyncPERulers(const nlohmann::json& rulers) {
         static constexpr const char* kRealms[] = {"Solitude", "Windhelm", "Whiterun", "Markarth", "Riften", "Dawnstar", "Falkreath", "Morthal", "Winterhold"};  // PE realm_id 0..8
-        if (!peIntegration_.load() || !rulers.is_object()) return;
+        if (!peIntegration_.load() || !rulers.is_object()) {
+            logger::debug("[diag:pe] ruler sync skipped: integration={} rulers={}", peIntegration_.load(), rulers.dump().substr(0, 200));
+            return;
+        }
         for (int i = 0; i < 9; ++i) {
             const auto ruler = rulers.find(std::to_string(i));
-            if (ruler == rulers.end() || !ruler->is_number_unsigned()) continue;
+            if (ruler == rulers.end() || !ruler->is_number_unsigned()) {
+                logger::debug("[diag:pe] ruler sync {}: no present ruler", kRealms[i]);
+                continue;
+            }
             const auto* form = RE::TESForm::LookupByID(ruler->get<RE::FormID>());
             const char* name = form ? form->GetName() : nullptr;
-            if (!name || !*name) continue;
+            if (!name || !*name) {
+                logger::debug("[diag:pe] ruler sync {}: form {:08X} unresolved (form={})", kRealms[i], ruler->get<RE::FormID>(), form != nullptr);
+                continue;
+            }
             std::lock_guard<std::mutex> lock(configMutex_);
             const auto faction = factionIndex_.find(std::string("PE_") + kRealms[i]);
-            if (faction == factionIndex_.end() || factions_[faction->second].leaderNames == std::vector<std::string>{name}) continue;
+            if (faction == factionIndex_.end()) {
+                logger::debug("[diag:pe] ruler sync {}: no PE_{} faction", kRealms[i], kRealms[i]);
+                continue;
+            }
+            if (factions_[faction->second].leaderNames == std::vector<std::string>{name}) continue;
+            logger::info("FactionPolitics: PE_{} leader -> '{}' ({:08X})", kRealms[i], name, ruler->get<RE::FormID>());
             factions_[faction->second].leaderNames = {name};
             ++factionRevision_;
         }
