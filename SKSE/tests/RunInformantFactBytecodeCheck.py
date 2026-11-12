@@ -185,6 +185,13 @@ def main():
         got = FactVM(({}, core, story), pathlib.Path("unused")).invoke("IntelEngine_StoryEngine", "BuildInteractionSummary", (A(n1, "c"), text, A(n2, "c")))
         require(got == want, f"fix86 summary ({n1!r}, {text!r}, {n2!r}): {got!r} != {want!r}")
         print("  [pex summary] %r" % got)
+    # fix87: BuildInteractionLine takes plain strings (gossip list builder has no Actors).
+    for n1, text, n2, want in (("Brenuin", "argued over the price.", "Anoriath", "Brenuin argued over the price with Anoriath"),
+                               ("Brenuin", "Brenuin argued with Anoriath", "Anoriath", "Brenuin argued with Anoriath"),
+                               ("Brenuin", "argued", "", "Brenuin argued")):
+        got = FactVM(({}, core, story), pathlib.Path("unused")).invoke("IntelEngine_StoryEngine", "BuildInteractionLine", (n1, text, n2))
+        require(got == want, f"fix87 line ({n1!r}, {text!r}, {n2!r}): {got!r} != {want!r}")
+        print("  [pex line] %r" % got)
     # fix69d: subject == informant (or empty) -> generic topic; both entrypoints.
     for automatic in (False, True):
         vm = FactVM(({}, core, story), pathlib.Path("unused"))

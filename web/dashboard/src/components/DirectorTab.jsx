@@ -433,7 +433,7 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
     if (action && !actionNpcName) { const choices = nearby.filter(n => n.name.toLowerCase() !== String(actionParams.targetName || '').trim().toLowerCase()); if (choices.length) { const npc = choices[Math.floor(Math.random() * choices.length)]; actionNpcName = npc.name; setActionNpc(npc.id); } }
     if (action && !actionName && enumTypes.length) { actionName = enumTypes[Math.floor(Math.random() * enumTypes.length)].key; setSelectedAction(actionName); }
     const reasonOnly = action && ['CancelCurrentTask','ChangeSpeed'].includes(actionName);
-    const defs = story ? currentFields : social ? currentSocialFields : action ? (actionFieldDefs[actionName] || []) : [];
+    const defs = story ? (touched.storyType ? currentFields : []) : social ? (touched.socialType ? currentSocialFields : []) : action ? (actionFieldDefs[actionName] || []) : [];
     let params = actionParams;
     if (action && defs.some(f => f.key === 'targetName') && !String(params.targetName || '').trim()) {
       const choices = [...new Set(nearby.map(n => n.name))].filter(name => name.toLowerCase() !== actionNpcName.toLowerCase());
