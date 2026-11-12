@@ -78,7 +78,7 @@ factions:
     skyrim_faction_id: "CWImperialFaction"
     leader_names: ["General Tullius", "Legate Rikke"]
     rivals: ["StormcloakFaction"]
-    allies: ["ThalmorFaction"]
+    allies: []
     base_army_strength: 30
     war_threshold: -50
     soldier_template: "LCharSoldierImperial"
@@ -104,7 +104,7 @@ factions:
     skyrim_faction_id: "ThalmorFaction"
     leader_names: ["Elenwen", "Ondolemar"]
     rivals: ["StormcloakFaction"]
-    allies: ["ImperialFaction"]
+    allies: []
     base_army_strength: 20
     war_threshold: -50
     soldier_template: "LCharThalmorMelee1H"
@@ -191,7 +191,7 @@ factions:
 default_relations:
   - faction_a: "ImperialFaction"
     faction_b: "ThalmorFaction"
-    relation: 50
+    relation: 15
   - faction_a: "ImperialFaction"
     faction_b: "StormcloakFaction"
     relation: -30
