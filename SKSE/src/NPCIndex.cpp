@@ -921,7 +921,8 @@ namespace IntelEngine {
         // upgrade to request-bound resolution via the Papyrus contract.
         StoryCandidateRejection rejection;
         auto formId = ResolveStoryCandidateFormID(name, m_dmCandidatePool, m_npcCandidatePool, &rejection);
-        if (!partnerName.empty() && (anchor || std::string_view(rejection.branch) == "ambiguous")) {
+        const bool tieBreak = !partnerName.empty() && (anchor || std::string_view(rejection.branch) == "ambiguous");
+        if (tieBreak) {
             // ponytail: NPC 1 anchors NPC 2, not a closest-pair search; explicit reference labels fix intent.
             auto* anchorActor = anchor ? anchor : RE::PlayerCharacter::GetSingleton();
             formId = ResolveStoryCandidateFormID(name, m_dmCandidatePool, m_npcCandidatePool, &rejection, [anchorActor](std::uint32_t id) -> double {
@@ -964,6 +965,8 @@ namespace IntelEngine {
                 name, rejection.branch, m_dmCandidatePool.size(), m_npcCandidatePool.size(), formId, matches);
             return nullptr;
         }
+        // run1 2026-11-12: a tie-break pick was invisible (SkyLink shows Actor returns as complex_type).
+        if (tieBreak) logger::debug("ResolveStoryCandidate('{}') -> tie-break picked FormID=0x{:08X}", name, formId);
         return actor;
     }
 
