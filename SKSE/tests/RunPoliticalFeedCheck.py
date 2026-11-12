@@ -116,6 +116,10 @@ template<class... T> void error(T&&...) {}
         "std::string FactionPolitics::ProcessPoliticalDMResponse(",
         "int FactionPolitics::DecayPlayerStandings(",
         "std::string FactionPolitics::GetFactionDisplayName(",
+        "int FactionPolitics::EnforceWarRule(",
+        "bool FactionPolitics::WarPossible(",
+        "std::string FactionPolitics::GetRelationStatus(",
+        "nlohmann::json FactionPolitics::FactionToJsonFromSnapshot(",
     )
     (work / "PoliticalFeedMethods.inc").write_text(
         "namespace IntelEngine {\n" + "\n".join(method(source, s) for s in signatures) +
