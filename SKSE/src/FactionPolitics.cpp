@@ -56,13 +56,6 @@ namespace IntelEngine {
         // Live 2026-11-11: 11 espionage / 6 embargo events in a row for one pair. True when `recent` (newest first) holds the same type
         // for the same unordered pair in its first 3 entries. Exempt: battle_result (own rule above), war_declaration/surrender/peace_offer
         // (state changes: DeclareWar, EndWar and the active-war checks already refuse a repeat), pe_* and political_reaction (no pair / reacts_to).
-        bool RepeatEventBlocked(const std::vector<FactionEvent>& recent, const std::string& a, const std::string& b, const std::string& type) {
-            if (type == "battle_result" || type == "war_declaration" || type == "surrender" || type == "peace_offer" ||
-                type == "political_reaction" || type.starts_with("pe_")) return false;
-            for (size_t i = 0; i < recent.size() && i < 3; ++i)
-                if (recent[i].eventType == type && ((recent[i].factionA == a && recent[i].factionB == b) || (recent[i].factionA == b && recent[i].factionB == a))) return true;
-            return false;
-        }
 
     }  // anonymous namespace
 
@@ -2689,12 +2682,6 @@ default_relations:
                 logger::info("Politics DM: rejected battle_result for {} vs {} — {}", factionA, factionB, why);
                 out["error"] = std::string(why).find("scheduled") != std::string::npos
                     ? "battle_result while a battle for the same war is scheduled" : "consecutive battle_result for the same war";
-                return out.dump();
-            }
-            // Live 2026-11-11: same type for the same pair within the last 3 events is a repeat; the DM must pick something else.
-            if (RepeatEventBlocked(last, factionA, factionB, eventType)) {
-                logger::info("Politics DM: rejected repeat {} for {} vs {} — last 3 events", eventType, factionA, factionB);
-                out["error"] = "repeat " + eventType + " for the same faction pair in the last 3 events";
                 return out.dump();
             }
         }
