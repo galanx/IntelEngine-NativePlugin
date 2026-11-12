@@ -580,6 +580,14 @@ def run_director_lite_checks(files, history):
                     not any(e[0] == "InjectFact" for e in task.effects[effects_at:]),
                     "repeated cancellation injected a duplicate closing fact")
 
+    def director_seek_fact_not_doubled():
+        for narration, expected in (("came looking for Player about the mine", "came looking for Player about the mine"),
+                                    ("had questions about the mine", "set out to find Player -- had questions about the mine")):
+            task = DirectorVM(files, history)
+            task.seek(narration)
+            require([e for e in task.effects if e[0] == "InjectFact"] == [("InjectFact", (task.agent, expected))],
+                    "Director seek memory is doubled or missing the prefix: " + narration)
+
     def director_action_success_notice():
         for state, expected in ((1, [("Notification", "Nazeem: ChangeSpeed started.")]),
                                 (0, [("Notification", "Nazeem: ChangeSpeed failed.")])):
@@ -779,7 +787,7 @@ def run_director_lite_checks(files, history):
     failures = []
     for case in (director_seek_then_seek_is_refused, run6_seek_seek_fetch_arrival,
                  director_story_while_story_active, cancel_story_task_ends_story,
-                 cancel_story_injects_closing_fact, director_action_success_notice,
+                 cancel_story_injects_closing_fact, director_seek_fact_not_doubled, director_action_success_notice,
                  director_conduct_report_success_notice, director_social_and_political_success_notice,
                  director_message_generation_success_notice,
                  director_story_not_found_notifies, ambush_faction_hirer_injects_leader_fact):
