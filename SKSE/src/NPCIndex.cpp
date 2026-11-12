@@ -1079,6 +1079,11 @@ namespace IntelEngine {
             if (verbose) logger::debug("[StoryDM] Rejected 0x{:08X}: no display name", actor->GetFormID());
             return false;
         }
+        // fix97: runtime-spawned actors (battle soldiers, ambushers) vanish on delete; live 17:43:41 NPC DM chose a brawl thief.
+        if (actor->IsDynamicForm()) {
+            if (verbose) logger::debug("[StoryDM] Rejected '{}': spawned (0xFF) actor", displayName);
+            return false;
+        }
         if (actor->IsDead()) {
             if (verbose) logger::debug("[StoryDM] Rejected '{}': dead", displayName);
             return false;
@@ -1859,7 +1864,7 @@ namespace IntelEngine {
             if (!actor || actor == player) return false;
             auto* cell = actor->GetParentCell();
             if (!cell) return false;
-            if (actor->IsDead() || actor->IsDisabled()) return false;
+            if (actor->IsDead() || actor->IsDisabled() || actor->IsDynamicForm()) return false;  // fix97: no spawned actors
             if (actor->IsInCombat()) return false;
             if (actor->IsHostileToActor(player)) return false;
             if (tracker && (tracker->HasActiveTask(actor) || tracker->IsOnCooldown(actor))) return false;
