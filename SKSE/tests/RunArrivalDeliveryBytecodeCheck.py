@@ -1325,6 +1325,96 @@ def run_linger_teammate_checks(files, history):
     print("actual PEX linger/proximity: pause-safe timeout; 0.5s accumulation; teammate and distance releases passed")
 
 
+def run_social_range_checks(files, history):
+    """fix66: npc_social narrates only when SkyrimNet will voice it; otherwise hold, then narrate or facts only."""
+    class SocialVM(VM):
+        player_dist, pair_dist, now, whisper = 100.0, 100.0, 0.5, False
+
+        def external(self, method, args, script):
+            if method == "GetConfigFloat":
+                return (200.0 if self.whisper else 800.0) if args[1] == "interaction.maxDistance" else 2.0
+            if method == "GetCurrentRealTime": return self.now
+            if method == "Is3DLoaded": return True
+            if method == "IsPlayerTeammate": return False
+            if method == "RenderFactsSection": return ""
+            if method == "HasNonSandboxAI": return True
+            if method == "IntListGet": return self.storage[(args[0], args[1])][args[2]]
+            if method == "FormListFind":
+                lst = self.storage.get((args[0], args[1]), [])
+                return lst.index(args[2]) if args[2] in lst else -1
+            if method == "GetDistance":
+                return self.player_dist if args[1] is self.player else self.pair_dist
+            return super().external(method, args, script)
+
+    def make(player_dist):
+        vm = SocialVM(files, history)
+        vm.player_dist = player_dist
+        vm.target.name = "Recipient"
+        vm.properties.update({"SOCIAL_HOLD_PAIR_DISTANCE": 600.0, "LINGER_TIMEOUT_SECONDS": 180.0, "LINGER_RELEASE_DISTANCE": 1500.0,
+            "IntelEngine_TravelTarget": "travel-link", "SandboxNearPlayerPackage": object(),
+            "NPCSocialTraveler": vm.agent, "NPCSocialTarget": vm.target, "NPCSocialNPC1": vm.agent,
+            "NPCSocialNPC2": vm.target, "NPCSocialNarration": "talked shop", "NPCSocialType": "npc_interaction",
+            "NPCSocialFact1": "fact one", "NPCSocialFact2": "fact two", "NPCSocialGossip": "",
+            "NPCSocialArrivalHandling": False, "SlotTaskTypes": ["npc_social"] + [""] * 4,
+            "SlotTargetNames": ["Recipient"] + [""] * 4})
+        vm.storage[(vm.player, "Intel_StoryLingerActors")] = []
+        return vm
+
+    def narrated(vm): return sum(e[0] == "SendTaskNarration" for e in vm.effects)
+    def facts(vm): return vm.call_counts.get(("IntelEngine_Core", "InjectFact"), 0)
+    def tick(vm): vm.invoke("IntelEngine_StoryEngine", "CheckStoryLingerCleanup")
+
+    # 1. In range: narrates immediately, facts delivered, no hold.
+    vm = make(1000.0)
+    vm.invoke("IntelEngine_StoryEngine", "OnNPCSocialArrived")
+    require(narrated(vm) == 1 and facts(vm) == 2 and not vm.storage[(vm.player, "Intel_StoryLingerActors")],
+            "in-range arrival did not narrate immediately without a hold")
+
+    # 2. Out of range (1500 > 0.85*800*2=1360): hold, nothing narrated or injected yet.
+    vm = make(1500.0)
+    vm.invoke("IntelEngine_StoryEngine", "OnNPCSocialArrived")
+    require(narrated(vm) == 0 and facts(vm) == 0, "out-of-range arrival narrated or injected facts immediately")
+    held = vm.storage[(vm.player, "Intel_StoryLingerActors")]
+    require(held == [vm.agent, vm.target] and vm.storage[(vm.agent, "Intel_SocHoldNarr")] == "talked shop",
+            "out-of-range arrival did not hold the pair on the story linger")
+    require(vm.properties["NPCSocialTraveler"] is None, "social dispatch slot/state not freed while holding")
+    # Player still out of range: keeps holding.
+    vm.now += 3.0
+    tick(vm)
+    require(narrated(vm) == 0 and (vm.agent, "Intel_SocHoldNarr") in vm.storage, "hold ended while player out of range")
+    # Player comes in range: narrates once, then outcome and release.
+    vm.player_dist = 1000.0
+    vm.now += 3.0
+    tick(vm)
+    require(narrated(vm) == 1 and facts(vm) == 2 and (vm.agent, "Intel_SocHoldNarr") not in vm.storage,
+            "held scene did not narrate and complete when the player came in range")
+    vm.now += 3.0
+    tick(vm)
+    require(held == [], "held pair not released after narration")
+
+    # 3. Whisper mode shrinks the limit (0.85*200*2=340): 1000 is out of range, read at check time.
+    vm = make(1000.0)
+    vm.whisper = True
+    vm.invoke("IntelEngine_StoryEngine", "OnNPCSocialArrived")
+    require(narrated(vm) == 0 and (vm.agent, "Intel_SocHoldNarr") in vm.storage, "whisper-mode limit not honoured")
+
+    # 4. Timeout with the player never in range: facts only, no narration.
+    vm = make(1500.0)
+    vm.invoke("IntelEngine_StoryEngine", "OnNPCSocialArrived")
+    vm.storage[(vm.agent, "Intel_StoryLingerElapsed")] = 181.0
+    vm.now += 3.0
+    tick(vm)
+    require(narrated(vm) == 0 and facts(vm) == 2 and (vm.agent, "Intel_SocHoldNarr") not in vm.storage,
+            "hold timeout did not complete facts only without narration")
+    require(any(e[0] == "Trace" and "Off-screen" in e[1] for e in vm.effects)
+            and not any(e[0] == "Trace" and "performed" in e[1] for e in vm.effects),
+            "timeout trace was not off-screen wording")
+    vm.now += 3.0
+    tick(vm)
+    require(vm.storage[(vm.player, "Intel_StoryLingerActors")] == [], "timed-out hold did not release the pair")
+    print("actual PEX social range: in-range narrates; out-of-range holds then narrates; timeout facts only; whisper limit")
+
+
 def main():
     if len(sys.argv) != 4:
         raise SystemExit(__doc__)
@@ -1622,6 +1712,7 @@ def main():
     run_hold_restriction_checks(files, history)
     run_soft_stuck_checks(files, history)
     run_linger_teammate_checks(files, history)
+    run_social_range_checks(files, history)
 
 
 if __name__ == "__main__":
