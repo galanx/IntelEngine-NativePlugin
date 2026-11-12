@@ -133,7 +133,7 @@ namespace IntelEngine {
         }
         file.close();
 
-        enum class Section { None, Factions, DefaultRelations };
+        enum class Section { None, Factions, DefaultRelations, WarAllowed };
         Section currentSection = Section::None;
 
         FactionConfig currentFaction;
@@ -171,7 +171,24 @@ namespace IntelEngine {
                 flushItem();
                 if (trimmed == "factions:") currentSection = Section::Factions;
                 else if (trimmed == "default_relations:") currentSection = Section::DefaultRelations;
+                else if (trimmed == "war_allowed:") { currentSection = Section::WarAllowed; result.hasWarAllowed = true; }
                 else currentSection = Section::None;
+                continue;
+            }
+
+            if (currentSection == Section::WarAllowed) {  // fix94: "Key: [list]" lines
+                const size_t colon = trimmed.find(':');
+                if (colon == std::string::npos || colon == 0) continue;
+                const std::string key = StripQuotes(Trim(trimmed.substr(0, colon)));
+                auto items = ParseInlineArray(StripComment(trimmed.substr(colon + 1)));
+                auto lower = [](std::string s) { std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); }); return s; };
+                auto it = std::find_if(result.warAllowed.begin(), result.warAllowed.end(), [&](const auto& p) { return lower(p.first) == lower(key); });
+                if (it == result.warAllowed.end()) {
+                    result.warAllowed.emplace_back(key, std::move(items));
+                } else {
+                    it->second.insert(it->second.end(), items.begin(), items.end());
+                    logger::warn("FactionConfigLoader: war_allowed key '{}' listed twice; lists merged", key);
+                }
                 continue;
             }
 

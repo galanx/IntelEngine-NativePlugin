@@ -4065,6 +4065,7 @@ namespace IntelEngine::Papyrus {
 
         // Phase A — main thread.
         auto snap = politics->BuildPoliticsTickSnapshot(currentGameTime);
+        politics->EnforceWarRule(snap);  // fix 94: before the context build so this tick's DM sees the new war
 
         AsyncDispatch::Submit([snap = std::move(snap),
                                questEditorId = std::move(questEditorId),

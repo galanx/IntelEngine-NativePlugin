@@ -201,6 +201,8 @@ default_relations:
   - faction_a: "BlackBriarFamily"
     faction_b: "ThievesGuildFaction"
     relation: 60
+war_allowed:
+  ImperialFaction: ["StormcloakFaction"]
 )YAML";
     }
 
@@ -288,6 +290,9 @@ default_relations:
         }
         factions_ = std::move(result.factions);
         defaultRelations_ = std::move(result.defaultRelations);
+        // fix94: only factions.yaml's war_allowed counts (fragments' sections are ignored); missing = Legion vs Stormcloaks only.
+        warAllowed_ = result.hasWarAllowed ? std::move(result.warAllowed)
+                                           : decltype(warAllowed_){{"ImperialFaction", {"StormcloakFaction"}}};
         ++factionRevision_;
         factionIndex_.clear();
         nameToId_.clear();
@@ -299,6 +304,18 @@ default_relations:
             loadedIds += factions_[i].id;
         }
         logger::info("FactionPolitics: Loaded {} factions: [{}]", factions_.size(), loadedIds);
+        auto matchesFaction = [&](const std::string& e) {
+            if (e == "*") return true;
+            const auto le = ToLower(e);
+            for (const auto& f : factions_)
+                if (le == ToLower(f.id) || le == ToLower(f.name) || le == ToLower(f.type)) return true;
+            return false;
+        };
+        for (const auto& [k, items] : warAllowed_) {
+            if (!matchesFaction(k)) logger::warn("FactionPolitics: war_allowed entry '{}' matches no faction or type", k);
+            for (const auto& it : items)
+                if (!matchesFaction(it)) logger::warn("FactionPolitics: war_allowed entry '{}' matches no faction or type", it);
+        }
 
         return true;
     }
@@ -979,9 +996,9 @@ default_relations:
             rj["status"] = GetRelationStatus(r.relationScore);
             rj["trade_active"] = r.tradeActive;
             rj["war_active"] = r.warActive;
-            // fix74: only military-type pairs may be forced into war (prompt Rule 3)
+            // fix74/94: war_allowed pairs only (prompt Rule 3)
             const auto cfgA = GetFaction(r.factionA), cfgB = GetFaction(r.factionB);
-            rj["war_possible"] = cfgA && cfgB && cfgA->type == "military" && cfgB->type == "military";
+            rj["war_possible"] = cfgA && cfgB && WarPossible(*cfgA, *cfgB);
             relationsJson.push_back(rj);
         }
         state["relations"] = relationsJson;
@@ -1965,6 +1982,10 @@ default_relations:
             logger::warn("FactionPolitics::DeclareWar: Invalid faction(s): {} / {}", factionA, factionB);
             return -1;
         }
+        if (!WarPossible(*cfgA, *cfgB)) {
+            logger::info("FactionPolitics::DeclareWar: war not allowed for {} / {}", factionA, factionB);
+            return -1;
+        }
 
         auto* db = PoliticalDB::GetSingleton();
         if (!db->IsReady()) return -1;
@@ -2005,6 +2026,49 @@ default_relations:
                      warId, factionA, factionB, strengthA, strengthB);
 
         WritePoliticalStateFile();
+        return warId;
+    }
+
+    // fix 94: war_allowed matcher. Entry matches "*", or the faction's id / name / type (case-insensitive).
+    bool FactionPolitics::WarPossible(const FactionConfig& a, const FactionConfig& b) const {
+        if (a.id.rfind("PE_", 0) == 0 || b.id.rfind("PE_", 0) == 0) return false;
+        const auto match = [](const std::string& e, const FactionConfig& f) {
+            return e == "*" || ToLower(e) == ToLower(f.id) || ToLower(e) == ToLower(f.name) || ToLower(e) == ToLower(f.type);
+        };
+        std::lock_guard<std::mutex> lock(configMutex_);
+        for (const auto& [key, items] : warAllowed_) {
+            const bool ka = match(key, a), kb = match(key, b);
+            if (!ka && !kb) continue;
+            for (const auto& it : items)
+                if ((ka && match(it, b)) || (kb && match(it, a))) return true;
+        }
+        return false;
+    }
+
+    // fix 94 (live 2026-11-12): the DM ignored Rule 3 on 11 of 11 ticks; declare the lowest-scored eligible Critical pair in code.
+    int FactionPolitics::EnforceWarRule(const PoliticsTickSnapshot& snap) {
+        if (!initialized_.load()) return -1;
+        auto* db = PoliticalDB::GetSingleton();
+        if (!db || !db->IsReady() || static_cast<int>(db->GetActiveWars().size()) >= maxActiveWars_.load()) return -1;
+        const float gameTime = snap.currentGameTime;
+        const int cooldownDays = warDeclarationCooldownDays_.load();
+        const auto relations = db->GetAllRelations();
+        const decltype(relations)::value_type* best = nullptr;
+        for (const auto& r : relations) {
+            if (r.warActive || GetRelationStatus(r.relationScore) != "Critical") continue;
+            const auto a = GetFaction(r.factionA), b = GetFaction(r.factionB);
+            if (!a || !b || !WarPossible(*a, *b)) continue;
+            if (FactionToJsonFromSnapshot(*a, snap).empty() || FactionToJsonFromSnapshot(*b, snap).empty()) continue;  // disbanded
+            const auto last = db->GetMostRecentWar(r.factionA, r.factionB);
+            if (last && last->endTime > 0.0f && gameTime - last->endTime < static_cast<float>(cooldownDays)) continue;
+            if (!best || r.relationScore < best->relationScore) best = &r;
+        }
+        if (!best) return -1;
+        const int warId = DeclareWar(best->factionA, best->factionB, gameTime);
+        if (warId < 0) return -1;
+        RecordPoliticalEvent(best->factionA, best->factionB, "war_declaration",
+            GetFactionDisplayName(best->factionA) + " declared war on " + GetFactionDisplayName(best->factionB) + ".", -15, gameTime);
+        logger::info("Politics: Rule 3 enforced in code — WAR #{} {} vs {} (score {})", warId, best->factionA, best->factionB, best->relationScore);
         return warId;
     }
 
@@ -2666,6 +2730,15 @@ default_relations:
             logger::warn("Politics DM: rejected surrender — no active war between {} and {}", factionA, factionB);
             out["error"] = "surrender requires an active war";
             return out.dump();
+        }
+        // fix 94: refuse a war_declaration for a pair war_allowed does not permit (fix 74 was prompt-only).
+        if (eventType == "war_declaration") {
+            const auto a = GetFaction(factionA), b = GetFaction(factionB);
+            if (!a || !b || !WarPossible(*a, *b)) {
+                logger::warn("Politics DM: rejected war_declaration — war not allowed between {} and {}", factionA, factionB);
+                out["error"] = "war not possible for this pair";
+                return out.dump();
+            }
         }
         // Live 2026-11-12 (#133): the DM sent battle_result with no active war; record it as a skirmish that does not manifest.
         const bool skirmishFromBattle = eventType == "battle_result" && !PoliticalDB::GetSingleton()->GetActiveWar(factionA, factionB);

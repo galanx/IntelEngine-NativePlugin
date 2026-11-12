@@ -35,7 +35,11 @@ FactionPolitics::PoliticsTickSnapshot VanillaSnapshot() {
 #include "PEVanillaSides.inc"
     return snap;
 }
-int FactionPolitics::DeclareWar(const std::string&, const std::string&, float) { throw std::runtime_error("unexpected war reaction"); }
+static bool allowWar = false;  // fix 94: lets EnforceWarRule reach the real StartWar
+int FactionPolitics::DeclareWar(const std::string& a, const std::string& b, float t) {
+    if (allowWar) return PoliticalDB::GetSingleton()->StartWar(a, b, t);
+    throw std::runtime_error("unexpected war reaction");
+}
 bool FactionPolitics::EndWar(const std::string&, const std::string&, const std::string&, float) { throw std::runtime_error("unexpected surrender reaction"); }
 int FactionPolitics::GetActiveWarId(const std::string&, const std::string&) { throw std::runtime_error("unexpected scheduled battle reaction"); }
 std::string FactionPolitics::CheckEventManifestation(const std::string&, const std::string&, const std::string&) { throw std::runtime_error("unexpected manifested reaction"); }
@@ -339,6 +343,46 @@ int main() try {
       db->CleanupFutureEvents(1000.f);
       Require(!warActive("W1","W2") && warActive("W3","W4"), "cleanup resyncs war_active with faction_wars");
       db->EndWar(w2,"W3",1002.f); }
+    // Fix 94: war_allowed matcher, parser, DM refusal and code-enforced Rule 3.
+    { const auto savedAllowed=politics->warAllowed_; const auto savedFactions=politics->factions_; const auto savedRels=politics->defaultRelations_;
+      auto fc=[](const char* id,const char* name,const char* type){ FactionConfig f; f.id=id; f.name=name; f.type=type; return f; };
+      const auto a=fc("A","Alpha Realm","military"), b=fc("B","Bravo","military"), c=fc("C","Charlie","guild"), pe=fc("PE_X","PE X","political");
+      politics->warAllowed_={{"A",{"B"}}};
+      Require(politics->WarPossible(a,b) && politics->WarPossible(b,a) && !politics->WarPossible(a,c), "war_allowed matcher");
+      politics->warAllowed_={{"*",{"*"}}};
+      Require(politics->WarPossible(a,c) && !politics->WarPossible(a,pe) && !politics->WarPossible(pe,c), "war_allowed matcher: * allows all but PE_");
+      politics->warAllowed_={{"military",{"guild"}}};
+      Require(politics->WarPossible(a,c) && politics->WarPossible(c,a) && !politics->WarPossible(a,b), "war_allowed matcher: type");
+      politics->warAllowed_={{"ALPHA realm",{"charlie"}}};
+      Require(politics->WarPossible(a,c) && !politics->WarPossible(b,c), "war_allowed matcher: name, any case");
+      std::ofstream("Data/SKSE/Plugins/SkyrimNet/config/plugins/IntelEngine/factions.yaml") <<
+          "factions:\n  - id: A\n    name: Renamed A\n    leader_names: [Leader]\n  - id: B\n    name: Other\n    leader_names: []\n"
+          "war_allowed:\n  # comment\n  \"A\": [\"B\", 'guild']  # trailing\n  military: [\"*\"]\n  a: [C]\n";
+      using L=std::vector<std::pair<std::string,std::vector<std::string>>>;
+      Require(politics->LoadConfig() && politics->warAllowed_==L{{"A",{"B","guild","C"}},{"military",{"*"}}}, "war_allowed parsed");
+      Config("Renamed A");
+      Require(politics->LoadConfig() && politics->warAllowed_==L{{"ImperialFaction",{"StormcloakFaction"}}}, "war_allowed parsed; missing section = default");
+      // DM refusal: A/B not allowed under the default list; the throwing DeclareWar stub proves it was not reached.
+      const size_t eventsBefore=db->GetRecentEvents(1000).size();
+      json dm={{"should_act",true},{"faction_a","A"},{"faction_b","B"},{"event_type","war_declaration"},{"description","A declares war."},{"relation_delta",-15}};
+      Require(json::parse(politics->ProcessPoliticalDMResponse(dm.dump(),1))["error"]=="war not possible for this pair" &&
+              db->GetRecentEvents(1000).size()==eventsBefore, "DM war_declaration refused when not allowed");
+      // EnforceWarRule
+      politics->factions_=savedFactions; politics->factions_.push_back(fc("C","Charlie","guild")); politics->factionIndex_["C"]=politics->factions_.size()-1;
+      politics->warAllowed_={{"*",{"*"}}};
+      const int relAB=db->GetRelation("A","B"), relAC=db->GetRelation("A","C");
+      db->SetRelation("A","B",-60); db->SetRelation("A","C",-55);
+      auto snap=VanillaSnapshot(); snap.currentGameTime=200.f;
+      allowWar=true;
+      auto dead=snap; FactionPolitics::PoliticsLeaderSnapshot l; l.name="Leader"; l.factionId="A"; l.wasResolved=true; l.confirmedDead=true; dead.leaders.push_back(l);
+      Require(politics->EnforceWarRule(dead)==-1 && !db->GetActiveWar("A","B"), "Rule 3 skips a disbanded faction");
+      const int warId=politics->EnforceWarRule(snap);
+      bool declared=false; for (const auto& e : db->GetRecentEvents(1000)) declared |= e.eventType=="war_declaration" && e.factionA=="A" && e.factionB=="B" && e.gameTime==200.f;
+      Require(warId>=0 && db->GetActiveWar("A","B") && !db->GetActiveWar("A","C") && declared, "Rule 3 enforced in code");
+      db->EndWar(warId,"A",201.f); allowWar=false;
+      db->SetRelation("A","B",relAB); db->SetRelation("A","C",relAC);
+      politics->warAllowed_=savedAllowed; politics->factions_=savedFactions; politics->defaultRelations_=savedRels;
+      politics->factionIndex_.erase("C"); }
     PoliticalEngineBridge::GetSingleton()->active=false;
     Require(!politics->TestPEContext().contains("political_engine") && politics->eligiblePE_.empty(), "inactive PE omits context and clears eligibility");
     PoliticalEngineBridge::GetSingleton()->active=true;

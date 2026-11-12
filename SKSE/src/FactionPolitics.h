@@ -368,6 +368,12 @@ namespace IntelEngine {
          *  Returns war ID or -1 on failure. */
         int DeclareWar(const std::string& factionA, const std::string& factionB, float gameTime);
 
+        /** fix 94: may this pair ever be at war? (war_allowed in factions.yaml; PE_ realms never). Takes configMutex_. */
+        bool WarPossible(const FactionConfig& a, const FactionConfig& b) const;
+
+        /** fix 94: declare the lowest-scored eligible Critical pair (Rule 3) in code. Returns war id or -1. */
+        int EnforceWarRule(const PoliticsTickSnapshot& snap);
+
         /** Process one war tick for all active wars.
          *  Applies morale decay, checks surrender conditions.
          *  Returns JSON string with war updates for Papyrus to dispatch as events. */
@@ -462,6 +468,7 @@ namespace IntelEngine {
         mutable std::mutex configMutex_;
         std::vector<FactionConfig> factions_;
         std::vector<DefaultRelation> defaultRelations_;
+        std::vector<std::pair<std::string, std::vector<std::string>>> warAllowed_;  // fix 94; under configMutex_
         uint64_t factionRevision_ = 0;
         std::string revisionLoadId_;
         std::unordered_map<std::string, bool> disbandedSnapshot_;
