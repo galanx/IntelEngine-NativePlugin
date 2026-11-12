@@ -29,6 +29,9 @@ mare = "Sinmir was loudly criticizing Commander Caius and the Imperial guard at 
 cases = {  # name: (informant, subject, rumor as the LLM wrote it, sender)
     "a) Marianus overheard, bad rumor": ("Marianus Cosma", "Gamlunda", "Marianus Cosma heard that " + huntsman + ".", ""),
     "b) Hulda told by Mikael": ("Hulda", "Sinmir", mare, "Mikael"),
+    "d) self-rumor, was robbed": ("Marianus Cosma", "Nazeem", "Marianus Cosma was robbed by Nazeem at the market.", ""),
+    "e) self-rumor, saw": ("Marianus Cosma", "Nazeem", "Marianus Cosma saw Nazeem steal a sword", ""),
+    "f) self-rumor, overheard": ("Marianus Cosma", "Nazeem", "Marianus Cosma overheard Nazeem boasting", ""),
     "c) sender == subject": ("Hulda", "Sinmir", "Sinmir bragged about the ale.", "Sinmir"),
 }
 data = {}
@@ -92,6 +95,8 @@ with tempfile.TemporaryDirectory(prefix="inf-render-") as d:
     print(out)
     print("rumor-bearing sentence counts (IE-owned: 0800+0801+7200+DirectNarration line):")
     for label, c in data.items():
-        core_text = c["fact"].split(" that ", 1)[-1] if " that " in c["fact"] else c["fact"]
-        sect = out.split("=========== CASE ")[[k for k in data].index(label) + 1]
+        core_text = c["narration"].split(": ", 1)[1]  # the rumor as narrated
+        if core_text.startswith(c["informant"] + " "):  # self-rumor: the fact says "I ..." instead of the name
+            core_text = core_text[len(c["informant"]) + 1:]
+        sect = next(x for x in out.split("=========== CASE ")[1:] if x.startswith(label))  # Inja json iterates sorted
         print(" ", label, "->", sect.count(core_text))
