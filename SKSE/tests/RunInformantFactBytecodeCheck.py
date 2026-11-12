@@ -153,8 +153,8 @@ def main():
             payload = {"storyType": "informant", "npcName": "Marianus Cosma", "narration": "x", "response": arrival.json.dumps(response)}
             vm.invoke("IntelEngine_Core", "OnDashboardDispatchStory", ("", arrival.json.dumps(payload), 0.0, None))
         topic = vm.storage.get(((vm.target if automatic else vm.agent), "Intel_ArrivalTopic"))
-        require(topic == "something they saw", f"fix69d self-subject topic ({automatic}): {topic!r}")
-        print("  [%s] self-subject topic=%r" % ("dm" if automatic else "director", topic))
+        require(not topic, f"fix69e self-subject must store no topic ({automatic}): {topic!r}")
+        print("  [%s] self-subject topic=%r (none expected)" % ("dm" if automatic else "director", topic))
 
     # Arrival: IE-built line is narrated as-is and stored for the "Why I came to find" bio section.
     vm = FactVM(({}, core, story), pathlib.Path("unused"))
