@@ -126,6 +126,10 @@ def main():
                 return json.loads(args[0]).get(args[1], "")
             if method in ("ResolveStoryCandidate", "ResolveDirectorActor"):
                 return self.actors.get(args[0])
+            if method == "GetConfigFloat":
+                return 800.0 if args[1] == "interaction.maxDistance" else 2.0
+            if method == "Is3DLoaded":
+                return True  # fix66: scene is in SkyrimNet range (1000 <= 0.85*800*2)
             if method == "GetDistance":
                 return 1000.0
             if method == "IsPlayerTeammate":
