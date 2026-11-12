@@ -172,6 +172,12 @@ class VM:
 
     def external(self, method, args, script):
         if method == "IsDashboardOpen": return False
+        if method == "GetLength": return len(args[0])
+        if method == "Find": return args[0].find(args[1], args[2] if len(args) > 2 else 0)
+        if method == "GetNthChar": return args[0][args[1]]
+        if method == "IsLetter": return args[0].isalpha()
+        if method == "Substring":  # length 0/absent = rest of string, as in Papyrus
+            return args[0][args[1]:] if len(args) < 3 or not args[2] else args[0][args[1]:args[1] + args[2]]
         if method == "StoryLoadRecovered":
             if args[0]: self.story_recovered = True
             return self.story_recovered
@@ -367,12 +373,6 @@ class DirectorVM(VM):
     def external(self, method, args, script):
         if method == "GetActorHoldName": return "Whiterun"
         if method == "GetDistance" and hasattr(self, "distance"): return self.distance
-        if method == "GetLength": return len(args[0])
-        if method == "Find": return args[0].find(args[1], args[2] if len(args) > 2 else 0)
-        if method == "GetNthChar": return args[0][args[1]]
-        if method == "IsLetter": return args[0].isalpha()
-        if method == "Substring":  # length 0/absent = rest of string, as in Papyrus
-            return args[0][args[1]:] if len(args) < 3 or not args[2] else args[0][args[1]:args[1] + args[2]]
         if method == "StoryResponseShouldAct": return json.loads(args[0]).get("should_act", False)
         if method == "ResolveStoryCandidate": return self.target
         if method in ("IsHighStatusNPC", "IsJarl"): return False

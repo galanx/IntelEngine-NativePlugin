@@ -175,6 +175,16 @@ def main():
         require(got == want, f"fix72 lead ({informant!r}, {rumor!r}): {got!r} != {want!r}")
         print("  [pex lead] %r + %r -> %r" % (informant, rumor, got))
 
+    # fix86: interaction summary never doubles the first NPC's name nor re-adds a partner the text already names.
+    A = arrival.Actor
+    for n1, text, n2, want in (("Hulda", "Hulda told Uthgerd about Sinmir", "Uthgerd the Unbroken", "Hulda told Uthgerd about Sinmir"),
+                               ("Ollfar [Whiterun Guard]", "Ollfar told Aldis about Uthgerd", "Aldis [Whiterun Guard]", "Ollfar told Aldis about Uthgerd"),
+                               ("Sinmir", "Sinmir confronted Mikael, demanding an apology.", "Mikael", "Sinmir confronted Mikael, demanding an apology."),
+                               ("Oengul War-Anvil", "lectured Hermir on steel", "Hermir Strong-Heart", "Oengul War-Anvil lectured Hermir on steel"),
+                               ("Lucia", "argued over a debt.", "Maulkyr [Whiterun Guard]", "Lucia argued over a debt with Maulkyr [Whiterun Guard]")):
+        got = FactVM(({}, core, story), pathlib.Path("unused")).invoke("IntelEngine_StoryEngine", "BuildInteractionSummary", (A(n1, "c"), text, A(n2, "c")))
+        require(got == want, f"fix86 summary ({n1!r}, {text!r}, {n2!r}): {got!r} != {want!r}")
+        print("  [pex summary] %r" % got)
     # fix69d: subject == informant (or empty) -> generic topic; both entrypoints.
     for automatic in (False, True):
         vm = FactVM(({}, core, story), pathlib.Path("unused"))
