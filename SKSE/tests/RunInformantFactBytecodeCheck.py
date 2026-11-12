@@ -174,6 +174,12 @@ def main():
         got = FactVM(({}, core, story), pathlib.Path("unused")).invoke("IntelEngine_Core", "InformantLead", (informant, rumor, sender))
         require(got == want, f"fix72 lead ({informant!r}, {rumor!r}): {got!r} != {want!r}")
         print("  [pex lead] %r + %r -> %r" % (informant, rumor, got))
+    # fix96: social gossip gets the Subject prefix unless it names the Subject as a whole word (live: "Ria" inside "Victoria").
+    for subject, gossip, want in (("Ria", "Victoria stole a ring", "Ria Victoria stole a ring"), ("Ria", "stole a ring", "Ria stole a ring"),
+                                  ("Ria", "Ria stole a ring", "Ria stole a ring")):
+        got = FactVM(({}, core, story), pathlib.Path("unused")).invoke("IntelEngine_Core", "InformantRumor", (subject, "", gossip))
+        require(got == want, f"fix96 gossip ({subject!r}, {gossip!r}): {got!r} != {want!r}")
+        print("  [pex gossip] %r" % got)
 
     # fix86: interaction summary never doubles the first NPC's name nor re-adds a partner the text already names.
     A = arrival.Actor
