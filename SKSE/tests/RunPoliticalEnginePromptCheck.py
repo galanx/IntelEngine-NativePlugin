@@ -71,6 +71,19 @@ int main() { try {
     who="Elenwen"; where="Solitude";
     auto elenwen=env.render(npc,data);
     Require(elenwen.find("leader of Thalmor")!=std::string::npos && elenwen.find("SPY-NEWS")!=std::string::npos && elenwen.find("EMBARGO-NEWS")!=std::string::npos,"party leader hears secret and public");
+    // fix68: same type + same unordered pair shows once (newest text, count); other types and pe_* stay separate
+    political["recent_events"]=json::array({
+        {{"type","embargo"},{"faction_a","ThalmorFaction"},{"faction_b","SilverBloodFamily"},{"description","EMB-OLD"},{"when","yesterday"}},
+        {{"type","embargo"},{"faction_a","SilverBloodFamily"},{"faction_b","ThalmorFaction"},{"description","EMB-MID"},{"when","earlier today"}},
+        {{"type","espionage"},{"faction_a","ThalmorFaction"},{"faction_b","SilverBloodFamily"},{"description","SPY-ONE"},{"when","earlier today"}},
+        {{"type","pe_visit"},{"faction_a",""},{"description","PE-SAME"}},{{"type","pe_visit"},{"faction_a",""},{"description","PE-SAME"}},
+        {{"type","embargo"},{"faction_a","ThalmorFaction"},{"faction_b","SilverBloodFamily"},{"description","EMB-NEW"},{"when","just now"}}});
+    auto merged=env.render(npc,data);
+    Require(merged.find("EMB-OLD")==std::string::npos && merged.find("EMB-MID")==std::string::npos,"older repeats hidden");
+    Require(merged.find("- (just now) EMB-NEW (reported 3 times)\n")!=std::string::npos,"newest repeat with count");
+    Require(merged.find("SPY-ONE\n")!=std::string::npos && merged.find("SPY-ONE (reported")==std::string::npos,"single event has no count");
+    Require(merged.find("PE-SAME")!=merged.rfind("PE-SAME"),"pe_* events stay unmerged");
+    std::cout << merged << "\n";
     json dm={{"politicalContext",json{{"recent_events",json::array()}}.dump(2)},
         {"tickHours","6"},{"maxActiveWars","2"},{"maxRelationChange","15"},{"peActive",false}};
     const auto dmTemplate=Read("current1.prompt"), oldDm=Read("baseline1.prompt");
@@ -83,7 +96,7 @@ int main() { try {
             env.render(dmTemplate,dm).find("reacts_to")!=std::string::npos, "active DM reaction rule");
     dm["politicalContext"]="";
     Require(env.render(dmTemplate,dm)==env.render(oldDm,dm), "empty context sentinel remains unchanged");
-    std::cout << "PASS real Inja: inactive NPC prompt byte-identical; fix64 faction/visibility rules hold\n";
+    std::cout << "PASS real Inja: inactive NPC prompt byte-identical; fix64 faction/visibility rules hold; fix68 repeats merge\n";
 } catch(const std::exception& e) { std::cerr<<e.what()<<'\n'; return 1; } }
 ''')
     subprocess.run(["cl","/nologo","/EHsc","/std:c++latest","/I"+str(pathlib.Path(sys.argv[1])/"include"),
