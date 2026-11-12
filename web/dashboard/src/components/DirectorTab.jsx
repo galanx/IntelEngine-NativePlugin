@@ -148,13 +148,13 @@ const STORY_TYPE_FIELDS = {
   informant: { example: 'e.g. heard from Sven that Camilla had vanished', hint: 'Approaches you with grounded gossip about another NPC.', narration: 'What the gossip concerns and who told them, or what they witnessed.', fields: [
     { key: 'subject', label: 'Subject NPC', type: 'text', required: true,
       placeholder: 'e.g. Camilla Valerius',
-      hint: 'Required. The NPC the rumour is about; their name must appear in the Rumor.' },
+      hint: 'Required. The NPC the rumour is about; their name must appear in the Rumor.', half: true },
+    { key: 'sender', label: 'Source', type: 'text',
+      placeholder: 'e.g. Sven',
+      hint: 'Who told the informant (may be the Subject); empty = witnessed firsthand.', half: true },
     { key: 'rumor', label: 'Rumor', type: 'text', required: true,
       placeholder: 'e.g. Camilla Valerius was seen arguing with Adrianne over an unpaid debt',
       hint: 'Required. One full past-tense sentence that names the Subject. Must start with a name, not a verb or an -ing word.' },
-    { key: 'sender', label: 'Source', type: 'text',
-      placeholder: 'e.g. Sven',
-      hint: 'Who told the informant (may be the Subject). Fill it whenever the narration names a teller; empty = witnessed firsthand.' },
   ] },
   road_encounter: { example: 'e.g. set out to sell pelts in Helgen', hint: 'Appears on the road ahead of you, travelling to Destination on their own errand (outdoors only).', narration: 'Why they are travelling, e.g. set out to sell pelts in Helgen.', fields: [
     { key: 'destination', label: 'Destination', type: 'text', required: true,
@@ -405,7 +405,7 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
         next[key] = value;
       }
       next[typeKey] = nextType;
-      if (form === 'story') { setStoryNpc(next.npcName); setStoryType(next.storyType); setStoryNarration(next.narration); setStoryFields(Object.fromEntries(Object.keys(allowed).filter(k => !['npcName','storyType','narration'].includes(k)).map(k => [k,next[k]]))); }
+      if (form === 'story') { setStoryNpc(next.npcName); setStoryType(next.storyType); setStoryNarration(next.narration ?? ''); setStoryFields(Object.fromEntries(Object.keys(allowed).filter(k => !['npcName','storyType','narration'].includes(k)).map(k => [k,next[k]]))); }
       if (form === 'social') { setSocialNpc1(next.npc1Name); setSocialNpc2(next.npc2Name); setSocialType(next.socialType); setSocialNarration(next.narration); setSocialFields(Object.fromEntries(Object.keys(allowed).filter(k => !['npc1Name','npc2Name','socialType','narration'].includes(k)).map(k => [k,next[k]]))); }
       setTouched(t=>({...t,[typeKey]:t[typeKey] || 'generated'}));
       if (form === 'political') { setPolFactionA(next.factionA); setPolFactionB(next.factionB); setPolEventType(next.eventType); setPolDescription(next.description); setPolDelta(next.relationDelta); }
@@ -722,9 +722,11 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
           />
           </Field>}
 
-          {/* Type-specific fields */}
+          {/* Type-specific fields; `half` fields share a row */}
+          <div className="grid grid-cols-2 gap-x-2">
           {currentFields.map(f => (
-            <Field key={f.key} label={f.label} required={f.required}>
+            <div key={f.key} className={f.half ? '' : 'col-span-2'}>
+            <Field label={f.label} required={f.required}>
               {f.type === 'select' ? (
                 <Select aria-label={f.label}
                   value={storyFields[f.key] || ''}
@@ -750,7 +752,9 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
                 <span className="director-hint">{f.hint}</span>
               )}
             </Field>
+            </div>
           ))}
+          </div>
 
           <button
             onClick={handleDispatchStory}
