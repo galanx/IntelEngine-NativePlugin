@@ -22,6 +22,8 @@ with tempfile.TemporaryDirectory(prefix="pe-prompts-") as directory:
                 b"- **Generate battle_result events** for active wars (subject to Rule 8: never two in a row for one war; never reuse the previous battle's `battle_location` for the same war) ")
             data = data.replace(b"- **Low morale triggers surrender**",  # fix48 adds the per-war battle flag rule
                 b"- **No back-to-back battles** \xe2\x80\x94 never pick `battle_result` for an `active_wars` entry whose `battle_result_allowed_now` starts with \"no\"; choose another event instead.\n- **Low morale triggers surrender**")
+            data = data.replace(b"you MUST pick a DIFFERENT pair this tick.",  # fix71 states the C++ repeat rule
+                b"you MUST pick a DIFFERENT pair this tick. Also never propose the same event_type for the same pair as any of the last 3 recent_events: the engine rejects it and the tick is wasted.")
         (work / f"baseline{i}.prompt").write_bytes(data)
     (work / "check.cpp").write_text(r'''
 #include <inja/inja.hpp>
