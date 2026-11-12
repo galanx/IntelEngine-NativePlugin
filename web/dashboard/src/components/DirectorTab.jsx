@@ -427,24 +427,30 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
     const story = form === 'story', social = form === 'social', action = form === 'action';
     const enumTypes = story ? DIRECTOR_STORY_TYPES : social ? SOCIAL_TYPES : action ? executableActions.filter(a => !['CancelCurrentTask','ChangeSpeed'].includes(a.name)).map(a => ({key:a.name})) : POLITICAL_EVENT_TYPES;
     const typeKey = action ? 'actionName' : story ? 'storyType' : social ? 'socialType' : 'eventType';
+    // fix88: a type left on (auto) is picked here, never by the LLM
+    const pool = story ? DIRECTOR_STORY_TYPES : social ? SOCIAL_TYPES : POLITICAL_EVENT_TYPES.filter(t => !['war_declaration','surrender','peace_offer'].includes(t.key)); // war-state types: manual only
+    const pick = () => pool[Math.floor(Math.random() * pool.length)].key;
+    const sType = story && !touched.storyType ? pick() : storyType, soType = social && !touched.socialType ? pick() : socialType;
+    const pType = !story && !social && !action ? (polEventType || pick()) : polEventType;
+    if (story && sType !== storyType) setStoryType(sType); if (social && soType !== socialType) setSocialType(soType); if (pType !== polEventType) setPolEventType(pType);
     let actionNpcName = nearby.find(n => n.id === actionNpc)?.name || '';
     if (action && (actionQuery || (actionNpc && !actionNpcName))) { setGenerateError('Pick a nearby NPC or clear the Action NPC field.'); return; }
     let actionName = selectedAction;
     if (action && !actionNpcName) { const choices = nearby.filter(n => n.name.toLowerCase() !== String(actionParams.targetName || '').trim().toLowerCase()); if (choices.length) { const npc = choices[Math.floor(Math.random() * choices.length)]; actionNpcName = npc.name; setActionNpc(npc.id); } }
     if (action && !actionName && enumTypes.length) { actionName = enumTypes[Math.floor(Math.random() * enumTypes.length)].key; setSelectedAction(actionName); }
     const reasonOnly = action && ['CancelCurrentTask','ChangeSpeed'].includes(actionName);
-    const defs = story ? (touched.storyType ? currentFields : []) : social ? (touched.socialType ? currentSocialFields : []) : action ? (actionFieldDefs[actionName] || []) : [];
+    const defs = story ? (STORY_TYPE_FIELDS[sType]?.fields || []) : social ? (SOCIAL_TYPE_FIELDS[soType] || []) : action ? (actionFieldDefs[actionName] || []) : [];
     let params = actionParams;
     if (action && defs.some(f => f.key === 'targetName') && !String(params.targetName || '').trim()) {
       const choices = [...new Set(nearby.map(n => n.name))].filter(name => name.toLowerCase() !== actionNpcName.toLowerCase());
       if (choices.length) { params = { ...params, targetName:choices[Math.floor(Math.random() * choices.length)] }; setActionParams(params); }
     }
-    let fields = story ? { npcName:storyNpc, storyType:touched.storyType ? storyType : '', narration:storyNarration, ...storyFields } :
-      social ? { npc1Name:socialNpc1, npc2Name:socialNpc2, socialType:touched.socialType ? socialType : '', narration:socialNarration, ...socialFields } :
+    let fields = story ? { npcName:storyNpc, storyType:sType, narration:storyNarration, ...storyFields } :
+      social ? { npc1Name:socialNpc1, npc2Name:socialNpc2, socialType:soType, narration:socialNarration, ...socialFields } :
         action ? { npcName:actionNpcName, actionName, ...params } :
-          { factionA:polFactionA, factionB:polFactionB, eventType:polEventType, description:polDescription, relationDelta:polDelta };
+          { factionA:polFactionA, factionB:polFactionB, eventType:pType, description:polDescription, relationDelta:polDelta };
     if (reasonOnly) fields = { npcName:fields.npcName, actionName, reason:actionParams.reason || '' };
-    if (story && storyType === 'informant') delete fields.narration; // IE writes the informant line itself
+    if (story && sType === 'informant') delete fields.narration; // IE writes the informant line itself
     if (action && !reasonOnly) fields.reason ??= ''; if (!reasonOnly) for (const f of defs) fields[f.key] ??= '';
     const npcPool = [...new Set(nearby.map(n => n.name))];
     const requiredNpcKeys = [...(story ? ['npcName'] : social ? ['npc1Name','npc2Name'] : []), ...defs.filter(f => f.required && ['npcName','npc1Name','npc2Name','subject'].includes(f.key)).map(f => f.key)];
@@ -459,7 +465,7 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
     const schema = Object.fromEntries(Object.entries(draft).filter(([k])=>!defs.some(f=>f.key===k)).map(([k,v]) => [k, { type: typeof v === 'number' ? 'number' : k === typeKey ? 'select' : 'text',
       required: (!reasonOnly || (action && k === 'reason')) && k !== 'relationDelta' && (k !== 'reason' || action),
       ...(k === typeKey ? { options:reasonOnly ? [actionName] : enumTypes.map(x=>x.key) } : {}) }]));
-    if (story && storyGuidance && schema.narration) schema.narration.hint = `${storyGuidance.hint} ${storyGuidance.narration}`;
+    const g = story && STORY_TYPE_FIELDS[sType]; if (g && schema.narration) schema.narration.hint = `${g.hint} ${g.narration}`;
     const variants = Object.fromEntries(enumTypes.map(t => [t.key, Object.fromEntries((story ? (STORY_TYPE_FIELDS[t.key]?.fields||[]) : social ? (SOCIAL_TYPE_FIELDS[t.key]||[]) : action ? actionFieldDefs[t.key] : []).map(f=>[f.key,Object.fromEntries(Object.entries(f).filter(([key])=>key!=='placeholder').map(([key,value])=>[key,key === 'options' ? value.map(o => typeof o === 'string' ? o : o.value) : key === 'type' && value === 'faction' ? 'text' : value]))]))]));
     for (const definition of [...Object.values(schema), ...Object.values(variants).flatMap(fields => Object.values(fields))]) for (const key of ['hint','example']) if (definition[key]) definition[key] = stripExamples(definition[key]);
     const id = String(++requestId.current);
