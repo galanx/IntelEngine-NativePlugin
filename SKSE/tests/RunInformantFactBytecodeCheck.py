@@ -50,11 +50,12 @@ def main():
     def expected_fact(subject, rumor, gossip, sender, informant):
         untagged = subject.split(" [", 1)[0]
         text = rumor or (gossip if contains(gossip, untagged) else subject + " " + gossip)
+        text = text[:-1] if text.endswith(".") else text  # trailing period dropped
         word = lambda n: r"(?<![A-Za-z])" + re.escape(n) + r"(?![A-Za-z])"  # whole word, as Papyrus ReplaceText
         text = re.sub(word(informant + "'s"), "my", text, flags=re.I)
         text = re.sub(word(informant), "me", text, flags=re.I)
         if not sender:
-            return "witnessed that " + text
+            return "saw that " + text
         if sender == untagged:
             return sender + " told me that " + text
         return "heard from " + sender + " that " + text
@@ -90,12 +91,45 @@ def main():
                     recipient = vm.agent
                 expected = expected_fact(subject, rumor, gossip, sender, informant)
                 text = rumor or (gossip if contains(gossip, subject.split(" [", 1)[0]) else subject + " " + gossip)
-                line = (informant + " came to tell Player what " + sender + " told them: " + text) if sender                     else informant + " came to tell Player what they witnessed: " + text
+                text = text[:-1] if text.endswith(".") else text
+                line = (informant + " came to tell Player what " + sender + " told them: " + text) if sender                     else informant + " came to tell Player what they saw: " + text
                 facts = [e[1][1] for e in vm.effects if e[0] == "InjectFact"]  # nothing may land on the subject
                 owners = {id(e[1][0]) for e in vm.effects if e[0] == "InjectFact"}
                 if facts != [expected] or owners != {id(recipient)} or vm.dispatched != line:
                     failures.append((automatic, sender, subject, rumor, gossip, facts, expected, vm.dispatched, line))
     require(not failures, f"informant entrypoint mismatch: {failures!r}")
+
+    # fix69: informant lead stripped from the rumor, exact stored fact + narration, both entry points.
+    huntsman = "Gamlunda was seen slipping a folded note to a stranger by the Drunken Huntsman"
+    mare = "Sinmir was loudly criticizing Commander Caius and the Imperial guard at The Bannered Mare"
+    exact = [  # (informant, subject, rumor, sender, fact, narration)
+        ("Marianus Cosma", "Gamlunda", "Marianus Cosma heard that " + huntsman + ".", "",
+         "saw that " + huntsman, "Marianus Cosma came to tell Player what they saw: " + huntsman),
+        ("Marianus Cosma", "Gamlunda", "marianus cosma OVERHEARD " + huntsman, "",
+         "saw that " + huntsman, "Marianus Cosma came to tell Player what they saw: " + huntsman),
+        ("Hulda", "Sinmir", "Hulda heard from Mikael that " + mare, "",
+         "heard from Mikael that " + mare, "Hulda came to tell Player what Mikael told them: " + mare),
+        ("Hulda", "Sinmir", "Hulda was told that " + mare, "Mikael",
+         "heard from Mikael that " + mare, "Hulda came to tell Player what Mikael told them: " + mare),
+        ("Hulda", "Sinmir", "Sinmir bragged about the ale.", "Sinmir",
+         "Sinmir told me that Sinmir bragged about the ale", "Hulda came to tell Player what Sinmir told them: Sinmir bragged about the ale"),
+    ]
+    for automatic in (False, True):
+        for informant, subject, rumor, sender, fact, narration in exact:
+            vm = FactVM(({}, core, story), pathlib.Path("unused"))
+            vm.target.name = vm.agent.name = informant
+            response = {"should_act": True, "type": "informant", "npc": informant, "narration": "Gossip from town",
+                        "subject": subject, "rumor": rumor, "gossip": "", "sender": sender}
+            if automatic:
+                vm.invoke("IntelEngine_StoryEngine", "OnDungeonMasterResponse", (arrival.json.dumps(response), 1))
+            else:
+                payload = {"storyType": "informant", "npcName": informant, "narration": "Gossip from town",
+                           "response": arrival.json.dumps(response)}
+                vm.invoke("IntelEngine_Core", "OnDashboardDispatchStory", ("", arrival.json.dumps(payload), 0.0, None))
+            facts = [e[1][1] for e in vm.effects if e[0] == "InjectFact"]
+            require(facts == [fact] and vm.dispatched == narration,
+                    f"fix69 exact mismatch ({automatic}, {rumor!r}): {facts!r} / {vm.dispatched!r}")
+            print("  [%s] fact=%r | narration=%r" % ("dm" if automatic else "director", facts[0], vm.dispatched))
 
     # Arrival: IE-built line is narrated as-is and stored for the "Why I came to find" bio section.
     vm = FactVM(({}, core, story), pathlib.Path("unused"))
