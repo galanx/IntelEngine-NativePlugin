@@ -803,7 +803,8 @@ def run_replacement_checks(files, history):
             payload = {"npc1Name": vm.target.name if mode == "different" else vm.agent.name, "npc2Name": vm.agent.name if mode == "different" else vm.target.name, "socialType": story_type} if social else {"npcName": vm.target.name if mode == "different" else vm.agent.name, "storyType": story_type}
             response = dict.fromkeys(("sender", "subject", "gossip", "destination", "msgContent", "meetTime", "questLocation", "enemyType", "questSubType", "victimName", "itemName", "itemDesc"), "")
             response.update({"replaceGeneration": "0" if mode == "stale" else "1"})
-            if story_type == "informant": response.update({"subject": vm.target.name, "gossip": "Knows the way"})
+            # fix73: informants may have an empty narration (IE writes the line); their invalid input is an empty rumour
+            if story_type == "informant": response.update({"subject": vm.target.name, "gossip": "" if mode == "invalid" else "Knows the way"})
             payload.update({"narration": "" if mode == "invalid" else "Replacement", "response": json.dumps(response), "replaceGeneration": response["replaceGeneration"]})
             vm.invoke("IntelEngine_Core", "OnDashboardDispatchNpcSocial" if social else "OnDashboardDispatchStory", ("", json.dumps(payload), 0.0, None))
             if mode in ("invalid", "stale"):
