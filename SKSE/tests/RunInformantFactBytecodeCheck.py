@@ -32,29 +32,47 @@ def main():
     core, story = disassemble("IntelEngine_Core"), disassemble("IntelEngine_StoryEngine")
 
     class FactVM(arrival.DirectorVM):
+        dispatched = None
         def invoke(self, script, name, args=()):
             if name == "DispatchToTarget":
+                self.dispatched = args[2]
                 return True
             return super().invoke(script, name, args)
         def external(self, method, args, script):
-            if method == "Substring":
-                return args[0][args[1]:args[1] + args[2]]
+            if method == "Find":  # Papyrus Find is case-insensitive
+                return args[0].lower().find(args[1].lower(), args[2] if len(args) > 2 else 0)
             return super().external(method, args, script)
 
+    def contains(text, name):
+        return name.lower() in text.lower()
+
+    def expected_fact(subject, rumor, gossip, sender, informant):
+        untagged = subject.split(" [", 1)[0]
+        text = rumor or (gossip if contains(gossip, untagged) else subject + " " + gossip)
+        text = text.replace(informant + "'s", "my").replace(informant, "me")
+        if not sender:
+            return "witnessed that " + text
+        if sender == untagged:
+            return sender + " told me that " + text
+        return "heard from " + sender + " that " + text
+
+    cases = [  # (subject, rumor, gossip) -- rumor-only, legacy gossip-only
+        ("Sinmir", "Mikael mocked Sinmir's views on the city's rot", ""),
+        ("Sinmir [the skald]", "Sinmir argued with Hulda about Hulda's town", ""),
+        ("Snilf", "", "Snilf was seen near the western gate."),
+        ("Snilf", "", "was seen near the western gate."),
+        ("Snilf", "", "At the western gate, Snilf was seen."),
+        ("Snilf [the alchemist]", "", "was seen near the western gate."),
+    ]
     failures = []
     for automatic in (False, True):
-        for sender, lead in (("Mira", "heard from Mira that "), ("", "witnessed that ")):
-            for subject, gossip in (("Snilf", "Snilf was seen near the western gate."),
-                                    ("Snilf", "was seen near the western gate."),
-                                    ("Snilf", "At the western gate, Snilf was seen."),
-                                    ("Snilf", "snilf was seen near the western gate."),
-                                    ("Snilf [the alchemist]", "Snilf was seen near the western gate."),
-                                    ("Snilf [the alchemist]", "was seen near the western gate.")):
+        for sender in ("Mira", "", "Sinmir", "Snilf"):
+            for subject, rumor, gossip in cases:
                 vm = FactVM(({}, core, story), pathlib.Path("unused"))
-                vm.target.name = "Snilf"
-                response = {"should_act": True, "type": "informant", "npc": vm.target.name,
+                vm.target.name = vm.agent.name = "Hulda"
+                response = {"should_act": True, "type": "informant", "npc": "Hulda",
                             "narration": "Gossip from town", "subject": subject,
-                            "gossip": gossip, "sender": sender}
+                            "rumor": rumor, "gossip": gossip, "sender": sender}
                 if automatic:
                     vm.invoke("IntelEngine_StoryEngine", "OnDungeonMasterResponse",
                               (arrival.json.dumps(response), 1))
@@ -66,14 +84,26 @@ def main():
                     vm.invoke("IntelEngine_Core", "OnDashboardDispatchStory",
                               ("", arrival.json.dumps(payload), 0.0, None))
                     recipient = vm.agent
-                untagged_subject = subject.split(" [", 1)[0]
-                expected = lead + (gossip if untagged_subject in gossip else subject + " " + gossip)
-                facts = [e[1][1] for e in vm.effects if e[0] == "InjectFact" and e[1][0] is recipient]
-                subject_fact = [gossip] if subject == "Snilf" else []
-                if facts != (subject_fact + [expected] if automatic else [expected]):
-                    failures.append((automatic, sender, subject, gossip, facts, expected))
-    require(not failures, f"informant entrypoint fact mismatch: {failures!r}")
-    print("actual PEX informant facts: both dispatch entrypoints, name/no-name/case, sender/no-sender PASS")
+                expected = expected_fact(subject, rumor, gossip, sender, "Hulda")
+                text = rumor or (gossip if contains(gossip, subject.split(" [", 1)[0]) else subject + " " + gossip)
+                line = ("Hulda came to tell Player what " + sender + " told them: " + text) if sender                     else "Hulda came to tell Player what they witnessed: " + text
+                facts = [e[1][1] for e in vm.effects if e[0] == "InjectFact"]  # nothing may land on the subject
+                owners = {id(e[1][0]) for e in vm.effects if e[0] == "InjectFact"}
+                if facts != [expected] or owners != {id(recipient)} or vm.dispatched != line:
+                    failures.append((automatic, sender, subject, rumor, gossip, facts, expected, vm.dispatched, line))
+    require(not failures, f"informant entrypoint mismatch: {failures!r}")
+
+    # Arrival: IE-built line is narrated as-is and stored for the "Why I came to find" bio section.
+    vm = FactVM(({}, core, story), pathlib.Path("unused"))
+    line = "Hulda came to tell Player what Mira told them: Sinmir mocked Mikael"
+    vm.properties.update({"IsActive": True, "ArrivalHandling": False, "ActiveStoryNPC": vm.target,
+                          "ActiveStoryType": "informant", "ActiveNarration": line, "DispatchGeneration": 1})
+    vm.invoke("IntelEngine_StoryEngine", "OnStoryNPCArrived")
+    narrated = [e[1][0] for e in vm.effects if e[0] == "SendTaskNarration"]
+    require(narrated == [line], f"arrival narration mismatch: {narrated!r}")
+    require(vm.storage.get((vm.target, "Intel_ArrivalPurpose")) == line, "arrival purpose not stored for the bio section")
+    print("actual PEX informant: both dispatch entrypoints, rumor/legacy gossip, tagged subject, sender/none/==subject, "
+          "'me'/'my' substitution, IE-built arrival line, no subject injection, arrival purpose stored PASS")
 
 
 if __name__ == "__main__":
