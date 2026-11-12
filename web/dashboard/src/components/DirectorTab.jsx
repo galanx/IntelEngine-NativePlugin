@@ -146,7 +146,7 @@ const WAIT_OPTIONS = [
 const STORY_TYPE_FIELDS = {
   seek_player: { example: 'e.g. set out to repay an old debt', hint: 'Travels to find you for a personal reason.', narration: 'Why they sought the named character (past tense, under 120 characters); do not claim the character’s location.' },
   informant: { example: 'e.g. heard from Sven that Camilla had vanished', hint: 'Approaches you with grounded gossip about another NPC.', narration: 'What the gossip concerns and who told them, or what they witnessed.', fields: [
-    { key: 'subject', label: 'Subject NPC', type: 'text', required: true,
+    { key: 'subject', label: 'Subject', type: 'text', required: true,
       placeholder: 'e.g. Camilla Valerius',
       hint: 'Required. The NPC the rumour is about; their name must appear in the Rumor.', half: true },
     { key: 'sender', label: 'Source', type: 'text',
@@ -738,7 +738,7 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
                     <option key={o} value={o}>{o}</option>
                   ))}
                 </Select>
-              ) : ['subject','sender','victimName'].includes(f.key) ? <FactionInput options={f.key === 'sender' && ['ambush','stalker'].includes(storyType) ? hirerOptions : npcOptions} aria-label={f.label} value={storyFields[f.key] || ''} onChange={e => { setTouched(t=>({...t,[f.key]:true})); setStoryFields(prev => ({...prev,[f.key]:e.target.value})); }} placeholder={f.placeholder} /> : (
+              ) : ['subject','sender','victimName'].includes(f.key) ? <FactionInput options={(f.key === 'sender' && ['ambush','stalker','informant'].includes(storyType)) || (f.key === 'subject' && storyType === 'informant') ? hirerOptions : npcOptions} aria-label={f.label} value={storyFields[f.key] || ''} onChange={e => { setTouched(t=>({...t,[f.key]:true})); setStoryFields(prev => ({...prev,[f.key]:e.target.value})); }} placeholder={f.placeholder} /> : (
                 <input
                   type="text"
                   value={storyFields[f.key] || ''}
