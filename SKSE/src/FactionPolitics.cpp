@@ -8,6 +8,7 @@
 
 #include "FactionPolitics.h"
 #include "FactionPairValidation.h"
+#include "InformantRumorValidation.h"
 #include "FactionConfigLoader.h"
 #include <filesystem>
 #include <fstream>
@@ -2487,6 +2488,20 @@ default_relations:
                     out["reason"] = "quest missing questLocation or enemyType";
                     return out.dump();
                 }
+            }
+        }
+
+        // Informant: the rumor is one checked sentence (legacy gossip phrase accepted when "rumor" is absent).
+        if (storyType == "informant") {
+            const std::string subject = resp.value("subject", "");
+            const std::string rumor = resp.value("rumor", "");
+            const std::string gossip = resp.value("gossip", "");
+            const std::string why = InformantRumorRejection(subject, rumor, gossip);
+            if (!why.empty()) {
+                logger::debug("FactionPolitics: informant rejected ({}): subject='{}' rumor='{}' gossip='{}' sender='{}'",
+                              why, subject, rumor, gossip, resp.value("sender", ""));
+                out["reason"] = "informant " + why;
+                return out.dump();
             }
         }
 
