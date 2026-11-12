@@ -254,6 +254,8 @@ def main():
     require(not events_of(director) and not any(e[0] == "InjectFact" for e in director.effects) and
             director.properties["NPCSocialTraveler"] is director.agent,
             "Director social travel did not defer facts/event until arrival")
+    require([e[1][5] for e in director.effects if e[0] == "AddNPCSocialLog"] == ["Courier: found a map | Recipient: likes ale"],
+            "Director npc_interaction log lost its detail")
     director.invoke("IntelEngine_StoryEngine", "OnNPCSocialArrived")
     require(len(events_of(director)) == 1 and
             json.loads(events_of(director)[0][1]) == {"line": "Courier met with Recipient"},
