@@ -1079,7 +1079,7 @@ namespace IntelEngine {
             std::string type = j.value("storyType", "");
             std::string narration = j.value("narration", "");
             std::string replaceGeneration = j.value("replaceGeneration", "-1");
-            if (npcName.empty() || type.empty() || narration.empty()) return;
+            if (npcName.empty() || type.empty() || (narration.empty() && type != "informant")) return;
         
             // Build response JSON with proper escaping (all optional fields default to "")
             nlohmann::json response;

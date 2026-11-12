@@ -141,6 +141,22 @@ def main():
             require(topic == subject, f"fix69d stored topic ({automatic}, {rumor!r}): {topic!r} != {subject!r}")
             print("  [%s] fact=%r | narration=%r | topic=%r" % ("dm" if automatic else "director", facts[0], vm.dispatched, topic))
 
+    # fix73: Director informant has no narration field; empty narration dispatches IE's line, other types still refuse.
+    vm = FactVM(({}, core, story), pathlib.Path("unused"))
+    vm.target.name = vm.agent.name = "Hulda"
+    response = {"subject": "Sinmir", "rumor": "Sinmir stole Hulda's ale", "gossip": "", "sender": ""}
+    payload = {"storyType": "informant", "npcName": "Hulda", "narration": "", "response": arrival.json.dumps(response)}
+    vm.invoke("IntelEngine_Core", "OnDashboardDispatchStory", ("", arrival.json.dumps(payload), 0.0, None))
+    require(vm.dispatched == "Hulda came to tell Player what they saw: Sinmir stole Hulda's ale",
+            f"fix73 informant with empty narration not dispatched with IE's line: {vm.dispatched!r}")
+    print("  [director] informant narration='' -> dispatched %r" % vm.dispatched)
+    vm = FactVM(({}, core, story), pathlib.Path("unused"))
+    vm.target.name = vm.agent.name = "Hulda"
+    payload = {"storyType": "seek_player", "npcName": "Hulda", "narration": "", "response": "{}"}
+    vm.invoke("IntelEngine_Core", "OnDashboardDispatchStory", ("", arrival.json.dumps(payload), 0.0, None))
+    require(vm.dispatched is None, f"fix73 seek_player with empty narration must stay refused: {vm.dispatched!r}")
+    print("  [director] seek_player narration='' -> refused (nothing dispatched)")
+
     # fix72: validator whole-word/-ing agreement with C++ (InformantRumorValidationCheck.cpp asserts the same inputs) and first-name lead.
     for subject, rumor, want in (("Ria", "Victoria was robbed.", "rumor does not name the subject"), ("Ria", "Ria's purse was stolen.", ""),
                                  ("Ria", "Ria was robbed.", ""), ("Ria", "Riften guards robbed Ria.", ""),

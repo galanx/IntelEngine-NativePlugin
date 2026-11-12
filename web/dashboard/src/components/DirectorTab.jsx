@@ -441,6 +441,7 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
         action ? { npcName:actionNpcName, actionName, ...params } :
           { factionA:polFactionA, factionB:polFactionB, eventType:polEventType, description:polDescription, relationDelta:polDelta };
     if (reasonOnly) fields = { npcName:fields.npcName, actionName, reason:actionParams.reason || '' };
+    if (story && storyType === 'informant') delete fields.narration; // IE writes the informant line itself
     if (action && !reasonOnly) fields.reason ??= ''; if (!reasonOnly) for (const f of defs) fields[f.key] ??= '';
     const npcPool = [...new Set(nearby.map(n => n.name))];
     const requiredNpcKeys = [...(story ? ['npcName'] : social ? ['npc1Name','npc2Name'] : []), ...defs.filter(f => f.required && ['npcName','npc1Name','npc2Name','subject'].includes(f.key)).map(f => f.key)];
@@ -455,7 +456,7 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
     const schema = Object.fromEntries(Object.entries(draft).filter(([k])=>!defs.some(f=>f.key===k)).map(([k,v]) => [k, { type: typeof v === 'number' ? 'number' : k === typeKey ? 'select' : 'text',
       required: (!reasonOnly || (action && k === 'reason')) && k !== 'relationDelta' && (k !== 'reason' || action),
       ...(k === typeKey ? { options:reasonOnly ? [actionName] : enumTypes.map(x=>x.key) } : {}) }]));
-    if (story && storyGuidance) schema.narration.hint = `${storyGuidance.hint} ${storyGuidance.narration}`;
+    if (story && storyGuidance && schema.narration) schema.narration.hint = `${storyGuidance.hint} ${storyGuidance.narration}`;
     const variants = Object.fromEntries(enumTypes.map(t => [t.key, Object.fromEntries((story ? (STORY_TYPE_FIELDS[t.key]?.fields||[]) : social ? (SOCIAL_TYPE_FIELDS[t.key]||[]) : action ? actionFieldDefs[t.key] : []).map(f=>[f.key,Object.fromEntries(Object.entries(f).filter(([key])=>key!=='placeholder').map(([key,value])=>[key,key === 'options' ? value.map(o => typeof o === 'string' ? o : o.value) : key === 'type' && value === 'faction' ? 'text' : value]))]))]));
     for (const definition of [...Object.values(schema), ...Object.values(variants).flatMap(fields => Object.values(fields))]) for (const key of ['hint','example']) if (definition[key]) definition[key] = stripExamples(definition[key]);
     const id = String(++requestId.current);
@@ -569,7 +570,7 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
   const storyTypeValid = !!touched.storyType && DIRECTOR_STORY_TYPES.some(type => type.key === storyType);
   const socialTypeValid = !!touched.socialType && SOCIAL_TYPES.some(type => type.key === socialType);
   const polEventTypeValid = !!touched.eventType && POLITICAL_EVENT_TYPES.some(type => type.key === polEventType);
-  const storyRequired = [['NPC', !!storyNpc.trim()], ['Story type', storyTypeValid], ['Narration', !!storyNarration.trim()], ...variantRequired(currentFields, storyFields)];
+  const storyRequired = [['NPC', !!storyNpc.trim()], ['Story type', storyTypeValid], ...(storyType === 'informant' ? [] : [['Narration', !!storyNarration.trim()]]), ...variantRequired(currentFields, storyFields)];
   const socialRequired = [['NPC 1', !!socialNpc1.trim()], ['NPC 2', !!socialNpc2.trim()], ['Social type', socialTypeValid], ['Narration', !!socialNarration.trim()], ...variantRequired(currentSocialFields, socialFields)];
   const politicalRequired = [['Faction A', !!polFactionA.trim()], ['Faction B', !!polFactionB.trim() && polFactionA.trim() !== polFactionB.trim()], ['Political event type', polEventTypeValid], ['Description', !!polDescription.trim()]];
   const missingFields = fields => fields.some(([, valid]) => !valid) && <p className="text-[10px] text-gray-400">Fill required fields: {fields.filter(([, valid]) => !valid).map(([label]) => label).join(', ')}</p>;
@@ -710,7 +711,7 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
             </Select>
             </Field>
           </div>
-          <Field label="Narration" required hint={storyGuidance?.narration || 'Why the NPC acts; used as story context.'}>
+          {storyType !== 'informant' && <Field label="Narration" required hint={storyGuidance?.narration || 'Why the NPC acts; used as story context.'}>
           <textarea
             value={storyNarration}
             onInput={() => setTouched(t=>({...t,narration:true}))}
@@ -719,7 +720,7 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
             rows={2}
             className="w-full bg-white/5 border border-white/10 rounded px-2 py-1.5 text-xs text-gray-200 outline-none placeholder:text-gray-600"
           />
-          </Field>
+          </Field>}
 
           {/* Type-specific fields */}
           {currentFields.map(f => (
