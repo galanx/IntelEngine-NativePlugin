@@ -145,7 +145,7 @@ const WAIT_OPTIONS = [
 // required: true = dispatch will fail without it, hint: shown below the field
 const STORY_TYPE_FIELDS = {
   seek_player: { example: 'e.g. set out to repay an old debt', hint: 'Travels to find you for a personal reason.', narration: 'Why they sought the named character (past tense, under 120 characters); do not claim the character’s location.' },
-  informant: { example: 'e.g. heard from Sven that Camilla had vanished', hint: 'Approaches you with grounded gossip about another NPC.', narration: 'What the gossip concerns and who told them, or what they witnessed.', fields: [
+  informant: { hint: 'Comes to tell you something they saw or heard.', fields: [
     { key: 'subject', label: 'Subject', type: 'text', required: true,
       placeholder: 'e.g. Camilla Valerius',
       hint: 'Required. The NPC the rumour is about; their name must appear in the Rumor.', half: true },
