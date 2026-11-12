@@ -314,9 +314,12 @@ const SOCIAL_TYPE_FIELDS = {
       hint: 'Required. What NPC 2 remembers. Past-tense verb phrase, no subject prefix.' },
   ],
   npc_gossip: [
+    { key: 'subject', label: 'Subject', type: 'text', required: true,
+      placeholder: 'e.g. Camilla Valerius',
+      hint: 'Required. Who or what the rumour is about (an NPC, a faction or you).' },
     { key: 'gossip', label: 'Gossip', type: 'text', required: true,
       placeholder: 'e.g. was overheard arguing with the steward about missing tribute',
-      hint: 'Required. What was said. Past-tense verb phrase, no subject prefix.' },
+      hint: 'Required. What the Subject did. Past-tense verb phrase; their name is added automatically.' },
   ],
 };
 
@@ -820,13 +823,13 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
 
           {currentSocialFields.map(f => (
             <Field key={f.key} label={f.label} required={f.required}>
-              <input
+              {f.key === 'subject' ? <FactionInput options={informantOptions} aria-label={f.label} value={socialFields[f.key] || ''} onChange={e => { setTouched(t=>({...t,[f.key]:true})); setSocialFields(prev => ({ ...prev, [f.key]: e.target.value })); }} placeholder={f.placeholder} /> : <input
                 type="text"
                 value={socialFields[f.key] || ''}
                 onChange={e => { setTouched(t=>({...t,[f.key]:true})); setSocialFields(prev => ({ ...prev, [f.key]: e.target.value })); }}
                 placeholder={f.placeholder}
                 className="bg-white/5 border border-white/10 rounded px-2 py-1.5 text-xs text-gray-200 outline-none placeholder:text-gray-600"
-              />
+              />}
               {f.hint && (
                 <span className="director-hint">{f.hint}</span>
               )}
