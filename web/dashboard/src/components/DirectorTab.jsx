@@ -572,7 +572,7 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
   const storyTypeValid = !!touched.storyType && DIRECTOR_STORY_TYPES.some(type => type.key === storyType);
   const socialTypeValid = !!touched.socialType && SOCIAL_TYPES.some(type => type.key === socialType);
   const polEventTypeValid = !!touched.eventType && POLITICAL_EVENT_TYPES.some(type => type.key === polEventType);
-  const storyRequired = [['NPC', !!storyNpc.trim()], ['Story type', storyTypeValid], ...(storyType === 'informant' ? [] : [['Narration', !!storyNarration.trim()]]), ...variantRequired(currentFields, storyFields)];
+  const storyRequired = [[storyType === 'informant' ? 'Informant NPC' : 'NPC', !!storyNpc.trim()], ['Story type', storyTypeValid], ...(storyType === 'informant' ? [] : [['Narration', !!storyNarration.trim()]]), ...variantRequired(currentFields, storyFields)];
   const socialRequired = [['NPC 1', !!socialNpc1.trim()], ['NPC 2', !!socialNpc2.trim()], ['Social type', socialTypeValid], ['Narration', !!socialNarration.trim()], ...variantRequired(currentSocialFields, socialFields)];
   const politicalRequired = [['Faction A', !!polFactionA.trim()], ['Faction B', !!polFactionB.trim() && polFactionA.trim() !== polFactionB.trim()], ['Political event type', polEventTypeValid], ['Description', !!polDescription.trim()]];
   const missingFields = fields => fields.some(([, valid]) => !valid) && <p className="text-[10px] text-gray-400">Fill required fields: {fields.filter(([, valid]) => !valid).map(([label]) => label).join(', ')}</p>;
@@ -690,7 +690,7 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
         {generateControls('story')}{pending?.form === 'story' && <small className="text-gray-400">Generating…</small>}{generateError && !pending && <small className="text-red-400">{generateError}</small>}
         <fieldset disabled={pending?.form === 'story'} className="space-y-2 border-0 p-0 m-0 min-w-0" inert={pending?.form === 'story' ? '' : undefined}>
           <div className="flex gap-2">
-            <Field label="NPC" required hint="Exact display name.">
+            <Field label={storyType === 'informant' ? 'Informant NPC' : 'NPC'} required hint="Exact display name.">
             <FactionInput options={npcOptions}
               type="text"
               value={storyNpc}
