@@ -19,5 +19,13 @@ int main() {
     Require(InformantRumorRejection("", "Mikael mocked Sinmir", "") == "subject is empty", "empty subject rejected");
     Require(InformantRumorRejection("Sinmir", "", "was seen near the gate").empty(), "legacy gossip phrase passes");
     Require(InformantRumorRejection("Sinmir", "", "arguing with Hulda") == "rumor starts with an -ing word", "legacy gerund rejected");
+    Require(InformantRumorRejection("Ria", "Victoria was robbed.", "") == "rumor does not name the subject", "name inside another word is not naming the subject");
+    Require(InformantRumorRejection("Ria", "Ria's purse was stolen.", "").empty(), "possessive names the subject");
+    Require(InformantRumorRejection("Ria", "Ria was robbed.", "").empty(), "whole-word name passes");
+    Require(InformantRumorRejection("Ria", "Riften guards robbed Ria.", "").empty(), "Riften is not Ria but Ria is named later");
+    Require(InformantRumorRejection("Mikael", "Running, Mikael stole the purse.", "") == "rumor starts with an -ing word", "gerund before a comma rejected");
+    Require(InformantRumorRejection("Billy [Citizen]", "Billy was robbed near the well.", "").empty(), "tagged subject names itself");
+    Require(InformantRumorRejection("J'zargo", "J'zargo's spell burned the inn.", "").empty(), "apostrophe name with possessive passes");
+    Require(InformantRumorRejection("Ria", "J'zargo robbed Ria.", "").empty(), "apostrophe name elsewhere does not hide the subject");
     std::cout << "PASS: informant rumor validation (name, -ing start, empty, legacy gossip)\n";
 }
