@@ -33,6 +33,8 @@ cases = {  # name: (informant, subject, rumor as the LLM wrote it, sender)
     "e) self-rumor, saw": ("Marianus Cosma", "Nazeem", "Marianus Cosma saw Nazeem steal a sword", ""),
     "f) self-rumor, overheard": ("Marianus Cosma", "Nazeem", "Marianus Cosma overheard Nazeem boasting", ""),
     "c) sender == subject": ("Hulda", "Sinmir", "Sinmir bragged about the ale.", "Sinmir"),
+    "g) subject == informant": ("Marianus Cosma", "Marianus Cosma", "Marianus Cosma saw a cart tip over", ""),
+    "h) seek_player (no topic)": ("Hulda", "", "", ""),
 }
 data = {}
 for label, (informant, subject, rumor, sender) in cases.items():
@@ -40,17 +42,23 @@ for label, (informant, subject, rumor, sender) in cases.items():
     vm.target.name = vm.agent.name = informant
     resp = {"should_act": True, "type": "informant", "npc": informant, "narration": "x", "subject": subject,
             "rumor": rumor, "gossip": "", "sender": sender}
-    vm.invoke("IntelEngine_StoryEngine", "OnDungeonMasterResponse", (json.dumps(resp), 1))
-    fact = [e[1][1] for e in vm.effects if e[0] == "InjectFact"][0]
-    line = vm.dispatched
+    if subject:
+        vm.invoke("IntelEngine_StoryEngine", "OnDungeonMasterResponse", (json.dumps(resp), 1))
+        fact = [e[1][1] for e in vm.effects if e[0] == "InjectFact"][0]
+        line = vm.dispatched
+    else:  # seek_player: no topic field exists
+        fact, line = "set out to find Player", "Hulda has come looking for Player"
     av = VM(({}, core, story), pathlib.Path("unused"))
     av.target.name = av.agent.name = informant
     av.properties.update({"IsActive": True, "ArrivalHandling": False, "ActiveStoryNPC": av.target,
                           "ActiveStoryType": "informant", "ActiveNarration": line, "DispatchGeneration": 1})
+    av.storage[(av.target, "Intel_ArrivalTopic")] = vm.storage.get((vm.target, "Intel_ArrivalTopic"), "")
+    if not subject: av.properties["ActiveStoryType"] = "seek_player"
     av.invoke("IntelEngine_StoryEngine", "OnStoryNPCArrived")
+    topic = av.storage.get((av.target, "Intel_ArrivalTopic"), "")
     purpose = av.storage.get((av.target, "Intel_ArrivalPurpose"), "")
     # DispatchToTarget (StoryEngine.psc:1993) stores Intel_StoryNarration = narration; it is stubbed in the VM.
-    data[label] = {"informant": informant, "fact": fact, "narration": line, "purpose": purpose,
+    data[label] = {"informant": informant, "fact": fact, "narration": line, "purpose": purpose, "topic": topic,
                    "sent": [e[1][0] for e in av.effects if e[0] == "SendTaskNarration"]}
 
 cpp = r'''
@@ -66,7 +74,7 @@ int main(int argc, char** argv) {
     // IE C++ RenderFactsSection format as seen in openrouter_input.log: "## Things I Know\n- <fact> (just now)"
     json store = {{"Intel_FactsRendered", "## Things I Know\n- " + c["fact"].get<std::string>() + " (just now)\n"},
                   {"Intel_TaskHistoryRendered", ""}, {"Intel_TaskType","story"}, {"Intel_Target","Iepe"},
-                  {"Intel_StoryNarration", c["narration"]}, {"Intel_ArrivalPurpose", c["purpose"]}};
+                  {"Intel_StoryNarration", c["narration"]}, {"Intel_ArrivalPurpose", c["purpose"]}, {"Intel_ArrivalTopic", c["topic"]}};
     env.add_callback("papyrus_util", 4, [&](inja::Arguments& a){ auto k=a[2]->get<std::string>(); return store.contains(k)?store[k]:*a[3]; });
     env.add_callback("papyrus_util", 3, [&](inja::Arguments&){ return json::array(); });
     env.add_callback("isValidActor",1,[](inja::Arguments&){ return true; });
@@ -81,6 +89,9 @@ int main(int argc, char** argv) {
       std::string out; bool blank=false; for (char ch : r) { if (ch=='\n' && !out.empty() && out.back()=='\n') { if(blank) continue; blank=true; } else blank=false; out+=ch; }
       std::cout << out << "\n";
     }
+    d["render_mode"] = "static";
+    { std::string r = env.render(Read(argv[1] + std::string("0801_intel_task_awareness.prompt")), d);
+      auto at = r.find("### Current Task"); std::cout << "----- 0801 third person (static)\n" << (at == std::string::npos ? r : r.substr(at)) << "\n"; }
     std::cout << "----- SkyrimNet-owned, built from IE's DirectNarration text\n"
               << "This event just happened and must be responded to, no matter what: `" << c["sent"][0].get<std::string>() << "`. This event is completely factual.\n";
   }
@@ -90,11 +101,12 @@ with tempfile.TemporaryDirectory(prefix="inf-render-") as d:
     w = pathlib.Path(d)
     (w / "cases.json").write_text(json.dumps(data), encoding="utf-8")
     (w / "check.cpp").write_text(cpp, encoding="utf-8")
-    subprocess.run(["cl", "/nologo", "/EHsc", "/std:c++17", "/utf-8", "/I" + inja_inc, "/I" + nlo_inc, "check.cpp", "/Fe:check.exe"], cwd=w, check=True, stdout=subprocess.DEVNULL)
+    subprocess.run(["cl", "/nologo", "/EHsc", "/std:c++17", "/utf-8", "/I" + inja_inc, "/I" + nlo_inc, "check.cpp", "/Fe:check.exe"], cwd=w, check=True)
     out = subprocess.run([str(w / "check.exe"), str(prompts) + "/"], cwd=w, check=True, capture_output=True, text=True, encoding="utf-8").stdout
     print(out)
     print("rumor-bearing sentence counts (IE-owned: 0800+0801+7200+DirectNarration line):")
     for label, c in data.items():
+        if not c["topic"] and c["fact"].startswith("set out"): continue  # seek_player: no rumor
         core_text = c["narration"].split(": ", 1)[1]  # the rumor as narrated
         if core_text.startswith(c["informant"] + " "):  # self-rumor: the fact says "I ..." instead of the name
             core_text = core_text[len(c["informant"]) + 1:]

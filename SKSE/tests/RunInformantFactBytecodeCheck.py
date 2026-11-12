@@ -137,7 +137,24 @@ def main():
             facts = [e[1][1] for e in vm.effects if e[0] == "InjectFact"]
             require(facts == [fact] and vm.dispatched == narration,
                     f"fix69 exact mismatch ({automatic}, {rumor!r}): {facts!r} / {vm.dispatched!r}")
-            print("  [%s] fact=%r | narration=%r" % ("dm" if automatic else "director", facts[0], vm.dispatched))
+            topic = vm.storage.get(((vm.target if automatic else vm.agent), "Intel_ArrivalTopic"))
+            require(topic == subject, f"fix69d stored topic ({automatic}, {rumor!r}): {topic!r} != {subject!r}")
+            print("  [%s] fact=%r | narration=%r | topic=%r" % ("dm" if automatic else "director", facts[0], vm.dispatched, topic))
+
+    # fix69d: subject == informant (or empty) -> generic topic; both entrypoints.
+    for automatic in (False, True):
+        vm = FactVM(({}, core, story), pathlib.Path("unused"))
+        vm.target.name = vm.agent.name = "Marianus Cosma"
+        response = {"should_act": True, "type": "informant", "npc": "Marianus Cosma", "narration": "x",
+                    "subject": "Marianus Cosma [Citizen]", "rumor": "Marianus Cosma saw a cart tip over", "gossip": "", "sender": ""}
+        if automatic:
+            vm.invoke("IntelEngine_StoryEngine", "OnDungeonMasterResponse", (arrival.json.dumps(response), 1))
+        else:
+            payload = {"storyType": "informant", "npcName": "Marianus Cosma", "narration": "x", "response": arrival.json.dumps(response)}
+            vm.invoke("IntelEngine_Core", "OnDashboardDispatchStory", ("", arrival.json.dumps(payload), 0.0, None))
+        topic = vm.storage.get(((vm.target if automatic else vm.agent), "Intel_ArrivalTopic"))
+        require(topic == "something they saw", f"fix69d self-subject topic ({automatic}): {topic!r}")
+        print("  [%s] self-subject topic=%r" % ("dm" if automatic else "director", topic))
 
     # Arrival: IE-built line is narrated as-is and stored for the "Why I came to find" bio section.
     vm = FactVM(({}, core, story), pathlib.Path("unused"))
