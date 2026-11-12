@@ -141,6 +141,24 @@ def main():
             require(topic == subject, f"fix69d stored topic ({automatic}, {rumor!r}): {topic!r} != {subject!r}")
             print("  [%s] fact=%r | narration=%r | topic=%r" % ("dm" if automatic else "director", facts[0], vm.dispatched, topic))
 
+    # fix72: validator whole-word/-ing agreement with C++ (InformantRumorValidationCheck.cpp asserts the same inputs) and first-name lead.
+    for subject, rumor, want in (("Ria", "Victoria was robbed.", "rumor does not name the subject"), ("Ria", "Ria's purse was stolen.", ""),
+                                 ("Ria", "Ria was robbed.", ""), ("Ria", "Riften guards robbed Ria.", ""),
+                                 ("Billy [Citizen]", "Billy was robbed near the well.", ""), ("J'zargo", "J'zargo's spell burned the inn.", ""),
+                                 ("Ria", "J'zargo robbed Ria.", ""),
+                                 ("Mikael", "Running, Mikael stole the purse.", "rumor starts with an -ing word")):
+        got = FactVM(({}, core, story), pathlib.Path("unused")).invoke("IntelEngine_Core", "InformantRejection", (subject, rumor))
+        require(got == want, f"fix72 rejection ({subject!r}, {rumor!r}): {got!r} != {want!r}")
+        print("  [pex rejection] %r + %r -> %r" % (subject, rumor, got))
+    for informant, rumor, sender, want in (("Marianus Cosma", "Marianus heard that Sven argued with Camilla.", False, "Sven argued with Camilla"),
+                                           ("Marianus Cosma", "Marianus heard from Mikael that Sven argued with Camilla", True, "Mikael"),
+                                           ("Hjorrenn Darkmoon [Citizen]", "Hjorrenn heard that Sven argued with Camilla.", False, "Sven argued with Camilla"),
+                                           ("J'zargo", "J'zargo saw that Sven argued with Camilla.", False, "Sven argued with Camilla"),
+                                           ("Jon Battle-Born", "Jon Gray-Mane stole a horse.", False, "Jon Gray-Mane stole a horse")):
+        got = FactVM(({}, core, story), pathlib.Path("unused")).invoke("IntelEngine_Core", "InformantLead", (informant, rumor, sender))
+        require(got == want, f"fix72 lead ({informant!r}, {rumor!r}): {got!r} != {want!r}")
+        print("  [pex lead] %r + %r -> %r" % (informant, rumor, got))
+
     # fix69d: subject == informant (or empty) -> generic topic; both entrypoints.
     for automatic in (False, True):
         vm = FactVM(({}, core, story), pathlib.Path("unused"))
