@@ -4,6 +4,7 @@ Usage: python RunInformantFactBytecodeCheck.py <papyrus.exe> <Game Scripts>
 """
 import importlib.util
 import pathlib
+import re
 import subprocess
 import sys
 
@@ -49,7 +50,9 @@ def main():
     def expected_fact(subject, rumor, gossip, sender, informant):
         untagged = subject.split(" [", 1)[0]
         text = rumor or (gossip if contains(gossip, untagged) else subject + " " + gossip)
-        text = text.replace(informant + "'s", "my").replace(informant, "me")
+        word = lambda n: r"(?<![A-Za-z])" + re.escape(n) + r"(?![A-Za-z])"  # whole word, as Papyrus ReplaceText
+        text = re.sub(word(informant + "'s"), "my", text, flags=re.I)
+        text = re.sub(word(informant), "me", text, flags=re.I)
         if not sender:
             return "witnessed that " + text
         if sender == untagged:
@@ -58,6 +61,7 @@ def main():
 
     cases = [  # (subject, rumor, gossip) -- rumor-only, legacy gossip-only
         ("Sinmir", "Mikael mocked Sinmir's views on the city's rot", ""),
+        ("Sinmir", "Sinmir sold Ria's ale in Riften, Victoria's mead and RIA's wine to Ria", ""),
         ("Sinmir [the skald]", "Sinmir argued with Hulda about Hulda's town", ""),
         ("Snilf", "", "Snilf was seen near the western gate."),
         ("Snilf", "", "was seen near the western gate."),
@@ -66,11 +70,11 @@ def main():
     ]
     failures = []
     for automatic in (False, True):
-        for sender in ("Mira", "", "Sinmir", "Snilf"):
+        for sender, informant in (("Mira", "Hulda"), ("", "Hulda"), ("Sinmir", "Hulda"), ("Snilf", "Hulda"), ("Mira", "Ria")):
             for subject, rumor, gossip in cases:
                 vm = FactVM(({}, core, story), pathlib.Path("unused"))
-                vm.target.name = vm.agent.name = "Hulda"
-                response = {"should_act": True, "type": "informant", "npc": "Hulda",
+                vm.target.name = vm.agent.name = informant
+                response = {"should_act": True, "type": "informant", "npc": informant,
                             "narration": "Gossip from town", "subject": subject,
                             "rumor": rumor, "gossip": gossip, "sender": sender}
                 if automatic:
@@ -84,9 +88,9 @@ def main():
                     vm.invoke("IntelEngine_Core", "OnDashboardDispatchStory",
                               ("", arrival.json.dumps(payload), 0.0, None))
                     recipient = vm.agent
-                expected = expected_fact(subject, rumor, gossip, sender, "Hulda")
+                expected = expected_fact(subject, rumor, gossip, sender, informant)
                 text = rumor or (gossip if contains(gossip, subject.split(" [", 1)[0]) else subject + " " + gossip)
-                line = ("Hulda came to tell Player what " + sender + " told them: " + text) if sender                     else "Hulda came to tell Player what they witnessed: " + text
+                line = (informant + " came to tell Player what " + sender + " told them: " + text) if sender                     else informant + " came to tell Player what they witnessed: " + text
                 facts = [e[1][1] for e in vm.effects if e[0] == "InjectFact"]  # nothing may land on the subject
                 owners = {id(e[1][0]) for e in vm.effects if e[0] == "InjectFact"}
                 if facts != [expected] or owners != {id(recipient)} or vm.dispatched != line:
