@@ -24,6 +24,15 @@ with tempfile.TemporaryDirectory(prefix="pe-prompts-") as directory:
                 b"- **No back-to-back battles** \xe2\x80\x94 never pick `battle_result` for an `active_wars` entry whose `battle_result_allowed_now` starts with \"no\"; choose another event instead.\n- **Low morale triggers surrender**")
             data = data.replace(b"you MUST pick a DIFFERENT pair this tick.",  # fix71 states the C++ repeat rule
                 b"you MUST pick a DIFFERENT pair this tick. Also never propose the same event_type for the same pair as any of the last 3 recent_events (war_declaration, surrender, peace_offer, battle_result, political_reaction and pe_* events are exempt): the engine rejects it and the tick is wasted.")
+            for o, n in [  # fix74: war mandate only for war_possible pairs
+                (b'Only when the pair\'s status is "Critical" AND no active war', b'Only when the pair\'s status is "Critical" AND the pair has `war_possible: true` AND no active war'),
+                (b"\xe2\x80\x94 war-eligible. If no active war exists and no cooldown applies, war_declaration MUST be your next event for this pair", b"\xe2\x80\x94 war-eligible only when `war_possible` is true (then, if no active war exists and no cooldown applies, war_declaration MUST be your next event for this pair); Critical pairs with `war_possible: false` use their factions' conflict styles and Rule 8 rotation"),
+                (b"**Critical-pair interaction (Rule 3 below):**", b"**Critical-pair interaction (Rule 3 below, `war_possible: true` pairs only):**"),
+                (b'If ANY faction pair has status "Critical"', b'If ANY faction pair with `war_possible: true` has status "Critical"'),
+                (b"If multiple Critical pairs exist without wars", b"If multiple such pairs exist without wars"),
+                (b'(b) if a pair\'s status is "Critical", war_declaration', b'(b) if a pair\'s status is "Critical" and `war_possible` is true, war_declaration')]:
+                assert o in data, o
+                data = data.replace(o, n)
         (work / f"baseline{i}.prompt").write_bytes(data)
     (work / "check.cpp").write_text(r'''
 #include <inja/inja.hpp>
@@ -96,6 +105,8 @@ int main() { try {
     dm["peActive"]=true;
     Require(env.render(dmTemplate,dm).find("political_reaction")!=std::string::npos &&
             env.render(dmTemplate,dm).find("reacts_to")!=std::string::npos, "active DM reaction rule");
+    dm["politicalContext"]=json{{"relations",json::array({{{"faction_a","SilverBloodFamily"},{"faction_b","ThalmorFaction"},{"war_possible",false}},{{"faction_a","ImperialLegion"},{"faction_b","ThalmorFaction"},{"war_possible",true}}})}}.dump(2);
+    { auto r=env.render(dmTemplate,dm); Require(r.find("\"war_possible\": false")!=std::string::npos && r.find("\"war_possible\": true")!=std::string::npos && dmTemplate.find("`war_possible: true`")!=std::string::npos,"war_possible renders in the DM state and the prompt names it"); }
     dm["politicalContext"]="";
     Require(env.render(dmTemplate,dm)==env.render(oldDm,dm), "empty context sentinel remains unchanged");
     std::cout << "PASS real Inja: inactive NPC prompt byte-identical; fix64 faction/visibility rules hold; fix68 repeats merge\n";

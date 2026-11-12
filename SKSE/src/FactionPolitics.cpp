@@ -986,6 +986,9 @@ default_relations:
             rj["status"] = GetRelationStatus(r.relationScore);
             rj["trade_active"] = r.tradeActive;
             rj["war_active"] = r.warActive;
+            // fix74: only military-type pairs may be forced into war (prompt Rule 3)
+            const auto cfgA = GetFaction(r.factionA), cfgB = GetFaction(r.factionB);
+            rj["war_possible"] = cfgA && cfgB && cfgA->type == "military" && cfgB->type == "military";
             relationsJson.push_back(rj);
         }
         state["relations"] = relationsJson;
