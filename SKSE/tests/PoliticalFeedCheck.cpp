@@ -331,6 +331,14 @@ int main() try {
       std::string recorded; for (const auto& e : db->GetRecentEvents(50)) if (e.id==nr["eventId"].get<int>()) recorded=e.eventType; // calendar stub game_time 0 sorts it below seeded events
       Require(nr["acted"]==true && nr["eventType"]=="border_skirmish" && !nr.contains("manifestJson") &&
               recorded=="border_skirmish", "battle_result without a war becomes a non-manifesting skirmish"); }
+    // Fix 93: load-time cleanup resyncs faction_relations.war_active with faction_wars (times above all fixture data).
+    { auto warActive=[&](const char* a,const char* b){ for (const auto& r : db->GetAllRelations()) if (r.factionA==a && r.factionB==b) return r.warActive; return false; };
+      db->SetRelation("W1","W2",-60); db->StartWar("W1","W2",1001.f);
+      db->SetRelation("W3","W4",-60); int w2=db->StartWar("W3","W4",999.5f); db->EndWar(w2,"W3",1001.f);
+      Require(warActive("W1","W2") && !warActive("W3","W4"), "war_active before cleanup");
+      db->CleanupFutureEvents(1000.f);
+      Require(!warActive("W1","W2") && warActive("W3","W4"), "cleanup resyncs war_active with faction_wars");
+      db->EndWar(w2,"W3",1002.f); }
     PoliticalEngineBridge::GetSingleton()->active=false;
     Require(!politics->TestPEContext().contains("political_engine") && politics->eligiblePE_.empty(), "inactive PE omits context and clears eligibility");
     PoliticalEngineBridge::GetSingleton()->active=true;
