@@ -2667,6 +2667,12 @@ default_relations:
             out["error"] = "surrender requires an active war";
             return out.dump();
         }
+        // Live 2026-11-12 (#133): the DM sent battle_result with no active war; record it as a skirmish that does not manifest.
+        const bool skirmishFromBattle = eventType == "battle_result" && !PoliticalDB::GetSingleton()->GetActiveWar(factionA, factionB);
+        if (skirmishFromBattle) {
+            logger::info("Politics DM: battle_result without an active war between {} and {} -> border_skirmish", factionA, factionB);
+            eventType = "border_skirmish";
+        }
         // Live 2026-11-10: the DM repeated event #19 verbatim as #20; drop an exact repeat of the latest event.
         if (auto* db = PoliticalDB::GetSingleton(); db && db->IsReady()) {
             auto last = db->GetRecentEvents(10);
@@ -2782,8 +2788,8 @@ default_relations:
         }
 
         // --- Check manifestation ---
-        if (eventType == "assassination_attempt" || eventType == "brawl" ||
-            eventType == "border_skirmish") {
+        if (!skirmishFromBattle && (eventType == "assassination_attempt" || eventType == "brawl" ||
+            eventType == "border_skirmish")) {
             std::string manifestJson = CheckEventManifestation(factionA, factionB, eventType);
             if (!manifestJson.empty()) {
                 out["manifestJson"] = manifestJson;

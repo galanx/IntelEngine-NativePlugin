@@ -320,7 +320,14 @@ int main() try {
       catch (const std::runtime_error&) {}
       // Fix 55: a schedule older than one game day (lost on reload) stops blocking.
       FactionEvent s; s.factionA="A"; s.factionB="B"; s.eventType="battle_scheduled"; s.gameTime=102.f;
-      Require(BattleResultBlockedReason({s},"A","B",102.5f)!=nullptr && BattleResultBlockedReason({s},"B","A",103.5f)==nullptr, "stale battle schedule expires after a game day"); }
+      Require(BattleResultBlockedReason({s},"A","B",102.5f)!=nullptr && BattleResultBlockedReason({s},"B","A",103.5f)==nullptr, "stale battle schedule expires after a game day");
+      // Fix 91: battle_result with no active war is recorded as a non-manifesting border_skirmish (fixture CheckEventManifestation throws).
+      db->EndWar(db->GetActiveWar("A","B")->id, "A", 104.f);
+      json n=b; n["description"]="Raid without a war.";
+      auto nr=json::parse(politics->ProcessPoliticalDMResponse(n.dump(),1));
+      std::string recorded; for (const auto& e : db->GetRecentEvents(50)) if (e.id==nr["eventId"].get<int>()) recorded=e.eventType; // calendar stub game_time 0 sorts it below seeded events
+      Require(nr["acted"]==true && nr["eventType"]=="border_skirmish" && !nr.contains("manifestJson") &&
+              recorded=="border_skirmish", "battle_result without a war becomes a non-manifesting skirmish"); }
     PoliticalEngineBridge::GetSingleton()->active=false;
     Require(!politics->TestPEContext().contains("political_engine") && politics->eligiblePE_.empty(), "inactive PE omits context and clears eligibility");
     PoliticalEngineBridge::GetSingleton()->active=true;
