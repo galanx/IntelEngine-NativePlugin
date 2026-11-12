@@ -66,14 +66,14 @@ namespace IntelEngine {
         return -1;
     }
 
-    /** Allies/rivals of a realm on PE side `side`, from the organizations' sides: same side = ally; 1<->2 and 3 vs 1/2 = rival; Independent (0) = none. */
+    /** Allies/rivals of a realm on PE side `side`, from the organizations' sides: same side = ally; Stormcloaks vs Empire or Aldmeri = rival; Empire/Aldmeri = neither; Independent (0) = none. */
     inline std::pair<std::vector<std::string>, std::vector<std::string>> PESideRelations(int side, const std::vector<FactionConfig>& factions) {
         std::pair<std::vector<std::string>, std::vector<std::string>> out;
         if (side < 1 || side > 3) return out;
         for (const auto& f : factions) {
             const int s = OrganizationPESide(f);
             if (s == side) out.first.push_back(f.id);
-            else if (s >= 1 && s <= 3) out.second.push_back(f.id);
+            else if (s >= 1 && s <= 3 && s + side != 4) out.second.push_back(f.id);  // {1,3} (Empire/Aldmeri) is neither
         }
         return out;
     }

@@ -173,13 +173,16 @@ int main() try {
         Require(politics->LoadConfig() && OrganizationPESide(*politics->GetFaction("Thal")) == 3 && OrganizationPESide(*politics->GetFaction("Pe2")) == 2 &&
                 OrganizationPESide(*politics->GetFaction("Bad")) == -1, "pe_side parsed; Thalmor defaults to Aldmeri Dominion; out-of-range ignored");
         {   // live PE side -> realm allies/rivals (pure mapping)
-            std::vector<FactionConfig> orgs(3);
+            std::vector<FactionConfig> orgs(4);
             orgs[0].id = "Imp"; orgs[0].skyrimFactionId = "CWImperialFaction";
             orgs[1].id = "Storm"; orgs[1].skyrimFactionId = "CWSonsFaction";
             orgs[2].id = "Guild";
-            auto empire = PESideRelations(1, orgs), independent = PESideRelations(0, orgs);
-            Require(empire.first == std::vector<std::string>{"Imp"} && empire.second == std::vector<std::string>{"Storm"} &&
-                    independent.first.empty() && independent.second.empty(), "Empire realm: ally Imperial, rival Stormcloak; Independent: none");
+            orgs[3].id = "Thal"; orgs[3].skyrimFactionId = "ThalmorFaction";
+            using V = std::vector<std::string>;
+            auto empire = PESideRelations(1, orgs), storm = PESideRelations(2, orgs), aldmeri = PESideRelations(3, orgs), independent = PESideRelations(0, orgs);
+            Require(empire.first == V{"Imp"} && empire.second == V{"Storm"} && storm.first == V{"Storm"} && storm.second == V{"Imp", "Thal"} &&
+                    aldmeri.first == V{"Thal"} && aldmeri.second == V{"Storm"} && independent.first.empty() && independent.second.empty(),
+                    "Empire/Aldmeri neither ally nor rival; Stormcloaks rival both; Independent: none");
         }
         PoliticalEngineBridge::GetSingleton()->detected = false;
         std::filesystem::remove_all(dir);
