@@ -148,13 +148,13 @@ const STORY_TYPE_FIELDS = {
   informant: { example: 'e.g. heard from Sven that Camilla had vanished', hint: 'Approaches you with grounded gossip about another NPC.', narration: 'What the gossip concerns and who told them, or what they witnessed.', fields: [
     { key: 'subject', label: 'Subject NPC', type: 'text', required: true,
       placeholder: 'e.g. Camilla Valerius',
-      hint: 'Required. The NPC the gossip is about. Gets a fact injected.' },
-    { key: 'gossip', label: 'Gossip', type: 'text', required: true,
-      placeholder: 'e.g. was seen arguing with Adrianne over an unpaid debt',
-      hint: 'What the Subject NPC did, told as a rumour, e.g. "was seen arguing with Adrianne over an unpaid debt". Their name is added automatically.' },
+      hint: 'Required. The NPC the rumour is about; their name must appear in the Rumor.' },
+    { key: 'rumor', label: 'Rumor', type: 'text', required: true,
+      placeholder: 'e.g. Camilla Valerius was seen arguing with Adrianne over an unpaid debt',
+      hint: 'Required. One full past-tense sentence that names the Subject. Must start with a name, not a verb or an -ing word.' },
     { key: 'sender', label: 'Source', type: 'text',
       placeholder: 'e.g. Sven',
-      hint: 'Optional. Who the informant heard it from. Empty = witnessed firsthand.' },
+      hint: 'Who told the informant (may be the Subject). Fill it whenever the narration names a teller; empty = witnessed firsthand.' },
   ] },
   road_encounter: { example: 'e.g. set out to sell pelts in Helgen', hint: 'Appears on the road ahead of you, travelling to Destination on their own errand (outdoors only).', narration: 'Why they are travelling, e.g. set out to sell pelts in Helgen.', fields: [
     { key: 'destination', label: 'Destination', type: 'text', required: true,
@@ -412,7 +412,7 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
       if (form === 'action') { const matches = nearby.filter(n => n.name === next.npcName); setActionNpc(nearby.find(n => n.id === actionNpc)?.name === next.npcName ? actionNpc : matches.length === 1 ? matches[0].id : ''); setSelectedAction(next.actionName); setActionParams(prev => (request.fields.actionName === 'CancelCurrentTask' || request.fields.actionName === 'ChangeSpeed') ? { ...prev, reason:next.reason || '' } : Object.fromEntries(Object.keys(allowed).filter(k => !['npcName','actionName'].includes(k)).map(k => [k,next[k] ?? '']))); }
       audit.ok = true; delete audit.rejected.$response; audit.applied = Object.keys(result.fields).filter(k=>next[k] !== old[k]); for (const k of Object.keys(result.fields)) if (!skipped.has(k) && !audit.applied.includes(k)) audit.rejected[k] ??= 'Preserved or unchanged';
       setGenerateError('');
-      if (!Object.keys(result.rejected || {}).some(k => k === 'narration' || k === 'gossip') && !request.followUp && Object.entries(allowed).some(([k, f]) => f.required && !String(next[k] ?? '').trim())) {
+      if (!Object.keys(result.rejected || {}).some(k => k === 'narration' || k === 'gossip' || k === 'rumor') &&!request.followUp && Object.entries(allowed).some(([k, f]) => f.required && !String(next[k] ?? '').trim())) {
         const fields = Object.fromEntries(Object.keys(allowed).map(k => [k, typeof next[k] === 'string' && !next[k].trim() ? '' : next[k] ?? '']));
         submitGenerate({ ...request, id:String(++requestId.current), fields, draft:{...fields}, followUp:true });
       }

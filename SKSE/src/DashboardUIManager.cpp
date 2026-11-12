@@ -1051,7 +1051,7 @@ namespace IntelEngine {
                         auto fields = nlohmann::json::parse(first != raw.npos && last != raw.npos ? raw.substr(first, last - first + 1) : raw);
                         if (!fields.is_object() || fields.empty()) throw std::runtime_error("invalid fields");
                         nlohmann::json rejected = nlohmann::json::object();
-                        for (const char* key : {"gossip", "narration"}) if (fields.contains(key) && fields[key].is_string()) {
+                        for (const char* key : {"gossip", "rumor", "narration"}) if (fields.contains(key) && fields[key].is_string()) {
                             const auto& text = fields[key].get_ref<const std::string&>();
                             auto has = [&](std::string_view phrase) { return std::search(text.begin(), text.end(), phrase.begin(), phrase.end(),
                                 [](unsigned char a, unsigned char b) { return std::tolower(a) == b; }) != text.end(); };
