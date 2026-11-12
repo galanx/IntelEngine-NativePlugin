@@ -111,6 +111,9 @@ def main():
          "heard from Mikael that " + mare, "Hulda came to tell Player what Mikael told them: " + mare),
         ("Hulda", "Sinmir", "Hulda was told that " + mare, "Mikael",
          "heard from Mikael that " + mare, "Hulda came to tell Player what Mikael told them: " + mare),
+        ("Marianus Cosma", "Nazeem", "Marianus Cosma was robbed by Nazeem at the market.", "",
+         "saw that Marianus Cosma was robbed by Nazeem at the market".replace("Marianus Cosma", "me"),
+         "Marianus Cosma came to tell Player what they saw: Marianus Cosma was robbed by Nazeem at the market"),
         ("Hulda", "Sinmir", "Sinmir bragged about the ale.", "Sinmir",
          "Sinmir told me that Sinmir bragged about the ale", "Hulda came to tell Player what Sinmir told them: Sinmir bragged about the ale"),
     ]
