@@ -511,6 +511,8 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
   const nearby = useMemo(() => npcs.map(n => ({ id: String(n.formId), name: n.name, kind: 'nearby' })), [loadedNpcs]);
   const npcOptions = useMemo(() => { const names = new Set(npcs.map(n => n.name)); return [...new Set([...names, ...knownNpcs])].map(name => ({ id: name, name, kind: names.has(name) ? 'nearby' : '' })); }, [loadedNpcs, knownNpcs]);
   const hirerOptions = useMemo(() => [...npcOptions, ...factions.map(f => ({ ...f, kind: 'faction' }))], [npcOptions, factions]);
+  // Informant text needs the faction's display name, not its ID (the rumor must contain the Subject).
+  const informantOptions = useMemo(() => [...npcOptions, ...factions.map(f => ({ ...f, id: f.name, kind: 'faction' }))], [npcOptions, factions]);
   const busySlots = names => tasks.filter(slot => slot.state && names.some(name => slot.agentName?.toLowerCase() === name.trim().toLowerCase()));
   const storyBusy = busySlots([storyNpc]);
   const socialBusy = busySlots([socialNpc1, socialNpc2]);
@@ -738,7 +740,7 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
                     <option key={o} value={o}>{o}</option>
                   ))}
                 </Select>
-              ) : ['subject','sender','victimName'].includes(f.key) ? <FactionInput options={(f.key === 'sender' && ['ambush','stalker','informant'].includes(storyType)) || (f.key === 'subject' && storyType === 'informant') ? hirerOptions : npcOptions} aria-label={f.label} value={storyFields[f.key] || ''} onChange={e => { setTouched(t=>({...t,[f.key]:true})); setStoryFields(prev => ({...prev,[f.key]:e.target.value})); }} placeholder={f.placeholder} /> : (
+              ) : ['subject','sender','victimName'].includes(f.key) ? <FactionInput options={storyType === 'informant' ? informantOptions : f.key === 'sender' && ['ambush','stalker'].includes(storyType) ? hirerOptions : npcOptions} aria-label={f.label} value={storyFields[f.key] || ''} onChange={e => { setTouched(t=>({...t,[f.key]:true})); setStoryFields(prev => ({...prev,[f.key]:e.target.value})); }} placeholder={f.placeholder} /> : (
                 <input
                   type="text"
                   value={storyFields[f.key] || ''}
