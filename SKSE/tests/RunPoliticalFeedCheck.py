@@ -102,6 +102,7 @@ template<class... T> void error(T&&...) {}
     signatures = (
         "std::string ToLower(",
         "const char* BattleResultBlockedReason(",
+        "bool RepeatEventBlocked(",
         "std::string FactionPolitics::GetConfigPath(",
         "std::string FactionPolitics::GetDefaultFactionConfig(",
         "bool FactionPolitics::LoadConfig(",

@@ -321,6 +321,14 @@ int main() try {
       // Fix 55: a schedule older than one game day (lost on reload) stops blocking.
       FactionEvent s; s.factionA="A"; s.factionB="B"; s.eventType="battle_scheduled"; s.gameTime=102.f;
       Require(BattleResultBlockedReason({s},"A","B",102.5f)!=nullptr && BattleResultBlockedReason({s},"B","A",103.5f)==nullptr, "stale battle schedule expires after a game day"); }
+    // Fix 68: same type for the same unordered pair within the last 3 events is rejected; other types / pairs / exempt types pass.
+    { std::vector<FactionEvent> r(3); r[0].eventType="trade_deal"; r[0].factionA="A"; r[0].factionB="B";
+      r[1].eventType="embargo"; r[1].factionA="C"; r[1].factionB="D"; r[2].eventType="espionage"; r[2].factionA="B"; r[2].factionB="A";
+      Require(RepeatEventBlocked(r,"B","A","trade_deal") && RepeatEventBlocked(r,"A","B","espionage"), "repeat type+pair in last 3 blocked");
+      Require(!RepeatEventBlocked(r,"A","B","embargo") && !RepeatEventBlocked(r,"A","C","trade_deal"), "other pair / type not blocked");
+      Require(!RepeatEventBlocked(r,"A","B","surrender") && !RepeatEventBlocked(r,"A","B","peace_offer"), "exempt types not blocked");
+      r.insert(r.begin(), FactionEvent{});  // espionage is now 4th newest: out of the window
+      Require(!RepeatEventBlocked(r,"A","B","espionage"), "4th-newest event no longer blocks"); }
     PoliticalEngineBridge::GetSingleton()->active=false;
     Require(!politics->TestPEContext().contains("political_engine") && politics->eligiblePE_.empty(), "inactive PE omits context and clears eligibility");
     PoliticalEngineBridge::GetSingleton()->active=true;
