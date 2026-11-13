@@ -147,11 +147,11 @@ void FinishPrismaDomReady(PrismaContext& context, PrismaView view, std::uint64_t
         requestGeneration = context.requestGeneration;
         magelight = context.magelight;
     }
-    static constexpr std::array<PRISMA_UI_API::JSListenerCallback, 16> callbacks = {
+    static constexpr std::array<PRISMA_UI_API::JSListenerCallback, 17> callbacks = {
         &PrismaListener<0>, &PrismaListener<1>, &PrismaListener<2>, &PrismaListener<3>,
         &PrismaListener<4>, &PrismaListener<5>, &PrismaListener<6>, &PrismaListener<7>,
         &PrismaListener<8>, &PrismaListener<9>, &PrismaListener<10>, &PrismaListener<11>,
-        &PrismaListener<12>, &PrismaListener<13>, &PrismaListener<14>, &PrismaListener<15>
+        &PrismaListener<12>, &PrismaListener<13>, &PrismaListener<14>, &PrismaListener<15>, &PrismaListener<16>
     };
     for (std::size_t i = 0; i < listeners.size() && i < callbacks.size(); ++i)
         api->RegisterJSListener(view, listeners[i].name, callbacks[i]);
@@ -836,6 +836,7 @@ public:
             return false;
         }
         view_ = view;
+        EnableGamepad();
         {
             std::lock_guard lock(context_.mutex);
             context_.view = view_;
@@ -1112,6 +1113,29 @@ private:
     const MAGELIGHT_API::MagelightApi4* api_ = nullptr;
     PRISMA_UI_API::IVPrismaUI1* prisma_ = nullptr;
     MAGELIGHT_API::ModId mod_ = 0;
+    // Controller: let Magelight give the pad to this view while it is open. In navigation style the host moves a
+    // selection between the page's controls (window.magelight.gamepad in the page attaches the panel as a scope):
+    // A selects, B goes back or closes, the shoulders turn the pages, the right stick scrolls, and a right-stick
+    // click switches to a stick-driven cursor. The layer is absent before Magelight 1.6, in VR (where the hands
+    // point at the panel) and when the player switched it off: then nothing changes.
+    void EnableGamepad() {
+        if (!api_ || !view_ || !api_->SetViewGamepad || !api_->QueryCapability) return;
+        if (api_->hostVersionNumber < 10600 || api_->QueryCapability("gamepad") != 1) {
+            logger::info("[Dashboard] Magelight controller layer not available (VR, switched off, or an older host)");
+            return;
+        }
+        MAGELIGHT_API::GamepadConfig config{};
+        config.size = sizeof(config);
+        config.enabled = true;
+        config.style = MAGELIGHT_API::kGamepadStyleNavigation;
+        config.allowCursor = true;
+        config.startInCursorMode = false;
+        const auto result = api_->SetViewGamepad(view_, &config);
+        if (result == MAGELIGHT_API::Result::Ok)
+            logger::info("[Dashboard] Magelight controller navigation enabled");
+        else
+            logger::info("[Dashboard] Magelight controller navigation refused: {}", ErrorText(api_, mod_, result));
+    }
     MAGELIGHT_API::ViewId view_ = 0;
     bool available_ = false;
 };
@@ -1267,6 +1291,28 @@ std::unique_ptr<IUiHost> CreateUiHostWithResolver(std::string_view preference,
     logger::info("[Dashboard] host preference={}, selected=None, magelightVersion={}, reason={}; {}",
                  requested, detectedMagelightVersion, magelightReason, prismaReason);
     return {};
+}
+
+int SetMagelightViewGamepadKeys(std::uint32_t view)
+{
+    const UiHostApiResolver resolver{&WinGetModuleHandle, &WinGetProcAddress, &RequestPrismaApi, &PostSkseTask};
+    return SetMagelightViewGamepadKeysWithResolver(view, resolver);
+}
+
+int SetMagelightViewGamepadKeysWithResolver(std::uint32_t view, const UiHostApiResolver& resolver)
+{
+    const auto* api = ResolveMagelightApi(resolver);
+    if (!api || view == 0 || api->hostVersionNumber < 10600 || !api->SetViewGamepad || !api->QueryCapability) return 0;
+    if (api->QueryCapability("gamepad") != 1) return 0;
+    MAGELIGHT_API::GamepadConfig config{};
+    config.size = sizeof(config);
+    config.enabled = true;
+    config.style = MAGELIGHT_API::kGamepadStyleKeys;
+    const auto result = api->SetViewGamepad(static_cast<MAGELIGHT_API::ViewId>(view), &config);
+    if (result == MAGELIGHT_API::Result::Ok) return 1;
+    logger::info("[Choice] Magelight refused the gamepad layer for view {}: {}", view,
+                 ErrorText(api, 0, result));
+    return -1;
 }
 
 } // namespace IntelEngine

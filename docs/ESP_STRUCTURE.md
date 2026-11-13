@@ -1,5 +1,7 @@
 # IntelEngine ESP Structure - Creation Kit Setup
 
+> **Historical design document.** Parts were never implemented or have changed; the README and docs/DLL_API.md describe IntelEngine 3.8.0.
+
 ## Overview
 
 This document describes the Creation Kit setup required for `IntelEngine.esp`. The plugin contains:

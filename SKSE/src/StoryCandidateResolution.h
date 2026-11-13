@@ -2,6 +2,9 @@
 
 #include <cctype>
 #include <cstdint>
+#include <cmath>
+#include <functional>
+#include <limits>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -43,7 +46,8 @@ struct StoryCandidateRejection {
 inline std::uint32_t ResolveStoryCandidateFormID(std::string_view name,
                                                 const StoryCandidatePool& dm,
                                                 const StoryCandidatePool& npc,
-                                                StoryCandidateRejection* rejection = nullptr) {
+                                                StoryCandidateRejection* rejection = nullptr,
+                                                const std::function<double(std::uint32_t)>& distance = {}) {
     if (rejection) *rejection = {};
     if (dm.empty() && npc.empty()) {
         if (rejection) rejection->branch = "empty-pools";
@@ -57,10 +61,24 @@ inline std::uint32_t ResolveStoryCandidateFormID(std::string_view name,
         if (!exact && normalized.empty()) return 0;
         std::uint32_t match = 0;
         bool found = false;
+        double best = std::numeric_limits<double>::infinity();
+        const auto sameName = [&](const std::string& candidate) {
+            return exact ? candidate == lower : NormalizeStoryCandidateName(candidate) == normalized;
+        };
+        // Distance tie-break: actors the DM was shown (dm pool) win over same-name actors it never saw.
+        bool shown = false;
+        if (distance) for (const auto& entry : dm) if (sameName(entry.first)) { shown = true; break; }
         for (const auto* pool : {&dm, &npc}) {
+            if (shown && pool == &npc) continue;
             for (const auto& [candidate, formId] : *pool) {
-                if (exact ? candidate != lower : NormalizeStoryCandidateName(candidate) != normalized) continue;
-                if (formId == 0 || found) {
+                if (!sameName(candidate)) continue;
+                if (distance && formId) {
+                    found = true;
+                    const double score = distance(formId);
+                    if (std::isfinite(score) && score >= 0 && (score < best || (score == best && formId < match))) { best = score; match = formId; }
+                    continue;
+                }
+                if (formId == 0 || (found && match != formId)) {
                     if (rejection) rejection->branch = formId == 0 ? "zero-formid" : "ambiguous";
                     return 0;
                 }

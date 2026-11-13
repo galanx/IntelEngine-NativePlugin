@@ -16,21 +16,14 @@ function PackagesTab({ packages, sendAction, removingIds, onMarkRemoving }) {
     sendAction('removePackages', { formId });
   }, [sendAction, onMarkRemoving]);
 
-  if (!packages || packages.length === 0) {
-    return (
-      <div className="p-3">
-        <div className="empty-state">No NPCs currently running IntelEngine packages.</div>
-      </div>
-    );
-  }
-
   return (
-    <div className="p-3 space-y-4">
+    <div>
       <section>
         <div className="flex items-center justify-between mb-2">
-          <h2 className="section-header">Other IE packages</h2>
+          <h2 className="section-header">IE packages</h2>
           <span className="text-xs text-gray-500">{packages.length} NPC{packages.length !== 1 ? 's' : ''}</span>
         </div>
+        {packages.length === 0 && <div className="empty-state">No NPCs currently running IntelEngine packages.</div>}
         <div className="space-y-1.5">
           {packages.map((entry, i) => {
             const isRemoving = removingIds.has(entry.formId);

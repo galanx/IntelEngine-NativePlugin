@@ -273,12 +273,12 @@ namespace IntelEngine {
         /**
          * Resolve uniquely within the latest DM/social pools, exact display name first,
          * then case/whitespace-normalized name with a trailing role suffix removed.
-         * Unknown or ambiguous names are rejected; no global name search.
+         * Strict unless automatic Social supplies partner context; no global name search.
          */
-        RE::Actor* ResolveStoryCandidate(const std::string& name);
+        RE::Actor* ResolveStoryCandidate(const std::string& name, const std::string& partnerName = "", RE::Actor* anchor = nullptr);
 
         /** Manual Director only: exact full name, unique actor-reference identity across the full index. */
-        RE::Actor* ResolveDirectorActor(const std::string& name);
+        RE::Actor* ResolveDirectorActor(const std::string& name, std::string* rejection = nullptr);
 
         /**
          * Record that an NPC was picked by the story engine at the given game time.
@@ -482,6 +482,7 @@ namespace IntelEngine {
             std::string bio;
             std::string npcHold;       // settlement (city/town) or hold fallback
             std::string factionName;   // pre-resolved political faction display name (empty if none)
+            std::string eligibleTypes; // story types this candidate may be used for (GetEligibleStoryTypes)
             bool        isFemale      = false;
             bool        is3DLoaded    = false;
             float       posX          = 0.f;
@@ -577,6 +578,8 @@ namespace IntelEngine {
 
         /** Scan loaded actors for those running one of the given packages. Returns JSON array. */
         std::string ScanActorsWithPackages(const std::vector<RE::FormID>& packageFormIDs);
+        // The same scan, returning the actors themselves.
+        std::vector<RE::Actor*> FindActorsWithPackages(const std::vector<RE::FormID>& packageFormIDs);
 
         /**
          * Get location name for an NPC, with fallback for unloaded actors.

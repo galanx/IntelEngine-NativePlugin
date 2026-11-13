@@ -16,6 +16,7 @@
 #include "Plugin.h"
 
 #include <sqlite3.h>
+#include <nlohmann/json.hpp>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -86,17 +87,20 @@ namespace IntelEngine {
         }
 
         /** Open/create database at the given path and ensure all tables exist. */
-        bool Initialize(const std::string& dbPath);
+        bool Initialize(const std::string& dbPath, const std::string& saveId = "");
 
         /** Close the database connection. */
         void Shutdown();
 
         /** Check if the database is open and ready. */
         bool IsReady() const { return db_ != nullptr; }
+        void BeginLoad();
+        nlohmann::json FeedIdentity();
+        nlohmann::json GetPoliticalEventsAfter(int afterId, int limit);
 
         /** Delete all rows from political tables where game_time > currentGameTime.
          *  Used on save load to remove future events from save-scumming.
-         *  Returns total rows deleted across all tables. */
+         *  Returns total rows deleted across all tables, or -1 on failure. */
         int CleanupFutureEvents(float currentGameTime);
 
         /** Recalculate player standings from history events.
@@ -128,7 +132,8 @@ namespace IntelEngine {
         int RecordEvent(const std::string& factionA, const std::string& factionB,
                         const std::string& eventType, const std::string& description,
                         int relationDelta, float gameTime,
-                        const std::string& instigatorNpc = "");
+                        const std::string& instigatorNpc = "",
+                        const std::string& locationName = "", const nlohmann::json& position = nullptr);
 
         /** Get recent visible events (most recent first), excluding replay-only relation_adjustment rows. */
         std::vector<FactionEvent> GetRecentEvents(int maxCount);
@@ -212,6 +217,9 @@ namespace IntelEngine {
 
         sqlite3* db_ = nullptr;
         mutable std::mutex mutex_;
+        nlohmann::json FeedIdentityLocked() const;
+        std::string saveId_, dbUuid_, loadId_;
+        bool feedReady_ = false, cleanupFailed_ = false;
     };
 
 }  // namespace IntelEngine

@@ -4,15 +4,13 @@
  * Off-Screen Travel Tracker
  *
  * Tracks estimated arrival time and position for NPCs traveling off-screen.
- * Skyrim doesn't simulate movement for unloaded NPCs — their position is
- * frozen until the cell loads again. This tracker waits until enough game
- * time has passed (distance-based estimate), then confirms the NPC is
- * stationary before signaling Papyrus to teleport.
+ * Unloaded NPCs can keep moving along routes. After the distance-based
+ * deadline, they can be placed immediately; loaded NPCs must stop first.
  *
  * Two-phase approach:
  * 1. Before estimated arrival: returns 0 (wait), keeps position baseline fresh.
- * 2. After estimated arrival: checks for movement. If stationary for
- *    STATIONARY_TICKS consecutive calls, returns 1 (teleport).
+ * 2. After estimated arrival: returns 1 immediately if unloaded, otherwise
+ *    after STATIONARY_TICKS consecutive stationary calls.
  *
  * Follows StuckDetector/DepartureDetector pattern:
  * slot-indexed arrays, shared_mutex, Meyer's singleton.
@@ -50,8 +48,8 @@ namespace IntelEngine {
          * Check off-screen travel progress.
          *
          * Before estimated arrival: updates baseline, returns 0.
-         * After estimated arrival: checks position delta against threshold.
-         * Returns 1 after STATIONARY_TICKS consecutive no-movement checks.
+         * After estimated arrival: unloaded actors return 1 immediately;
+         * loaded actors need STATIONARY_TICKS consecutive no-movement checks.
          *
          * @param slot  Slot index (0-4)
          * @param currentGameTime  Current game time (days)
@@ -60,7 +58,7 @@ namespace IntelEngine {
          * @return 0=still in transit (wait), 1=should teleport to destination
          */
         int CheckProgress(int slot, float currentGameTime,
-                          float npcX, float npcY);
+                          float npcX, float npcY, bool loaded, float& movement, int& stationaryTicks);
 
         /**
          * Reset/clear a slot. Called on task completion, cancellation, or load.

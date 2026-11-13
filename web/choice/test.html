@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+<!-- Automatic browser check of the IntelEngine choice page. Serve the repo root (python -m http.server 8174) and open
+     http://localhost:8174/web/choice/test.html; it prints PASS or FAIL. Chromium only: it does not prove
+     Magelight/Ultralight behaviour in game. -->
+<head>
+<meta charset="UTF-8" />
+<title>IntelEngine choice page check</title>
+</head>
+<body>
+<pre id="result">Running...</pre>
+<iframe title="page under test" src="index.html" width="900" height="600"></iframe>
+<script>
+const wait = ms => new Promise(r => setTimeout(r, ms));
+document.querySelector('iframe').addEventListener('load', async function () {
+  const out = document.getElementById('result');
+  try {
+    const view = this.contentWindow, doc = this.contentDocument;
+    const got = [];
+    view.ieChoice = p => got.push(p);
+    const assert = (ok, msg) => { if (!ok) throw Error(msg); };
+    const visible = () => doc.getElementById('panel').classList.contains('visible');
+    const key = k => { doc.dispatchEvent(new view.KeyboardEvent('keydown', { key: k, bubbles: true, cancelable: true }));
+                       doc.dispatchEvent(new view.KeyboardEvent('keyup', { key: k, bubbles: true, cancelable: true })); };
+    const hold = k => doc.dispatchEvent(new view.KeyboardEvent('keydown', { key: k, bubbles: true, cancelable: true }));
+    const btns = () => doc.querySelectorAll('.btn');
+    const show = (token, buttons, extra) => view.ieChoiceShow(JSON.stringify(Object.assign(
+      { token, title: 'Lydia', kind: 'Quest offer', body: 'Lydia wants help.', buttons, timeoutMs: 0 }, extra)));
+    const three = ['A', 'B', 'C'];
+    const log = [];
+    const pass = m => log.push('PASS ' + m);
+
+    assert(!visible(), 'hidden before the first request'); pass('hidden before the first request');
+
+    for (let i = 0; i < 3; i++) {
+      show('t' + i, three);
+      assert(visible(), 'visible after ieChoiceShow');
+      btns()[i].click();
+      assert(got.at(-1) === 't' + i + '|' + i, `button ${i} sends t${i}|${i}, got ${got.at(-1)}`);
+      assert(!visible(), 'hidden after a choice');
+    }
+    pass('each button sends token|index');
+
+    show('two', ['A', 'B']); assert(btns().length === 2, 'two buttons for two labels');
+    assert(btns()[0].classList.contains('primary') && btns()[1].classList.contains('danger'), 'tones: first primary, last danger');
+    key('Escape'); assert(got.at(-1) === 'two|1', 'Esc on two buttons sends index 1, got ' + got.at(-1));
+    show('esc', three); key('Escape'); assert(got.at(-1) === 'esc|2', 'Esc sends the last index');
+    pass('Esc sends the last index');
+
+    const before = got.length;
+    key('Escape'); btns().length && btns()[0].click();
+    assert(got.length === before, 'no answer without a live request'); pass('no answer without a live request');
+
+    show('dbl', three); btns()[1].click(); btns()[2].click();
+    assert(got.filter(p => p.startsWith('dbl|')).length === 1, 'only one answer per request'); pass('one answer per request');
+
+    show('k', three); key('2'); assert(got.at(-1) === 'k|1', 'key 2 sends index 1');
+    show('k9', ['A', 'B']); key('3'); assert(visible() && !got.some(p => p.startsWith('k9|')), 'key 3 ignored with two buttons'); key('1');
+    assert(got.at(-1) === 'k9|0', 'key 1 sends index 0'); pass('keys 1-N pick');
+
+    show('nav', three);
+    assert(doc.activeElement === btns()[0], 'first button focused on open');
+    key('ArrowDown'); assert(doc.activeElement === btns()[1], 'Down moves focus');
+    key('Tab'); assert(doc.activeElement === btns()[2], 'Tab moves focus');
+    key('ArrowUp'); assert(doc.activeElement === btns()[1], 'Up moves focus');
+    key('Enter'); assert(got.at(-1) === 'nav|1', 'Enter clicks the focused button'); pass('arrows/Tab move, Enter picks');
+
+    const held = got.length;
+    show('hold', three); hold('2');
+    assert(got.length === held && visible(), 'a held key has not answered yet');
+    doc.dispatchEvent(new view.KeyboardEvent('keyup', { key: '2', bubbles: true }));
+    assert(got.at(-1) === 'hold|1' && !visible(), 'the answer goes out when the key comes up'); pass('a key answers on release');
+    show('lr', three); key('ArrowRight'); assert(doc.activeElement === btns()[1], 'Right moves focus');
+    key('ArrowLeft'); assert(doc.activeElement === btns()[0], 'Left moves focus'); key('e');
+    assert(got.at(-1) === 'lr|0', 'E picks the focused button'); pass('Left/Right move, E picks');
+    assert(parseFloat(doc.getElementById('panel').style.zoom) > 0, 'the panel is scaled to the frame'); pass('scaled to the frame');
+
+    view.ieChoiceShow({ token: 'obj', title: '<i>t</i>', kind: 'k', body: '<b>bold</b> "q"', buttons: ['<u>x</u>', 'y'] });
+    assert(doc.getElementById('text').textContent === '<b>bold</b> "q"' && !doc.querySelector('#text b'), 'body is literal text');
+    assert(!doc.querySelector('#title i, .btn u'), 'title and labels are literal text');
+    btns()[0].click(); pass('text is literal (object payload too)');
+
+    show('long', three, { body: 'R'.repeat(400), title: 'T'.repeat(120) });
+    const card = doc.getElementById('panel').getBoundingClientRect();
+    assert(card.right <= view.innerWidth && card.left >= 0 && card.bottom <= view.innerHeight, 'long text stays inside the frame');
+    btns()[2].click(); pass('long body fits');
+
+    show('nt', three);
+    assert(doc.getElementById('timer').hidden, 'no timer bar without timeoutMs'); btns()[0].click(); pass('no timer without timeoutMs');
+
+    const n0 = got.length;
+    show('to', three, { timeoutMs: 1000 });
+    assert(!doc.getElementById('timer').hidden && doc.getElementById('timeoutLabel').textContent === 'No answer = C', 'timer bar shown');
+    await wait(1200);
+    assert(got.length === n0 + 1 && got.at(-1) === 'to|t', 'timeout sends token|t, got ' + got.at(-1));
+    assert(!visible(), 'hidden after the timeout'); pass('timeout sends token|t after ~1.2 s');
+
+    const n1 = got.length;
+    show('cancel', three, { timeoutMs: 1000 });
+    await wait(300); btns()[0].click(); await wait(1200);
+    assert(got.length === n1 + 1 && got.at(-1) === 'cancel|0', 'a click cancels the timer, got ' + got.slice(n1).join(','));
+    pass('a click before expiry cancels the timer');
+
+    out.textContent = 'PASS (' + got.length + ' answers)\n' + log.join('\n');
+    out.style.color = 'green';
+  } catch (e) {
+    out.textContent = 'FAIL: ' + e.message;
+    out.style.color = 'red';
+  }
+});
+</script>
+</body>
+</html>
