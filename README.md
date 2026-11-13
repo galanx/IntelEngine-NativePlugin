@@ -74,14 +74,14 @@ Without any player input, NPCs autonomously:
 - **Offer quests** — bounty hunts, rescue missions, item retrieval, and **faction war battles**
 - **Interact with each other** independently — arguments, deals, whispered conspiracies
 
-### Part 3 — Faction Politics (NEW in v3.0)
+### Part 3 — Faction Politics
 
 A living political system where 9 factions (configurable) scheme, trade, and wage war:
 
 - **Political DM** generates events every 6 game hours — trade deals, espionage, border skirmishes, assassinations, war declarations, and surrenders
 - **Player standing** with each faction rises and falls based on your actions — fight for a faction, betray them, commit crimes in their territory
 - **Faction wars** with morale, army strength, off-screen battles, and **player-present battles** with 5 waves of spawned soldiers (22 per side)
-- **Faction quests** — when your standing is 20+ with a faction, they call on you for combat missions, rescue operations, and full-scale battles that affect war outcomes
+- **Faction quests** — when your standing is 40+ with a faction, they call on you for combat missions, rescue operations, and full-scale battles that affect war outcomes (battles you happen upon: you join automatically at standing 20+)
 - **Political awareness** — NPCs know about recent political events and react to them in conversation
 - **In-game dashboard** (Magelight UI recommended, PrismaUI fallback) with a Politics tab showing all faction relations, active wars, and player standings
 
@@ -123,7 +123,7 @@ NPCs understand natural time expressions:
 
 **Natural arrival** — The NPC waits at the meeting point, idling naturally — sitting, leaning, looking around. When you arrive, the meeting is live. Walk away, and it ends. No arbitrary timer. No "press E to end meeting." Just proximity.
 
-**No-shows are remembered.** If you never arrive, the NPC waits until their patience runs out (configurable, default 3 game hours), then leaves. They remember you didn't show — and it colors future interactions differently than a meeting that went well.
+**No-shows are remembered.** If you never arrive, the NPC waits until their patience runs out (configurable, default 5 game hours), then leaves. They remember you didn't show — and it colors future interactions differently than a meeting that went well.
 
 **Lateness is tracked.** The NPC knows if they arrived late (pathfinding trouble, long distance). You know if the player was late. The meeting outcome — success, late arrival, or no-show — persists in the NPC's memory.
 
@@ -254,7 +254,7 @@ When an NPC is supposed to leave a location, IntelEngine verifies they actually 
 
 ## NPC Memory — Awareness Prompts
 
-IntelEngine injects six **SkyrimNet awareness prompts** into every NPC's character bio. These render live game state as natural-language context the AI sees on every dialogue cycle. NPCs don't just execute tasks — they **know** what they've done, what they're doing, and what they've committed to.
+IntelEngine injects eight **SkyrimNet bio submodules** into every NPC's character bio. These render live game state as natural-language context the AI sees on every dialogue cycle. NPCs don't just execute tasks — they **know** what they've done, what they're doing, and what they've committed to.
 
 ### Task Awareness
 NPCs know their current task — *"traveling to Dragonsreach"*, *"delivering a message to Nazeem"*, *"returning with Adrianne"* — and maintain a timestamped history of completed tasks. *"I fetched Ysolda earlier today. Delivered a message to the Jarl yesterday."* Task-outcome evidence is offline/compiled; the run3 raw result spelling was not logged, so the inverse-cause diagnosis remains unproven.
@@ -274,6 +274,12 @@ Everything the NPC learned through story events — gossip heard, ambush outcome
 ### Gossip Network
 Both rumors the NPC has heard (and from whom) and rumors they've shared (and to whom). Creates a visible web of social information — *"Ysolda told me that Nazeem was seen lurking near the warehouse."*
 
+### Political Awareness
+NPCs know the recent political events, wars and faction standings that concern their own faction (or the territory they are in). Leaders and members see their faction's events; public events reach everyone; secret ones only reach the factions involved. Faction members also know how their faction views you.
+
+### Arrival Purpose
+When an NPC has travelled to find you, they remember why they came, so their first words are about that errand.
+
 ---
 
 ## Concurrency & Persistence
@@ -288,7 +294,7 @@ Both rumors the NPC has heard (and from whom) and rumors they've shared (and to 
 
 ## MCM Configuration
 
-Three pages in the SkyUI Mod Configuration Menu:
+Four pages in the SkyUI Mod Configuration Menu:
 
 ### Active Tasks
 Real-time view of all 5 task slots — what each NPC is doing, where, and current status. Clear individual tasks or reset everything.
@@ -303,9 +309,12 @@ View all pending scheduled tasks with times and targets. Cancel individually or 
 | Debug Mode | Off | On/Off | Shows IE debug messages as in-game notifications (always logged to Papyrus.0.log). |
 | Max Concurrent Tasks | 5 | 1-5 | How many NPCs can be active at once |
 | Default Wait Hours | 48 | 6-168 | How long NPCs wait at destinations |
-| Task Confirmation | On | On/Off | Prompt before executing tasks |
+| Action Confirmation Prompts | Followers Only (Schedule Meeting: Everyone) | Disabled / Followers Only / Everyone | Set per action. With Magelight the prompt is a Magelight popup. Director actions never prompt |
 | Report Back After Delivery | On | On/Off | Messengers narrate delivery completion |
-| Meeting Timeout | 3 hrs | 1-12 | How long NPCs wait at meeting spots |
+| Meeting Timeout | 5 hrs | 1-12 | How long NPCs wait at meeting spots |
+
+### Hold Restrictions
+Per story type (Seek Player, Informant, Road Encounter, Ambush, Stalker, Message, Quest), choose which NPCs may travel from other places: No restriction, Same hold (civilians / except followers / everyone), or Same town (civilians / except followers / everyone). Default: Same hold (civilians).
 
 ### Story Tuning
 
@@ -314,8 +323,7 @@ View all pending scheduled tasks with times and targets. Cancel individually or 
 | Danger Zone Policy | Allow All | Who can be dispatched to dangerous areas (Allow All / Block Civilians / Followers Only / Block All) |
 | Player Home Visit Policy | Allow All | Who can visit when you're at home (same 4 levels) |
 | Story Tick Interval | 3 hrs | How often the Dungeon Master evaluates the world |
-| Travel Timeout | 7 hrs | Max travel time before a story NPC gives up |
-| Meeting Timeout | 5 hrs | Max wait time for scheduled meetings |
+| Max Travel Time | 1 day | 0.25–3 days | Max travel time before a story NPC gives up |
 | Quest Sub-Types | All On | Toggle rescue, find item, and combat quests individually |
 
 ---
@@ -330,18 +338,18 @@ Host selection is fixed until restart. In `Data/SKSE/Plugins/SkyrimNet/config/pl
 
 Change the dashboard hotkey in the dashboard's Settings tab or on the SkyrimNet settings page (click Save); both apply immediately. The MCM has no hotkey option.
 
-Section headers in Tasks, Story, Politics, Director, Actions and Packages toggle their bodies with ▾/▸ indicators. All sections start open; each section's choice is remembered in browser localStorage across reloads. Header controls remain usable without toggling. Offline headless regression: `python SKSE/tests/RunDashboardDropdownCheck.py "<chrome.exe>" web/dashboard/dist --scenario=dashboard_sections_collapse`; game-host behavior is not live-verified.
+Section headers in Tasks (including its IE packages section), Story, Politics, Director and Actions toggle their bodies with ▾/▸ indicators. All sections start open; each section's choice is remembered in browser localStorage across reloads. Header controls remain usable without toggling. Offline headless regression: `python SKSE/tests/RunDashboardDropdownCheck.py "<chrome.exe>" web/dashboard/dist --scenario=dashboard_sections_collapse`; game-host behavior is not live-verified.
 
 ### Tabs
 
-**Tasks** — Live view of all active and scheduled tasks. Cancel individual tasks, see agent names, destinations, task types, speeds, and scheduled meeting timing ("in ~3h", "very soon", "overdue"). A successful task-card cancellation shows `<Name>'s task cancelled.`. Cancelling the active story NPC's task also ends the story and its tracking, clearing the Story tab.
+**Tasks** — Live view of all active and scheduled tasks. Cancel individual tasks, see agent names, destinations, task types, speeds, and scheduled meeting timing ("in ~3h", "very soon", "overdue"). An IE packages section lists NPCs running IntelEngine AI packages (travel, sandbox, stalk) without a task slot; remove packages from stuck NPCs directly. A successful task-card cancellation shows `<Name>'s task cancelled.`. Cancelling the active story NPC's task also ends the story and its tracking, clearing the Story tab.
 Slot allocation and clearing refresh the open dashboard immediately; a closed dashboard skips snapshot building.
 
 Cancelled stories with narration add a `stopped before finishing: ...` NPC fact before cleanup. Generic load abandonment and the six-hour watchdog add `never finished: ...` facts; this is source/compiled-bytecode behavior, not live-verified.
 
 Task cards show recorded origin, in-game allocation time and existing dispatch reason. Scheduled cards retain their creation provenance; legacy missing times stay blank. SkyrimNet dialogue actions currently provide origin only: upstream action mappings do not forward the triggering dialogue response.
 
-**Story Engine** — Toggle the Story Engine and individual story types on/off. See the active dispatch, next DM check-in timer, NPC social activity, active quests, and a log of recent NPC-to-NPC interactions.
+**Story** — Toggle the Story Engine and individual story types on/off. See the active dispatch, next DM check-in timer, NPC social activity, active quests, and a log of recent NPC-to-NPC interactions.
 
 Activity dates use the current save's in-game calendar and display to the nearest minute, including political events, war timelines, battle history and new NPC activity entries. Older entries without a timestamp remain undated; a recorded zero is a valid timestamp.
 
@@ -385,8 +393,6 @@ Category rows use larger bold titles and an amber left border. Disabling a categ
 
 Story toggles affect automatic stories; Action toggles affect AI-chosen actions. Director ignores both. Action-toggle changes apply after SkyrimNet **Reload configs** or a restart.
 
-**Active Packages** — See which NPCs are currently running IntelEngine AI packages (travel, sandbox, stalk). Remove packages from stuck NPCs directly.
-
 **Settings** — Shared settings behavior with the MCM. Politics settings are read from `settings.yaml` and saved there by both interfaces; plugin configuration includes blocklists and LLM overrides.
 
 ### How It Works
@@ -425,7 +431,7 @@ IntelEngine operates as two tightly integrated layers, with a third connecting i
 - **Time parsing** — natural language to game-hour conversion for scheduling
 - **Stuck & departure detection** — native position polling at engine speed, independent per task slot
 - **Cell analysis** — door enumeration, exterior/interior classification, directional scanning
-- **Dashboard bridge** — PrismaUI integration with thread-safe C++/Papyrus event routing and JSON state serialization
+- **Dashboard bridge** — shared C++ host bridge for Magelight UI (preferred) and PrismaUI with thread-safe C++/Papyrus event routing and JSON state serialization
 
 **Papyrus Scripts** — game engine integration:
 - AI package management (travel, sandbox, and escort packages at three speed tiers)
@@ -434,14 +440,14 @@ IntelEngine operates as two tightly integrated layers, with a third connecting i
 - Save/load recovery with full package and linked-ref reconstruction
 - MCM management interface
 
-**SkyrimNet External Bundle** — IntelEngine's 11 AI-selectable actions, three category containers, four custom LLM prompts, and seven character-bio submodules ship under `SKSE/Plugins/SkyrimNet/external/galanx.intelengine/`. Action identities and Papyrus entry points remain unchanged.
+**SkyrimNet External Bundle** — IntelEngine's 11 AI-selectable actions, three category containers, five custom LLM prompts, and eight character-bio submodules ship under `SKSE/Plugins/SkyrimNet/external/galanx.intelengine/`. Action identities and Papyrus entry points remain unchanged.
 
 **SkyrimNet Plugin Configuration** — IntelEngine's LLM variant, settings schema, generated `settings.yaml`, and user-editable `factions.yaml` remain under `SKSE/Plugins/SkyrimNet/config/plugins/IntelEngine/`. This configuration path is separate from the Beta 25 external content bundle.
 
 **Extra faction files (`factions.d/`)** — besides `factions.yaml`, IntelEngine loads every `factions.d/*.yaml` next to it (`SKSE/Plugins/SkyrimNet/config/plugins/IntelEngine/`), in filename order. A faction whose `id` already exists is replaced whole; a new `id` is added. A relation for the same pair replaces the earlier one. A broken file is skipped with a log warning. If a file's first line is `requires: political_engine`, it loads only when Political Engine is installed and its integration setting is on; IntelEngine ships `political_engine.yaml` this way. Edits are whole-faction only: copy the full faction into your file to change it, because single fields cannot be overridden. A faction may set an optional `pe_side: 0-3` (Political Engine side: 0 Independent, 1 Empire, 2 Stormcloaks, 3 Aldmeri Dominion); without it the Imperial, Stormcloak and Thalmor engine factions map to 1, 2 and 3.
 
 ```yaml
-# factions.d/my_changes.yaml
+# factions.d/zz_my_changes.yaml  (files load in name order: this one has to come after political_engine.yaml to change PE_Whiterun)
 factions:
   - id: "PE_Whiterun"
     name: "Whiterun (mine)"
@@ -456,12 +462,13 @@ factions:
 
 The Story Engine is Part 2 of IntelEngine. Every few in-game hours, an LLM Dungeon Master observes the full world state — your location, time of day, NPC memories and relationships — and decides if something should happen. World facts shared by every candidate are shown once, while each NPC's additional knowledge remains attached to them for silent fact-checking. No random dice rolls. Every event is grounded in the actual history of your playthrough.
 
-Nine story types, each individually toggleable via MCM:
+Ten story types, each individually toggleable via MCM:
 
 - **Seek Player** — NPCs travel to find you because of unfinished business, old friendships, or something they overheard. Forgotten friends don't stay forgotten — NPCs you haven't seen in a while are more likely to come looking.
 - **Informant** — NPCs approach with real gossip traced to actual game events. The chain of who told whom is tracked.
 - **Road Encounter** — You cross paths with NPCs traveling on their own business. Exterior only. They have their own destination.
 - **Ambush** — Hostile NPCs with real grudges stalk and attack you. Stealth or charge variants. Beat them and they yield — talk, kill, or walk away.
+- **Faction Ambush** — A faction that is hostile to you (standing -40 or lower) sends a patrol of 3–7 soldiers to waylay you on the road. Exterior only.
 - **Stalker** — Romantically obsessed NPCs secretly follow you until caught. No combat — the emotional confrontation is the payoff.
 - **Message** — Couriers deliver verbal messages from NPCs who can't come themselves, with optional meeting invitations that schedule the sender.
 - **Quest: Combat** — NPCs ask you to clear enemies from a location. Guide option (they jog with you) or go alone with a map marker. Bandits, draugr, or dragons.
@@ -469,6 +476,8 @@ Nine story types, each individually toggleable via MCM:
 - **Quest: Find Item** — NPCs send you to retrieve a specific item from a dungeon. A quest chest is placed at the boss room with a guardian enemy. The compass points directly at the chest.
 - **NPC Interaction** — Two NPCs interact independently of you. Arguments, deals, training, whispered conspiracies. Happens whether you're watching or not.
 - **NPC Gossip** — Rumors spread through chains of up to 10 people. Information travels realistically through the world.
+
+**Background events in SkyrimNet History — implemented, pending live acceptance:** persistent `intel_social` and `intel_story` schemas categorize executed NPC interactions, gossip exchanges and story/seek/informant outcomes. Matching generic memories are replaced rather than duplicated; travel proposals, rejections and cooldown blocks do not emit these types. SkyrimNet's existing automatic-audience distance/configuration filters still apply, so off-screen registration does not guarantee History retention. Politics remains in IntelEngine's Politics tab: SkyrimNet currently has no History-only sink excluded from NPC prompts/memory.
 
 Every event injects facts into NPC bios that persist and influence all future dialogue. Message and quest courier facts/memories are recorded only after arrival passes the travel rejection checks; rejected pending quests do not publish quest facts or repetition history. The Dungeon Master prompt lists only enabled story types and guards long-absence seek-player guidance accordingly. Anti-repetition, type balancing, and per-NPC cooldowns keep stories varied and meaningful. Story arrival interleaving has compiled-PEX coverage, but live acceptance remains pending. Localized-place-name prompt guidance is not localized-install acceptance.
 Localized place-name guidance adds neither Unicode/alias resolution nor custom named-Place routing.
@@ -482,7 +491,6 @@ IntelEngine is under active development. The following features are planned for 
 - **Eliminate Target** — dispatch an NPC to kill a specific person. Assassinations, bounty hunting, or settling grudges — carried out autonomously across the world.
 - **Lockpick Door** — send an NPC to pick a locked door, gaining access to restricted areas without doing the dirty work yourself.
 - **Steal Item** — task an NPC with stealing something from someone's inventory or home. Risk and reward — their skill determines success.
-- **Background events in SkyrimNet History — implemented, pending live acceptance:** persistent `intel_social` and `intel_story` schemas categorize executed NPC interactions, gossip exchanges and story/seek/informant outcomes. Matching generic memories are replaced rather than duplicated; travel proposals, rejections and cooldown blocks do not emit these types. SkyrimNet's existing automatic-audience distance/configuration filters still apply, so off-screen registration does not guarantee History retention. Politics remains in IntelEngine's Politics tab: SkyrimNet currently has no History-only sink excluded from NPC prompts/memory.
 - **Timeline-rewind notification — backlog, not implemented:** when loading an earlier save removes later political history (`CleanupFutureEvents` > 0), show a top-left `RE::DebugNotification` hint with the count, deferred until the load completes. Separate native feature, not part of the migration release.
 
 ---

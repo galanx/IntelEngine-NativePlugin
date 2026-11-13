@@ -29,7 +29,8 @@ int main() try {
     Require(politics->EndWar("D", "C", "C", 3.f), "end independent peace war");
     const int battle = db->GetRelation("A", "B");
     const int peace = db->GetRelation("C", "D");
-    Require(battle == -55 && peace == -50, "battle -10 and peace +10 applied live");
+    // peace: +10, and at least up to the truce score (-40), so the pair is not Critical after the war
+    Require(battle == -55 && peace == -40, "battle -10 and peace (truce) applied live");
     db->Shutdown();
     Require(db->Initialize("./relations.db"), "reopen persisted DB");
     db->CleanupFutureEvents(3.f);

@@ -28,6 +28,7 @@
 #include "OffScreenTracker.h"
 #include "ProximityMonitor.h"
 #include "ProximityDistance.h"
+#include "NaturalTimeParser.h"
 #include "SlotTracker.h"
 #include "MemoryDB.h"
 #include "Settings.h"
@@ -70,6 +71,7 @@ namespace IntelEngine::Papyrus {
     std::vector<int> GetDMCandidatePoolFormIDs(RE::StaticFunctionTag*);
     std::vector<int> GetNPCCandidatePoolFormIDs(RE::StaticFunctionTag*);
     RE::BSFixedString ScanActorsWithPackages(RE::StaticFunctionTag*, std::vector<int>);
+    std::vector<RE::Actor*> GetActorsWithPackages(RE::StaticFunctionTag*, std::vector<int>);
     RE::BSFixedString RenderFactsSection(RE::StaticFunctionTag*, std::vector<RE::BSFixedString>, std::vector<float>, float);
     RE::BSFixedString RenderGossipHeardSection(RE::StaticFunctionTag*, std::vector<RE::BSFixedString>, std::vector<RE::BSFixedString>, std::vector<float>, float);
     RE::BSFixedString RenderGossipToldSection(RE::StaticFunctionTag*, std::vector<RE::BSFixedString>, std::vector<RE::BSFixedString>, std::vector<float>, float);
@@ -95,6 +97,8 @@ namespace IntelEngine::Papyrus {
     void ReloadDashboardConfig(RE::StaticFunctionTag*);
     void PushDashboardFullState(RE::StaticFunctionTag*, RE::BSFixedString);
     bool IsDashboardOpen(RE::StaticFunctionTag*);
+    int EnableMagelightGamepadKeys(RE::StaticFunctionTag*, int);
+    bool IsActorTalking(RE::StaticFunctionTag*, RE::Actor*);
 
     // Political system forward declarations
     int GetFactionRelation(RE::StaticFunctionTag*, RE::BSFixedString, RE::BSFixedString);
@@ -407,6 +411,7 @@ namespace IntelEngine::Papyrus {
         a_vm->RegisterFunction("GetDMCandidatePoolFormIDs", SCRIPT_NAME, GetDMCandidatePoolFormIDs); ++count;
         a_vm->RegisterFunction("GetNPCCandidatePoolFormIDs", SCRIPT_NAME, GetNPCCandidatePoolFormIDs); ++count;
         a_vm->RegisterFunction("ScanActorsWithPackages", SCRIPT_NAME, ScanActorsWithPackages); ++count;
+        a_vm->RegisterFunction("GetActorsWithPackages", SCRIPT_NAME, GetActorsWithPackages); ++count;
         a_vm->RegisterFunction("SpawnQuestEnemies", SCRIPT_NAME, SpawnQuestEnemies); ++count;
         a_vm->RegisterFunction("SpawnQuestBoss", SCRIPT_NAME, SpawnQuestBoss); ++count;
         a_vm->RegisterFunction("SpawnQuestChest", SCRIPT_NAME, SpawnQuestChest); ++count;
@@ -452,6 +457,8 @@ namespace IntelEngine::Papyrus {
         a_vm->RegisterFunction("ReloadDashboardConfig", SCRIPT_NAME, ReloadDashboardConfig); ++count;
         a_vm->RegisterFunction("PushDashboardFullState", SCRIPT_NAME, PushDashboardFullState); ++count;
         a_vm->RegisterFunction("IsDashboardOpen", SCRIPT_NAME, IsDashboardOpen); ++count;
+        a_vm->RegisterFunction("EnableMagelightGamepadKeys", SCRIPT_NAME, EnableMagelightGamepadKeys); ++count;
+        a_vm->RegisterFunction("IsActorTalking", SCRIPT_NAME, IsActorTalking); ++count;
 
         // Faction Politics Functions
         a_vm->RegisterFunction("GetFactionRelation", SCRIPT_NAME, GetFactionRelation); ++count;
@@ -1170,12 +1177,11 @@ namespace IntelEngine::Papyrus {
     std::vector<float> GetOffsetBehind(RE::StaticFunctionTag*, RE::TESObjectREFR* akRef, float distance) {
         if (!akRef) return {0.0f, 0.0f};
 
-        float angle = akRef->GetAngleZ() + 180.0f;
-        if (angle >= 360.0f) angle -= 360.0f;
-
-        // Convert degrees to radians for C++ trig
-        constexpr float DEG_TO_RAD = 3.14159265358979f / 180.0f;
-        float radians = angle * DEG_TO_RAD;
+        // The engine keeps a reference's rotation in radians (Papyrus GetAngleZ converts for scripts). Adding 180
+        // to that as if it were degrees gave an angle between 180 and 186 whatever the facing, so "behind" was
+        // always due south of the reference, and in front of a player who happened to look south.
+        constexpr float PI = 3.14159265358979f;
+        float radians = akRef->GetAngleZ() + PI;
         float offsetX = std::sin(radians) * distance;
         float offsetY = std::cos(radians) * distance;
 
@@ -1187,155 +1193,22 @@ namespace IntelEngine::Papyrus {
     // ==========================================================================
 
     float ParseTimeCondition(RE::StaticFunctionTag*, RE::BSFixedString condition) {
-        std::string input = StringUtils::ToLowerStd(condition.c_str());
-        if (input.empty()) return -1.0f;
-
-        // Check for "tomorrow" — adds 24h offset to force next-day scheduling
-        // Supports: "tomorrow", "tomorrow morning", "tomorrow night", "tomorrow at 3pm", etc.
-        float dayOffset = 0.0f;
-        auto tomorrowPos = input.find("tomorrow");
-        if (tomorrowPos != std::string::npos) {
-            dayOffset = 24.0f;
-            input.erase(tomorrowPos, 8);  // "tomorrow" = 8 chars
-            while (!input.empty() && input.front() == ' ') input.erase(input.begin());
-            while (!input.empty() && input.back() == ' ') input.pop_back();
-            if (input.empty()) {
-                logger::debug("ParseTimeCondition: '{}' -> noon tomorrow (36.0)", condition.c_str());
-                return 12.0f + dayOffset;  // "tomorrow" alone → noon tomorrow
-            }
-            logger::debug("ParseTimeCondition: stripped 'tomorrow', parsing sub-time '{}'", input);
+        // Relative phrases need a timescale-aware clock (compatible with DTS mods).
+        // Pass -1 when Calendar is unavailable so relatives fail cleanly.
+        float currentHour = -1.0f;
+        if (auto* cal = RE::Calendar::GetSingleton()) {
+            const float currentGameTime = cal->GetCurrentGameTime();
+            currentHour = (currentGameTime - std::floor(currentGameTime)) * 24.0f;
         }
 
-        // Helper: compute relative hour offset from current time, wrapped at 24
-        // Uses GetCurrentGameTime() to be timescale-aware (compatible with DTS mods)
-        auto relativeHour = [](float offset) -> float {
-            auto* cal = RE::Calendar::GetSingleton();
-            if (!cal) return -1.0f;
-
-            // Derive current hour from timescale-aware GetCurrentGameTime()
-            float currentGameTime = cal->GetCurrentGameTime();
-            float currentHour = (currentGameTime - std::floor(currentGameTime)) * 24.0f;
-
-            float target = currentHour + offset;
-            while (target >= 24.0f) target -= 24.0f;
-            return target;
-        };
-
-        // --- Relative time patterns ---
-        if (input.find("soon") != std::string::npos ||
-            input.find("shortly") != std::string::npos ||
-            input.find("a moment") != std::string::npos ||
-            input.find("right away") != std::string::npos ||
-            input.find("immediately") != std::string::npos) {
-            return relativeHour(0.25f) + dayOffset;
+        const float result = NaturalTime::Parse(
+            condition.c_str() ? condition.c_str() : "", currentHour);
+        if (result < 0.0f) {
+            logger::debug("ParseTimeCondition: could not parse '{}'", condition.c_str());
+        } else {
+            logger::debug("ParseTimeCondition: '{}' -> {}", condition.c_str(), result);
         }
-
-        if (input.find("half an hour") != std::string::npos ||
-            input.find("30 minute") != std::string::npos) {
-            return relativeHour(0.5f) + dayOffset;
-        }
-
-        if (input.find("few hour") != std::string::npos ||
-            input.find("couple hour") != std::string::npos ||
-            input.find("couple of hour") != std::string::npos) {
-            return relativeHour(2.0f) + dayOffset;
-        }
-
-        // "N hour(s)" — check from high to low to avoid "1 hour" matching inside "10 hour"
-        struct HourPattern { const char* text; float hours; };
-        static const HourPattern hourPatterns[] = {
-            {"12 hour", 12.0f}, {"11 hour", 11.0f}, {"10 hour", 10.0f},
-            {"9 hour", 9.0f}, {"8 hour", 8.0f}, {"7 hour", 7.0f},
-            {"6 hour", 6.0f}, {"5 hour", 5.0f}, {"4 hour", 4.0f},
-            {"3 hour", 3.0f}, {"2 hour", 2.0f},
-        };
-        for (const auto& hp : hourPatterns) {
-            if (input.find(hp.text) != std::string::npos) {
-                return relativeHour(hp.hours) + dayOffset;
-            }
-        }
-
-        // "1 hour" / "an hour" / "one hour" — after multi-digit patterns
-        if (input.find("1 hour") != std::string::npos ||
-            input.find("an hour") != std::string::npos ||
-            input.find("one hour") != std::string::npos) {
-            return relativeHour(1.0f) + dayOffset;
-        }
-
-        // --- Named time patterns (substring match) ---
-        // Order matters: more specific terms before substrings they contain
-        // e.g., "midnight" before "night", "afternoon" before "noon"
-        struct NamedTime { const char* keyword; float hour; };
-        static const NamedTime namedTimes[] = {
-            {"midnight", 0.0f},
-            {"first light", 5.0f},
-            {"dawn", 5.0f},
-            {"sunrise", 6.0f},
-            {"sun rise", 6.0f},
-            {"breakfast", 8.0f},
-            {"morning", 8.0f},
-            {"midday", 12.0f},
-            {"mid-day", 12.0f},
-            {"afternoon", 14.0f},   // before "noon"
-            {"noon", 12.0f},
-            {"dinner", 18.0f},
-            {"supper", 18.0f},
-            {"evening", 18.0f},
-            {"sundown", 19.0f},
-            {"sun set", 19.0f},
-            {"sunset", 19.0f},
-            {"twilight", 20.0f},
-            {"dusk", 20.0f},
-            {"tonight", 22.0f},     // before "night"
-            {"night", 22.0f},
-            {"dark", 22.0f},
-        };
-        for (const auto& nt : namedTimes) {
-            if (input.find(nt.keyword) != std::string::npos) {
-                return nt.hour + dayOffset;
-            }
-        }
-
-        // --- Specific hour patterns: "Xpm"/"X pm"/"Xam"/"X am" ---
-        struct ClockPattern { const char* text; int hour; };
-        static const ClockPattern pmPatterns[] = {
-            {"12pm", 12}, {"12 pm", 12},
-            {"11pm", 23}, {"11 pm", 23},
-            {"10pm", 22}, {"10 pm", 22},
-            {"9pm", 21}, {"9 pm", 21},
-            {"8pm", 20}, {"8 pm", 20},
-            {"7pm", 19}, {"7 pm", 19},
-            {"6pm", 18}, {"6 pm", 18},
-            {"5pm", 17}, {"5 pm", 17},
-            {"4pm", 16}, {"4 pm", 16},
-            {"3pm", 15}, {"3 pm", 15},
-            {"2pm", 14}, {"2 pm", 14},
-            {"1pm", 13}, {"1 pm", 13},
-        };
-        for (const auto& cp : pmPatterns) {
-            if (input.find(cp.text) != std::string::npos) {
-                return static_cast<float>(cp.hour) + dayOffset;
-            }
-        }
-
-        static const ClockPattern amPatterns[] = {
-            {"12am", 0}, {"12 am", 0},
-            {"11am", 11}, {"11 am", 11},
-            {"10am", 10}, {"10 am", 10},
-            {"9am", 9}, {"9 am", 9},
-            {"8am", 8}, {"8 am", 8},
-            {"7am", 7}, {"7 am", 7},
-            {"6am", 6}, {"6 am", 6},
-        };
-        for (const auto& cp : amPatterns) {
-            if (input.find(cp.text) != std::string::npos) {
-                return static_cast<float>(cp.hour) + dayOffset;
-            }
-        }
-
-        // Nothing matched
-        logger::debug("ParseTimeCondition: could not parse '{}'", condition.c_str());
-        return -1.0f;
+        return result;
     }
 
     float CalculateTargetGameTime(RE::StaticFunctionTag*, float targetHour, float currentHour) {
@@ -2358,6 +2231,15 @@ namespace IntelEngine::Papyrus {
         return result;
     }
 
+    std::vector<RE::Actor*> GetActorsWithPackages(RE::StaticFunctionTag*, std::vector<int> packageFormIDs) {
+        std::vector<RE::FormID> formIds;
+        formIds.reserve(packageFormIDs.size());
+        for (auto fid : packageFormIDs) {
+            formIds.push_back(static_cast<RE::FormID>(fid));
+        }
+        return NPCIndex::GetSingleton()->FindActorsWithPackages(formIds);
+    }
+
     // ==========================================================================
     // MemoryDB Functions (SkyrimNet SQLite reader)
     // ==========================================================================
@@ -2876,6 +2758,23 @@ namespace IntelEngine::Papyrus {
 
     void PushDashboardFullState(RE::StaticFunctionTag*, RE::BSFixedString json) {
         DashboardUIManager::GetSingleton()->PushFullState(json.c_str());
+    }
+
+    // The engine's own IsTalking test (the condition function the game uses for lip sync and greetings), so it
+    // is true for a vanilla line and for a line SkyrimNet plays through the game's voice system alike.
+    bool IsActorTalking(RE::StaticFunctionTag*, RE::Actor* actor) {
+        if (!actor || !actor->Is3DLoaded()) return false;
+        RE::TESConditionItem item;
+        item.data.functionData.function = RE::FUNCTION_DATA::FunctionID::kIsTalking;
+        item.data.comparisonValue.f = 1.0f;
+        item.data.flags.opCode = RE::CONDITION_ITEM_DATA::OpCode::kEqualTo;
+        item.data.object = RE::CONDITIONITEMOBJECT::kSelf;
+        RE::ConditionCheckParams params(actor, actor);
+        return item(params);
+    }
+
+    int EnableMagelightGamepadKeys(RE::StaticFunctionTag*, int view) {
+        return view > 0 ? SetMagelightViewGamepadKeys(static_cast<std::uint32_t>(view)) : 0;
     }
 
     bool IsDashboardOpen(RE::StaticFunctionTag*) {
@@ -4346,9 +4245,12 @@ namespace IntelEngine::Papyrus {
             auto* soldier = RE::TESForm::LookupByID<RE::Actor>(fid);
             if (!soldier || soldier->IsDead()) continue;
 
-            // Aggression 2 = attack everyone. Factionless — nobody defends them.
-            // currentCombatTarget = leader, so they prioritize the leader.
-            soldier->AsActorValueOwner()->SetActorValue(RE::ActorValue::kAggression, 2.f);
+            // Aggression 1 = attacks enemies only, and fights back when attacked. The assassin has no
+            // faction, so nobody is an enemy by default: the leader becomes the target through
+            // currentCombatTarget and Papyrus StartCombat, the guards by attacking first. This was 2
+            // ("attacks neutrals too"), and to a factionless actor everyone is a neutral: the assassin
+            // went for the player and bystanders as soon as the leader was down or out of reach.
+            soldier->AsActorValueOwner()->SetActorValue(RE::ActorValue::kAggression, 1.f);
             soldier->GetActorRuntimeData().currentCombatTarget = target->GetHandle();
             attackCount++;
 
@@ -4919,8 +4821,15 @@ namespace IntelEngine::Papyrus {
     // ==========================================================================
 
     RE::BSFixedString ProcessPoliticalDMResponse(RE::StaticFunctionTag*, RE::BSFixedString response, int success) {
-        return RE::BSFixedString(FactionPolitics::GetSingleton()->ProcessPoliticalDMResponse(
-            response.c_str(), success));
+        // The response is model output. Only its parse was guarded: a field of the wrong type ("relation_delta":
+        // "-10", "faction_b": null) makes nlohmann's value() throw, and an exception leaving a native ends the game.
+        try {
+            return RE::BSFixedString(FactionPolitics::GetSingleton()->ProcessPoliticalDMResponse(
+                response.c_str(), success));
+        } catch (const std::exception& e) {
+            logger::warn("ProcessPoliticalDMResponse: malformed response ignored: {}", e.what());
+            return RE::BSFixedString("{\"error\":\"malformed response\"}");
+        }
     }
 
     RE::BSFixedString RunStandingMechanicsNative(RE::StaticFunctionTag*) {
@@ -4978,15 +4887,30 @@ namespace IntelEngine::Papyrus {
     }
 
     RE::BSFixedString GetPreciseTimeDescriptionNative(RE::StaticFunctionTag*, float meetTimeHours, float currentGameTime) {
-        float currentHours = std::fmod(currentGameTime * 24.f, 24.f);
-        float hoursUntil = meetTimeHours - currentHours;
-        if (hoursUntil < 0) hoursUntil += 24.f;
+        // ParseTimeCondition encodes "tomorrow" as hour + 24 (e.g. 34 = tomorrow 10:00).
+        // Normalize before formatting so we don't render 34 as "10 PM".
+        int extraDays = 0;
+        while (meetTimeHours >= 24.f) {
+            meetTimeHours -= 24.f;
+            ++extraDays;
+        }
 
-        bool tomorrow = (meetTimeHours < currentHours && hoursUntil > 1.f);
-        std::string prefix = tomorrow ? "tomorrow " : "";
+        float currentHours = std::fmod(currentGameTime * 24.f, 24.f);
+        if (currentHours < 0.f) currentHours += 24.f;
+
+        float hoursUntil = meetTimeHours - currentHours;
+        if (hoursUntil < 0.f) hoursUntil += 24.f;
+
+        const bool tomorrow = extraDays > 0 || (meetTimeHours < currentHours && hoursUntil > 1.f);
+        std::string prefix;
+        if (extraDays >= 2) {
+            prefix = "in " + std::to_string(extraDays) + " days ";
+        } else if (tomorrow) {
+            prefix = "tomorrow ";
+        }
 
         int hour = static_cast<int>(meetTimeHours);
-        int minute = static_cast<int>((meetTimeHours - hour) * 60.f);
+        int minute = static_cast<int>((meetTimeHours - static_cast<float>(hour)) * 60.f);
         std::string ampm = (hour >= 12) ? "PM" : "AM";
         int displayHour = hour % 12;
         if (displayHour == 0) displayHour = 12;
@@ -5058,7 +4982,13 @@ namespace IntelEngine::Papyrus {
                                              int toggleBitmask, int envFlags) {
         std::string s = responseJson.c_str();
         StripToJson(s);  // same stripping as the field readers; a ```json fence used to fail validation
-        return RE::BSFixedString(FactionPolitics::ValidateStoryResponse(s, toggleBitmask, envFlags));
+        // Model output again (see ProcessPoliticalDMResponse): "gossip": null beside "rumor" threw out of the native.
+        try {
+            return RE::BSFixedString(FactionPolitics::ValidateStoryResponse(s, toggleBitmask, envFlags));
+        } catch (const std::exception& e) {
+            logger::warn("ValidateStoryResponse: malformed response rejected: {}", e.what());
+            return RE::BSFixedString("{\"valid\":false,\"reason\":\"malformed response\"}");
+        }
     }
 
     RE::BSFixedString BuildFactionBattleDispatchFact(RE::StaticFunctionTag*,

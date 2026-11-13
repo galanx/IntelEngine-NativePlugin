@@ -202,7 +202,7 @@ default_relations:
     faction_b: "ThievesGuildFaction"
     relation: 60
 war_allowed:
-  ImperialFaction: ["StormcloakFaction"]
+  military: ["military"]
 )YAML";
     }
 
@@ -258,6 +258,18 @@ war_allowed:
                 const auto b = line.find_first_not_of(" \t\r"), e = line.find_last_not_of(" \t\r");
                 if (b != std::string::npos) { first = line.substr(b, e - b + 1); break; }
             }
+            // A file saved with a byte-order mark, or with other spacing after the colon, did not match the exact
+            // text below and was loaded for everyone: nine Political Engine realms for players without that mod.
+            if (first.rfind("\xEF\xBB\xBF", 0) == 0) first.erase(0, 3);
+            if (first.rfind("requires:", 0) == 0) {
+                auto need = first.substr(9);
+                need.erase(0, need.find_first_not_of(" \t"));
+                if (need != "political_engine") {
+                    logger::warn("FactionPolitics: skipped fragment {} (unknown requirement '{}')", file.filename().string(), need);
+                    continue;
+                }
+                first = "requires: political_engine";
+            }
             if (first == "requires: political_engine" &&
                 !(peIntegration_.load() && PoliticalEngineBridge::GetSingleton()->IsDetected())) {
                 logger::info("FactionPolitics: skipped fragment {} (Political Engine not active)", file.filename().string());
@@ -290,9 +302,12 @@ war_allowed:
         }
         factions_ = std::move(result.factions);
         defaultRelations_ = std::move(result.defaultRelations);
-        // fix94: only factions.yaml's war_allowed counts (fragments' sections are ignored); missing = Legion vs Stormcloaks only.
+        // fix94: only factions.yaml's war_allowed counts (fragments' sections are ignored).
+        // Missing = armies fight armies: any two factions of type "military". It was Legion vs Stormcloaks by id,
+        // which left every faction file written for 3.7.1 (and every custom faction set) with at most that one
+        // war, or none. Guilds and families still never go to war, which is what the list is for.
         warAllowed_ = result.hasWarAllowed ? std::move(result.warAllowed)
-                                           : decltype(warAllowed_){{"ImperialFaction", {"StormcloakFaction"}}};
+                                           : decltype(warAllowed_){{"military", {"military"}}};
         ++factionRevision_;
         factionIndex_.clear();
         nameToId_.clear();
@@ -2055,9 +2070,14 @@ war_allowed:
         const auto relations = db->GetAllRelations();
         const decltype(relations)::value_type* best = nullptr;
         for (const auto& r : relations) {
-            if (r.warActive || GetRelationStatus(r.relationScore) != "Critical") continue;
+            if (r.warActive) continue;
             const auto a = GetFaction(r.factionA), b = GetFaction(r.factionB);
             if (!a || !b || !WarPossible(*a, *b)) continue;
+            // Each faction's own war_threshold, the same way IsAtWar and the prompt read it (one side willing
+            // to fight sets the bar). The plain "Critical" test here was the fixed -49, so two factions both
+            // set up to be slow to war went to war at -50 regardless of what factions.yaml said.
+            const int threshold = (std::max)({RELATION_HOSTILE - 1, a->warThreshold, b->warThreshold});
+            if (r.relationScore > threshold) continue;
             if (FactionToJsonFromSnapshot(*a, snap).empty() || FactionToJsonFromSnapshot(*b, snap).empty()) continue;  // disbanded
             const auto last = db->GetMostRecentWar(r.factionA, r.factionB);
             if (last && last->endTime > 0.0f && gameTime - last->endTime < static_cast<float>(cooldownDays)) continue;
@@ -2109,19 +2129,29 @@ war_allowed:
                 update["ended"] = true;
                 update["victor"] = victor;
                 update["end_reason"] = "mutual_exhaustion";
-                db->EndWar(war.id, victor, gameTime);
+                // Through EndWar, like a surrender the DM reports: the peace is recorded and the pair is left at
+                // a truce. Ended here in the database only, the war left no trace anybody in the world could
+                // know about, and the score stayed where it was (see EndWar).
+                EndWar(war.factionA, war.factionB, victor, gameTime);
+                RecordPoliticalEvent(war.factionA, war.factionB, "ceasefire",
+                    GetFactionDisplayName(war.factionA) + " and " + GetFactionDisplayName(war.factionB) +
+                    " stopped fighting, both too worn down to go on.", 0, gameTime);
                 logger::info("FactionPolitics: War #{} ended — mutual exhaustion, victor: {}", war.id, victor);
             } else if (aCollapsed) {
                 update["ended"] = true;
                 update["victor"] = war.factionB;
                 update["end_reason"] = "surrender";
-                db->EndWar(war.id, war.factionB, gameTime);
+                EndWar(war.factionA, war.factionB, war.factionB, gameTime);
+                RecordPoliticalEvent(war.factionA, war.factionB, "surrender",
+                    GetFactionDisplayName(war.factionA) + " surrendered to " + GetFactionDisplayName(war.factionB) + ".", 0, gameTime);
                 logger::info("FactionPolitics: War #{} ended — {} surrendered to {}", war.id, war.factionA, war.factionB);
             } else if (bCollapsed) {
                 update["ended"] = true;
                 update["victor"] = war.factionA;
                 update["end_reason"] = "surrender";
-                db->EndWar(war.id, war.factionA, gameTime);
+                EndWar(war.factionA, war.factionB, war.factionA, gameTime);
+                RecordPoliticalEvent(war.factionB, war.factionA, "surrender",
+                    GetFactionDisplayName(war.factionB) + " surrendered to " + GetFactionDisplayName(war.factionA) + ".", 0, gameTime);
                 logger::info("FactionPolitics: War #{} ended — {} surrendered to {}", war.id, war.factionB, war.factionA);
             } else {
                 // Update morale in DB
@@ -2154,9 +2184,15 @@ war_allowed:
 
         bool ok = db->EndWar(war->id, victor, gameTime);
         if (ok) {
-            // Improve relations slightly on peace
-            db->RecordEvent(factionA, factionB, "relation_adjustment", "War ended", 10, gameTime);
-            db->AdjustRelation(factionA, factionB, 10);
+            // Peace improves relations a little, and it leaves the pair out of "Critical": an uneasy truce at least.
+            // With +10 alone a pair at -65 stayed Critical, and the code that declares war for Critical pairs
+            // (EnforceWarRule) started the same war again after every cooldown, 15 points lower each time: the
+            // side that had just surrendered was at war again a week later, without end. A new war now takes
+            // new provocation. (Recorded as an event: scores are rebuilt from the events on every load.)
+            constexpr int kTruceScore = RELATION_HOSTILE + 9;  // -40: hostile, no longer critical
+            const int peaceDelta = (std::max)(10, kTruceScore - db->GetRelation(factionA, factionB));
+            db->RecordEvent(factionA, factionB, "relation_adjustment", "War ended", peaceDelta, gameTime);
+            db->AdjustRelation(factionA, factionB, peaceDelta);
             WritePoliticalStateFile();
         }
         return ok;

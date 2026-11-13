@@ -184,7 +184,7 @@ extern "C" short GetAsyncKeyState(int);
     if vcpkg:
         include_candidates.append(vcpkg / "installed" / "x64-windows" / "include")
     include_candidates += [pathlib.Path("C:/vcpkg/installed/x64-windows/include"),
-                           pathlib.Path("C:/Users/vector/vcpkg/installed/x64-windows/include")]
+                           pathlib.Path.home() / "vcpkg" / "installed" / "x64-windows" / "include"]
     json_include = next((p for p in include_candidates if (p / "nlohmann/json.hpp").exists()), None)
     if json_include is None:
         raise FileNotFoundError("nlohmann/json.hpp not found; set VCPKG_ROOT to the project's vcpkg root")

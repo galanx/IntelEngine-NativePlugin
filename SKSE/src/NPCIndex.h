@@ -578,6 +578,8 @@ namespace IntelEngine {
 
         /** Scan loaded actors for those running one of the given packages. Returns JSON array. */
         std::string ScanActorsWithPackages(const std::vector<RE::FormID>& packageFormIDs);
+        // The same scan, returning the actors themselves.
+        std::vector<RE::Actor*> FindActorsWithPackages(const std::vector<RE::FormID>& packageFormIDs);
 
         /**
          * Get location name for an NPC, with fallback for unloaded actors.
