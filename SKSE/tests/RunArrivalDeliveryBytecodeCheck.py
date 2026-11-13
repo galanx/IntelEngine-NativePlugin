@@ -1356,6 +1356,53 @@ def run_bard_release_checks(files, history):
     print("actual PEX OutOfPlayersSight: unloaded or unseen elsewhere counts as unseen; the player's own cell and anything in view do not")
 
 
+def run_review_note_checks(files, history):
+    """Two notes from Gerkinfeltser's review of 3.8.0 (2026-11-13).
+    1. HeldByAnotherPackage waited two minutes for an NPC who carried no override at all (our package gone,
+       nobody holding them) before the stuck handling put the package back.
+    2. The start stamp behind the "task has only just started" grace is in real seconds since launch and is
+       saved; a later session's clock passes it again. It is dropped at every load."""
+    class HeldVM(VM):
+        overrides = 1
+
+        def external(self, method, args, script):
+            if method == "Is3DLoaded": return True
+            if method == "GetCurrentPackage": return self.foreign
+            if method == "CountPackageOverride": return self.overrides
+            if method == "GetCurrentRealTime": return 500.0
+            if method == "GetFormFromFile": return None     # no bard quest here: nobody sits in an audience
+            if method == "ResetStuckSlot":
+                self.effects.append((method, tuple(args)))
+                return None
+            return super().external(method, args, script)
+
+    for overrides, held in ((0, False), (1, True), (2, False)):
+        vm = HeldVM(files, history)
+        vm.foreign, vm.overrides = object(), overrides
+        vm.properties.update({name: object() for name in (
+            "TravelPackage_Walk", "TravelPackage_Jog", "TravelPackage_Run", "TravelPackage_Stalk",
+            "SandboxPackage", "SandboxNearPlayerPackage")})
+        vm.properties.update({"BARD_RELEASE_TRIES": 4, "HELD_PATIENCE_SECONDS": 120.0})
+        result = vm.invoke("IntelEngine_Core", "HeldByAnotherPackage", (0, vm.agent))
+        require(bool(result) == held,
+                f"HeldByAnotherPackage with {overrides} override(s) returned {result!r}, expected {held}")
+        resets = [event for event in vm.effects if event[0] == "ResetStuckSlot"]
+        require(bool(resets) == held,
+                f"HeldByAnotherPackage with {overrides} override(s): stuck counter reset {len(resets)} time(s)")
+    print("actual PEX HeldByAnotherPackage: held only with exactly one override; none at all goes to the stuck handling")
+
+    vm = VM(files, history)
+    vm.storage[(vm.agent, "Intel_TaskStartedRT")] = 1000.0
+    vm.storage[(vm.target, "Intel_TaskStartedRT")] = 1000.0     # not in a slot: not ours to touch
+    vm.invoke("IntelEngine_Core", "ForgetTaskStartStamps")
+    require((vm.agent, "Intel_TaskStartedRT") not in vm.storage, "the start stamp of an agent in a slot survived a load")
+    require((vm.target, "Intel_TaskStartedRT") in vm.storage, "a start stamp outside the slots was removed")
+    _, code, _ = vm.scripts["IntelEngine_Core"]["Maintenance"]
+    require(any("ForgetTaskStartStamps" in repr(instruction) for instruction in code),
+            "Maintenance does not drop the start stamps at a load")
+    print("actual PEX ForgetTaskStartStamps: the start stamp of everyone on a task is dropped, and Maintenance calls it")
+
+
 def run_linger_teammate_checks(files, history):
     class LingerVM(VM):
         teammate = False
@@ -1887,6 +1934,7 @@ def main():
     run_hold_restriction_checks(files, history)
     run_soft_stuck_checks(files, history)
     run_bard_release_checks(files, history)
+    run_review_note_checks(files, history)
     run_linger_teammate_checks(files, history)
     run_social_range_checks(files, history)
 

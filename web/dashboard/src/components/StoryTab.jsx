@@ -2,15 +2,17 @@ import withSections from './Section';
 import React, { useState } from 'react';
 import GameTime from './GameTime';
 
+// label: the setting's name as on SkyrimNet's plugin settings page ("Story type: ..."); type: what the Director
+// and the log call it.
 const STORY_TYPES = [
-  { key: 'seek_player', label: 'Seek Player', icon: '\u{1F50D}' },
-  { key: 'informant', label: 'Informant', icon: '\u{1F4E2}' },
-  { key: 'road_encounter', label: 'Road Encounter', icon: '\u{1F6E4}' },
-  { key: 'ambush', label: 'Ambush', icon: '\u{2694}' },
-  { key: 'faction_ambush', label: 'Faction Ambush', icon: '\u{1F6E1}' },
-  { key: 'stalker', label: 'Stalker', icon: '\u{1F441}' },
-  { key: 'message', label: 'Message', icon: '\u{1F4E8}' },
-  { key: 'quest', label: 'Quest', icon: '\u{2728}' },
+  { key: 'seek_player', label: "Someone comes to see you", type: 'Seek Player', icon: '\u{1F50D}' },
+  { key: 'informant', label: "Someone brings a rumor", type: 'Informant', icon: '\u{1F4E2}' },
+  { key: 'road_encounter', label: "A meeting on the road", type: 'Road Encounter', icon: '\u{1F6E4}' },
+  { key: 'ambush', label: "An ambush", type: 'Ambush', icon: '\u{2694}' },
+  { key: 'faction_ambush', label: "A faction's patrol hunts you", type: 'Faction Ambush', icon: '\u{1F6E1}' },
+  { key: 'stalker', label: "Someone follows you unseen", type: 'Stalker', icon: '\u{1F441}' },
+  { key: 'message', label: "A message is delivered", type: 'Message', icon: '\u{1F4E8}' },
+  { key: 'quest', label: "Someone has work for you", type: 'Quest', icon: '\u{2728}' },
   { key: 'npc_interaction', label: 'NPC Interaction', icon: '\u{1F91D}' },
   { key: 'npc_gossip', label: 'NPC Gossip', icon: '\u{1F5E3}' },
 ];
@@ -73,7 +75,7 @@ function StoryTab({ story, quest, social, npcSocialLog, calendar, sendAction }) 
 
       {/* Story Type Toggles */}
       <section>
-        <h2 className="section-header mb-2">Story Types</h2>
+        <h2 className="section-header mb-2">Story types</h2>
         <p className="text-[10px] text-gray-400 mb-1">Only affects automatic stories. Director dispatch can use any type. What NPCs do among themselves is under Settings, NPC Behavior.</p>
         <div className="grid grid-cols-1 gap-1">
           {STORY_TYPES.filter(type => !type.key.startsWith('npc_')).map(type => {
@@ -81,6 +83,7 @@ function StoryTab({ story, quest, social, npcSocialLog, calendar, sendAction }) 
             return (
               <button
                 key={type.key}
+                title={`The Director and the log call this type "${type.type}".`}
                 onClick={() => sendAction('toggleStoryType', { type: type.key, enabled: !enabled })}
                 className={`flex items-center gap-2 px-3 py-1.5 rounded text-left transition-colors ${
                   enabled

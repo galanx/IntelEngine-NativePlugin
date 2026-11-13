@@ -1,14 +1,16 @@
 import { useState, useCallback, useRef } from 'react';
 import Select from './Select';
 
-const DANGER_POLICIES = ['Allow All', 'Block Civilians', 'Followers Only', 'Block All'];
+// Names of settings and of their options are those of SkyrimNet's plugin settings page (SettingsBridge.cpp and
+// manifest.yaml); SKSE/tests/RunSettingNamesCheck.py compares them. A unit that page carries in brackets stands
+// beside the value here.
+const NPC_POLICIES = ['Allow all NPCs', 'Block civilians only', 'Allow followers only', 'Block all NPCs'];
 const DANGER_HINTS = [
   'No filtering. All NPC types can visit you in dungeons and caves. Informants always turn back.',
   'Farmers, merchants and civilians stay away. Warriors and mages can still visit. Informants always turn back.',
   'Only NPCs who can be followers visit you in dangerous locations. Informants always turn back.',
   'Nobody visits you in dangerous locations.',
 ];
-const HOME_POLICIES = ['Allow All', 'Block Civilians', 'Followers Only', 'Block All'];
 const HOME_HINTS = [
   'No filtering. All NPC types can visit you at home.',
   'Civilians won\'t bother you at home. Warriors and mages can still visit.',
@@ -16,7 +18,8 @@ const HOME_HINTS = [
   'Nobody visits you at home.',
 ];
 
-const HOLD_POLICIES = ['Any Hold', 'Same Hold (Civ)', 'Same Hold (-Fol)', 'Same Hold (All)', 'Same Town (Civ)', 'Same Town (-Fol)', 'Same Town (All)'];
+const HOLD_POLICIES = ['No restriction', 'Same hold (civilians)', 'Same hold (except followers)', 'Same hold (everyone)',
+  'Same town (civilians)', 'Same town (except followers)', 'Same town (everyone)'];
 const HOLD_HINTS = [
   'No restriction. NPCs from any hold can be dispatched.',
   'Civilians must be in the same hold as you. Warriors and followers can cross holds.',
@@ -28,41 +31,41 @@ const HOLD_HINTS = [
 ];
 const HOLD_TYPES = [
   // def: the game's default for that type (index into HOLD_POLICIES); they differ.
-  { key: 'holdPolicySeekPlayer', label: 'Seek Player', def: 1 },
-  { key: 'holdPolicyInformant', label: 'Informant', def: 6 },
-  { key: 'holdPolicyRoadEncounter', label: 'Road Encounter', def: 0 },
-  { key: 'holdPolicyAmbush', label: 'Ambush', def: 1 },
-  { key: 'holdPolicyStalker', label: 'Stalker', def: 1 },
-  { key: 'holdPolicyMessage', label: 'Message', def: 2 },
-  { key: 'holdPolicyQuest', label: 'Quest', def: 0 },
+  { key: 'holdPolicySeekPlayer', label: 'Someone comes to see you', def: 1 },
+  { key: 'holdPolicyInformant', label: 'Someone brings a rumor', def: 6 },
+  { key: 'holdPolicyRoadEncounter', label: 'A meeting on the road', def: 0 },
+  { key: 'holdPolicyAmbush', label: 'An ambush', def: 1 },
+  { key: 'holdPolicyStalker', label: 'Someone follows you unseen', def: 1 },
+  { key: 'holdPolicyMessage', label: 'A message is delivered', def: 2 },
+  { key: 'holdPolicyQuest', label: 'Someone has work for you', def: 0 },
 ];
 
-const CONFIRM_MODES = ['Disabled', 'Followers Only', 'Everyone'];
+const CONFIRM_MODES = ['Disabled', 'Followers only', 'Everyone'];
 const CONFIRM_HINTS = [
   'No confirmation prompt. Action executes immediately.',
   'Prompt only when active followers perform this action.',
   'Prompt for all NPCs performing this action.',
 ];
 const CONFIRM_ACTIONS = [
-  { key: 'confirmGoToLocation', label: 'Go To Location' },
-  { key: 'confirmDeliverMessage', label: 'Deliver Message' },
-  { key: 'confirmFetchPerson', label: 'Fetch Person' },
-  { key: 'confirmEscortTarget', label: 'Escort Target' },
-  { key: 'confirmSearchForActor', label: 'Search For Actor' },
-  { key: 'confirmScheduleMeeting', label: 'Schedule Meeting' },
-  { key: 'confirmScheduleFetch', label: 'Schedule Fetch' },
-  { key: 'confirmScheduleDelivery', label: 'Schedule Delivery' },
+  { key: 'confirmGoToLocation', label: 'Go somewhere' },
+  { key: 'confirmDeliverMessage', label: 'Deliver a message' },
+  { key: 'confirmFetchPerson', label: 'Fetch someone' },
+  { key: 'confirmEscortTarget', label: 'Escort someone' },
+  { key: 'confirmSearchForActor', label: 'Search for someone' },
+  { key: 'confirmScheduleMeeting', label: 'Arrange a meeting' },
+  { key: 'confirmScheduleFetch', label: 'Fetch someone later' },
+  { key: 'confirmScheduleDelivery', label: 'Deliver a message later' },
 ];
 
 const SKIP_FOLLOWER_ACTIONS = [
-  { key: 'skipFollowerGoToLocation', label: 'Go To Location' },
-  { key: 'skipFollowerDeliverMessage', label: 'Deliver Message' },
-  { key: 'skipFollowerFetchPerson', label: 'Fetch Person' },
-  { key: 'skipFollowerEscortTarget', label: 'Escort Target' },
-  { key: 'skipFollowerSearchForActor', label: 'Search For Actor' },
-  { key: 'skipFollowerScheduleMeeting', label: 'Schedule Meeting' },
-  { key: 'skipFollowerScheduleFetch', label: 'Schedule Fetch' },
-  { key: 'skipFollowerScheduleDelivery', label: 'Schedule Delivery' },
+  { key: 'skipFollowerGoToLocation', label: 'Go somewhere' },
+  { key: 'skipFollowerDeliverMessage', label: 'Deliver a message' },
+  { key: 'skipFollowerFetchPerson', label: 'Fetch someone' },
+  { key: 'skipFollowerEscortTarget', label: 'Escort someone' },
+  { key: 'skipFollowerSearchForActor', label: 'Search for someone' },
+  { key: 'skipFollowerScheduleMeeting', label: 'Arrange a meeting' },
+  { key: 'skipFollowerScheduleFetch', label: 'Fetch someone later' },
+  { key: 'skipFollowerScheduleDelivery', label: 'Deliver a message later' },
 ];
 
 const VK_NAMES = {
@@ -99,25 +102,25 @@ function SettingsTab({ config, storyTypes, onSettingChange, pluginConfig, onPlug
   return (
     <div className="ie-settings p-3 space-y-1">
       {/* Story Engine */}
-      <Accordion title="Story Engine" isOpen={openSections.storyEngine} onToggle={() => toggle('storyEngine')}>
+      <Accordion title="Stories" isOpen={openSections.storyEngine} onToggle={() => toggle('storyEngine')}>
         <ToggleRow
-          label="Story Engine"
+          label="Stories"
           value={config.storyEnabled}
           onChange={v => onSettingChange('storyEnabled', v)}
-          hint="NPCs with unfinished business autonomously seek you out based on shared history."
+          hint="The Story Engine (the dungeon master): NPCs with unfinished business autonomously seek you out based on shared history."
         />
         <SliderRow
-          label="Check Interval"
+          label="Check interval"
           value={config.storyInterval}
           min={0.5} max={168} step={0.5}
-          unit="hrs"
+          unit="game hours"
           onCommit={v => onSettingChange('storyInterval', v)}
           hint="How often (game hours) the Story Engine checks for NPCs with reasons to find you. Max 168 = 1 week."
         />
         {/* No "NPC Cooldown" row: the game uses the longer of it and Long Absence (three days by default), so
             its 6 to 72 hours changed nothing. Long Absence is the setting. */}
         <SliderRow
-          label="Long Absence"
+          label="Long absence"
           value={config.longAbsenceDays}
           min={1} max={14} step={1}
           unit="days"
@@ -125,7 +128,7 @@ function SettingsTab({ config, storyTypes, onSettingChange, pluginConfig, onPlug
           hint="Minimum game days since last interaction before an NPC becomes a Story Engine candidate. An NPC who has just come to you is left alone for at least as long."
         />
         <SliderRow
-          label="Max Travel Time"
+          label="Longest journey"
           value={config.maxTravelDays}
           min={0.25} max={3} step={0.25}
           unit="days"
@@ -133,65 +136,64 @@ function SettingsTab({ config, storyTypes, onSettingChange, pluginConfig, onPlug
           hint="Max game days an NPC will travel before being teleported."
         />
         <ToggleRow
-          label="Teleport When Stuck"
+          label="Move a stuck traveller along"
           value={config.allowStuckTeleport}
           onChange={v => onSettingChange('allowStuckTeleport', v)}
-          hint="When disabled, stuck NPCs give up instead of being teleported."
+          hint="A story NPC who cannot get on, or has been on the way for longer than Longest journey, is placed further along, out of your sight. When disabled, they give up instead."
         />
       </Accordion>
 
       {/* NPC Behavior */}
       <Accordion title="NPC Behavior" isOpen={openSections.npcBehavior} onToggle={() => toggle('npcBehavior')}>
-        <span className="text-[10px] text-gray-500 uppercase tracking-wider block mb-1">Danger Zones</span>
         <PolicyRow
-          label=""
+          label="NPCs sent into dangerous places"
           value={config.dangerZonePolicy}
-          options={DANGER_POLICIES}
+          options={NPC_POLICIES}
           hints={DANGER_HINTS}
           onChange={v => onSettingChange('dangerZonePolicy', v)}
         />
-        <span className="text-[10px] text-gray-500 uppercase tracking-wider block mb-1 mt-2">Player Home</span>
         <PolicyRow
-          label=""
+          label="NPCs sent into your home"
           value={config.playerHomePolicy}
-          options={HOME_POLICIES}
+          options={NPC_POLICIES}
           hints={HOME_HINTS}
           onChange={v => onSettingChange('playerHomePolicy', v)}
         />
         <div className="border-t border-white/5 mt-2 pt-2">
+          <span className="text-[10px] text-gray-500 uppercase tracking-wider block mb-1">NPCs among themselves</span>
           <ToggleRow
-            label="NPC Interactions"
+            label="NPCs visit and talk to each other"
             value={config.npcTickEnabled}
             onChange={v => onSettingChange('npcTickEnabled', v)}
-            hint="NPCs gossip, argue, trade, and socialize independently."
+            hint="NPCs who know each other meet without you: they gossip, argue, trade, and socialize independently."
+          />
+          <ToggleRow
+            label="Kind: one NPC goes to see another"
+            value={!storyTypes || storyTypes.npc_interaction !== false}
+            onChange={v => onSettingChange('npc_interaction', v)}
+            hint="Arguments, trades, conversations. The Director and the log call this type NPC Interaction."
+          />
+          <ToggleRow
+            label="Kind: gossip passed on"
+            value={!storyTypes || storyTypes.npc_gossip !== false}
+            onChange={v => onSettingChange('npc_gossip', v)}
+            hint="NPCs spread rumors among themselves. The Director and the log call this type NPC Gossip."
           />
           <SliderRow
-            label="Interaction Interval"
+            label="Check interval"
             value={config.npcTickInterval}
             min={0.5} max={168} step={0.5}
-            unit="hrs"
+            unit="game hours"
             onCommit={v => onSettingChange('npcTickInterval', v)}
             hint="How often the NPC social system checks for NPC-to-NPC interactions. Max 168 = 1 week."
           />
           <SliderRow
-            label="Social Cooldown"
+            label="Rest per NPC"
             value={config.npcSocialCooldown}
             min={6} max={72} step={6}
-            unit="hrs"
+            unit="game hours"
             onCommit={v => onSettingChange('npcSocialCooldown', v)}
             hint="How long before an NPC can be picked for another social interaction."
-          />
-          <ToggleRow
-            label="NPC-to-NPC Interactions"
-            value={!storyTypes || storyTypes.npc_interaction !== false}
-            onChange={v => onSettingChange('npc_interaction', v)}
-            hint="NPCs interact with each other autonomously (arguments, trades, conversations)."
-          />
-          <ToggleRow
-            label="NPC Gossip"
-            value={!storyTypes || storyTypes.npc_gossip !== false}
-            onChange={v => onSettingChange('npc_gossip', v)}
-            hint="NPCs spread rumors and gossip among themselves."
           />
         </div>
       </Accordion>
@@ -199,66 +201,65 @@ function SettingsTab({ config, storyTypes, onSettingChange, pluginConfig, onPlug
       {/* Hold Restrictions */}
       <Accordion title="Hold Restrictions" isOpen={openSections.holdRestrictions} onToggle={() => toggle('holdRestrictions')}>
         <p className="text-[9px] text-gray-600 mb-2">
-          Restrict NPCs from traveling across holds per story type. The defaults differ and are shown with each type.
+          How far each kind of story may reach for its NPC. The defaults differ and are shown with each kind.
         </p>
         {HOLD_TYPES.map(type => (
-          <div key={type.key} className="mb-1.5">
-            <span className="text-[10px] text-gray-500 uppercase tracking-wider block mb-0.5">{type.label}
-              <span className="normal-case tracking-normal text-gray-600"> · default: {HOLD_POLICIES[type.def]}</span></span>
-            <PolicyRow
-              label=""
-              value={config[type.key] ?? type.def}
-              options={HOLD_POLICIES}
-              hints={HOLD_HINTS}
-              onChange={v => onSettingChange(type.key, v)}
-            />
-          </div>
+          <PolicyRow
+            key={type.key}
+            label={type.label}
+            note={`default: ${HOLD_POLICIES[type.def]}`}
+            value={config[type.key] ?? type.def}
+            options={HOLD_POLICIES}
+            hints={HOLD_HINTS}
+            onChange={v => onSettingChange(type.key, v)}
+            wrap
+          />
         ))}
       </Accordion>
 
       {/* Tasks & Meetings */}
       <Accordion title="Tasks & Meetings" isOpen={openSections.tasks} onToggle={() => toggle('tasks')}>
         <SliderRow
-          label="Max Concurrent"
+          label="NPCs on a task at once"
           value={config.maxTasks}
           min={1} max={5} step={1}
           onCommit={v => onSettingChange('maxTasks', v)}
           hint="Maximum number of NPCs that can be on tasks at once."
         />
         <SliderRow
-          label="Default Wait Hours"
+          label="Wait at a destination"
           value={config.defaultWaitHours}
           min={6} max={168} step={1}
-          unit="hrs"
+          unit="game hours"
           onCommit={v => onSettingChange('defaultWaitHours', v)}
           hint="How long NPCs wait at destinations before returning home."
         />
         <SliderRow
-          label="Release Distance"
+          label="Visit ends when you walk away"
           value={config.releaseDistance}
           min={300} max={2000} step={100}
-          unit="u"
+          unit="units"
           onCommit={v => onSettingChange('releaseDistance', v)}
           hint="How far you must walk before an NPC stops lingering."
         />
         <SliderRow
-          label="Meeting Timeout"
+          label="Wait for you at a meeting"
           value={config.meetingTimeoutHours}
           min={1} max={12} step={0.5}
-          unit="hrs"
+          unit="game hours"
           onCommit={v => onSettingChange('meetingTimeoutHours', v)}
           hint="How long an NPC waits at the meeting spot before giving up."
         />
         <SliderRow
-          label="Meeting Grace Period"
+          label="On time until"
           value={config.meetingGracePeriod}
           min={0} max={2} step={0.1}
-          unit="hrs"
+          unit="game hours late"
           onCommit={v => onSettingChange('meetingGracePeriod', v)}
           hint="Arrival tolerance for meetings. Set higher if using variable timescales."
         />
         <ToggleRow
-          label="Report Back (Delivery)"
+          label="Report back after a delivery"
           value={config.reportBack}
           onChange={v => onSettingChange('reportBack', v)}
           hint="Messengers return to you after delivering a message off-screen."
@@ -266,8 +267,8 @@ function SettingsTab({ config, storyTypes, onSettingChange, pluginConfig, onPlug
       </Accordion>
 
       {/* Action Confirmation Prompts */}
-      <Accordion title="Action Confirmations" isOpen={openSections.confirmations} onToggle={() => toggle('confirmations')}>
-        <p className="text-[10px] text-gray-500 mb-2">Per-action confirmation prompts (Disabled / Followers Only / Everyone)</p>
+      <Accordion title="Ask before starting" isOpen={openSections.confirmations} onToggle={() => toggle('confirmations')}>
+        <p className="text-[10px] text-gray-500 mb-2">Ask you before an NPC starts this task: never (Disabled), only for your followers, or for everyone.</p>
         {CONFIRM_ACTIONS.map(({ key, label }) => {
           const val = parseInt(config[key]) || 0;
           return (
@@ -287,7 +288,7 @@ function SettingsTab({ config, storyTypes, onSettingChange, pluginConfig, onPlug
 
       {/* Actions followers can do. Stored as "skip for followers"; shown the other way round, because a list of
           switches that are off under "Skip ..." read as "switched off for my followers". */}
-      <Accordion title="Actions Followers Can Do" isOpen={openSections.skipFollowers} onToggle={() => toggle('skipFollowers')}>
+      <Accordion title="What followers can be asked to do" isOpen={openSections.skipFollowers} onToggle={() => toggle('skipFollowers')}>
         <p className="text-[10px] text-gray-500 mb-2">All on by default. Switch one off to keep your active followers out of that action (it is refused without a prompt).</p>
         {SKIP_FOLLOWER_ACTIONS.map(({ key, label }) => (
           <ToggleRow
@@ -303,13 +304,13 @@ function SettingsTab({ config, storyTypes, onSettingChange, pluginConfig, onPlug
       <Accordion title="Auto Dynamic Bio" isOpen={openSections.autoBio} onToggle={() => toggle('autoBio')}>
         <p className="text-[10px] text-gray-500 mb-2">Automatically update NPC dynamic bios after X dialogue lines (per-NPC tracking)</p>
         <ToggleRow
-          label="Enabled"
+          label="Refresh an NPC's profile after much talk"
           value={config.autoBioEnabled}
           onChange={v => onSettingChange('autoBioEnabled', v)}
           hint="When enabled, NPCs get their dynamic bio refreshed after a set number of dialogue exchanges."
         />
         <SliderRow
-          label="Lines Before Update"
+          label="Lines before a profile refresh"
           value={parseInt(config.autoBioThreshold) || 20}
           min={5} max={1000} step={5}
           onCommit={v => onSettingChange('autoBioThreshold', v)}
@@ -318,22 +319,22 @@ function SettingsTab({ config, storyTypes, onSettingChange, pluginConfig, onPlug
       </Accordion>
 
       {/* Quest Types */}
-      <Accordion title="Quest Types" isOpen={openSections.quests} onToggle={() => toggle('quests')}>
-        <ToggleRow label="Combat (Clear Enemies)" value={config.questCombat} onChange={v => onSettingChange('questCombat', v)}
+      <Accordion title="Quest kinds" isOpen={openSections.quests} onToggle={() => toggle('quests')}>
+        <ToggleRow label="Clear out enemies" value={config.questCombat} onChange={v => onSettingChange('questCombat', v)}
           hint="NPC asks you to kill bandits, draugr, or dragons at a location." />
-        <ToggleRow label="Rescue (Save Captive)" value={config.questRescue} onChange={v => onSettingChange('questRescue', v)}
+        <ToggleRow label="Rescue someone" value={config.questRescue} onChange={v => onSettingChange('questRescue', v)}
           hint="A real NPC is teleported to the location and held captive by enemies." />
-        <ToggleRow label="Find Item" value={config.questFindItem} onChange={v => onSettingChange('questFindItem', v)}
+        <ToggleRow label="Find an item" value={config.questFindItem} onChange={v => onSettingChange('questFindItem', v)}
           hint="A valuable item spawns in a chest guarded by enemies." />
-        <ToggleRow label="Faction Combat" value={config.questFactionCombat} onChange={v => onSettingChange('questFactionCombat', v)}
+        <ToggleRow label="Fight a faction's enemies" value={config.questFactionCombat} onChange={v => onSettingChange('questFactionCombat', v)}
           hint="Clear out hostile faction soldiers at a location. Rewards faction standing." />
-        <ToggleRow label="Faction Rescue" value={config.questFactionRescue} onChange={v => onSettingChange('questFactionRescue', v)}
+        <ToggleRow label="Rescue for a faction" value={config.questFactionRescue} onChange={v => onSettingChange('questFactionRescue', v)}
           hint="Rescue a captive from hostile faction soldiers. Rewards faction standing." />
-        <ToggleRow label="Faction Battle" value={config.questFactionBattle} onChange={v => onSettingChange('questFactionBattle', v)}
+        <ToggleRow label="Join a faction's battle" value={config.questFactionBattle} onChange={v => onSettingChange('questFactionBattle', v)}
           hint="A friendly faction invites you to join an upcoming battle. Requires high standing (40+)." />
         {/* No "Allow NPC Death (Rescue)" switch: nothing reads the setting, a rescue's victim is always kept alive. */}
         <SliderRow
-          label="Quest Timeout"
+          label="Quest expires after"
           value={config.questTimeoutDays}
           min={1} max={30} step={1}
           unit="days"
@@ -343,11 +344,11 @@ function SettingsTab({ config, storyTypes, onSettingChange, pluginConfig, onPlug
       </Accordion>
 
       {/* Faction Politics */}
-      <Accordion title="Faction Politics" isOpen={openSections.politics} onToggle={() => toggle('politics')}>
+      <Accordion title="Faction politics" isOpen={openSections.politics} onToggle={() => toggle('politics')}>
         {pluginConfig && onPluginConfigChange ? (
           <>
             <ToggleRow
-              label="Politics Enabled"
+              label="Faction politics"
               value={pluginConfig['politics.enabled'] !== false && pluginConfig['politics.enabled'] !== 'false'}
               onChange={v => onPluginConfigChange('politics.enabled', v)}
               hint="Factions autonomously trade, negotiate, scheme, and go to war."
@@ -363,22 +364,22 @@ function SettingsTab({ config, storyTypes, onSettingChange, pluginConfig, onPlug
               disabled={!pluginConfig['politics.pe_detected']}
               hint="When off, PE reactions are recorded without changing relations or player standing." />
             <SliderRow
-              label="Tick Interval"
+              label="Check interval"
               value={parseInt(pluginConfig['politics.tick_interval_hours']) || 6}
               min={1} max={168} step={1}
-              unit="hrs"
+              unit="game hours"
               onCommit={v => onPluginConfigChange('politics.tick_interval_hours', v)}
               hint="How often the Political DM evaluates faction relations. Max 168 = 1 week."
             />
             <SliderRow
-              label="Max Relation Change"
+              label="Largest change of a relation per check"
               value={parseInt(pluginConfig['politics.max_relation_change_per_tick']) || 15}
               min={5} max={30} step={1}
               onCommit={v => onPluginConfigChange('politics.max_relation_change_per_tick', v)}
               hint="Maximum relation score change per political tick."
             />
             <SliderRow
-              label="Max Active Wars"
+              label="Wars at the same time"
               value={parseInt(pluginConfig['politics.max_active_wars']) || 2}
               min={1} max={5} step={1}
               onCommit={v => onPluginConfigChange('politics.max_active_wars', v)}
@@ -393,10 +394,10 @@ function SettingsTab({ config, storyTypes, onSettingChange, pluginConfig, onPlug
       {/* Debug */}
       <Accordion title="Debug" isOpen={openSections.debug} onToggle={() => toggle('debug')}>
         <ToggleRow
-          label="Debug Mode"
+          label="Debug messages"
           value={config.debugMode}
           onChange={v => onSettingChange('debugMode', v)}
-          hint="Shows IE debug messages as in-game notifications (always logged to Papyrus.0.log)."
+          hint="Shows what IntelEngine does as notices on screen. The Papyrus log has it either way; for more in the DLL's own log set DebugLevel=4 in IntelEngine.ini."
         />
       </Accordion>
 
@@ -464,26 +465,26 @@ function SettingsTab({ config, storyTypes, onSettingChange, pluginConfig, onPlug
               secret
             />
             <TextInputRow
-              label="Model"
+              label="Model Override"
               value={pluginConfig['llm.model_name'] || ''}
               onCommit={v => onPluginConfigChange('llm.model_name', v)}
             />
             <NumberInputRow
-              label="Temperature"
+              label="Temperature Override"
               value={pluginConfig['llm.temperature'] || 0}
               min={0} max={2} step={0.1}
               onCommit={v => onPluginConfigChange('llm.temperature', v)}
               hint="0 = use base config"
             />
             <NumberInputRow
-              label="Max Tokens"
+              label="Max Tokens Override"
               value={pluginConfig['llm.max_tokens'] || 0}
               min={0} max={4096} step={1}
               onCommit={v => onPluginConfigChange('llm.max_tokens', v)}
               hint="0 = use base config"
             />
             <NumberInputRow
-              label="Timeout"
+              label="Timeout Override"
               value={pluginConfig['llm.timeout'] || 0}
               min={0} max={120} step={1}
               unit="sec"
@@ -601,16 +602,20 @@ function SliderRow({ label, value, min, max, step, unit, onCommit, hint }) {
   );
 }
 
-function PolicyRow({ label, value, options, hints, onChange }) {
+function PolicyRow({ label, note, value, options, hints, onChange, wrap = false }) {
   return (
     <div className="py-1">
-      {label && <span className="text-xs text-gray-300 block mb-1">{label}</span>}
-      <div className="flex gap-1">
+      {label && (
+        <span className="text-xs text-gray-300 block mb-1">
+          {label}{note && <span className="text-[10px] text-gray-600"> · {note}</span>}
+        </span>
+      )}
+      <div className={wrap ? 'flex flex-wrap gap-1' : 'flex gap-1'}>
         {options.map((opt, i) => (
           <button
             key={i}
             onClick={() => onChange(i)}
-            className={`flex-1 text-[10px] py-1 rounded transition-colors ${
+            className={`${wrap ? 'px-2' : 'flex-1'} text-[10px] py-1 rounded transition-colors ${
               value === i
                 ? 'bg-blue-500/30 text-blue-300 border border-blue-500/50'
                 : 'bg-white/5 text-gray-500 border border-white/5 hover:text-gray-300'
@@ -697,7 +702,7 @@ function HotkeyRow({ value, modifiers, onChangeKey, onChangeMods }) {
   return (
     <div className="py-1 space-y-2">
       <div className="flex items-center justify-between">
-        <span className="text-xs text-gray-300">Key</span>
+        <span className="text-xs text-gray-300">Dashboard Hotkey</span>
         <Select aria-label="Dashboard hotkey" containerClassName="w-24"
           value={value}
           onChange={e => { if (e.target.value !== '') onChangeKey(parseInt(e.target.value)); }}
@@ -713,7 +718,7 @@ function HotkeyRow({ value, modifiers, onChangeKey, onChangeMods }) {
         </Select>
       </div>
       <div className="flex items-center justify-between">
-        <span className="text-xs text-gray-300">Modifiers</span>
+        <span className="text-xs text-gray-300">Dashboard Modifiers</span>
         <div className="flex gap-1">
           {MOD_FLAGS.map(m => (
             <button
