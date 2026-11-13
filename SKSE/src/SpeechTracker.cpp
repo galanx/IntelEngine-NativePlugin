@@ -98,7 +98,9 @@ namespace IntelEngine {
         if (!event) return RE::BSEventNotifyControl::kContinue;
         Kind kind;
         if (!KindOf(event->eventName.c_str(), kind)) return RE::BSEventNotifyControl::kContinue;
-        seenEvents_.store(true);
+        if (!seenEvents_.exchange(true)) {
+            logger::info("SpeechTracker: first SkyrimNet speech event received ({})", event->eventName.c_str());
+        }
         // The sender is the speaking actor (for the audio events: the actor the line came from).
         if (!event->sender || IsNarration(event->strArg.c_str())) return RE::BSEventNotifyControl::kContinue;
         Apply(event->sender->GetFormID(), kind, Clock::now());

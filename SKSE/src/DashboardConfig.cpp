@@ -106,6 +106,14 @@ namespace IntelEngine {
         return defaultVal;
     }
 
+    bool DashboardConfig::ReadSetting(const std::string& section, const std::string& key, std::string& value) {
+        static const std::string kMissing = "\x01missing";
+        const std::string text = ReadYamlString(GetSettingsPath(), section, key, kMissing);
+        if (text == kMissing) return false;
+        value = text;
+        return true;
+    }
+
     // General-purpose YAML value writer (formattedValue is already YAML-ready)
     bool DashboardConfig::WriteYamlValue(const std::string& section,
                                           const std::string& key,
