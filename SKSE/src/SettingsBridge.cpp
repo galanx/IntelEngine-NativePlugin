@@ -24,11 +24,19 @@ namespace IntelEngine::SettingsBridge {
             "the groups in brackets are the ones the limit applies to.";
         constexpr const char* kConfirmText =
             "Ask you before an NPC starts this task: never, only for your followers, or for everyone.";
-        constexpr const char* kSkipText = "Your followers are never offered this action.";
+        constexpr const char* kAllowText =
+            "On: your followers can be given this action like anyone else. Off: it is refused for your active followers, without a prompt.";
+        constexpr const char* kHoldShort = "How far this kind of story may reach for its NPC.";
 
         Entry Bool(const char* key, const char* section, const char* name, bool def, const char* category,
                    const char* label, const char* description, const char* event = nullptr, const char* arg = nullptr) {
             return {key, section, name, Kind::Bool, 0, 1, nullptr, def ? 1.0 : 0.0, category, label, description, event, arg};
+        }
+        // A switch the game stores as "skip for followers", shown as "followers can do this" (on by default).
+        Entry Allowed(const char* key, const char* section, const char* name, const char* category, const char* label) {
+            Entry entry = Bool(key, section, name, true, category, label, kAllowText);
+            entry.inverted = true;
+            return entry;
         }
         Entry Num(Kind kind, const char* key, const char* section, const char* name, double min, double max, double def,
                   const char* category, const char* label, const char* description) {
@@ -47,7 +55,7 @@ namespace IntelEngine::SettingsBridge {
             const char* N = "NPCs among themselves";
             const char* T = "Tasks";
             const char* TC = "Tasks: ask before starting";
-            const char* TF = "Tasks: not for followers";
+            const char* TF = "Tasks: what followers can be asked to do";
             const char* M = "Meetings";
             const char* O = "Other";
             return {
@@ -85,13 +93,13 @@ namespace IntelEngine::SettingsBridge {
                 // ── Stories: reach ──
                 Choice("holdPolicySeekPlayer", "stories", "reach_seek_player", kHoldPolicy, 1, SH, "Someone comes to see you",
                        kHoldText),
-                Choice("holdPolicyInformant", "stories", "reach_informant", kHoldPolicy, 6, SH, "Someone brings a rumor", kHoldText),
+                Choice("holdPolicyInformant", "stories", "reach_informant", kHoldPolicy, 6, SH, "Someone brings a rumor", kHoldShort),
                 Choice("holdPolicyRoadEncounter", "stories", "reach_road_encounter", kHoldPolicy, 0, SH, "A meeting on the road",
                        kHoldText),
-                Choice("holdPolicyMessage", "stories", "reach_message", kHoldPolicy, 2, SH, "A message is delivered", kHoldText),
-                Choice("holdPolicyQuest", "stories", "reach_quest", kHoldPolicy, 0, SH, "Someone has work for you", kHoldText),
-                Choice("holdPolicyAmbush", "stories", "reach_ambush", kHoldPolicy, 1, SH, "An ambush", kHoldText),
-                Choice("holdPolicyStalker", "stories", "reach_stalker", kHoldPolicy, 1, SH, "Someone follows you unseen", kHoldText),
+                Choice("holdPolicyMessage", "stories", "reach_message", kHoldPolicy, 2, SH, "A message is delivered", kHoldShort),
+                Choice("holdPolicyQuest", "stories", "reach_quest", kHoldPolicy, 0, SH, "Someone has work for you", kHoldShort),
+                Choice("holdPolicyAmbush", "stories", "reach_ambush", kHoldPolicy, 1, SH, "An ambush", kHoldShort),
+                Choice("holdPolicyStalker", "stories", "reach_stalker", kHoldPolicy, 1, SH, "Someone follows you unseen", kHoldShort),
 
                 // ── Stories: quests ──
                 Bool("questCombat", "stories", "quest_combat", true, SQ, "Quest kind: clear out enemies", ""),
@@ -133,15 +141,14 @@ namespace IntelEngine::SettingsBridge {
                 Choice("confirmScheduleDelivery", "tasks", "confirm_schedule_delivery", kConfirm, 1, TC, "Deliver a message later",
                        kConfirmText),
 
-                Bool("skipFollowerGoToLocation", "tasks", "no_follower_go_to_location", false, TF, "Go somewhere", kSkipText),
-                Bool("skipFollowerDeliverMessage", "tasks", "no_follower_deliver_message", false, TF, "Deliver a message", kSkipText),
-                Bool("skipFollowerFetchPerson", "tasks", "no_follower_fetch_person", false, TF, "Fetch someone", kSkipText),
-                Bool("skipFollowerEscortTarget", "tasks", "no_follower_escort_target", false, TF, "Escort someone", kSkipText),
-                Bool("skipFollowerSearchForActor", "tasks", "no_follower_search_for_actor", false, TF, "Search for someone", kSkipText),
-                Bool("skipFollowerScheduleMeeting", "tasks", "no_follower_schedule_meeting", false, TF, "Arrange a meeting", kSkipText),
-                Bool("skipFollowerScheduleFetch", "tasks", "no_follower_schedule_fetch", false, TF, "Fetch someone later", kSkipText),
-                Bool("skipFollowerScheduleDelivery", "tasks", "no_follower_schedule_delivery", false, TF, "Deliver a message later",
-                     kSkipText),
+                Allowed("skipFollowerGoToLocation", "tasks", "followers_go_to_location", TF, "Go somewhere"),
+                Allowed("skipFollowerDeliverMessage", "tasks", "followers_deliver_message", TF, "Deliver a message"),
+                Allowed("skipFollowerFetchPerson", "tasks", "followers_fetch_person", TF, "Fetch someone"),
+                Allowed("skipFollowerEscortTarget", "tasks", "followers_escort_target", TF, "Escort someone"),
+                Allowed("skipFollowerSearchForActor", "tasks", "followers_search_for_actor", TF, "Search for someone"),
+                Allowed("skipFollowerScheduleMeeting", "tasks", "followers_schedule_meeting", TF, "Arrange a meeting"),
+                Allowed("skipFollowerScheduleFetch", "tasks", "followers_schedule_fetch", TF, "Fetch someone later"),
+                Allowed("skipFollowerScheduleDelivery", "tasks", "followers_schedule_delivery", TF, "Deliver a message later"),
 
                 // ── Meetings ──
                 Num(Kind::Float, "meetingTimeoutHours", "meetings", "timeout_hours", 1, 12, 5, M, "Wait for you at a meeting (game hours)",
@@ -186,6 +193,7 @@ namespace IntelEngine::SettingsBridge {
             if (it == config.end()) return false;
             if (it->is_boolean()) {
                 value = it->get<bool>() ? 1.0 : 0.0;
+                if (entry.inverted) value = 1.0 - value;        // from here on: the file's side
                 return true;
             }
             if (it->is_number()) {
@@ -356,7 +364,7 @@ namespace IntelEngine::SettingsBridge {
             Change change;
             change.event = entry.event ? entry.event : kSettingEvent;
             change.arg = entry.event ? entry.eventArg : entry.key;
-            change.value = static_cast<float>(file);
+            change.value = static_cast<float>(entry.inverted ? 1.0 - file : file);    // back to the game's side
             changes.push_back(std::move(change));
         }
         return changes;

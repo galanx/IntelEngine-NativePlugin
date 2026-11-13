@@ -232,7 +232,7 @@ function SettingsTab({ config, onSettingChange, pluginConfig, onPluginConfigChan
         <SliderRow
           label="Default Wait Hours"
           value={config.defaultWaitHours}
-          min={6} max={168} step={6}
+          min={6} max={168} step={1}
           unit="hrs"
           onCommit={v => onSettingChange('defaultWaitHours', v)}
           hint="How long NPCs wait at destinations before returning home."
@@ -289,15 +289,16 @@ function SettingsTab({ config, onSettingChange, pluginConfig, onPluginConfigChan
         })}
       </Accordion>
 
-      {/* Skip Action for Followers */}
-      <Accordion title="Skip Action for Followers" isOpen={openSections.skipFollowers} onToggle={() => toggle('skipFollowers')}>
-        <p className="text-[10px] text-gray-500 mb-2">Silently block actions when performed by active followers</p>
+      {/* Actions followers can do. Stored as "skip for followers"; shown the other way round, because a list of
+          switches that are off under "Skip ..." read as "switched off for my followers". */}
+      <Accordion title="Actions Followers Can Do" isOpen={openSections.skipFollowers} onToggle={() => toggle('skipFollowers')}>
+        <p className="text-[10px] text-gray-500 mb-2">All on by default. Switch one off to keep your active followers out of that action (it is refused without a prompt).</p>
         {SKIP_FOLLOWER_ACTIONS.map(({ key, label }) => (
           <ToggleRow
             key={key}
             label={label}
-            value={config[key]}
-            onChange={v => onSettingChange(key, v)}
+            value={!config[key]}
+            onChange={v => onSettingChange(key, !v)}
           />
         ))}
       </Accordion>
@@ -361,11 +362,14 @@ function SettingsTab({ config, onSettingChange, pluginConfig, onPluginConfigChan
               hint="Factions autonomously trade, negotiate, scheme, and go to war."
             />
             <p className="text-xs text-gray-400">Political Engine detected: {pluginConfig['politics.pe_detected'] ? 'Yes' : 'No'}</p>
-            <ToggleRow label="Political Engine integration" value={pluginConfig['politics.pe_integration'] !== false && pluginConfig['politics.pe_integration'] !== 'false'}
+            {/* Off unless switched on: a value the game has not sent yet reads as off. Greyed out without the mod. */}
+            <ToggleRow label="Political Engine integration (experimental)" value={pluginConfig['politics.pe_integration'] === true || pluginConfig['politics.pe_integration'] === 'true'}
               onChange={v => onPluginConfigChange('politics.pe_integration', v)}
-              hint="When off, IE ignores Political Engine even if installed." />
+              disabled={!pluginConfig['politics.pe_detected']}
+              hint="Off by default. Needs the Political Engine mod and does nothing without it. Load a save after turning it on: realms are added at game start and on load." />
             <ToggleRow label="PE reactions move relations" value={pluginConfig['politics.pe_reactions_move_relations'] !== false && pluginConfig['politics.pe_reactions_move_relations'] !== 'false'}
               onChange={v => onPluginConfigChange('politics.pe_reactions_move_relations', v)}
+              disabled={!pluginConfig['politics.pe_detected']}
               hint="When off, PE reactions are recorded without changing relations or player standing." />
             <SliderRow
               label="Tick Interval"
@@ -541,16 +545,18 @@ function Accordion({ title, isOpen, onToggle, children }) {
 
 // ── Shared Components ──
 
-function ToggleRow({ label, value, onChange, hint }) {
+function ToggleRow({ label, value, onChange, hint, disabled = false }) {
   return (
-    <div className="py-1">
+    <div className={`py-1 ${disabled ? 'opacity-40' : ''}`}>
       <div className="flex items-center justify-between">
         <span className="text-xs text-gray-300">{label}</span>
         <button
-          onClick={() => onChange(!value)}
+          onClick={() => { if (!disabled) onChange(!value); }}
+          disabled={disabled}
+          aria-disabled={disabled}
           className={`w-8 h-4 rounded-full transition-colors relative ${
             value ? 'bg-blue-500' : 'bg-gray-600'
-          }`}
+          } ${disabled ? 'cursor-not-allowed' : ''}`}
         >
           <span className={`absolute top-0.5 w-3 h-3 rounded-full bg-white transition-transform ${
             value ? 'left-4' : 'left-0.5'
