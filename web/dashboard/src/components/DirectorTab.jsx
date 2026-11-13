@@ -177,16 +177,16 @@ const STORY_TYPE_FIELDS = {
       hint: 'Required. The message text. The NPC you pick is the sender; IE picks a nearby courier.' },
     { key: 'destination', label: 'Meeting place', type: 'text',
       placeholder: 'e.g. The Bee and Barb, Dragonsreach',
-      hint: 'Optional. If set with meetTime, creates a meeting invitation.' },
+      hint: 'Optional. With a Meeting time, creates a meeting invitation.' },
     { key: 'meetTime', label: 'Meeting time', type: 'select', options: MEET_TIMES,
-      hint: 'Optional. Must match msgContent. Avoid night/midnight for palaces/shops.' },
+      hint: 'Optional. Must match the Message content. Avoid night/midnight for palaces/shops.' },
   ] },
   quest: { example: 'e.g. needed help rescuing a friend from Fort Greymoor', hint: 'Sends an NPC to ask for help with combat, a rescue or finding an item; leaders use a courier.', narration: 'Why help is needed, consistent with the quest location and sub-type.', fields: [
     { key: 'questSubType', label: 'Sub-type', type: 'select', options: QUEST_SUB_TYPES, required: true,
       hint: 'Required. combat = kill enemies, rescue = save captive NPC, find_item = retrieve item.' },
     { key: 'questLocation', label: 'Quest location', type: 'text', required: true,
       placeholder: 'e.g. Bleak Falls Barrow, Fort Greymoor, Valtheim Towers',
-      hint: 'Required. A real Skyrim dungeon/fort/ruin. Enemies spawn here.' },
+      hint: 'Required. A real Skyrim dungeon, fort, ruin or camp, not where you are now or a player home. Enemies spawn here.' },
     { key: 'enemyType', label: 'Enemy type', type: 'select', options: ENEMY_TYPES, required: true,
       hint: 'Required. bandit = forts/camps, draugr = Nordic ruins, dragon = open areas.' },
     { key: 'sender', label: 'Quest giver', type: 'text',
@@ -201,7 +201,7 @@ const STORY_TYPE_FIELDS = {
     { key: 'itemName', label: 'Item (find_item)', type: 'text',
       placeholder: 'e.g. Ebony Blade, Glass Sword, Spell Tome: Fireball',
       hint: 'Find_item only. Exact in-game item name. Fallback to random if not found.' },
-    { key: 'itemDesc', label: 'Item description', type: 'text', requiredIf: ['questSubType', 'find_item'],
+    { key: 'itemDesc', label: 'Item description (find_item)', type: 'text', requiredIf: ['questSubType', 'find_item'],
       placeholder: 'e.g. a legendary elven blade, a powerful spell tome',
       hint: 'Required for find_item. Brief narrative description for dialogue context.' },
   ] },
@@ -578,7 +578,8 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
 
   const storyGuidance = touched.storyType ? STORY_TYPE_FIELDS[storyType] : null, currentFields = STORY_TYPE_FIELDS[storyType]?.fields || [];
   const currentSocialFields = SOCIAL_TYPE_FIELDS[socialType] || [];
-  const variantRequired = (defs, values) => defs.filter(f => f.required || (f.requiredIf && values[f.requiredIf[0]] === f.requiredIf[1])).map(f => [f.label, !!(values[f.key] || '').trim()]);
+  const isRequired = (f, values) => !!(f.required || (f.requiredIf && values[f.requiredIf[0]] === f.requiredIf[1]));
+  const variantRequired = (defs, values) => defs.filter(f => isRequired(f, values)).map(f => [f.label, !!(values[f.key] || '').trim()]);
   // An unpicked type shows "(auto)", which only Generate honours, so Dispatch needs a picked (or generated) type.
   const storyTypeValid = !!touched.storyType && DIRECTOR_STORY_TYPES.some(type => type.key === storyType);
   const socialTypeValid = !!touched.socialType && SOCIAL_TYPES.some(type => type.key === socialType);
@@ -739,7 +740,7 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
           <div className="grid grid-cols-2 gap-x-2">
           {currentFields.map(f => (
             <div key={f.key} className={f.half ? '' : 'col-span-2'}>
-            <Field label={f.label} required={f.required}>
+            <Field label={f.label} required={isRequired(f, storyFields)}>
               {f.type === 'select' ? (
                 <Select aria-label={f.label}
                   value={storyFields[f.key] || ''}
