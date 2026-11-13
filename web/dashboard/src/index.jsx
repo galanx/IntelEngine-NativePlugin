@@ -12,6 +12,7 @@ window.onerror = (msg, src, line, col) => {
 const pendingCalls = [];
 window.updateSlots = (json) => pendingCalls.push({ name: 'updateSlots', json });
 window.updateFullState = (json) => pendingCalls.push({ name: 'updateFullState', json });
+window.showPrompt = (json) => pendingCalls.push({ name: 'showPrompt', json });
 window.__pendingInteropCalls = pendingCalls;
 
 const container = document.getElementById('dashboard-root');

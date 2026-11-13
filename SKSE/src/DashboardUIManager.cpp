@@ -85,6 +85,7 @@ namespace IntelEngine {
             {"onDashboard_executeAction", OnExecuteActionStatic},
             {"onDashboard_toggleAction", OnToggleActionStatic},
             {"onDashboard_generateDirector", OnGenerateDirectorStatic},
+            {"onPromptResult", OnPromptResultStatic},
         };
 
         std::unique_ptr<IUiHost> host;
@@ -333,6 +334,17 @@ namespace IntelEngine {
                 pendingFullStatePayloadSet_ = false;
                 pendingFullStatePayload_.clear();
                 break;
+            }
+            if (promptId_ != 0) {
+                if (event == UiHostEvent::DomReady) {
+                    promptSent_ = false;      // a freshly loaded page has no card yet: send it again
+                } else if (event == UiHostEvent::Refused || event == UiHostEvent::Unavailable ||
+                           (event == UiHostEvent::Exited && !requestedOpen_)) {
+                    // The view could not open, or was closed (Escape, B) with the prompt still up.
+                    promptAbort_ = true;
+                    promptAbortResult_ = (event == UiHostEvent::Exited && promptSent_) ? promptFallback_
+                                                                                       : kPromptUnavailable;
+                }
             }
             if (requestedOpen_ && domReady_.load() && isOpen_.load()) {
                 if (!openedEventSent_) {
@@ -610,6 +622,7 @@ namespace IntelEngine {
             const bool queueGameTask = flush || fullState;
             if (queueGameTask) gameTaskQueued_ = true;
             lock.unlock();
+            ServicePrompt();
             if (close) {
                 bool callClose;
                 {
@@ -753,6 +766,124 @@ namespace IntelEngine {
             }
             wasComboPressed = comboPressed;
         }
+    }
+
+    // =========================================================================
+    // Timed prompt
+    // =========================================================================
+
+    int DashboardUIManager::ShowPrompt(const std::string& title, const std::string& body,
+                                       const std::vector<std::string>& options, float timeoutSeconds,
+                                       int timeoutChoice) {
+        if (options.empty()) return 0;
+        const int optionCount = static_cast<int>(options.size());
+        if (timeoutChoice < 0 || timeoutChoice >= optionCount) timeoutChoice = optionCount - 1;
+        if (timeoutSeconds < 0.0f) timeoutSeconds = 0.0f;
+        int id = 0;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (shuttingDown_ || !host_ || !available_.load()) return 0;
+            if (promptId_ != 0) return 0;      // one at a time; the caller falls back to a message box
+            id = promptId_ = ++promptCounter_;
+            promptFallback_ = timeoutChoice;
+            promptSent_ = false;
+            promptAbort_ = false;
+            promptOpenedView_ = !requestedOpen_;
+            promptWantsOpen_ = !requestedOpen_;
+            nlohmann::json payload;
+            payload["id"] = id;
+            payload["title"] = title;
+            payload["body"] = body;
+            payload["options"] = options;
+            payload["timeout"] = timeoutSeconds;
+            payload["timeoutChoice"] = timeoutChoice;
+            payload["standalone"] = promptOpenedView_;
+            promptJson_ = SafeDump(payload);
+            // The page counts the time down itself; this is the backstop for a page that never answers.
+            // Without a time limit the prompt waits for the player, as a message box would.
+            const float limit = timeoutSeconds > 0.0f ? timeoutSeconds + 8.0f : 3600.0f;
+            promptDeadline_ = std::chrono::steady_clock::now() +
+                              std::chrono::milliseconds(static_cast<long long>(limit * 1000.0f));
+        }
+        logger::info("[Prompt] {} shown ({} answers, {:.0f} s)", id, optionCount, timeoutSeconds);
+        pollCondition_.notify_one();
+        return id;
+    }
+
+    int DashboardUIManager::GetPromptResult(int promptId) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (promptId != 0 && promptId == promptId_) return -1;
+        if (promptId != 0 && promptId == lastPromptId_) return lastPromptResult_;
+        return kPromptUnavailable;
+    }
+
+    void DashboardUIManager::ServicePrompt() {
+        std::string payload;
+        bool open = false;
+        bool finish = false;
+        int result = 0;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (promptId_ == 0 || shuttingDown_) return;
+            if (promptAbort_) {
+                promptAbort_ = false;
+                finish = true;
+                result = promptAbortResult_;
+            } else if (std::chrono::steady_clock::now() > promptDeadline_) {
+                finish = true;
+                result = promptSent_ ? promptFallback_ : kPromptUnavailable;
+            } else {
+                // Hand the card to the page before the view opens, so it is what the player sees first.
+                if (!promptSent_ && domReady_.load()) {
+                    promptSent_ = true;
+                    payload = promptJson_;
+                }
+                if (promptWantsOpen_ && (promptSent_ || !domReady_.load())) {
+                    promptWantsOpen_ = false;
+                    open = !requestedOpen_;
+                }
+            }
+        }
+        if (!payload.empty() && host_ && !host_->Call("showPrompt", payload)) {
+            std::lock_guard<std::mutex> lock(mutex_);
+            promptSent_ = false;              // not delivered: try again once the page can take it
+        }
+        if (open) Toggle();
+        if (finish) FinishPrompt(result);
+    }
+
+    void DashboardUIManager::FinishPrompt(int result) {
+        bool closeView = false;
+        int id = 0;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (promptId_ == 0) return;
+            id = lastPromptId_ = promptId_;
+            lastPromptResult_ = result;
+            promptId_ = 0;
+            promptJson_.clear();
+            promptWantsOpen_ = false;
+            closeView = promptOpenedView_ && requestedOpen_;
+            promptOpenedView_ = false;
+        }
+        logger::info("[Prompt] {} answered: {}", id, result);
+        if (closeView) RequestClose();
+    }
+
+    void DashboardUIManager::OnPromptResultStatic(const char* jsonArg) {
+        auto* self = GetSingleton();
+        if (!self->acceptingCallbacks_.load()) return;
+        std::string arg(jsonArg ? jsonArg : "{}");
+        try {
+            auto j = nlohmann::json::parse(arg);
+            const int id = j.value("id", 0);
+            const int choice = j.value("choice", -1);
+            {
+                std::lock_guard<std::mutex> lock(self->mutex_);
+                if (id == 0 || id != self->promptId_ || choice < 0) return;
+            }
+            self->FinishPrompt(choice);
+        } catch (...) {}
     }
 
     // =========================================================================

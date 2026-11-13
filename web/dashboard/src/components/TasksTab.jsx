@@ -19,7 +19,7 @@ function TasksTab({ tasks, scheduled, calendar, sendAction, packages, removingId
   const otherPackages = packages.filter(entry => !activeTasks.some(slot => (slot.agentFormId >>> 0) === entry.formId));
 
   return (
-    <div className="p-3 space-y-4">
+    <div className="ie-page p-3 space-y-4">
       {/* Active Tasks */}
       <section>
         <div className="flex items-center justify-between mb-2">
@@ -96,7 +96,7 @@ function TasksTab({ tasks, scheduled, calendar, sendAction, packages, removingId
                        sched.schedState === 2 ? 'Meeting' : 'Pending'}
                     </span>
                     <button
-                      onClick={() => sendAction('cancelSchedule', { slot: i })}
+                      onClick={() => sendAction('cancelSchedule', { slot: Number.isInteger(sched.slot) ? sched.slot : i })}
                       className="btn-cancel"
                       title="Cancel scheduled task"
                     >

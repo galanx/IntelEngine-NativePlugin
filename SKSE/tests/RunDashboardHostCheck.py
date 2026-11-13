@@ -60,7 +60,8 @@ def method(source, signature):
 
 manager = (SRC / "DashboardUIManager.cpp").read_text(encoding="utf-8")
 has_generate = "    void DashboardUIManager::OnGenerateDirectorStatic(" in manager
-listener_count = 15 + int(has_generate)
+has_prompt = "    void DashboardUIManager::OnPromptResultStatic(" in manager
+listener_count = 15 + int(has_generate) + int(has_prompt)
 listener_start = manager.index("        static const UiListener listeners[] = {")
 listener_end = manager.index("        };", listener_start)
 listener_entries = manager[manager.index("{", listener_start) + 1:listener_end]
@@ -70,7 +71,7 @@ for index, callback in enumerate((
     "OnToggleStoryTypeStatic", "OnChangeSettingStatic", "OnRemovePackagesStatic",
     "OnChangePluginConfigStatic", "OnDispatchStoryStatic", "OnDispatchNpcSocialStatic",
     "OnDispatchPoliticsStatic", "OnExecuteActionStatic", "OnToggleActionStatic",
-    "OnGenerateDirectorStatic",
+    "OnGenerateDirectorStatic", "OnPromptResultStatic",
 )):
     listener_entries = listener_entries.replace(callback, f"listener{index}")
 callbacks = [method(manager, sig) for sig in (
@@ -100,11 +101,16 @@ callbacks = [method(manager, sig) for sig in (
     "    void DashboardUIManager::OnExecuteActionStatic(",
     "    void DashboardUIManager::OnToggleActionStatic(",
     "    void DashboardUIManager::OnGenerateDirectorStatic(",
+    "    int DashboardUIManager::ShowPrompt(",
+    "    int DashboardUIManager::GetPromptResult(",
+    "    void DashboardUIManager::ServicePrompt()",
+    "    void DashboardUIManager::FinishPrompt(",
+    "    void DashboardUIManager::OnPromptResultStatic(",
     "    void DashboardUIManager::LoadActionYAMLs()",
     "    void DashboardUIManager::ReloadView()",
     "    void DashboardUIManager::SendModEvent(",
     "    void DashboardUIManager::HotkeyPollLoop()",
-    ) if has_generate or "OnGenerateDirectorStatic" not in sig]
+    ) if (has_generate or "OnGenerateDirectorStatic" not in sig) and (has_prompt or "Prompt" not in sig)]
 
 with tempfile.TemporaryDirectory(prefix="dashboard-host-") as temp:
     work = pathlib.Path(temp)
@@ -113,7 +119,7 @@ with tempfile.TemporaryDirectory(prefix="dashboard-host-") as temp:
         (work / "actions" / action_file).write_bytes(
             (ROOT / "SKSE/Plugins/SkyrimNet/external/galanx.intelengine/actions" / action_file).read_bytes())
     (work / "UiHostTestSupport.h").write_text(r'''#pragma once
-#define INTELENGINE_VERSION "3.7.1"
+#define INTELENGINE_VERSION "3.7.2"
 #include "Windows.h"
 #include <cstdint>
 #include <string>
@@ -263,7 +269,7 @@ int callbackHits = 0, routedListener = -1;
 void route(int id,const char* arg) { ++callbackHits; routedListener=id; listenerCalls.push_back({std::to_string(id),arg?arg:""}); }
 #define ROUTE(N) void listener##N(const char* a){route(N,a);}
 ROUTE(0) ROUTE(1) ROUTE(2) ROUTE(3) ROUTE(4) ROUTE(5) ROUTE(6) ROUTE(7)
-ROUTE(8) ROUTE(9) ROUTE(10) ROUTE(11) ROUTE(12) ROUTE(13) ROUTE(14) ROUTE(15)
+ROUTE(8) ROUTE(9) ROUTE(10) ROUTE(11) ROUTE(12) ROUTE(13) ROUTE(14) ROUTE(15) ROUTE(16)
 #undef ROUTE
 namespace IntelEngine::SkyrimNetAPI {
 inline bool (*SendCustomPromptToLLM)(const char*, const char*, const char*,
@@ -285,6 +291,7 @@ const std::array<std::string_view, ''' + str(listener_count) + r'''> expectedNam
     "onDashboard_changePluginConfig", "onDashboard_dispatchStory", "onDashboard_dispatchNpcSocial",
     "onDashboard_dispatchPolitics", "onDashboard_executeAction", "onDashboard_toggleAction",
     *(["onDashboard_generateDirector"] if has_generate else []),
+    *(["onPromptResult"] if has_prompt else []),
 )) + r'''};
 
 struct FakePrisma final : PRISMA_UI_API::IVPrismaUI1 {
@@ -733,11 +740,84 @@ public:
     static void OnDispatchStoryStatic(const char*); static void OnDispatchNpcSocialStatic(const char*); static void OnDispatchPoliticsStatic(const char*); static void OnExecuteActionStatic(const char*);
     static void OnChangePluginConfigStatic(const char*); static void OnToggleActionStatic(const char*);
     static void OnGenerateDirectorStatic(const char*);
+    // Timed prompt
+    static constexpr int kPromptUnavailable=-2;
+    int promptId_=0,promptCounter_=0,promptFallback_=0,lastPromptId_=0,lastPromptResult_=-1,promptAbortResult_=kPromptUnavailable;
+    bool promptSent_=false,promptWantsOpen_=false,promptOpenedView_=false,promptAbort_=false;
+    std::string promptJson_; std::chrono::steady_clock::time_point promptDeadline_{};
+    int ShowPrompt(const std::string&,const std::string&,const std::vector<std::string>&,float,int);
+    int GetPromptResult(int); void ServicePrompt(); void FinishPrompt(int);
+    static void OnPromptResultStatic(const char*);
 };
 }
 ''' + "namespace IntelEngine {\n" + "\n".join(callbacks) + (
     "\nvoid DashboardUIManager::OnGenerateDirectorStatic(const char*) {}\n" if not has_generate else ""
 ) + r'''
+void testPrompt() {
+    auto* m=DashboardUIManager::GetSingleton();
+    m->host_=std::make_unique<FakeHost>(); auto* host=static_cast<FakeHost*>(m->host_.get());
+    const auto sent=[&]{ int n=0; for(auto& c:host->calls) if(c.first=="showPrompt") ++n; return n; };
+    const std::vector<std::string> answers{"Allow","Deny","Deny (Silent)"};
+    m->shuttingDown_=false; m->available_=true; m->acceptingCallbacks_=true;
+    m->requestedOpen_=false; m->isOpen_=false; m->domReady_=true; m->promptId_=0;
+
+    // No answers, or no usable UI: the caller is told at once and falls back to a message box.
+    assert(m->ShowPrompt("t","b",{},20.f,0)==0);
+    m->available_=false; assert(m->ShowPrompt("t","b",answers,20.f,2)==0); m->available_=true;
+
+    // Shown on its own: the card is handed to the page, then the view is opened for it.
+    m->pendingOpen_=false;
+    const int first=m->ShowPrompt("Meeting","Saadia wants to meet.",answers,20.f,2);
+    assert(first>0 && m->GetPromptResult(first)==-1);
+    assert(m->ShowPrompt("t","b",answers,20.f,2)==0);                  // one at a time
+    m->ServicePrompt();
+    assert(sent()==1 && m->requestedOpen_ && m->pendingOpen_);     // the poll loop opens the view
+    auto card=nlohmann::json::parse(host->calls.back().second);
+    assert(card["id"]==first && card["options"].size()==3 && card["timeoutChoice"]==2 && card["standalone"]==true);
+    m->ServicePrompt(); assert(sent()==1);                             // sent once
+    // A reloaded page has no card: it is sent again.
+    m->OnHostEvent(UiHostEvent::DomReady); m->ServicePrompt(); assert(sent()==2);
+    // An answer for another prompt, or no answer at all, changes nothing.
+    DashboardUIManager::OnPromptResultStatic(R"({"id":999,"choice":0})");
+    DashboardUIManager::OnPromptResultStatic(R"({"id":0})");
+    DashboardUIManager::OnPromptResultStatic("not json");
+    assert(m->GetPromptResult(first)==-1);
+    // The player's answer ends it, and the view opened for the prompt closes again.
+    DashboardUIManager::OnPromptResultStatic((R"({"id":)"+std::to_string(first)+R"(,"choice":1})").c_str());
+    assert(m->GetPromptResult(first)==1 && !m->requestedOpen_ && m->promptId_==0);
+    assert(m->GetPromptResult(12345)==DashboardUIManager::kPromptUnavailable);
+
+    // An out-of-range fallback becomes the last answer; closing the view (Escape, B) takes the fallback.
+    m->requestedOpen_=false; m->isOpen_=false; m->pendingClose_=false;
+    const int second=m->ShowPrompt("t","b",{"Yes","No"},20.f,7);
+    m->ServicePrompt();
+    assert(nlohmann::json::parse(host->calls.back().second)["timeoutChoice"]==1);
+    m->isOpen_=true; m->OnHostEvent(UiHostEvent::Exited); m->ServicePrompt();
+    assert(m->GetPromptResult(second)==1);
+
+    // The view could not open (another UI holds the screen): unavailable, so the caller falls back.
+    m->requestedOpen_=false; m->isOpen_=false;
+    const int third=m->ShowPrompt("t","b",answers,20.f,2);
+    m->ServicePrompt(); m->OnHostEvent(UiHostEvent::Refused); m->ServicePrompt();
+    assert(m->GetPromptResult(third)==DashboardUIManager::kPromptUnavailable);
+
+    // A page that never answers: after the deadline the fallback counts.
+    m->requestedOpen_=false; m->isOpen_=false;
+    const int fourth=m->ShowPrompt("t","b",answers,20.f,0);
+    m->ServicePrompt();
+    m->promptDeadline_=std::chrono::steady_clock::now()-std::chrono::seconds(1);
+    m->ServicePrompt();
+    assert(m->GetPromptResult(fourth)==0);
+
+    // With the dashboard already open the card is laid over it and the dashboard stays open afterwards.
+    m->requestedOpen_=true; m->isOpen_=true; m->pendingOpen_=false;
+    const int fifth=m->ShowPrompt("t","b",answers,20.f,2);
+    m->ServicePrompt();
+    assert(nlohmann::json::parse(host->calls.back().second)["standalone"]==false && !m->pendingOpen_);
+    DashboardUIManager::OnPromptResultStatic((R"({"id":)"+std::to_string(fifth)+R"(,"choice":0})").c_str());
+    assert(m->GetPromptResult(fifth)==0 && m->requestedOpen_);
+    m->requestedOpen_=false; m->isOpen_=false; m->domReady_=false; m->pendingOpen_=false; m->pendingClose_=false;
+}
 void testManager() {
     auto* m=DashboardUIManager::GetSingleton(); m->host_=std::make_unique<FakeHost>();
     eventCalls.clear();
@@ -1038,8 +1118,8 @@ void testLifecycleLogs() {
 int main() {
     for (std::size_t i=0; i<listeners.size(); ++i)
         assert(listeners[i].name == expectedNames[i]);
-    selectTest(); prismaTest(); magelightTest(); materializationTest(); failCleanupTest(); IntelEngine::testManager(); IntelEngine::testLifecycleLogs();
-    std::cout << "PASS dashboard host selection, adapters, lifecycle, routing, and manager callbacks\n";
+    selectTest(); prismaTest(); magelightTest(); materializationTest(); failCleanupTest(); IntelEngine::testManager(); IntelEngine::testLifecycleLogs(); IntelEngine::testPrompt();
+    std::cout << "PASS dashboard host selection, adapters, lifecycle, routing, manager callbacks, and timed prompt\n";
 }
 ''', encoding="utf-8")
 

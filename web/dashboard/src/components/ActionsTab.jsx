@@ -25,7 +25,7 @@ function ActionsTab({ actions, sendAction }) {
   }
 
   return (
-    <div className="p-3 space-y-3">
+    <div className="ie-page ie-page-wide p-3 space-y-3">
       <section>
       <div className="flex items-center justify-between mb-1">
         <h2 className="section-header">IntelEngine Actions</h2>
