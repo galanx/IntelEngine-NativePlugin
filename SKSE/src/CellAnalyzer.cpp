@@ -550,16 +550,25 @@ namespace IntelEngine {
     }
 
     bool CellAnalyzer::IsLocationDangerous(RE::BGSLocation* location) {
-        if (!location) return true;  // unknown location = assume dangerous
-        EnsureDangerousKeywordsCached();
-        // If any safe keyword matches, the location is NOT dangerous
-        for (auto* keyword : m_safeKeywords) {
-            if (location->HasKeyword(keyword)) {
-                return false;
+        if (location) EnsureDangerousKeywordsCached();
+        RE::BGSKeyword* matched = nullptr;
+        if (location) for (auto* keyword : m_safeKeywords) if (location->HasKeyword(keyword)) { matched = keyword; break; }
+        const bool dangerous = !matched;
+        if (spdlog::default_logger()->should_log(spdlog::level::debug)) {
+            static std::mutex diagnosticMutex;
+            std::lock_guard diagnosticLock(diagnosticMutex);
+            static RE::BGSLocation* previousLocation = nullptr;
+            static bool previousDangerous = false, initialized = false;
+            if (!initialized || location != previousLocation || dangerous != previousDangerous) {
+                const char* name = location ? location->GetFullName() : nullptr;
+                const char* keyword = matched ? matched->GetFormEditorID() : nullptr;
+                logger::debug("[diag:danger] location='{}' FormID={} safeKeyword={}",
+                    name ? name : "null", location ? location->GetFormID() : 0,
+                    location ? (keyword ? keyword : "none") : "null location");
+                previousLocation = location; previousDangerous = dangerous; initialized = true;
             }
         }
-        // No safe keyword found = dangerous (dungeon, lair, camp, etc.)
-        return true;
+        return dangerous;
     }
 
     bool CellAnalyzer::IsLocationNonCombative(RE::BGSLocation* location) {

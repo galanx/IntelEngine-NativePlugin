@@ -31,7 +31,8 @@ struct ModCallbackEvent { std::string eventName, strArg; };
 struct Source { template<class T> void AddEventSink(T*) {} };
 inline Source* GetModCallbackEventSource() { return nullptr; }
 }
-namespace logger { template<class... T> void info(T&&...) {} }
+namespace logger { template<class... T> void info(T&&...) {} template<class... T> void debug(T&&...) {} }
+namespace spdlog { namespace level { enum level_enum { debug }; } struct L { bool should_log(level::level_enum) { return true; } }; inline L* default_logger() { static L l; return &l; } }
 namespace IntelEngine::AsyncDispatch { template<class F> void Submit(F f) { f(); } }
 ''')
     source = (src / "PoliticalEngineBridge.cpp").read_text()
@@ -52,7 +53,8 @@ static unsigned api = 3;
 static bool installed = true;
 static bool journalExport = true;
 static bool sidesExport = true;
-static json sides = {{"political_sides080",{{"territory_rule","current_owner_realm"},{"realms",json::array({{{"realm_id",3},{"side_id",1}},{{"realm_id",9},{"side_id",2}}})}}}};
+// Live PE 0.8.0 RC2 shape (2026-11-10): fields at top level, no "political_sides080" wrapper.
+static json sides = {{"territory_rule","current_owner_realm"},{"player_side_id",1},{"realms",json::array({{{"realm_id",3},{"side_id",1}},{{"realm_id",9},{"side_id",2}}})}};
 static unsigned ReadSides(char* out,unsigned capacity) {
     auto text=sides.dump(); auto size=static_cast<unsigned>(text.size()+1);
     if(out && capacity>=size) std::memcpy(out,text.c_str(),size);
@@ -113,25 +115,28 @@ int main(int argc, char** argv) { try {
     Require(IntelEngine::PEEventText(changes[0]) == "Fellburg took Southern Reach from Markarth.", "factual realm-name rumor");
     if(sidesExport) {
         Require(bridge->Context()["territory"]["11"]["side_id"]==2,"captured district follows current owner, not original hold");
-        sides["political_sides080"]["realms"][1]["side_id"]=3;
+        sides["realms"][1]["side_id"]=3;
         SKSE::ModCallbackEvent sideChanged{"PL_StateChanged","[\"political_sides080\"]"};
         bridge->ProcessEvent(&sideChanged,nullptr);
         Require(bridge->Poll()==json::array() && bridge->Context()["territory"]["11"]["side_id"]==3,"sides-only event refreshes context without news");
-        sides["political_sides080"]["realms"][1]["side_id"]=0;
+        sides["realms"][1]["side_id"]=0;
         bridge->MarkDirty(); bridge->Poll();
         Require(bridge->Context()["territory"]["11"]["side_id"]==0,"independent is a known side, not missing");
-        sides["political_sides080"]["realms"][1]["side_id"]=7;
+        sides["realms"][1]["side_id"]=7;
         bridge->MarkDirty(); bridge->Poll();
         Require(!bridge->Context()["territory"]["11"].contains("side_id"),"invalid allegiance omitted");
         const auto valid=sides; sides=nullptr; bridge->MarkDirty(); bridge->Poll();
         Require(!bridge->Context()["territory"]["11"].contains("side_id") &&
                 bridge->Context()["side_source"]=="political_sides080", "malformed present export never falls back");
-        sides=valid; sides["political_sides080"]["realms"][1]["side_id"]=2;
+        sides=valid; sides["realms"][1]["side_id"]=2;
         bridge->MarkDirty(); bridge->Poll();
     }
     bridge->MarkDirty(); Require(bridge->Poll() == json::array(), "duplicate re-read");
     state = before; SKSE::ModCallbackEvent loaded{"PL_StateChanged", "[\"loaded\"]"};
-    bridge->ProcessEvent(&loaded, nullptr); Require(bridge->Poll() == json::array(), "load replayed news");
+    static int hooked = 0; bridge->onLoaded = [] { ++hooked; };
+    bridge->ProcessEvent(&loaded, nullptr); Require(hooked == 1, "PE loaded event runs the post-load sync");
+    Require(bridge->Poll() == json::array(), "load replayed news");
+    Require(bridge->Rulers().is_object() && (!sidesExport || bridge->RealmSides()["3"] == 1), "first poll after load yields rulers/sides, no changes");
     // LABELLED SYNTHETIC six-district turn, using the genuine before capture.
     state = before; state["revision"] = 100;
     for (int i=0;i<6;++i) state["campaign070"]["regions"][i]["owner_realm_id"] = 9;
@@ -141,6 +146,10 @@ int main(int argc, char** argv) { try {
     Require(bridge->Poll()==json::array() && !bridge->IsActive(), "disabled PE");
     Require(bridge->Context().is_null(), "disabled context omitted");
     state = after; bridge->MarkDirty(); Require(bridge->Poll()==json::array(), "reenable replay");
+    state = before; bridge->MarkDirty(); bridge->Poll(); Require(bridge->Context().is_object(), "active before integration toggle");
+    bridge->SetEnabled(false); state = after;
+    Require(bridge->Context().is_null() && bridge->Poll()==json::array() && !bridge->IsActive(), "integration off: no context, no changes");
+    bridge->SetEnabled(true); Require(bridge->Poll()==json::array() && bridge->IsActive(), "integration on: fresh baseline, no replay");
     state["data_ready"] = false; bridge->MarkDirty();
     Require(bridge->Poll()==json::array() && !bridge->IsActive(), "not-ready PE");
     state = before; bridge->MarkDirty(); Require(bridge->Poll()==json::array(), "ready baseline");
@@ -179,8 +188,26 @@ int main(int argc, char** argv) { try {
     Require(changes.size()==1 && changes[0]["type"]=="pe_campaign", "applied peace cessation");
     war["settlement"]["outcome"]="puppet";
     Require(PEDiff(base,PEComparable(synthetic))==json::array(), "private puppet settlement");
-    synthetic=after; synthetic["campaign080"]["governments"][9]["kind"]=2;
+    synthetic=after; synthetic["campaign080"]["governments"][9]["kind"]=2; synthetic["rulers"]=before["rulers"];
     Require(PEDiff(base,PEComparable(synthetic))==json::array(), "private puppet ownership");
+    synthetic=before; synthetic["campaign080"]["governments"][9]["kind"]=2; synthetic["campaign070"]["regions"][0]["owner_realm_id"]=9;
+    synthetic["rulers"][9]["actor_id"]=synthetic["rulers"][9]["actor_id"].get<unsigned>()+1;
+    changes=PEDiff(PEComparable(before),PEComparable(synthetic));
+    Require(changes.size()==1 && changes[0]["type"]=="pe_ruler" && changes[0]["realm"]=="9", "puppet ruler change, no ownership");
+    Require(PEComparable(synthetic)["realms"].contains("9"), "puppet realm keeps its public name (ruler news text)");
+    // Dashboard-only ownership label: only the player's own puppet/vassal; never in Context().
+    synthetic=before; synthetic["campaign080"]["governments"][3]={{"kind",2},{"overlord",9}};
+    synthetic["campaign080"]["governments"][4]={{"kind",3},{"overlord",9}};
+    synthetic["campaign080"]["governments"][5]={{"kind",2},{"overlord",1}};
+    auto owned=IntelEngine::PEOwnedRealms(synthetic);
+    Require(owned==json::object({{"3","puppet"},{"4","vassal"}}), "player's puppet/vassal labelled, other realm's puppet absent");
+    Require(IntelEngine::PEOwnedRealms(before)==json::object() && IntelEngine::PEOwnedRealms(json())==json::object(), "no owned realms by default / malformed");
+    state=synthetic; bridge->MarkDirty(true); bridge->Poll();
+    Require(bridge->OwnedRealms()==owned, "bridge exposes owned realms");
+    Require(bridge->Context().dump().find("overlord")==std::string::npos && bridge->Context().dump().find("puppet")==std::string::npos &&
+            bridge->Context().dump().find("vassal")==std::string::npos && bridge->Context().dump().find("kind")==std::string::npos, "context carries no government data");
+    bridge->SetEnabled(false); Require(bridge->OwnedRealms()==json::object(), "integration off: no owned realms");
+    bridge->SetEnabled(true); state=before; bridge->MarkDirty(true); bridge->Poll();
     for (const auto& malformed : {json(),json::array(),json("bad"),json(5)}) {
         synthetic=before; synthetic["campaign070"]=malformed; synthetic["rulers"]=malformed;
         synthetic["campaign080"]=malformed;

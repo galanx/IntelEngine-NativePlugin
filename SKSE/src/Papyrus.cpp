@@ -47,12 +47,14 @@
 
 namespace IntelEngine::Papyrus {
 
+    bool StoryLoadRecovered(RE::StaticFunctionTag*, bool complete) { return IntelEngineStoryLoadRecovered(complete); }
     // Forward declarations for functions defined after Register()
     void MarkSystemPending(RE::StaticFunctionTag*, RE::BSFixedString, float);
     void ClearSystemPending(RE::StaticFunctionTag*, RE::BSFixedString);
     bool ShouldResetPending(RE::StaticFunctionTag*, RE::BSFixedString, float, float);
     RE::Actor* ResolveStoryCandidate(RE::StaticFunctionTag*, RE::BSFixedString, RE::BSFixedString, RE::Actor*);
     RE::Actor* ResolveDirectorActor(RE::StaticFunctionTag*, RE::BSFixedString);
+    RE::BSFixedString GetDirectorFailureMessage(RE::StaticFunctionTag*, RE::BSFixedString);
     RE::Actor* FindMessengerForSender(RE::StaticFunctionTag*, RE::Actor*);
     void NotifyStoryCooldown(RE::StaticFunctionTag*, RE::Actor*, float);
     void BeginAsyncNPCDMTick(RE::StaticFunctionTag*, std::int32_t, RE::TESQuest*, RE::BSFixedString, RE::BSFixedString);
@@ -119,6 +121,8 @@ namespace IntelEngine::Papyrus {
     int SyncVanillaFactionStandings(RE::StaticFunctionTag*);
     void WritePoliticalStateFile(RE::StaticFunctionTag*);
     void SetPoliticsEnabled(RE::StaticFunctionTag*, bool);
+    bool GetPEIntegration(RE::StaticFunctionTag*);
+    void SetPEIntegration(RE::StaticFunctionTag*, bool);
     bool GetPEReactionsMoveRelations(RE::StaticFunctionTag*);
     void SetPEReactionsMoveRelations(RE::StaticFunctionTag*, bool);
     void SetPoliticsTickInterval(RE::StaticFunctionTag*, int);
@@ -177,6 +181,7 @@ namespace IntelEngine::Papyrus {
         return RE::BSFixedString(FriendlyKey(std::string(key.c_str())));
     }
     RE::BSFixedString BuildTaskHistoryDesc(RE::StaticFunctionTag*, RE::BSFixedString, RE::BSFixedString, RE::BSFixedString, RE::BSFixedString, RE::BSFixedString);
+    RE::BSFixedString DescribeDistance(RE::StaticFunctionTag*, RE::TESObjectREFR*, RE::TESObjectREFR*);
     RE::BSFixedString GetSlotStatusNative(RE::StaticFunctionTag*, RE::BSFixedString, int, RE::BSFixedString, RE::BSFixedString);
     RE::BSFixedString GetPreciseTimeDescriptionNative(RE::StaticFunctionTag*, float, float);
     RE::BSFixedString GetTimeDescriptionNative(RE::StaticFunctionTag*, float);
@@ -253,6 +258,7 @@ namespace IntelEngine::Papyrus {
         a_vm->RegisterFunction("FindNPCByNameNear", SCRIPT_NAME, FindNPCByNameNear); ++count;
         a_vm->RegisterFunction("ResolveStoryCandidate", SCRIPT_NAME, ResolveStoryCandidate); ++count;
         a_vm->RegisterFunction("ResolveDirectorActor", SCRIPT_NAME, ResolveDirectorActor); ++count;
+        a_vm->RegisterFunction("GetDirectorFailureMessage", SCRIPT_NAME, GetDirectorFailureMessage); ++count;
         a_vm->RegisterFunction("FindMessengerForSender", SCRIPT_NAME, FindMessengerForSender); ++count;
         a_vm->RegisterFunction("GetNPCCurrentLocation", SCRIPT_NAME, GetNPCCurrentLocation); ++count;
         a_vm->RegisterFunction("IsNPCAccessible", SCRIPT_NAME, IsNPCAccessible); ++count;
@@ -309,6 +315,7 @@ namespace IntelEngine::Papyrus {
         // Distance / Math Utility Functions
         a_vm->RegisterFunction("GetDistance3D", SCRIPT_NAME, GetDistance3D); ++count;
         a_vm->RegisterFunction("GetDistance2D", SCRIPT_NAME, GetDistance2D); ++count;
+        a_vm->RegisterFunction("DescribeDistance", SCRIPT_NAME, DescribeDistance); ++count;
         a_vm->RegisterFunction("GetArrivalThreshold", SCRIPT_NAME, GetArrivalThreshold); ++count;
         a_vm->RegisterFunction("CalculateDeadlineFromDistance", SCRIPT_NAME, CalculateDeadlineFromDistance); ++count;
         a_vm->RegisterFunction("GetOffsetBehind", SCRIPT_NAME, GetOffsetBehind); ++count;
@@ -471,6 +478,8 @@ namespace IntelEngine::Papyrus {
         a_vm->RegisterFunction("SyncVanillaFactionStandings", SCRIPT_NAME, SyncVanillaFactionStandings); ++count;
         a_vm->RegisterFunction("WritePoliticalStateFile", SCRIPT_NAME, WritePoliticalStateFile); ++count;
         a_vm->RegisterFunction("SetPoliticsEnabled", SCRIPT_NAME, SetPoliticsEnabled); ++count;
+        a_vm->RegisterFunction("GetPEIntegration", SCRIPT_NAME, GetPEIntegration); ++count;
+        a_vm->RegisterFunction("SetPEIntegration", SCRIPT_NAME, SetPEIntegration); ++count;
         a_vm->RegisterFunction("GetPEReactionsMoveRelations", SCRIPT_NAME, GetPEReactionsMoveRelations); ++count;
         a_vm->RegisterFunction("SetPEReactionsMoveRelations", SCRIPT_NAME, SetPEReactionsMoveRelations); ++count;
 
@@ -596,6 +605,7 @@ namespace IntelEngine::Papyrus {
         a_vm->RegisterFunction("MarkSystemPending", SCRIPT_NAME, MarkSystemPending); ++count;
         a_vm->RegisterFunction("ClearSystemPending", SCRIPT_NAME, ClearSystemPending); ++count;
         a_vm->RegisterFunction("ShouldResetPending", SCRIPT_NAME, ShouldResetPending); ++count;
+        a_vm->RegisterFunction("StoryLoadRecovered", SCRIPT_NAME, StoryLoadRecovered); ++count;
 
         // Utility
         a_vm->RegisterFunction("HexToInt", SCRIPT_NAME, HexToInt); ++count;
@@ -636,6 +646,11 @@ namespace IntelEngine::Papyrus {
 
     RE::Actor* ResolveDirectorActor(RE::StaticFunctionTag*, RE::BSFixedString name) {
         return NPCIndex::GetSingleton()->ResolveDirectorActor(name.c_str());
+    }
+    RE::BSFixedString GetDirectorFailureMessage(RE::StaticFunctionTag*, RE::BSFixedString name) {
+        std::string reason;
+        NPCIndex::GetSingleton()->ResolveDirectorActor(name.c_str(), &reason);
+        return RE::BSFixedString(reason == "lookup-null" ? fmt::format("{} isn't loaded right now (they only exist near their home), so they can't be sent from here.", name.c_str()) : fmt::format("Couldn't find NPC '{}' (no unique match).", name.c_str()));
     }
 
     RE::Actor* FindMessengerForSender(RE::StaticFunctionTag*, RE::Actor* sender) {
@@ -1087,6 +1102,16 @@ namespace IntelEngine::Papyrus {
         return std::sqrt(dx * dx + dy * dy);
     }
 
+    RE::BSFixedString DescribeDistance(RE::StaticFunctionTag*, RE::TESObjectREFR* a, RE::TESObjectREFR* b) {
+        if (!a || !b) return "sameSpace=no";
+        auto* ac = a->GetParentCell();
+        auto* bc = b->GetParentCell();
+        const bool same = (ac && bc && ac->IsInteriorCell() && ac == bc) ||
+            ((!ac || !ac->IsInteriorCell()) && (!bc || !bc->IsInteriorCell()) && a->GetWorldspace() && a->GetWorldspace() == b->GetWorldspace());
+        if (!same) return "sameSpace=no";
+        return RE::BSFixedString(fmt::format("dist={:.0f} sameSpace=yes", a->GetPosition().GetDistance(b->GetPosition())));
+    }
+
     float CalculateDeadlineFromDistance(RE::StaticFunctionTag*,
                                         RE::TESObjectREFR* source, RE::TESObjectREFR* target,
                                         bool isRoundTrip, float minHours, float maxHours) {
@@ -1389,14 +1414,30 @@ namespace IntelEngine::Papyrus {
         auto pos = actor->GetPosition();
         OffScreenTracker::GetSingleton()->InitSlot(
             slot, estimatedArrivalGameTime, pos.x, pos.y);
+        logger::debug("[diag:offscreen] {} slot={} init XY=({},{}) loaded={}",
+            actor->GetName(), slot, pos.x, pos.y, actor->Is3DLoaded());
     }
 
     int CheckOffScreenProgress(RE::StaticFunctionTag*, int slot,
                                RE::Actor* actor, float currentGameTime) {
         if (!actor) return 0;
         auto pos = actor->GetPosition();
-        return OffScreenTracker::GetSingleton()->CheckProgress(
-            slot, currentGameTime, pos.x, pos.y);
+        float movement;
+        int ticks;
+        int status = OffScreenTracker::GetSingleton()->CheckProgress(slot, currentGameTime, pos.x, pos.y, actor->Is3DLoaded(), movement, ticks);
+        if (movement >= 0.0f && spdlog::default_logger()->should_log(spdlog::level::debug)) {
+            auto* player = RE::PlayerCharacter::GetSingleton();
+            auto* cell = actor->GetParentCell();
+            auto* world = actor->GetWorldspace();
+            auto* package = actor->GetCurrentPackage();
+            const auto playerPos = player ? player->GetPosition() : RE::NiPoint3{};
+            logger::debug("[diag:offscreen] {} ref={:08X} slot={} xyz=({},{},{}) cell={}({:08X}) space={}({:08X}) loaded={} package={:08X} playerXY=({},{}) {} movement={} stationaryTicks={} return={}",
+                actor->GetName(), actor->GetFormID(), slot, pos.x, pos.y, pos.z,
+                cell ? cell->GetName() : "none", cell ? cell->GetFormID() : 0,
+                cell && cell->IsInteriorCell() ? "interior" : world ? world->GetName() : "none", world ? world->GetFormID() : 0,
+                actor->Is3DLoaded(), package ? package->GetFormID() : 0, playerPos.x, playerPos.y, DescribeDistance(nullptr, actor, player).c_str(), movement, ticks, status);
+        }
+        return status;
     }
 
     void ResetOffScreenSlot(RE::StaticFunctionTag*, int slot) {
@@ -3989,6 +4030,14 @@ namespace IntelEngine::Papyrus {
     // BeginAsyncPoliticalTick — main-thread leader snapshot, worker-thread JSON,
     // dispatched callback fires Papyrus OnPoliticsDMContextReady(String contextJson).
     // -------------------------------------------------------------------------
+    // Shared by the political tick and the post-load sync (Plugin.cpp). A first poll after a reset only sets the baseline (no changes).
+    nlohmann::json PollAndSyncPE() {
+        auto changes = PoliticalEngineBridge::GetSingleton()->Poll();
+        FactionPolitics::GetSingleton()->SyncPERulers(PoliticalEngineBridge::GetSingleton()->Rulers());
+        FactionPolitics::GetSingleton()->SyncPESides(PoliticalEngineBridge::GetSingleton()->RealmSides());
+        return changes;
+    }
+
     void BeginAsyncPoliticalTick(RE::StaticFunctionTag*,
                                   float currentGameTime,
                                   RE::TESQuest* callbackQuest,
@@ -4016,6 +4065,7 @@ namespace IntelEngine::Papyrus {
 
         // Phase A — main thread.
         auto snap = politics->BuildPoliticsTickSnapshot(currentGameTime);
+        politics->EnforceWarRule(snap);  // fix 94: before the context build so this tick's DM sees the new war
 
         AsyncDispatch::Submit([snap = std::move(snap),
                                questEditorId = std::move(questEditorId),
@@ -4023,7 +4073,7 @@ namespace IntelEngine::Papyrus {
                                functionName = std::move(functionName),
                                generation = SlotTracker::GetSingleton()->loadGeneration.load()]() mutable {
             if (generation != SlotTracker::GetSingleton()->loadGeneration.load()) return;
-            auto changes = PoliticalEngineBridge::GetSingleton()->Poll();
+            auto changes = PollAndSyncPE();
             if (generation != SlotTracker::GetSingleton()->loadGeneration.load()) return;
             std::string requestJson = FactionPolitics::GetSingleton()->BuildPoliticalContextFromSnapshot(snap);
             auto* task = SKSE::GetTaskInterface();
@@ -4407,6 +4457,8 @@ namespace IntelEngine::Papyrus {
     void SetPoliticsEnabled(RE::StaticFunctionTag*, bool enabled) {
         FactionPolitics::GetSingleton()->SetEnabled(enabled);
     }
+    bool GetPEIntegration(RE::StaticFunctionTag*) { return FactionPolitics::GetSingleton()->GetPEIntegration(); }
+    void SetPEIntegration(RE::StaticFunctionTag*, bool val) { FactionPolitics::GetSingleton()->SetPEIntegration(val); }
     bool GetPEReactionsMoveRelations(RE::StaticFunctionTag*) { return FactionPolitics::GetSingleton()->GetPEReactionsMoveRelations(); }
     void SetPEReactionsMoveRelations(RE::StaticFunctionTag*, bool val) { FactionPolitics::GetSingleton()->SetPEReactionsMoveRelations(val); }
 
@@ -5004,8 +5056,9 @@ namespace IntelEngine::Papyrus {
 
     RE::BSFixedString ValidateStoryResponse(RE::StaticFunctionTag*, RE::BSFixedString responseJson,
                                              int toggleBitmask, int envFlags) {
-        return RE::BSFixedString(FactionPolitics::ValidateStoryResponse(
-            responseJson.c_str(), toggleBitmask, envFlags));
+        std::string s = responseJson.c_str();
+        StripToJson(s);  // same stripping as the field readers; a ```json fence used to fail validation
+        return RE::BSFixedString(FactionPolitics::ValidateStoryResponse(s, toggleBitmask, envFlags));
     }
 
     RE::BSFixedString BuildFactionBattleDispatchFact(RE::StaticFunctionTag*,

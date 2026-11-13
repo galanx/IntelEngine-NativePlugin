@@ -112,8 +112,10 @@ class VM:
         self.properties.update({"NPCTickIntervalHours": 1.5, "MONITOR_INTERVAL": 5.0, "IDLE_POLL_INTERVAL": 30.0})
         self.properties.update({"IsActive": True, "ArrivalHandling": False, "DispatchGeneration": 0,
             "ActiveStoryNPC": self.agent, "ActiveStoryType": "seek_player",
+            "LastPollRealTime": -1.0, "LastStretchSince": -1.0, "LastStretchRetry": 0,
             "ActiveSecondNPC": None, "ActiveNarration": "A message about the road", "NPCSocialGeneration": 0})
         self.call_counts, self.reenter_story = {}, False
+        self.story_recovered = True
         self.storage.update({(self.agent, "Intel_Message"): "Meet me at the bridge",
             (self.agent, "Intel_Result"): "", (self.agent, "Intel_DeliveryMeetLocation"): "none",
             (self.agent, "Intel_DeliveryMeetTime"): "none", (self.agent, "Intel_WasFollower"): 0,
@@ -170,6 +172,15 @@ class VM:
 
     def external(self, method, args, script):
         if method == "IsDashboardOpen": return False
+        if method == "GetLength": return len(args[0])
+        if method == "Find": return args[0].find(args[1], args[2] if len(args) > 2 else 0)
+        if method == "GetNthChar": return args[0][args[1]]
+        if method == "IsLetter": return args[0].isalpha()
+        if method == "Substring":  # length 0/absent = rest of string, as in Papyrus
+            return args[0][args[1]:] if len(args) < 3 or not args[2] else args[0][args[1]:args[1] + args[2]]
+        if method == "StoryLoadRecovered":
+            if args[0]: self.story_recovered = True
+            return self.story_recovered
         if method == self.arrival_interleave_method:
             self.arrival_interleave_method = None
             if self.arrival_interleave_action == "replace":
@@ -228,10 +239,13 @@ class VM:
         if method == "GetPoliticsTickInterval": return 6.0
         if method == "IntListFind": return -1
         if method in ("IntListAdd", "GetForm"): return None
-        if method in ("FormListCount", "IntListCount"):
-            return len(self.storage.get((args[0], args[1]), []))
+        if method in ("FormListCount", "IntListCount"): return len(self.storage.get((args[0], args[1]), []))
+        if method == "FormListGet": return self.storage[(args[0], args[1])][args[2]]
+        if method == "FormListAdd": self.storage.setdefault((args[0], args[1]), []).append(args[2]); return None
+        if method == "FormListRemoveAt": self.storage[(args[0], args[1])].pop(args[2]); return None
         if method == "EncodeRenderedCache": return args[0]
         if method == "RenderTaskHistorySection": return ""
+        if method == "DescribeDistance": return "dist=0 sameSpace=yes"
         if method == "IsIndexLoaded": return True
         if method == "ClearSlotState":
             self.effects.append((method, tuple(args)))
@@ -283,10 +297,10 @@ class VM:
                 if self.stop_on_dispatch_reset and script == "IntelEngine_StoryEngine" and name == "DispatchToTarget" and a[0][1] == "::ArrivalHandling_var" and not env[a[0][1]]:
                     self.dispatch_reset_seen = True
                     return None
-            elif op in ("iadd", "fadd", "fsub", "fmul", "fdiv"):
+            elif op in ("iadd", "isub", "fadd", "fsub", "fmul", "fdiv"):
                 x, y = v(a[1]), v(a[2])
                 env[a[0][1]] = {"iadd": lambda: x + y, "fadd": lambda: x + y,
-                    "fsub": lambda: x - y, "fmul": lambda: x * y, "fdiv": lambda: x / y}[op]()
+                    "isub": lambda: x - y, "fsub": lambda: x - y, "fmul": lambda: x * y, "fdiv": lambda: x / y}[op]()
             elif op == "fneg": env[a[0][1]] = -v(a[1])
             elif op == "strcat":
                 env[a[0][1]] = str(v(a[1])) + str(v(a[2]))
@@ -359,14 +373,16 @@ class DirectorVM(VM):
     def external(self, method, args, script):
         if method == "GetActorHoldName": return "Whiterun"
         if method == "GetDistance" and hasattr(self, "distance"): return self.distance
-        if method == "GetLength": return len(args[0])
         if method == "StoryResponseShouldAct": return json.loads(args[0]).get("should_act", False)
         if method == "ResolveStoryCandidate": return self.target
         if method in ("IsHighStatusNPC", "IsJarl"): return False
-        if method == "ValidateStoryResponse": return '{"valid":"true"}'
+        if method == "ValidateStoryResponse":
+            response = json.loads(args[0])
+            return json.dumps({"valid": "true" if response.get("should_act") is True and response.get("type") else "false"})
         if method in ("NotifyStoryTypePicked", "RecordStoryDispatch", "NotifyStoryCooldown", "FormListAdd"): self.effects.append((method, tuple(args))); return None
         if method == "StoryResponseGetField": return json.loads(args[0]).get(args[1], "")
         if method == "ResolveDirectorActor": return self.agent if args[0] == self.agent.name else self.target
+        if method == "FindNPCByName": return next((actor for actor in (self.agent, self.target) if actor.name == args[0]), None)
         if method == "ParseFormID": return int(args[0])
         if method == "GetForm": return self.agent
         if method in ("UnregisterForUpdate", "UnregisterForUpdateGameTime"):
@@ -564,6 +580,14 @@ def run_director_lite_checks(files, history):
                     not any(e[0] == "InjectFact" for e in task.effects[effects_at:]),
                     "repeated cancellation injected a duplicate closing fact")
 
+    def director_seek_fact_not_doubled():
+        for narration, expected in (("came looking for Player about the mine", "came looking for Player about the mine"),
+                                    ("had questions about the mine", "set out to find Player -- had questions about the mine")):
+            task = DirectorVM(files, history)
+            task.seek(narration)
+            require([e for e in task.effects if e[0] == "InjectFact"] == [("InjectFact", (task.agent, expected))],
+                    "Director seek memory is doubled or missing the prefix: " + narration)
+
     def director_action_success_notice():
         for state, expected in ((1, [("Notification", "Nazeem: ChangeSpeed started.")]),
                                 (0, [("Notification", "Nazeem: ChangeSpeed failed.")])):
@@ -680,6 +704,7 @@ def run_director_lite_checks(files, history):
             def external(self, method, args, script):
                 if method == "ResolveDirectorActor":
                     return self.agent if args[0] == "Nazeem" else None
+                if method == "GetDirectorFailureMessage": return "Director lookup failed"
                 return super().external(method, args, script)
 
         for event, payload, names in (
@@ -692,9 +717,9 @@ def run_director_lite_checks(files, history):
             task = MissingActorVM()
             task.invoke("IntelEngine_Core", event, ("", json.dumps(payload), 0.0, None))
             notices = [e for e in task.effects if e[0] == "Notification"]
-            require(notices ==
-                    [("Notification", "Couldn't find NPC '" + names[0] + "' (no unique match).")],
-                    "director_story_not_found_notifies: missing NPC notice " + repr(task.effects))
+            require(len(notices) == 1 and not task.properties["IsActive"]
+                    and not task.properties.get("IsNPCStoryActive") and task.properties["SlotStates"] == [0] * 5,
+                    "director_story_not_found_notifies: rejection started a story or lost notification")
             require(any(e[0] == "Trace" for e in task.effects),
                     "director_story_not_found_notifies: DebugMsg trace was removed")
 
@@ -762,7 +787,7 @@ def run_director_lite_checks(files, history):
     failures = []
     for case in (director_seek_then_seek_is_refused, run6_seek_seek_fetch_arrival,
                  director_story_while_story_active, cancel_story_task_ends_story,
-                 cancel_story_injects_closing_fact, director_action_success_notice,
+                 cancel_story_injects_closing_fact, director_seek_fact_not_doubled, director_action_success_notice,
                  director_conduct_report_success_notice, director_social_and_political_success_notice,
                  director_message_generation_success_notice,
                  director_story_not_found_notifies, ambush_faction_hirer_injects_leader_fact):
@@ -776,17 +801,23 @@ def run_director_lite_checks(files, history):
 
 
 def run_replacement_checks(files, history):
-    for social in (False, True):
+    for social, story_type in ((False, "seek_player"), (False, "informant"), (True, "npc_interaction")):
         for mode in ("same", "different", "no-slot", "invalid", "stale"):
             vm = DirectorVM(files, history); vm.distance = 1000.0; vm.properties.update({"NPCSocialGeneration": 0, "IntelEngine_TravelTarget": "link"})
             if social: vm.invoke("IntelEngine_StoryEngine", "DispatchNPCSocial", (vm.agent, vm.target, "Old trip", "npc_interaction", vm.agent, vm.target, "", "", "", "Director"))
             else: vm.seek("Old story")
             vm.storage[(vm.agent, "Intel_WasFollower")] = 1; vm.storage[(vm.agent, "Intel_MessageContent")] = "Old message"; before = vm.task_snapshot(); vm.effects.clear()
             if mode == "no-slot": vm.properties["SlotStates"][0] = 0; vm.properties["AgentAlias00"].actor = None
-            payload = {"npc1Name": vm.target.name if mode == "different" else vm.agent.name, "npc2Name": vm.agent.name if mode == "different" else vm.target.name, "socialType": "npc_interaction"} if social else {"npcName": vm.target.name if mode == "different" else vm.agent.name, "storyType": "seek_player"}
-            payload.update({"narration": "" if mode == "invalid" else "Replacement", "response": "{}", "replaceGeneration": "0" if mode == "stale" else "1"})
+            payload = {"npc1Name": vm.target.name if mode == "different" else vm.agent.name, "npc2Name": vm.agent.name if mode == "different" else vm.target.name, "socialType": story_type} if social else {"npcName": vm.target.name if mode == "different" else vm.agent.name, "storyType": story_type}
+            response = dict.fromkeys(("sender", "subject", "gossip", "destination", "msgContent", "meetTime", "questLocation", "enemyType", "questSubType", "victimName", "itemName", "itemDesc"), "")
+            response.update({"replaceGeneration": "0" if mode == "stale" else "1"})
+            # fix73: informants may have an empty narration (IE writes the line); their invalid input is an empty rumour
+            if story_type == "informant": response.update({"subject": vm.target.name, "gossip": "" if mode == "invalid" else "Knows the way"})
+            payload.update({"narration": "" if mode == "invalid" else "Replacement", "response": json.dumps(response), "replaceGeneration": response["replaceGeneration"]})
             vm.invoke("IntelEngine_Core", "OnDashboardDispatchNpcSocial" if social else "OnDashboardDispatchStory", ("", json.dumps(payload), 0.0, None))
-            if mode in ("invalid", "stale"): require(vm.task_snapshot() == before, "invalid/stale replacement changed old work")
+            if mode in ("invalid", "stale"):
+                require(vm.task_snapshot() == before, "invalid/stale replacement changed old work")
+                require(any(e[0] == "Notification" for e in vm.effects), "replacement refusal was silent")
             else:
                 require(vm.properties["NPCSocialTraveler" if social else "ActiveStoryNPC"] is (vm.target if mode == "different" else vm.agent) and vm.properties["NPCSocialGeneration" if social else "DispatchGeneration"] == 2 and sum(s != 0 for s in vm.properties["SlotStates"]) == 1, "replacement did not admit exactly one new dispatch")
                 require(any(e[0] == "SetPlayerTeammate" for e in vm.effects) and (social or (vm.agent, "Intel_MessageContent") not in vm.storage), "replacement lost follower restoration or old message cleanup")
@@ -863,6 +894,536 @@ def run_resume_checks(files, history):
                 require((vm.agent, "Intel_TaskStartTime") not in vm.storage if loaded else any(
                     e[0] == ("finished" if group == "arrival" else "StartCombat") for e in vm.effects), group + ": normal continuation failed")
         print("actual PEX resume " + group + ": replacement preserved; normal continuation PASS")
+class NearPlayerVM(DirectorVM):
+    def __init__(self, files, history):
+        super().__init__(files, history)
+        self.distance, self.now, self.loaded, self.hold_allowed = 300.0, 0.0, True, True
+        self.player.cell = self.agent.cell
+        self.properties.update({"IsActive": True, "ActiveStoryNPC": self.agent,
+            "MONITOR_INTERVAL": 3.0,
+            "ActiveStoryType": "seek_player", "NearPlayerSince": -1.0,
+            "SlotStates": [8] + [0] * 4, "SlotTaskTypes": ["story"] + [""] * 4,
+            "SlotTargetNames": ["Player"] + [""] * 4})
+        self.properties["AgentAlias00"].actor = self.agent
+        self.storage[(self.agent, "Intel_IsStoryDispatch")] = 1
+
+    def invoke(self, script, name, args=()):
+        if name == "EnsureBuildingAccess":
+            self.effects.append((name, tuple(args)))
+            return None
+        return super().invoke(script, name, args)
+
+    def external(self, method, args, script):
+        if method == "GetCurrentRealTime": return self.now
+        if method == "GetArrivalThreshold": return 100.0
+        if method == "Is3DLoaded": return self.loaded
+        if method in ("IsInterior", "IsSneaking"): return False
+        if method == "GetWorldSpace": return None
+        if method == "CheckHoldRestriction": return self.hold_allowed
+        if method == "FormListFind": return -1
+        if method in ("CheckStuckStatus", "CheckOffScreenProgress"): return 0
+        return super().external(method, args, script)
+
+
+def run_near_player_checks(files, history):
+    for story_type in ("seek_player", "informant"):
+        vm = NearPlayerVM(files, history)
+        vm.properties["ActiveStoryType"] = story_type
+        vm.invoke("IntelEngine_StoryEngine", "CheckStoryNPCArrival")
+        for tick in range(1, 30):
+            vm.now = tick * 0.5
+            vm.invoke("IntelEngine_StoryEngine", "CheckStoryNPCArrival")
+            require(vm.properties["IsActive"], "fast near-player polls arrived before 15 seconds")
+        vm.now = 15.0
+        vm.invoke("IntelEngine_StoryEngine", "CheckStoryNPCArrival")
+        vm.invoke("IntelEngine_StoryEngine", "OnProximityArrived", ("0",))
+        vm.invoke("IntelEngine_StoryEngine", "CheckStoryNPCArrival")
+        require(not vm.properties["IsActive"] and
+                vm.call_counts.get(("IntelEngine_Core", "ClearSlot"), 0) == 1,
+                "400u / 15s fallback did not finish exactly once")
+        require(vm.storage.get((vm.agent, "Intel_StoryLingerStart")) == 15.0 and
+                vm.call_counts.get(("IntelEngine_Core", "RemoveAllPackages"), 0) == 1,
+                "fallback did not remove travel packages and start linger")
+    for story_type in ("seek_player", "informant"):
+        paused = NearPlayerVM(files, history)
+        paused.properties["ActiveStoryType"] = story_type
+        paused.invoke("IntelEngine_StoryEngine", "CheckStoryNPCArrival")
+        paused.now = 1440.0
+        paused.invoke("IntelEngine_StoryEngine", "CheckStoryNPCArrival")
+        require(paused.properties["NearPlayerSince"] == 6.0 and paused.properties["IsActive"],
+                f"{story_type}: pause gap was not capped at 6 seconds")
+        for _ in range(20):
+            paused.invoke("IntelEngine_StoryEngine", "CheckStoryNPCArrival")
+        require(paused.properties["IsActive"], "zero-time polls advanced near streak")
+    vm = NearPlayerVM(files, history)
+    vm.distance = 400.0
+    for now in (0.0, 6.0, 12.0, 15.0, 60.0):
+        vm.now = now
+        vm.invoke("IntelEngine_StoryEngine", "CheckStoryNPCArrival")
+    require(vm.properties["IsActive"], "400u fallback incorrectly arrived")
+    vm = NearPlayerVM(files, history)
+    vm.distance = 600.0
+    for now in (0.0, 6.0, 12.0, 15.0, 60.0):
+        vm.now = now
+        vm.invoke("IntelEngine_StoryEngine", "CheckStoryNPCArrival")
+    require(vm.properties["IsActive"], "600u fallback incorrectly arrived")
+    for interruption in ("distance", "unloaded", "cell"):
+        vm = NearPlayerVM(files, history)
+        vm.invoke("IntelEngine_StoryEngine", "CheckStoryNPCArrival")
+        vm.now = 12.0
+        if interruption == "distance": vm.distance = 400.0
+        if interruption == "unloaded": vm.loaded = False
+        if interruption == "cell": vm.player.cell = None
+        vm.invoke("IntelEngine_StoryEngine", "CheckStoryNPCArrival")
+        vm.distance, vm.loaded, vm.player.cell = 300.0, True, vm.agent.cell
+        for tick in range(6):
+            vm.now = 15.0 + tick * 3.0
+            vm.invoke("IntelEngine_StoryEngine", "CheckStoryNPCArrival")
+            require(vm.properties["IsActive"] == (tick < 5),
+                    f"{interruption} did not reset near-player dwell")
+        vm.now = 30.0
+        vm.invoke("IntelEngine_StoryEngine", "CheckStoryNPCArrival")
+        require(not vm.properties["IsActive"], f"{interruption} recovery never arrived")
+    vm = NearPlayerVM(files, history)
+    vm.invoke("IntelEngine_StoryEngine", "CheckStoryNPCArrival")
+    vm.now, vm.distance = 10.0, 100.0
+    vm.invoke("IntelEngine_StoryEngine", "OnProximityArrived", ("0",))
+    vm.now = 20.0
+    vm.invoke("IntelEngine_StoryEngine", "CheckStoryNPCArrival")
+    require(vm.call_counts.get(("IntelEngine_Core", "ClearSlot"), 0) == 1,
+            "native-first arrival and fallback duplicated completion")
+    print("actual PEX near-player arrival: dwell, interruption, range, linger and native races passed")
+
+
+def run_last_stretch_checks(files, history):
+    class StretchVM(NearPlayerVM):
+        def __init__(self, offscreen):
+            super().__init__(files, history)
+            self.offscreen, self.loaded, self.teleports = offscreen, not offscreen, 0
+            self.stuck = 0 if offscreen else 3
+            self.distance = 1000.0
+            self.properties.update({"LastStretchSince": -1.0, "LastStretchRetry": 0,
+                "AllowStuckTeleport": True, "STUCK_DISTANCE_THRESHOLD": 1.0})
+            self.properties["TELEPORT_OFFSET_INTERIOR"] = 500.0
+            self.combat = False
+            self.player.cell = None
+
+        def invoke(self, script, name, args=()):
+            if name == "ImmersiveTeleportToTarget":
+                self.teleports += 1
+                return None
+            return super().invoke(script, name, args)
+
+        def external(self, method, args, script):
+            if method == "GetCurrentRealTime": return self.now
+            if method == "GetOffsetBehind":
+                self.effects.append((method, tuple(args)))
+                return [300.0, 400.0]
+            if method == "MoveTo":
+                self.teleports += 1
+                self.effects.append(("retry-place", tuple(args)))
+                return None
+            if method == "Is3DLoaded": return self.loaded
+            if method == "IsInCombat": return self.combat
+            if method == "CheckOffScreenProgress": return 1 if self.offscreen else 0
+            if method == "CheckStuckStatus": return self.stuck
+            return super().external(method, args, script)
+
+    for route, loaded_after in ((True, False), (True, True), (False, True)):
+        vm = StretchVM(route)
+        vm.invoke("IntelEngine_StoryEngine", "CheckStoryNPCArrival")
+        vm.loaded, vm.offscreen = loaded_after, not loaded_after
+        require(vm.teleports == 1 and vm.properties["LastStretchSince"] == 0.0,
+                f"{'off-screen' if route else 'stuck'} teleport did not start last-stretch timer")
+        vm.stuck = 3
+        for tick in range(1, 150):
+            vm.now = tick * 0.5
+            vm.invoke("IntelEngine_StoryEngine", "CheckStoryNPCArrival")
+            require(vm.teleports == 1 and vm.properties["IsActive"],
+                    "fast polls re-placed before 75 seconds")
+        vm.now = 75.0
+        vm.invoke("IntelEngine_StoryEngine", "CheckStoryNPCArrival")
+        require(vm.teleports == 2 and vm.properties["LastStretchRetry"] == 1,
+                "first expiry did not re-place exactly once")
+        require(("retry-place", (vm.agent, vm.player, 300.0, 400.0, 0.0, False)) in vm.effects and
+                vm.effects[-1] == ("ReapplyTravelPackage", (vm.agent,)),
+                "last-stretch retry did not place at 500u and reapply travel")
+        for tick in range(1, 150):
+            vm.now = 75.0 + tick * 0.5
+            vm.invoke("IntelEngine_StoryEngine", "CheckStoryNPCArrival")
+            require(vm.properties["IsActive"], "fast polls aborted before another 75 seconds")
+        vm.now = 150.0
+        vm.invoke("IntelEngine_StoryEngine", "CheckStoryNPCArrival")
+        vm.invoke("IntelEngine_StoryEngine", "OnProximityArrived", ("0",))
+        require(not vm.properties["IsActive"] and vm.teleports == 2 and
+                sum(e == ("Notification", "Story: Nazeem couldn't reach you - story ended")
+                    for e in vm.effects) == 1 and
+                vm.call_counts.get(("IntelEngine_StoryEngine", "AbortStoryTravel"), 0) == 1 and
+                vm.call_counts.get(("IntelEngine_StoryEngine", "OnStoryNPCArrived"), 0) == 0,
+                "second expiry did not abort and notify exactly once")
+        vm.now = 200.0
+        vm.invoke("IntelEngine_StoryEngine", "CheckStoryNPCArrival")
+        require(vm.call_counts.get(("IntelEngine_StoryEngine", "AbortStoryTravel"), 0) == 1,
+                "late poll repeated last-stretch abort")
+
+    for story_type in ("npc_interaction", "npc_gossip"):
+        second = StretchVM(True)
+        second.properties.update({"ActiveStoryType": story_type, "ActiveSecondNPC": second.target})
+        second.invoke("IntelEngine_StoryEngine", "CheckStoryNPCArrival")
+        for tick in range(1, 26):
+            second.now = tick * 3.0
+            second.invoke("IntelEngine_StoryEngine", "CheckStoryNPCArrival")
+        require(("GetOffsetBehind", (second.target, 500.0)) in second.effects and
+                ("retry-place", (second.agent, second.target, 300.0, 400.0, 0.0, False)) in second.effects and
+                second.effects[-1] == ("ReapplyTravelPackage", (second.agent,)),
+                f"{story_type} last-stretch retry did not use the second-NPC target")
+
+    combat = StretchVM(False)
+    combat.invoke("IntelEngine_StoryEngine", "CheckStoryNPCArrival")
+    combat.combat, combat.now = True, 30.0
+    combat.invoke("IntelEngine_StoryEngine", "CheckStoryNPCArrival")
+    require(combat.properties["LastStretchSince"] == 0.0, "combat erased last-stretch timer")
+    combat.combat = False
+    for tick in range(1, 26):
+        combat.now = 30.0 + tick * 3.0
+        combat.invoke("IntelEngine_StoryEngine", "CheckStoryNPCArrival")
+        require(combat.teleports == (1 if tick < 25 else 2),
+                "last-stretch timer did not resume after combat")
+
+    paused = StretchVM(False)
+    paused.invoke("IntelEngine_StoryEngine", "CheckStoryNPCArrival")
+    paused.now = 1440.0
+    paused.invoke("IntelEngine_StoryEngine", "CheckStoryNPCArrival")
+    require(paused.properties["LastStretchSince"] == 6.0 and paused.teleports == 1,
+            "last-stretch pause gap was not capped at 6 seconds")
+    paused.now -= 1.0
+    paused.invoke("IntelEngine_StoryEngine", "CheckStoryNPCArrival")
+    require(paused.properties["LastStretchSince"] == 6.0,
+            "backward clock reduced accumulated time")
+
+    raced = StretchVM(False)
+    raced.invoke("IntelEngine_StoryEngine", "CheckStoryNPCArrival")
+    raced.distance, raced.now = 100.0, 20.0
+    raced.invoke("IntelEngine_StoryEngine", "OnProximityArrived", ("0",))
+    raced.now = 100.0
+    raced.invoke("IntelEngine_StoryEngine", "CheckStoryNPCArrival")
+    require(raced.call_counts.get(("IntelEngine_StoryEngine", "OnStoryNPCArrived"), 0) == 1 and
+            raced.call_counts.get(("IntelEngine_Core", "ClearSlot"), 0) == 1,
+            "native arrival during last stretch did not win exactly once")
+    print("actual PEX last stretch: loaded/unloaded 500u target-relative retry, second-NPC target, abort, combat pause and native arrival passed")
+
+
+def run_load_recovery_checks(files, history):
+    class LoadVM(NearPlayerVM):
+        def invoke(self, script, name, args=()):
+            if name in ("WarmCooldownMirror", "WarmStoryTypeCounts", "ClearStaleRealTimeTimers",
+                        "SyncHoldRestrictionPolicies", "WarmBioLineCounts"):
+                return None
+            return super().invoke(script, name, args)
+
+        def external(self, method, args, script):
+            if method in ("SetAutoBioEnabled", "SetAutoBioThreshold"):
+                return None
+            if method in ("IntListClear", "FormListClear"):
+                self.storage.pop((args[0], args[1]), None)
+                return None
+            if method == "GetOffsetBehind": return [300.0, 400.0]
+            if method == "MoveTo":
+                self.effects.append((method, tuple(args)))
+                return None
+            return super().external(method, args, script)
+
+    for retry in (0, 1):
+        vm = LoadVM(files, history)
+        vm.story_recovered = False
+        vm.now, vm.distance = 456.0, 1000.0
+        vm.properties.update({"ActiveStoryType": "informant", "LastStretchSince": 80.0,
+            "LastStretchRetry": retry, "LastPollRealTime": 450.0, "NearPlayerSince": 12.0,
+            "IsNPCStoryActive": False, "QuestActive": False, "QuestGuideActive": False})
+        before, effects = dict(vm.properties), list(vm.effects)
+        vm.invoke("IntelEngine_StoryEngine", "CheckStoryNPCArrival")
+        vm.invoke("IntelEngine_StoryEngine", "OnProximityArrived", ("0",))
+        require(vm.properties == before and vm.effects == effects,
+                "saved story acted or accumulated time before load recovery")
+        require(not any(vm.call_counts.get(("IntelEngine_StoryEngine", name), 0)
+                        for name in ("AbortStoryTravel", "OnStoryNPCArrived")),
+                "saved story aborted or arrived before load recovery")
+        vm.invoke("IntelEngine_StoryEngine", "RestartMonitoring")
+        require(vm.story_recovered and not vm.properties["IsActive"] and
+                vm.properties["ActiveStoryNPC"] is None and
+                all(vm.properties[key] == -1.0 for key in
+                    ("LastPollRealTime", "LastStretchSince", "NearPlayerSince")),
+                "load recovery did not abandon saved story and reset arrival timers")
+        require(any(e[0] == "InjectFact" and "never finished:" in str(e)
+                    for e in vm.effects), "load recovery omitted abandonment fact")
+        vm.effects.clear()
+        vm.invoke("IntelEngine_StoryEngine", "CheckStoryNPCArrival")
+        require(not vm.effects, "abandoned story acted after recovery")
+    print("actual PEX load recovery: saved retry/abort polls inert; recovery abandons and resets timers")
+
+
+def run_hold_restriction_checks(files, history):
+    for origin in ("Director", "Story engine"):
+        vm = NearPlayerVM(files, history)
+        vm.properties.update({"IsActive": False, "ActiveStoryNPC": None,
+            "ActiveStoryType": "informant", "SlotStates": [0] * 5})
+        vm.properties["AgentAlias00"].actor = None
+        if origin == "Director":
+            payload = json.dumps({"storyType": "informant", "npcName": vm.agent.name,
+                "narration": "brought news", "response": json.dumps({"subject": vm.target.name, "gossip": "knows the road"})})
+            vm.invoke("IntelEngine_Core", "OnDashboardDispatchStory", ("", payload, 0.0, None))
+        else:
+            vm.invoke("IntelEngine_StoryEngine", "DispatchToTarget",
+                (vm.agent, vm.player, "brought news", "story", origin))
+        require(vm.storage.get((vm.agent, "Intel_TaskOrigin")) == origin, "dispatch origin not retained")
+        vm.hold_allowed = False
+        vm.effects.clear()
+        vm.invoke("IntelEngine_StoryEngine", "CheckStoryNPCArrival")
+        notices = [e for e in vm.effects if e[0] == "Notification" and "hold restriction" in e[1]]
+        if origin == "Director":
+            require(vm.properties["IsActive"] and vm.properties["SlotStates"][0] == 1 and not notices,
+                    "Director informant was aborted by MCM hold restriction")
+        else:
+            require(not vm.properties["IsActive"] and vm.properties["SlotStates"][0] == 0 and
+                    len(notices) == 1 and vm.agent.name in notices[0][1],
+                    "automatic hold abort did not clean up with an NPC/reason notification")
+    vm = NearPlayerVM(files, history)
+    vm.hold_allowed = False
+    vm.invoke("IntelEngine_StoryEngine", "ShouldAbortForHoldRestriction",
+        (vm.agent, vm.player, "seek_player", "", -1))
+    require(vm.properties["IsActive"] and not any(e[0] == "Notification" for e in vm.effects),
+            "stale hold check aborted or notified for a replacement")
+    print("actual PEX hold restriction: Director informant retained, automatic abort notified, stale guard passed")
+
+
+def run_soft_stuck_checks(files, history):
+    class StuckVM(VM):
+        loaded = True
+
+        def external(self, method, args, script):
+            if method == "RandomFloat": return 0.0
+            if method == "Is3DLoaded": return self.loaded
+            if method in ("Wait", "PathToReference", "MoveTo"):
+                self.effects.append((method, tuple(args)))
+                return None
+            return super().external(method, args, script)
+
+    for dest_player in (True, False):
+        for loaded in (True, False):
+            vm = StuckVM(files, history)
+            vm.loaded = loaded
+            package = object()
+            vm.properties.update({"SlotSpeeds": [0] * 5, "TravelPackage_Walk": package,
+                                  "PRIORITY_TRAVEL": 100})
+            vm.invoke("IntelEngine_Core", "SoftStuckRecovery",
+                      (vm.agent, 0, vm.player if dest_player else None))
+            calls = [event for event in vm.effects if event[0] in ("Wait", "PathToReference")]
+            require(not calls, f"SoftStuckRecovery left latent calls for dest_player={dest_player}, loaded={loaded}: {calls!r}")
+            require(("AddPackageOverride", (vm.agent, package, 100, 1)) in vm.effects,
+                    "SoftStuckRecovery did not reapply the travel package")
+            require(sum(event[0] == "EvaluatePackage" for event in vm.effects) >= 1,
+                    "SoftStuckRecovery did not evaluate the re-applied package")
+    print("actual PEX SoftStuckRecovery: no Wait/PathToReference; travel package and EvaluatePackage retained (player/None, loaded/unloaded)")
+
+
+def run_linger_teammate_checks(files, history):
+    class LingerVM(VM):
+        teammate = False
+        linked = "existing-link"
+        now = 0.5
+        distance = 100.0
+
+        def external(self, method, args, script):
+            if method == "GetCurrentRealTime": return self.now
+            if method == "IntListGet": return self.storage[(args[0], args[1])][args[2]]
+            if method == "HasNonSandboxAI": return True
+            if method == "GetForm": return self.agent if args[0] == 1234 else None
+            if method == "IsPlayerTeammate": return self.teammate
+            if method == "Is3DLoaded": return True
+            if method == "GetDistance":
+                self.effects.append((method, tuple(args)))
+                return self.distance
+            if method == "SetLinkedRef":
+                self.linked = args[1]
+                self.effects.append((method, tuple(args)))
+                return None
+            return super().external(method, args, script)
+
+    def make_vm():
+        vm = LingerVM(files, history)
+        npc = vm.agent
+        actors = [npc]
+        vm.storage[(vm.player, "Intel_StoryLingerActors")] = actors
+        vm.now = 0.5
+        vm.storage[(npc, "Intel_StoryLingerStart")] = vm.now
+        vm.storage[(vm.player, "Intel_FakeEncounterNPCs")] = [1234]
+        vm.storage[(npc, "Intel_FakeEncounterInteracted")] = 1
+        vm.storage[(npc, "Intel_FakeEncounterGreetTime")] = vm.now
+        vm.storage[(npc, "Intel_FakeEncounterElapsed")] = 0.0
+        vm.properties.update({"LINGER_RELEASE_DISTANCE": 1500.0, "ENCOUNTER_RESUME_DISTANCE": 1500.0,
+                              "IntelEngine_TravelTarget": "travel-link", "SandboxNearPlayerPackage": object()})
+        vm.properties["LINGER_TIMEOUT_SECONDS"] = vm.invoke("IntelEngine_StoryEngine", "LINGER_TIMEOUT_SECONDS")
+        return vm, npc, actors
+
+    vm, npc, actors = make_vm()
+    vm.now = 1440.5
+    vm.invoke("IntelEngine_StoryEngine", "CheckStoryLingerCleanup")
+    story_pause_safe = actors == [npc]
+    actors = [npc]
+    vm.storage[(vm.player, "Intel_StoryLingerActors")] = actors
+    vm.storage[(npc, "Intel_StoryLingerStart")] = vm.now
+    vm.storage[(npc, "Intel_StoryLingerElapsed")] = 0.0
+    story_frequent_safe = True
+    for tick in range(1, 361):
+        vm.now = 1440.5 + tick * 0.5
+        vm.invoke("IntelEngine_StoryEngine", "CheckStoryLingerCleanup")
+        story_frequent_safe = story_frequent_safe and actors == [npc]
+    vm.now += 0.5
+    vm.invoke("IntelEngine_StoryEngine", "CheckStoryLingerCleanup")
+    story_timed_out = actors == []
+
+    vm, npc, actors = make_vm()
+    vm.now = 1440.5
+    vm.invoke("IntelEngine_StoryEngine", "CheckRoadEncounterProximity")
+    road_pause_safe = vm.storage[(npc, "Intel_FakeEncounterInteracted")] == 1
+    vm.storage[(npc, "Intel_FakeEncounterInteracted")] = 1
+    vm.storage[(npc, "Intel_FakeEncounterGreetTime")] = vm.now
+    vm.storage[(npc, "Intel_FakeEncounterElapsed")] = 0.0
+    road_frequent_safe = True
+    for tick in range(1, 361):
+        vm.now = 1440.5 + tick * 0.5
+        vm.invoke("IntelEngine_StoryEngine", "CheckRoadEncounterProximity")
+        road_frequent_safe = road_frequent_safe and vm.storage[(npc, "Intel_FakeEncounterInteracted")] == 1
+    vm.now += 0.5
+    vm.invoke("IntelEngine_StoryEngine", "CheckRoadEncounterProximity")
+    road_timed_out = vm.storage[(npc, "Intel_FakeEncounterInteracted")] == 2
+    require(story_pause_safe and road_pause_safe and story_frequent_safe and road_frequent_safe
+            and story_timed_out and road_timed_out,
+            f"linger: pause story/road={story_pause_safe}/{road_pause_safe}, "
+            f"before-180 story/road={story_frequent_safe}/{road_frequent_safe}, "
+            f"after-180 story/road={story_timed_out}/{road_timed_out}")
+
+    vm, npc, actors = make_vm()
+    vm.invoke("IntelEngine_StoryEngine", "CheckStoryLingerCleanup")
+    require(actors == [npc], "nearby non-teammate linger was released")
+    vm.teammate = True
+    vm.effects.clear()
+    vm.invoke("IntelEngine_StoryEngine", "CheckStoryLingerCleanup")
+    require(actors == [] and (npc, "Intel_StoryLingerStart") not in vm.storage
+            and (npc, "Intel_StoryLingerElapsed") not in vm.storage,
+            "teammate linger cleanup did not remove list entry and timer state")
+    require(not any(e[0] in ("Wait", "GetDistance") for e in vm.effects),
+            "teammate linger cleanup waited or checked distance before release")
+    require(("RemovePackageOverride", (npc, vm.properties.get("SandboxNearPlayerPackage"))) in vm.effects,
+            "actual Core.ReleaseLinger teammate branch did not remove the sandbox override")
+    require(vm.linked is None and any(e[0] == "SetLinkedRef" and e[1][1] is None for e in vm.effects),
+            "actual Core.ReleaseLinger teammate branch did not clear the linked ref")
+    require(not any(e[0] in ("ResolveAnyDestination", "GetEditorLocationRef", "MoveTo", "AddPackageOverride")
+                    for e in vm.effects),
+            "teammate linger release unexpectedly attempted home travel")
+    require(any(e[0] == "EvaluatePackage" for e in vm.effects),
+            "actual Core.ReleaseLinger did not evaluate the teammate package")
+
+    vm, npc, actors = make_vm()
+    vm.now = 31.5
+    vm.storage[(npc, "Intel_StoryLingerStart")] = vm.now
+    vm.storage[(npc, "Intel_StoryLingerElapsed")] = 31.0
+    vm.distance = 2000.0
+    vm.invoke("IntelEngine_StoryEngine", "CheckStoryLingerCleanup")
+    require(actors == [], "distant linger was not released")
+    print("actual PEX linger/proximity: pause-safe timeout; 0.5s accumulation; teammate and distance releases passed")
+
+
+def run_social_range_checks(files, history):
+    """fix66: npc_social narrates only when SkyrimNet will voice it; otherwise hold, then narrate or facts only."""
+    class SocialVM(VM):
+        player_dist, pair_dist, now, whisper = 100.0, 100.0, 0.5, False
+
+        def external(self, method, args, script):
+            if method == "GetConfigFloat":
+                return (200.0 if self.whisper else 800.0) if args[1] == "interaction.maxDistance" else 2.0
+            if method == "GetCurrentRealTime": return self.now
+            if method == "Is3DLoaded": return True
+            if method == "IsPlayerTeammate": return False
+            if method == "RenderFactsSection": return ""
+            if method == "HasNonSandboxAI": return True
+            if method == "IntListGet": return self.storage[(args[0], args[1])][args[2]]
+            if method == "FormListFind":
+                lst = self.storage.get((args[0], args[1]), [])
+                return lst.index(args[2]) if args[2] in lst else -1
+            if method == "GetDistance":
+                return self.player_dist if args[1] is self.player else self.pair_dist
+            return super().external(method, args, script)
+
+    def make(player_dist):
+        vm = SocialVM(files, history)
+        vm.player_dist = player_dist
+        vm.target.name = "Recipient"
+        vm.properties.update({"SOCIAL_HOLD_PAIR_DISTANCE": 600.0, "LINGER_TIMEOUT_SECONDS": 180.0, "LINGER_RELEASE_DISTANCE": 1500.0,
+            "IntelEngine_TravelTarget": "travel-link", "SandboxNearPlayerPackage": object(),
+            "NPCSocialTraveler": vm.agent, "NPCSocialTarget": vm.target, "NPCSocialNPC1": vm.agent,
+            "NPCSocialNPC2": vm.target, "NPCSocialNarration": "talked shop", "NPCSocialType": "npc_interaction",
+            "NPCSocialFact1": "fact one", "NPCSocialFact2": "fact two", "NPCSocialGossip": "",
+            "NPCSocialArrivalHandling": False, "SlotTaskTypes": ["npc_social"] + [""] * 4,
+            "SlotTargetNames": ["Recipient"] + [""] * 4})
+        vm.storage[(vm.player, "Intel_StoryLingerActors")] = []
+        return vm
+
+    def narrated(vm): return sum(e[0] == "SendTaskNarration" for e in vm.effects)
+    def facts(vm): return vm.call_counts.get(("IntelEngine_Core", "InjectFact"), 0)
+    def tick(vm): vm.invoke("IntelEngine_StoryEngine", "CheckStoryLingerCleanup")
+
+    # 1. In range: narrates immediately, facts delivered, no hold.
+    vm = make(1000.0)
+    vm.invoke("IntelEngine_StoryEngine", "OnNPCSocialArrived")
+    require(narrated(vm) == 1 and facts(vm) == 2 and not vm.storage[(vm.player, "Intel_StoryLingerActors")],
+            "in-range arrival did not narrate immediately without a hold")
+
+    # 2. Out of range (1500 > 0.85*800*2=1360): hold, nothing narrated or injected yet.
+    vm = make(1500.0)
+    vm.invoke("IntelEngine_StoryEngine", "OnNPCSocialArrived")
+    require(narrated(vm) == 0 and facts(vm) == 0, "out-of-range arrival narrated or injected facts immediately")
+    held = vm.storage[(vm.player, "Intel_StoryLingerActors")]
+    require(held == [vm.agent, vm.target] and vm.storage[(vm.agent, "Intel_SocHoldNarr")] == "talked shop",
+            "out-of-range arrival did not hold the pair on the story linger")
+    require(vm.properties["NPCSocialTraveler"] is None, "social dispatch slot/state not freed while holding")
+    # Player still out of range: keeps holding.
+    vm.now += 3.0
+    tick(vm)
+    require(narrated(vm) == 0 and (vm.agent, "Intel_SocHoldNarr") in vm.storage, "hold ended while player out of range")
+    # Player comes in range: narrates once, then outcome and release.
+    vm.player_dist = 1000.0
+    vm.now += 3.0
+    tick(vm)
+    require(narrated(vm) == 1 and facts(vm) == 2 and (vm.agent, "Intel_SocHoldNarr") not in vm.storage,
+            "held scene did not narrate and complete when the player came in range")
+    vm.now += 3.0
+    tick(vm)
+    require(held == [], "held pair not released after narration")
+
+    # 3. Whisper mode shrinks the limit (0.85*200*2=340): 1000 is out of range, read at check time.
+    vm = make(1000.0)
+    vm.whisper = True
+    vm.invoke("IntelEngine_StoryEngine", "OnNPCSocialArrived")
+    require(narrated(vm) == 0 and (vm.agent, "Intel_SocHoldNarr") in vm.storage, "whisper-mode limit not honoured")
+
+    # 4. Timeout with the player never in range: facts only, no narration.
+    vm = make(1500.0)
+    vm.invoke("IntelEngine_StoryEngine", "OnNPCSocialArrived")
+    vm.storage[(vm.agent, "Intel_StoryLingerElapsed")] = 181.0
+    vm.now += 3.0
+    tick(vm)
+    require(narrated(vm) == 0 and facts(vm) == 2 and (vm.agent, "Intel_SocHoldNarr") not in vm.storage,
+            "hold timeout did not complete facts only without narration")
+    require(any(e[0] == "Trace" and "Off-screen" in e[1] for e in vm.effects)
+            and not any(e[0] == "Trace" and "performed" in e[1] for e in vm.effects),
+            "timeout trace was not off-screen wording")
+    vm.now += 3.0
+    tick(vm)
+    require(vm.storage[(vm.player, "Intel_StoryLingerActors")] == [], "timed-out hold did not release the pair")
+    print("actual PEX social range: in-range narrates; out-of-range holds then narrates; timeout facts only; whisper limit")
+
+
 def main():
     if len(sys.argv) != 4:
         raise SystemExit(__doc__)
@@ -1154,6 +1715,13 @@ def main():
     run_callback_checks(files, history)
     run_replacement_checks(files, history)
     run_courier_checks(files, history)
+    run_near_player_checks(files, history)
+    run_last_stretch_checks(files, history)
+    run_load_recovery_checks(files, history)
+    run_hold_restriction_checks(files, history)
+    run_soft_stuck_checks(files, history)
+    run_linger_teammate_checks(files, history)
+    run_social_range_checks(files, history)
 
 
 if __name__ == "__main__":

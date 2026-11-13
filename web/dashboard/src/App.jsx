@@ -110,6 +110,11 @@ function App() {
     const fn = window[`onDashboard_${action}`];
     if (fn) fn(JSON.stringify(payload));
   }, []);
+  useEffect(() => {
+    const editable = el => !!el && (el.matches('input:not([type=checkbox]):not([type=radio]):not([type=range]):not([type=button]):not([type=submit]):not([type=reset]):not([type=file]):not([type=color]), textarea') || el.isContentEditable);
+    const focus = event => sendAction('textFocus', { focused: editable(event.type === 'focusout' ? event.relatedTarget : event.target) });
+    document.addEventListener('focusin', focus); document.addEventListener('focusout', focus);
+    return () => { document.removeEventListener('focusin', focus); document.removeEventListener('focusout', focus); }; }, [sendAction]);
 
   const handleSettingChange = useCallback((key, value) => {
     // Optimistic local update — no round-trip needed

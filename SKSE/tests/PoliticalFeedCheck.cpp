@@ -23,6 +23,8 @@ class PoliticalEngineBridge {
 public:
     bool active = true;
     bool sidesExport = false;
+    bool detected = false;
+    bool IsDetected() const { return detected; }
     bool HasSidesExport() const { return sidesExport; }
     static PoliticalEngineBridge* GetSingleton() { static PoliticalEngineBridge value; return &value; }
     bool IsActive() const { return active; }
@@ -33,7 +35,11 @@ FactionPolitics::PoliticsTickSnapshot VanillaSnapshot() {
 #include "PEVanillaSides.inc"
     return snap;
 }
-int FactionPolitics::DeclareWar(const std::string&, const std::string&, float) { throw std::runtime_error("unexpected war reaction"); }
+static bool allowWar = false;  // fix 94: lets EnforceWarRule reach the real StartWar
+int FactionPolitics::DeclareWar(const std::string& a, const std::string& b, float t) {
+    if (allowWar) return PoliticalDB::GetSingleton()->StartWar(a, b, t);
+    throw std::runtime_error("unexpected war reaction");
+}
 bool FactionPolitics::EndWar(const std::string&, const std::string&, const std::string&, float) { throw std::runtime_error("unexpected surrender reaction"); }
 int FactionPolitics::GetActiveWarId(const std::string&, const std::string&) { throw std::runtime_error("unexpected scheduled battle reaction"); }
 std::string FactionPolitics::CheckEventManifestation(const std::string&, const std::string&, const std::string&) { throw std::runtime_error("unexpected manifested reaction"); }
@@ -154,6 +160,40 @@ int main() try {
     factions = json::parse(politics->GetFactionsJson());
     Require(factions["revision"].get<unsigned long long>() > revision && factions["factions"][0]["name"] == "Renamed A", "config reload revision");
     revision = factions["revision"].get<unsigned long long>();
+    {   // factions.d fragments: replace id, add id, replace relation pair; PE-gated fragment follows detection
+        const std::string dir = "Data/SKSE/Plugins/SkyrimNet/config/plugins/IntelEngine/factions.d";
+        std::filesystem::create_directories(dir);
+        std::ofstream(dir + "/a.yaml") << "factions:\n  - id: B\n    name: Fragment B\n    leader_names: []\n  - id: D\n    name: New D\n    leader_names: []\n"
+            "default_relations:\n  - faction_a: B\n    faction_b: D\n    relation: 5\n";
+        std::ofstream(dir + "/b.yaml") << "default_relations:\n  - faction_a: D\n    faction_b: B\n    relation: 9\n";
+        std::ofstream(dir + "/c.yaml") << "# note\n\nrequires: political_engine\nfactions:\n  - id: PE_X\n    name: PE X\n    leader_names: []\n";
+        Require(politics->LoadConfig() && politics->GetFaction("B")->name == "Fragment B" && politics->GetFaction("D") &&
+                politics->defaultRelations_.size() == 1 && politics->defaultRelations_[0].relation == 9, "fragment replaces id, adds id, replaces relation pair");
+        Require(!politics->GetFaction("PE_X"), "PE fragment skipped when PE absent");
+        PoliticalEngineBridge::GetSingleton()->detected = true;
+        Require(politics->LoadConfig() && politics->GetFaction("PE_X"), "PE fragment loaded when PE detected");
+        std::ofstream(dir + "/d.yaml") << "factions:\n  - id: Thal\n    name: Thal\n    skyrim_faction_id: ThalmorFaction\n    leader_names: []\n"
+            "  - id: Pe2\n    name: Pe2\n    pe_side: 2\n    leader_names: []\n  - id: Bad\n    name: Bad\n    pe_side: 9\n    leader_names: []\n";
+        Require(politics->LoadConfig() && OrganizationPESide(*politics->GetFaction("Thal")) == 3 && OrganizationPESide(*politics->GetFaction("Pe2")) == 2 &&
+                OrganizationPESide(*politics->GetFaction("Bad")) == -1, "pe_side parsed; Thalmor defaults to Aldmeri Dominion; out-of-range ignored");
+        {   // live PE side -> realm allies/rivals (pure mapping)
+            std::vector<FactionConfig> orgs(4);
+            orgs[0].id = "Imp"; orgs[0].skyrimFactionId = "CWImperialFaction";
+            orgs[1].id = "Storm"; orgs[1].skyrimFactionId = "CWSonsFaction";
+            orgs[2].id = "Guild";
+            orgs[3].id = "Thal"; orgs[3].skyrimFactionId = "ThalmorFaction";
+            using V = std::vector<std::string>;
+            auto empire = PESideRelations(1, orgs), storm = PESideRelations(2, orgs), aldmeri = PESideRelations(3, orgs), independent = PESideRelations(0, orgs);
+            Require(empire.first == V{"Imp"} && empire.second == V{"Storm"} && storm.first == V{"Storm"} && storm.second == V{"Imp", "Thal"} &&
+                    aldmeri.first == V{"Thal"} && aldmeri.second == V{"Storm"} && independent.first.empty() && independent.second.empty(),
+                    "Empire/Aldmeri neither ally nor rival; Stormcloaks rival both; Independent: none");
+        }
+        PoliticalEngineBridge::GetSingleton()->detected = false;
+        std::filesystem::remove_all(dir);
+        Config("Renamed A");
+        Require(politics->LoadConfig() && !politics->GetFaction("D"), "fragments gone after removal");
+        revision = json::parse(politics->GetFactionsJson())["revision"].get<unsigned long long>();
+    }
     NPCIndex::GetSingleton()->leader.dead = true;
     factions = json::parse(politics->GetFactionsJson());
     Require(factions["revision"].get<unsigned long long>() > revision && factions["factions"][0]["disbanded"] == true &&
@@ -267,6 +307,82 @@ int main() try {
     reacted=json::parse(politics->ProcessPoliticalDMResponse(reaction.dump(),1));
     Require(reacted["acted"]==true && db->GetRelation("A","B")==relationBeforePE+10 &&
             db->GetPlayerStanding("A")==8, "toggle does not suppress IE's own untagged politics");
+    { auto s=reaction; s["event_type"]="surrender"; s["faction_b"]="C"; s["description"]="A surrenders without a war.";
+      Require(json::parse(politics->ProcessPoliticalDMResponse(s.dump(),1))["error"]=="surrender requires an active war", "surrender without active war rejected before EndWar"); }
+    // Seed at game_time 100/101 (calendar stub gives 0, fixture events 3) so "latest" is deterministic.
+    { json b={{"should_act",true},{"faction_a","B"},{"faction_b","A"},{"event_type","battle_result"},{"description","Second clash."},{"relation_delta",-8}};
+      politics->RecordPoliticalEvent("A","B","battle_result","First clash.",-8,100.f);
+      Require(json::parse(politics->ProcessPoliticalDMResponse(b.dump(),1))["error"]=="consecutive battle_result for the same war", "consecutive battle_result for one pair rejected");
+      politics->RecordPoliticalEvent("A","B","trade_deal","Truce goods.",5,101.f);
+      // Passing the backstop reaches the war handlers, whose fixture stubs throw; a rejection returns an error instead.
+      try { Require(!json::parse(politics->ProcessPoliticalDMResponse(b.dump(),1)).contains("error"), "battle_result allowed after a different event"); }
+      catch (const std::runtime_error& e) { Require(std::string(e.what()).find("battle")!=std::string::npos, "battle_result allowed after a different event"); }
+      // Fix 50: a scheduled battle blocks battle_result for its pair even after other events; other pairs unaffected.
+      politics->RecordPoliticalEvent("A","B","battle_scheduled","Armies march.",0,102.f);
+      politics->RecordPoliticalEvent("A","C","trade_deal","Other goods.",5,103.f);
+      Require(json::parse(politics->ProcessPoliticalDMResponse(b.dump(),1))["error"]=="battle_result while a battle for the same war is scheduled", "battle_result rejected while battle scheduled");
+      json c=b; c["faction_b"]="C";
+      // Passing the backstop is enough here: the fixture then fails recording or throws from a war handler.
+      try { Require(json::parse(politics->ProcessPoliticalDMResponse(c.dump(),1)).value("error","")!="battle_result while a battle for the same war is scheduled", "other pair unaffected by schedule"); }
+      catch (const std::runtime_error&) {}
+      // Fix 55: a schedule older than one game day (lost on reload) stops blocking.
+      FactionEvent s; s.factionA="A"; s.factionB="B"; s.eventType="battle_scheduled"; s.gameTime=102.f;
+      Require(BattleResultBlockedReason({s},"A","B",102.5f)!=nullptr && BattleResultBlockedReason({s},"B","A",103.5f)==nullptr, "stale battle schedule expires after a game day");
+      // Fix 91: battle_result with no active war is recorded as a non-manifesting border_skirmish (fixture CheckEventManifestation throws).
+      db->EndWar(db->GetActiveWar("A","B")->id, "A", 104.f);
+      json n=b; n["description"]="Raid without a war.";
+      auto nr=json::parse(politics->ProcessPoliticalDMResponse(n.dump(),1));
+      std::string recorded; for (const auto& e : db->GetRecentEvents(50)) if (e.id==nr["eventId"].get<int>()) recorded=e.eventType; // calendar stub game_time 0 sorts it below seeded events
+      Require(nr["acted"]==true && nr["eventType"]=="border_skirmish" && !nr.contains("manifestJson") &&
+              recorded=="border_skirmish", "battle_result without a war becomes a non-manifesting skirmish"); }
+    // Fix 93: load-time cleanup resyncs faction_relations.war_active with faction_wars (times above all fixture data).
+    { auto warActive=[&](const char* a,const char* b){ for (const auto& r : db->GetAllRelations()) if (r.factionA==a && r.factionB==b) return r.warActive; return false; };
+      db->SetRelation("W1","W2",-60); db->StartWar("W1","W2",1001.f);
+      db->SetRelation("W3","W4",-60); int w2=db->StartWar("W3","W4",999.5f); db->EndWar(w2,"W3",1001.f);
+      Require(warActive("W1","W2") && !warActive("W3","W4"), "war_active before cleanup");
+      db->CleanupFutureEvents(1000.f);
+      Require(!warActive("W1","W2") && warActive("W3","W4"), "cleanup resyncs war_active with faction_wars");
+      db->EndWar(w2,"W3",1002.f); }
+    // Fix 94: war_allowed matcher, parser, DM refusal and code-enforced Rule 3.
+    { const auto savedAllowed=politics->warAllowed_; const auto savedFactions=politics->factions_; const auto savedRels=politics->defaultRelations_;
+      auto fc=[](const char* id,const char* name,const char* type){ FactionConfig f; f.id=id; f.name=name; f.type=type; return f; };
+      const auto a=fc("A","Alpha Realm","military"), b=fc("B","Bravo","military"), c=fc("C","Charlie","guild"), pe=fc("PE_X","PE X","political");
+      politics->warAllowed_={{"A",{"B"}}};
+      Require(politics->WarPossible(a,b) && politics->WarPossible(b,a) && !politics->WarPossible(a,c), "war_allowed matcher");
+      politics->warAllowed_={{"*",{"*"}}};
+      Require(politics->WarPossible(a,c) && !politics->WarPossible(a,pe) && !politics->WarPossible(pe,c), "war_allowed matcher: * allows all but PE_");
+      politics->warAllowed_={{"military",{"guild"}}};
+      Require(politics->WarPossible(a,c) && politics->WarPossible(c,a) && !politics->WarPossible(a,b), "war_allowed matcher: type");
+      politics->warAllowed_={{"ALPHA realm",{"charlie"}}};
+      Require(politics->WarPossible(a,c) && !politics->WarPossible(b,c), "war_allowed matcher: name, any case");
+      std::ofstream("Data/SKSE/Plugins/SkyrimNet/config/plugins/IntelEngine/factions.yaml") <<
+          "factions:\n  - id: A\n    name: Renamed A\n    leader_names: [Leader]\n  - id: B\n    name: Other\n    leader_names: []\n"
+          "war_allowed:\n  # comment\n  \"A\": [\"B\", 'guild']  # trailing\n  military: [\"*\"]\n  a: [C]\n";
+      using L=std::vector<std::pair<std::string,std::vector<std::string>>>;
+      Require(politics->LoadConfig() && politics->warAllowed_==L{{"A",{"B","guild","C"}},{"military",{"*"}}}, "war_allowed parsed");
+      Config("Renamed A");
+      Require(politics->LoadConfig() && politics->warAllowed_==L{{"ImperialFaction",{"StormcloakFaction"}}}, "war_allowed parsed; missing section = default");
+      // DM refusal: A/B not allowed under the default list; the throwing DeclareWar stub proves it was not reached.
+      const size_t eventsBefore=db->GetRecentEvents(1000).size();
+      json dm={{"should_act",true},{"faction_a","A"},{"faction_b","B"},{"event_type","war_declaration"},{"description","A declares war."},{"relation_delta",-15}};
+      Require(json::parse(politics->ProcessPoliticalDMResponse(dm.dump(),1))["error"]=="war not possible for this pair" &&
+              db->GetRecentEvents(1000).size()==eventsBefore, "DM war_declaration refused when not allowed");
+      // EnforceWarRule
+      politics->factions_=savedFactions; politics->factions_.push_back(fc("C","Charlie","guild")); politics->factionIndex_["C"]=politics->factions_.size()-1;
+      politics->warAllowed_={{"*",{"*"}}};
+      const int relAB=db->GetRelation("A","B"), relAC=db->GetRelation("A","C");
+      db->SetRelation("A","B",-60); db->SetRelation("A","C",-55);
+      auto snap=VanillaSnapshot(); snap.currentGameTime=200.f;
+      allowWar=true;
+      auto dead=snap; FactionPolitics::PoliticsLeaderSnapshot l; l.name="Leader"; l.factionId="A"; l.wasResolved=true; l.confirmedDead=true; dead.leaders.push_back(l);
+      Require(politics->EnforceWarRule(dead)==-1 && !db->GetActiveWar("A","B"), "Rule 3 skips a disbanded faction");
+      const int warId=politics->EnforceWarRule(snap);
+      bool declared=false; for (const auto& e : db->GetRecentEvents(1000)) declared |= e.eventType=="war_declaration" && e.factionA=="A" && e.factionB=="B" && e.gameTime==200.f;
+      Require(warId>=0 && db->GetActiveWar("A","B") && !db->GetActiveWar("A","C") && declared, "Rule 3 enforced in code");
+      db->EndWar(warId,"A",201.f); allowWar=false;
+      db->SetRelation("A","B",relAB); db->SetRelation("A","C",relAC);
+      politics->warAllowed_=savedAllowed; politics->factions_=savedFactions; politics->defaultRelations_=savedRels;
+      politics->factionIndex_.erase("C"); }
     PoliticalEngineBridge::GetSingleton()->active=false;
     Require(!politics->TestPEContext().contains("political_engine") && politics->eligiblePE_.empty(), "inactive PE omits context and clears eligibility");
     PoliticalEngineBridge::GetSingleton()->active=true;

@@ -1,3 +1,4 @@
+#include <chrono>
 /**
  * Dashboard UI Manager Implementation
  *
@@ -29,6 +30,7 @@
 #include <utility>
 #include <stdexcept>
 #include <string_view>
+#include <cctype>
 
 namespace IntelEngine {
 
@@ -86,6 +88,7 @@ namespace IntelEngine {
             {"onDashboard_executeAction", OnExecuteActionStatic},
             {"onDashboard_toggleAction", OnToggleActionStatic},
             {"onDashboard_generateDirector", OnGenerateDirectorStatic},
+            {"onDashboard_textFocus", OnTextFocusStatic},
         };
 
         std::unique_ptr<IUiHost> host;
@@ -159,6 +162,7 @@ namespace IntelEngine {
             openedEventSent_ = false;
             domReady_.store(false);
             isOpen_.store(false);
+            textFocused_.store(false);
             initialized_ = false;
         }
     }
@@ -172,6 +176,7 @@ namespace IntelEngine {
         {
             std::lock_guard<std::mutex> lock(mutex_);
             if (shuttingDown_ || !host_ || !available_.load()) return;
+            textFocused_.store(false);
             const bool wasRequestedOpen = requestedOpen_;
             requestedOpen_ = !requestedOpen_;
             ++generation_;
@@ -206,6 +211,7 @@ namespace IntelEngine {
         {
             std::lock_guard<std::mutex> lock(mutex_);
             if (shuttingDown_ || !host_ || !available_.load()) return;
+            textFocused_.store(false);
             logClose = requestedOpen_;
             requestedOpen_ = false;
             ++generation_;
@@ -261,6 +267,7 @@ namespace IntelEngine {
                 expectedExitPending_ = false;
                 logOpened = !isOpen_.load();
                 isOpen_.store(true);
+                textFocused_.store(false);
                 pendingFlush_ = true;
                 break;
             case UiHostEvent::Exited: {
@@ -335,6 +342,7 @@ namespace IntelEngine {
                 pendingFullStatePayload_.clear();
                 break;
             }
+            if (!isOpen_.load() || event == UiHostEvent::DomReady) textFocused_.store(false);
             if (requestedOpen_ && domReady_.load() && isOpen_.load()) {
                 if (!openedEventSent_) {
                     openedEventSent_ = true;
@@ -471,6 +479,7 @@ namespace IntelEngine {
             pc["politics.tick_interval_hours"] = politics->GetTickIntervalHours();
             pc["politics.max_relation_change_per_tick"] = politics->GetMaxRelationChangePerTick();
             pc["politics.max_active_wars"] = politics->GetMaxActiveWars();
+            pc["politics.pe_integration"] = politics->GetPEIntegration();
             pc["politics.pe_reactions_move_relations"] = politics->GetPEReactionsMoveRelations();
             pc["politics.pe_detected"] = PoliticalEngineBridge::GetSingleton()->IsDetected();
             parsed["pluginConfig"] = pc;
@@ -749,7 +758,8 @@ namespace IntelEngine {
                     auto* task = SKSE::GetTaskInterface();
                     if (task) {
                         task->AddTask([]() {
-                            DashboardUIManager::GetSingleton()->Toggle();
+                            auto* manager = DashboardUIManager::GetSingleton();
+                            if (!manager->textFocused_.load()) manager->Toggle();
                         });
                     }
                 }
@@ -764,6 +774,9 @@ namespace IntelEngine {
 
     void DashboardUIManager::OnCloseStatic(const char*) {
         GetSingleton()->RequestClose();
+    }
+    void DashboardUIManager::OnTextFocusStatic(const char* json) {
+        auto* m = GetSingleton(); std::lock_guard lock(m->mutex_); try { m->textFocused_.store(m->acceptingCallbacks_.load() && m->isOpen_.load() && nlohmann::json::parse(json ? json : "{}").value("focused", false)); } catch (...) {}
     }
 
     void DashboardUIManager::OnRequestRefreshStatic(const char*) {
@@ -952,6 +965,8 @@ namespace IntelEngine {
                     saved = politics->SetMaxRelationChangePerTick(val.get<int>());
                 } else if (key == "max_active_wars" && val.is_number_integer()) {
                     saved = politics->SetMaxActiveWars(val.get<int>());
+                } else if (key == "pe_integration" && val.is_boolean()) {
+                    saved = politics->SetPEIntegration(val.get<bool>());
                 } else if (key == "pe_reactions_move_relations" && val.is_boolean()) {
                     saved = politics->SetPEReactionsMoveRelations(val.get<bool>());
                 } else {
@@ -987,6 +1002,7 @@ namespace IntelEngine {
         modEvent.strArg = strArg;
         modEvent.numArg = numArg;
         modEvent.sender = nullptr;
+        if (eventName == "IntelEngine_DashboardRefresh") logger::debug("[diag:refresh] sent timestampMs={}", std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count());
         eventSource->SendEvent(&modEvent);
 
         logger::debug("[Dashboard] Sent ModEvent: {} str={} num={}",
@@ -1006,9 +1022,9 @@ namespace IntelEngine {
             { std::lock_guard<std::mutex> lock(mgr->mutex_);
               if (mgr->shuttingDown_ || !mgr->requestedOpen_ || !mgr->isOpen_ || !mgr->domReady_) return;
               generation = mgr->generation_; }
-            auto queue = [mgr, generation, id, form](nlohmann::json fields, std::string error) {
+            auto queue = [mgr, generation, id, form](nlohmann::json fields, std::string error, nlohmann::json rejected = nlohmann::json::object()) {
                 nlohmann::json result{{"requestId", id}, {"form", form}, {"ok", error.empty()},
-                                      {"fields", std::move(fields)}, {"error", std::move(error)}};
+                                      {"fields", std::move(fields)}, {"error", std::move(error)}, {"rejected", std::move(rejected)}};
                 { std::lock_guard<std::mutex> lock(mgr->mutex_);
                   if (mgr->generation_ != generation || mgr->shuttingDown_) return;
                   mgr->pendingDirectorResults_.emplace_back(generation, SafeDump(result)); }
@@ -1025,7 +1041,9 @@ namespace IntelEngine {
             } else request["currentLocation"] = "";
             if (!SkyrimNetAPI::SendCustomPromptToLLM) { queue({}, "Generate unavailable"); return; }
             const auto context = SafeDump(request);
-            const bool queued = SkyrimNetAPI::SendCustomPromptToLLM("intel_director_generate", "", context.c_str(),
+            logger::debug("[Dashboard] Generate form={} request={} fields={} draft={}", form, id,
+                          SafeDump(request.value("fields", nlohmann::json::object())), SafeDump(request.value("draft", nlohmann::json::object())));
+            const bool queued = SkyrimNetAPI::SendCustomPromptToLLM("intel_director_generate", "intel_story_dm", context.c_str(),
                 [queue, form, id](const char* response, int success) mutable {
                     std::string_view raw = response ? response : "";
                     logger::info("[Dashboard] Generate form={} request={} raw={}", form, id, raw.substr(0, 600));
@@ -1034,7 +1052,14 @@ namespace IntelEngine {
                         const auto first = raw.find('{'), last = raw.rfind('}');
                         auto fields = nlohmann::json::parse(first != raw.npos && last != raw.npos ? raw.substr(first, last - first + 1) : raw);
                         if (!fields.is_object() || fields.empty()) throw std::runtime_error("invalid fields");
-                        queue(std::move(fields), "");
+                        nlohmann::json rejected = nlohmann::json::object();
+                        for (const char* key : {"gossip", "rumor", "narration"}) if (fields.contains(key) && fields[key].is_string()) {
+                            const auto& text = fields[key].get_ref<const std::string&>();
+                            auto has = [&](std::string_view phrase) { return std::search(text.begin(), text.end(), phrase.begin(), phrase.end(),
+                                [](unsigned char a, unsigned char b) { return std::tolower(a) == b; }) != text.end(); };
+                            if (has("subject npc") || has("another local npc")) { fields.erase(key); rejected[key] = "Placeholder NPC reference"; }
+                        }
+                        queue(std::move(fields), "", std::move(rejected));
                     } catch (...) { queue({}, "Malformed generation result: " + std::string(raw.substr(0, 120))); }
                 });
             if (!queued) queue({}, "Generation unavailable");
@@ -1056,7 +1081,7 @@ namespace IntelEngine {
             std::string type = j.value("storyType", "");
             std::string narration = j.value("narration", "");
             std::string replaceGeneration = j.value("replaceGeneration", "-1");
-            if (npcName.empty() || type.empty() || narration.empty()) return;
+            if (npcName.empty() || type.empty() || (narration.empty() && type != "informant")) return;
         
             // Build response JSON with proper escaping (all optional fields default to "")
             nlohmann::json response;

@@ -25,6 +25,14 @@ The `IntelEngine.dll` SKSE plugin provides high-performance functions that would
 
 All functions are exposed to Papyrus via the `IntelEngine` script namespace.
 
+### Story load recovery
+`Bool Function StoryLoadRecovered(Bool complete = false) Global Native` reads a nonpersisted, atomic readiness marker. Passing `true` marks StoryEngine load recovery complete; only `RestartMonitoring` does this after cleanup. Preload and serialization revert reset it, including same-process reloads. `CheckStoryNPCArrival` does nothing while it is false. A saved Papyrus property cannot provide this per-load boundary.
+
+### Travel diagnostics
+`String Function DescribeDistance(ObjectReference a, ObjectReference b) Global Native` returns `dist=<rounded 3D game units> sameSpace=yes` only for the same interior cell or matching nonnull exterior worldspaces. Null references, missing cells and different spaces return `sameSpace=no` without a distance.
+
+Native `[diag:*]` logs require `DebugLevel=4`; Papyrus diagnostics use the existing MCM debug toggle. Off-screen phase-2 logs include actor/player context, movement and stationary ticks; phase 1 retains only initialization logging. Caller-status and linger logs are limited to once per ten real seconds per NPC. `[diag:path]` start/end pairs bracket the three remaining latent recovery calls without changing them. Offline production logic checks: `python SKSE/tests/RunDiagnosticCheck.py <vcpkg-triplet-dir>`. These checks do not establish live behavior.
+
 ### Read-only political feeds (pipe 2)
 
 ```papyrus
@@ -663,6 +671,7 @@ not also call `RecordPoliticalEvent` for these initiatives. Missing export disab
 Active PE adds authoritative territory and recent public developments to the Political DM
 context. A development is eligible for one `political_reaction` on the next tick through
 `reacts_to`; expiry, load identity and duplicate responses reject stale reactions.
+`politics.pe_integration` defaults true; when false IE ignores Political Engine (no polling, no context, no `pe_*` events) and re-enabling resets the baseline.
 `politics.pe_reactions_move_relations` defaults true. Its persisted Papyrus/MCM/dashboard
 toggle controls only tagged reaction relation and player-standing deltas, not IE's own
 politics, standing decay or war/battle mechanics. Disabled still records the reaction.

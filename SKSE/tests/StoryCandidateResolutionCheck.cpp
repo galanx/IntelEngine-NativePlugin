@@ -58,6 +58,13 @@ int main() {
     Require(nearest({{"guard", 2}}, 10, 2) == 0, "self-only pair rejects");
     Require(nearest({{"guard", 4}, {"guard", 5}}, 10) == 0, "incomparable or invalid candidates reject");
     Require(nearest({{"guard", 0}, {"guard", 2}}, 10) == 0, "proximity must preserve zero-ID rejection");
+    // fix63: bare name with a DM-shown actor must not pick a nearer same-name actor the DM never saw.
+    const auto gamlunda = [](const StoryCandidatePool& shown) {
+        return ResolveStoryCandidateFormID("Gamlunda", shown, {{"gamlunda [servant]", 1}}, nullptr,
+                                           [](std::uint32_t id) { return id == 1 ? 1.0 : 100.0; });
+    };
+    Require(gamlunda({{"gamlunda [priest]", 2}}) == 2, "bare name must resolve to the DM-shown actor, not the nearer unseen one");
+    Require(gamlunda({}) == 1, "no DM-shown match keeps the social-pool fallback");
     std::cout << "PASS: production proximity ranking, ambiguous names, partner anchor, ties, duplicates and exclusions\n";
     for (const auto branch : {"empty-pools", "no-match", "ambiguous", "zero-formid"}) {
         StoryCandidateRejection diagnostic;

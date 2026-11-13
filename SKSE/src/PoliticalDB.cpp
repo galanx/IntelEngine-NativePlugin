@@ -799,6 +799,23 @@ namespace IntelEngine {
             else ok = false;
         }
 
+        // Resync war_active with faction_wars (wars deleted/reopened above never touched it)
+        {
+            const char* sql =
+                "UPDATE faction_relations SET war_active = EXISTS (SELECT 1 FROM faction_wars w WHERE w.faction_a = faction_relations.faction_a AND w.faction_b = faction_relations.faction_b AND w.end_time IS NULL) "
+                "WHERE IFNULL(war_active, 0) != EXISTS (SELECT 1 FROM faction_wars w WHERE w.faction_a = faction_relations.faction_a AND w.faction_b = faction_relations.faction_b AND w.end_time IS NULL)";
+            sqlite3_stmt* stmt = nullptr;
+            if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) == SQLITE_OK) {
+                if (sqlite3_step(stmt) == SQLITE_DONE) {
+                    int resynced = sqlite3_changes(db_);
+                    if (resynced > 0) logger::info("PoliticalDB: war_active resynced on {} relations", resynced);
+                }
+                else ok = false;
+                sqlite3_finalize(stmt);
+            }
+            else ok = false;
+        }
+
         // Delete future battles within surviving wars
         {
             const char* sql = "DELETE FROM war_battles WHERE game_time > ?";

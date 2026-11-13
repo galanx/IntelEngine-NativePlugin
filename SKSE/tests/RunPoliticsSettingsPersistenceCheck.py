@@ -29,6 +29,7 @@ methods = [method(dashboard, "std::string DashboardConfig::ReadYamlString("),
                "bool FactionPolitics::SetTickIntervalHours(",
                "bool FactionPolitics::SetMaxRelationChangePerTick(",
                "bool FactionPolitics::SetMaxActiveWars(",
+               "bool FactionPolitics::SetPEIntegration(",
                "bool FactionPolitics::SetPEReactionsMoveRelations(",
                "void FactionPolitics::LoadSettings(",
                "void FactionPolitics::Initialize("))]
@@ -68,12 +69,20 @@ public:
 private:
     std::mutex writeMutex_;
 };
+class PoliticalEngineBridge {
+public:
+    static PoliticalEngineBridge* GetSingleton() { static PoliticalEngineBridge value; return &value; }
+    void SetEnabled(bool on) { enabled = on; }
+    bool enabled = true;
+};
 class FactionPolitics {
 public:
     bool SetEnabled(bool);
     bool SetTickIntervalHours(int);
     bool SetMaxRelationChangePerTick(int);
     bool SetMaxActiveWars(int);
+    bool SetPEIntegration(bool);
+    bool GetPEIntegration() const { return peIntegration_.load(); }
     bool SetPEReactionsMoveRelations(bool);
     bool GetPEReactionsMoveRelations() const { return peReactionsMoveRelations_.load(); }
     void LoadSettings();
@@ -91,6 +100,7 @@ public:
     void WritePoliticalStateFile() {}
 private:
     std::atomic<bool> enabled_{true};
+    std::atomic<bool> peIntegration_{true};
     std::atomic<bool> peReactionsMoveRelations_{true};
     std::atomic<bool> initialized_{false};
     bool configLoaded_ = false;
@@ -117,6 +127,9 @@ int main(int argc, char** argv) {
     assert(!politics.IsEnabled());
     assert(politics.IsInitialized());
     assert(politics.IsConfigLoaded());
+    assert(politics.GetPEIntegration());
+    assert(politics.SetPEIntegration(false));
+    assert(!politics.GetPEIntegration() && !PoliticalEngineBridge::GetSingleton()->enabled);
     assert(politics.GetPEReactionsMoveRelations());
     assert(politics.SetPEReactionsMoveRelations(false));
     assert(!politics.GetPEReactionsMoveRelations());
@@ -139,6 +152,8 @@ int main(int argc, char** argv) {
     settingsPath = "missing/settings.yaml";
     assert(!politics.SetEnabled(true));
     assert(!politics.IsEnabled());
+    assert(!politics.SetPEIntegration(true));
+    assert(!politics.GetPEIntegration());
     assert(!politics.SetPEReactionsMoveRelations(true));
     assert(!politics.GetPEReactionsMoveRelations());
     settingsPath = argv[1];
@@ -148,6 +163,7 @@ int main(int argc, char** argv) {
     assert(reloaded.GetTickIntervalHours() == 168);
     assert(reloaded.GetMaxRelationChangePerTick() == 30);
     assert(reloaded.GetMaxActiveWars() == 5);
+    assert(!reloaded.GetPEIntegration() && !PoliticalEngineBridge::GetSingleton()->enabled);
     assert(!reloaded.GetPEReactionsMoveRelations());
 }
 ''', encoding="utf-8")

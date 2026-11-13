@@ -62,9 +62,16 @@ inline std::uint32_t ResolveStoryCandidateFormID(std::string_view name,
         std::uint32_t match = 0;
         bool found = false;
         double best = std::numeric_limits<double>::infinity();
+        const auto sameName = [&](const std::string& candidate) {
+            return exact ? candidate == lower : NormalizeStoryCandidateName(candidate) == normalized;
+        };
+        // Distance tie-break: actors the DM was shown (dm pool) win over same-name actors it never saw.
+        bool shown = false;
+        if (distance) for (const auto& entry : dm) if (sameName(entry.first)) { shown = true; break; }
         for (const auto* pool : {&dm, &npc}) {
+            if (shown && pool == &npc) continue;
             for (const auto& [candidate, formId] : *pool) {
-                if (exact ? candidate != lower : NormalizeStoryCandidateName(candidate) != normalized) continue;
+                if (!sameName(candidate)) continue;
                 if (distance && formId) {
                     found = true;
                     const double score = distance(formId);

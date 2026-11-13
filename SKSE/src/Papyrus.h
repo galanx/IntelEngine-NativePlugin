@@ -7,6 +7,8 @@
  */
 
 #include "Plugin.h"
+#include <nlohmann/json.hpp>
+#include "StoryLoadRecovery.h"
 
 namespace IntelEngine::Papyrus {
 
@@ -16,6 +18,7 @@ namespace IntelEngine::Papyrus {
      * Register all Papyrus native functions with the VM.
      */
     bool Register(RE::BSScript::IVirtualMachine* a_vm);
+    nlohmann::json PollAndSyncPE();
 
     // ==========================================================================
     // NPC Search Functions
