@@ -4245,9 +4245,12 @@ namespace IntelEngine::Papyrus {
             auto* soldier = RE::TESForm::LookupByID<RE::Actor>(fid);
             if (!soldier || soldier->IsDead()) continue;
 
-            // Aggression 2 = attack everyone. Factionless — nobody defends them.
-            // currentCombatTarget = leader, so they prioritize the leader.
-            soldier->AsActorValueOwner()->SetActorValue(RE::ActorValue::kAggression, 2.f);
+            // Aggression 1 = attacks enemies only, and fights back when attacked. The assassin has no
+            // faction, so nobody is an enemy by default: the leader becomes the target through
+            // currentCombatTarget and Papyrus StartCombat, the guards by attacking first. This was 2
+            // ("attacks neutrals too"), and to a factionless actor everyone is a neutral: the assassin
+            // went for the player and bystanders as soon as the leader was down or out of reach.
+            soldier->AsActorValueOwner()->SetActorValue(RE::ActorValue::kAggression, 1.f);
             soldier->GetActorRuntimeData().currentCombatTarget = target->GetHandle();
             attackCount++;
 
