@@ -246,10 +246,58 @@ namespace IntelEngine::NaturalTime {
             replaceAll(input, "p.m", "pm");
         }
 
+        // The part of the day a phrase names, for a clock time written without am / pm ("6:30 in the evening"):
+        // 0 none, 1 morning, 2 afternoon or evening, 3 night. The same readings as the hour-with-period
+        // handlers further down.
+        auto dayPart = [&]() -> int {
+            if (findBounded("morning")) return 1;
+            if (findBounded("afternoon") || findBounded("evening")) return 2;
+            if (findBounded("tonight") || findBounded("night")) return 3;
+            return 0;
+        };
+        auto inDayPart = [](int hour, int part) -> int {      // hour 1..12
+            if (part == 1) return (hour == 12) ? 0 : hour;
+            if (part == 2) return (hour == 12) ? 12 : hour + 12;
+            if (part == 3) return (hour == 12) ? 0 : (hour <= 4 ? hour : hour + 12);
+            return hour;
+        };
+
+        // --- A spelled-out hour with am / pm: "six a.m.", "ten pm" ---
+        // The digit scan below only sees "6 am". (The 3.7.2 time reader understood these; the phrase came back
+        // unread, and an unread time is replaced by a default hour.)
+        {
+            struct WordHour {
+                const char* text;
+                int hour;
+            };
+            static const WordHour words[] = {
+                {"twelve", 12}, {"eleven", 11}, {"ten", 10}, {"nine", 9}, {"eight", 8}, {"seven", 7},
+                {"six", 6},     {"five", 5},    {"four", 4}, {"three", 3}, {"two", 2},  {"one", 1},
+            };
+            for (const auto& word : words) {
+                const size_t len = std::strlen(word.text);
+                size_t pos = 0;
+                while ((pos = input.find(word.text, pos)) != std::string::npos) {
+                    const char before = (pos > 0) ? input[pos - 1] : ' ';
+                    size_t k = pos + len;
+                    pos += len;
+                    if (isTokenChar(static_cast<unsigned char>(before))) continue;
+                    if (k >= input.size() || input[k] != ' ') continue;
+                    while (k < input.size() && input[k] == ' ') ++k;
+                    if (k + 1 >= input.size() || input[k + 1] != 'm' || (input[k] != 'a' && input[k] != 'p')) continue;
+                    if (k + 2 < input.size() && isTokenChar(static_cast<unsigned char>(input[k + 2]))) continue;
+                    const bool pm = input[k] == 'p';
+                    const int hour = pm ? (word.hour == 12 ? 12 : word.hour + 12) : (word.hour == 12 ? 0 : word.hour);
+                    return static_cast<float>(hour) + dayOffset;
+                }
+            }
+        }
+
         // --- Explicit clock times ---
         // Supports:
         //   12h: "10 am", "10am", "10:30 pm", "at 10 a.m."
         //   24h: "14:00", "at 14:30", "at 22", "18:00"
+        //   H:MM with the part of the day: "6:30 in the evening", "9:30 tonight"
         // Bare 1-12 without am/pm is left for period/"at N" handlers below.
         {
             for (size_t i = 0; i < input.size(); ++i) {
@@ -314,9 +362,11 @@ namespace IntelEngine::NaturalTime {
                     }
                     hourFloat += static_cast<float>(minute) / 60.0f;
                 } else if (hasColon) {
-                    // 24h HH:MM (also accepts 0:00–23:59)
+                    // 24h HH:MM (also accepts 0:00–23:59). A named part of the day decides for 1:00–12:59:
+                    // "6:30 in the evening" was read as written, half past six in the morning.
                     if (hour > 23) continue;
-                    hourFloat = static_cast<float>(hour) + static_cast<float>(minute) / 60.0f;
+                    const int hour24 = (hour >= 1 && hour <= 12) ? inDayPart(hour, dayPart()) : hour;
+                    hourFloat = static_cast<float>(hour24) + static_cast<float>(minute) / 60.0f;
                 } else if (hour >= 13 && hour <= 23) {
                     // Bare 24h hour: "at 14", "22"
                     hourFloat = static_cast<float>(hour);
@@ -461,11 +511,16 @@ namespace IntelEngine::NaturalTime {
             // Don't treat "at 10" as a hit inside "at 100" / "at 10th" / "at tenth"
             if (std::isalnum(static_cast<unsigned char>(after))) continue;
             // "Meet me at 6", said at two in the afternoon, is six in the evening; said at eight in the
-            // evening it is six in the morning. With no clock, or for another day, the morning stands.
+            // evening it is six in the morning.
             if (cp.hour < 12 && dayOffset == 0.0f && currentHour >= 0.0f) {
                 const float morning = static_cast<float>(cp.hour);
                 if (currentHour >= morning && currentHour < morning + 12.0f) return morning + 12.0f;
+                return morning;
             }
+            // Another day, or no clock to go by: there is no "next time the clock shows it", so the waking
+            // hours decide, as in the 3.7.2 time reader. "Tomorrow at 6" is the evening (nobody arranges to
+            // meet at three or six in the night without saying so); "tomorrow at 9" is the morning.
+            if (cp.hour >= 1 && cp.hour <= 6) return static_cast<float>(cp.hour + 12) + dayOffset;
             return static_cast<float>(cp.hour) + dayOffset;
         }
 
