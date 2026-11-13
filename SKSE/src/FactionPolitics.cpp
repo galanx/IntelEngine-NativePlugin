@@ -258,6 +258,18 @@ war_allowed:
                 const auto b = line.find_first_not_of(" \t\r"), e = line.find_last_not_of(" \t\r");
                 if (b != std::string::npos) { first = line.substr(b, e - b + 1); break; }
             }
+            // A file saved with a byte-order mark, or with other spacing after the colon, did not match the exact
+            // text below and was loaded for everyone: nine Political Engine realms for players without that mod.
+            if (first.rfind("\xEF\xBB\xBF", 0) == 0) first.erase(0, 3);
+            if (first.rfind("requires:", 0) == 0) {
+                auto need = first.substr(9);
+                need.erase(0, need.find_first_not_of(" \t"));
+                if (need != "political_engine") {
+                    logger::warn("FactionPolitics: skipped fragment {} (unknown requirement '{}')", file.filename().string(), need);
+                    continue;
+                }
+                first = "requires: political_engine";
+            }
             if (first == "requires: political_engine" &&
                 !(peIntegration_.load() && PoliticalEngineBridge::GetSingleton()->IsDetected())) {
                 logger::info("FactionPolitics: skipped fragment {} (Political Engine not active)", file.filename().string());

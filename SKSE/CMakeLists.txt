@@ -131,6 +131,7 @@ find_package(unofficial-sqlite3 CONFIG REQUIRED)
 set(SOURCES
     src/Plugin.cpp
     src/Papyrus.cpp
+    src/NaturalTimeParser.cpp
     src/NPCIndex.cpp
     src/ItemIndex.cpp
     src/LocationResolver.cpp
@@ -217,8 +218,8 @@ target_link_libraries(ReferenceGetterDispatchCheck PRIVATE CommonLibSSE::CommonL
 
 add_executable(ProximityDistanceCheck EXCLUDE_FROM_ALL tests/ProximityDistanceCheck.cpp)
 target_include_directories(ProximityDistanceCheck PRIVATE src)
-add_executable(ClockTimeCheck EXCLUDE_FROM_ALL tests/ClockTimeCheck.cpp)
-target_include_directories(ClockTimeCheck PRIVATE src)
+add_executable(NaturalTimeParserCheck EXCLUDE_FROM_ALL tests/NaturalTimeParserCheck.cpp src/NaturalTimeParser.cpp)
+target_include_directories(NaturalTimeParserCheck PRIVATE src)
 
 add_executable(PoliticalEngineReadJSONCheck EXCLUDE_FROM_ALL tests/PoliticalEngineReadJSONCheck.cpp)
 target_include_directories(PoliticalEngineReadJSONCheck PRIVATE src)

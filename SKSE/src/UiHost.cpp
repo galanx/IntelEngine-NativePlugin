@@ -1293,4 +1293,26 @@ std::unique_ptr<IUiHost> CreateUiHostWithResolver(std::string_view preference,
     return {};
 }
 
+int SetMagelightViewGamepadKeys(std::uint32_t view)
+{
+    const UiHostApiResolver resolver{&WinGetModuleHandle, &WinGetProcAddress, &RequestPrismaApi, &PostSkseTask};
+    return SetMagelightViewGamepadKeysWithResolver(view, resolver);
+}
+
+int SetMagelightViewGamepadKeysWithResolver(std::uint32_t view, const UiHostApiResolver& resolver)
+{
+    const auto* api = ResolveMagelightApi(resolver);
+    if (!api || view == 0 || api->hostVersionNumber < 10600 || !api->SetViewGamepad || !api->QueryCapability) return 0;
+    if (api->QueryCapability("gamepad") != 1) return 0;
+    MAGELIGHT_API::GamepadConfig config{};
+    config.size = sizeof(config);
+    config.enabled = true;
+    config.style = MAGELIGHT_API::kGamepadStyleKeys;
+    const auto result = api->SetViewGamepad(static_cast<MAGELIGHT_API::ViewId>(view), &config);
+    if (result == MAGELIGHT_API::Result::Ok) return 1;
+    logger::info("[Choice] Magelight refused the gamepad layer for view {}: {}", view,
+                 ErrorText(api, 0, result));
+    return -1;
+}
+
 } // namespace IntelEngine

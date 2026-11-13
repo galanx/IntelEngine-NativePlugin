@@ -17,7 +17,12 @@ with tempfile.TemporaryDirectory(prefix='conduct-check-') as directory:
 #include <vector>
 namespace RE {
 using FormID = std::uint32_t;
-struct Actor { std::string faction; };
+struct Actor {
+ std::string faction;
+ // ProcessPlayerConduct logs who reported (the [diag:conduct] line).
+ const char* GetDisplayFullName() const { return "Reporter"; }
+ FormID GetFormID() const { return 0x14; }
+};
 inline std::vector<std::string> notifications;
 struct Calendar {
  static Calendar* GetSingleton() { static Calendar clock; return &clock; }
@@ -28,6 +33,7 @@ inline void ShowHUDMessage(const char* text) { notifications.emplace_back(text);
 }
 }
 namespace logger {
+template<class... T> void debug(T&&...) {}
 template<class... T> void info(T&&...) {}
 template<class... T> void warn(T&&...) {}
 template<class... T> void error(T&&...) {}

@@ -20,7 +20,9 @@ document.querySelector('iframe').addEventListener('load', async function () {
     view.ieChoice = p => got.push(p);
     const assert = (ok, msg) => { if (!ok) throw Error(msg); };
     const visible = () => doc.getElementById('panel').classList.contains('visible');
-    const key = k => doc.dispatchEvent(new view.KeyboardEvent('keydown', { key: k, bubbles: true, cancelable: true }));
+    const key = k => { doc.dispatchEvent(new view.KeyboardEvent('keydown', { key: k, bubbles: true, cancelable: true }));
+                       doc.dispatchEvent(new view.KeyboardEvent('keyup', { key: k, bubbles: true, cancelable: true })); };
+    const hold = k => doc.dispatchEvent(new view.KeyboardEvent('keydown', { key: k, bubbles: true, cancelable: true }));
     const btns = () => doc.querySelectorAll('.btn');
     const show = (token, buttons, extra) => view.ieChoiceShow(JSON.stringify(Object.assign(
       { token, title: 'Lydia', kind: 'Quest offer', body: 'Lydia wants help.', buttons, timeoutMs: 0 }, extra)));
@@ -62,6 +64,16 @@ document.querySelector('iframe').addEventListener('load', async function () {
     key('Tab'); assert(doc.activeElement === btns()[2], 'Tab moves focus');
     key('ArrowUp'); assert(doc.activeElement === btns()[1], 'Up moves focus');
     key('Enter'); assert(got.at(-1) === 'nav|1', 'Enter clicks the focused button'); pass('arrows/Tab move, Enter picks');
+
+    const held = got.length;
+    show('hold', three); hold('2');
+    assert(got.length === held && visible(), 'a held key has not answered yet');
+    doc.dispatchEvent(new view.KeyboardEvent('keyup', { key: '2', bubbles: true }));
+    assert(got.at(-1) === 'hold|1' && !visible(), 'the answer goes out when the key comes up'); pass('a key answers on release');
+    show('lr', three); key('ArrowRight'); assert(doc.activeElement === btns()[1], 'Right moves focus');
+    key('ArrowLeft'); assert(doc.activeElement === btns()[0], 'Left moves focus'); key('e');
+    assert(got.at(-1) === 'lr|0', 'E picks the focused button'); pass('Left/Right move, E picks');
+    assert(parseFloat(doc.getElementById('panel').style.zoom) > 0, 'the panel is scaled to the frame'); pass('scaled to the frame');
 
     view.ieChoiceShow({ token: 'obj', title: '<i>t</i>', kind: 'k', body: '<b>bold</b> "q"', buttons: ['<u>x</u>', 'y'] });
     assert(doc.getElementById('text').textContent === '<b>bold</b> "q"' && !doc.querySelector('#text b'), 'body is literal text');

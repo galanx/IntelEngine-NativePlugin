@@ -50,6 +50,8 @@ struct FactionPolitics {
     static FactionPolitics* GetSingleton(){static FactionPolitics value;return &value;}
     bool IsReady() const {return true;}
     Snapshot BuildPoliticsTickSnapshot(float time){Require(gameThread,"engine snapshot on worker");return {time};}
+    // The tick enforces the war rule (fix 94) right after the snapshot; it writes engine state, so game thread only.
+    int EnforceWarRule(const Snapshot&){Require(gameThread,"war rule enforced on worker");return -1;}
     void SyncPERulers(const json&){} void SyncPESides(const json&){}
     std::string BuildPoliticalContextFromSnapshot(const Snapshot&){Require(!gameThread,"context must stay on worker");return "fixture context";}
     int RecordPoliticalEvent(const std::string&,const std::string&,const std::string&,const std::string&,int,float time){

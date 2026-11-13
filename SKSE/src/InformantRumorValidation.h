@@ -26,8 +26,15 @@ inline std::string InformantRumorRejection(const std::string& subject, const std
         return false;
     };
     if (!rumor.empty() && !names(rumor, name)) return "rumor does not name the subject";
-    // a name that merely ends in "ing" is allowed
-    if (first.size() > 3 && lower(first).compare(first.size() - 3, 3, "ing") == 0 && lower(name).rfind(lower(first), 0) != 0)
+    // a name that merely ends in "ing" is allowed, and so are ordinary openings that happen to end in it: the rule
+    // keeps "Hearing that ..." out, but it also refused "During the feast, Nazeem ..." and "King Torygg ..."
+    // (keep this list the same as in Core.InformantRumorRejection)
+    static const char* const plainWords[] = {"during", "something", "nothing", "anything", "everything", "king",
+                                             "morning", "evening", "spring"};
+    const std::string lowerFirst = lower(first);
+    const bool plainWord = std::any_of(std::begin(plainWords), std::end(plainWords),
+                                       [&](const char* w) { return lowerFirst == w; });
+    if (!plainWord && first.size() > 3 && lowerFirst.compare(first.size() - 3, 3, "ing") == 0 && lower(name).rfind(lowerFirst, 0) != 0)
         return "rumor starts with an -ing word";
     return "";
 }
