@@ -1,6 +1,6 @@
 #include "SpeechTracker.h"
 
-#include <cstring>
+#include <cctype>
 
 #include <nlohmann/json.hpp>
 
@@ -10,19 +10,28 @@ namespace IntelEngine {
         double SecondsBetween(SpeechTracker::Clock::time_point from, SpeechTracker::Clock::time_point to) {
             return std::chrono::duration<double>(to - from).count();
         }
+
+        // Event names travel through the game's string pool, which keeps one spelling per name whatever its
+        // case: a script that registered "skyrimnet_audiostarted" first decides how the name arrives here.
+        bool SameName(const char* a, const char* b) {
+            for (; *a && *b; ++a, ++b) {
+                if (std::tolower(static_cast<unsigned char>(*a)) != std::tolower(static_cast<unsigned char>(*b))) return false;
+            }
+            return *a == *b;
+        }
     }  // namespace
 
     bool SpeechTracker::KindOf(const char* eventName, Kind& kind) {
         if (!eventName) return false;
-        if (std::strcmp(eventName, "SkyrimNet_SpeechStarted") == 0) {
+        if (SameName(eventName, "SkyrimNet_SpeechStarted")) {
             kind = Kind::Queued;
             return true;
         }
-        if (std::strcmp(eventName, "SkyrimNet_AudioStarted") == 0) {
+        if (SameName(eventName, "SkyrimNet_AudioStarted")) {
             kind = Kind::AudioStarted;
             return true;
         }
-        if (std::strcmp(eventName, "SkyrimNet_AudioEnded") == 0) {
+        if (SameName(eventName, "SkyrimNet_AudioEnded")) {
             kind = Kind::AudioEnded;
             return true;
         }

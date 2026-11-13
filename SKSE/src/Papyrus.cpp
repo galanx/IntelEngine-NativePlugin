@@ -2818,8 +2818,11 @@ namespace IntelEngine::Papyrus {
 
     // The game's settings (Core.BuildConfigJson) go into the file where they differ. Returns how many were written.
     std::int32_t SyncPluginSettings(RE::StaticFunctionTag*, RE::BSFixedString configJson) {
-        const auto config = nlohmann::json::parse(configJson.c_str(), nullptr, false);
-        if (!config.is_object()) return 0;
+        const auto config = SettingsBridge::ParseConfig(configJson.c_str());
+        if (!config.is_object()) {
+            logger::warn("SettingsBridge: the settings object from the scripts is not JSON ({} characters); nothing written", configJson.length());
+            return 0;
+        }
         const int written = SettingsBridge::SyncToFile(config, SettingsFile());
         if (written > 0) logger::info("SettingsBridge: {} setting(s) written to settings.yaml", written);
         return written;
@@ -2831,9 +2834,20 @@ namespace IntelEngine::Papyrus {
     std::int32_t ApplyPluginSettings(RE::StaticFunctionTag*, RE::BSFixedString configJson) {
         FactionPolitics::GetSingleton()->LoadSettings();
         DashboardConfig::GetSingleton()->Reload();
-        const auto config = nlohmann::json::parse(configJson.c_str(), nullptr, false);
-        if (!config.is_object()) return 0;
-        auto changes = SettingsBridge::ApplyFromFile(config, SettingsFile());
+        const auto config = SettingsBridge::ParseConfig(configJson.c_str());
+        if (!config.is_object()) {
+            logger::warn("SettingsBridge: the settings object from the scripts is not JSON ({} characters); nothing taken from settings.yaml", configJson.length());
+            return 0;
+        }
+        auto store = SettingsFile();
+        int added = 0;
+        store.write = [&added, write = store.write](const std::string& section, const std::string& name, const std::string& value) {
+            const bool ok = write(section, name, value);
+            if (ok) ++added;
+            return ok;
+        };
+        auto changes = SettingsBridge::ApplyFromFile(config, store);
+        if (added > 0) logger::info("SettingsBridge: {} setting(s) the file lacked were added to settings.yaml", added);
         if (changes.empty()) return 0;
         const auto count = static_cast<std::int32_t>(changes.size());
         logger::info("SettingsBridge: {} setting(s) taken from settings.yaml", count);
