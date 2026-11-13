@@ -178,6 +178,9 @@ function App() {
     setState(prev => ({
       ...prev,
       config: prev.config ? { ...prev.config, [key]: value } : prev.config,
+      // The two NPC-social switches travel among the story types in what the game sends.
+      story: (key === 'npc_interaction' || key === 'npc_gossip') && prev.story
+        ? { ...prev.story, types: { ...(prev.story.types || {}), [key]: value } } : prev.story,
     }));
     // Send to game
     sendAction('changeSetting', { key, value });
@@ -373,6 +376,7 @@ function App() {
             {activeTab === 'settings' && (
               <SettingsTab
                 config={state.config}
+                storyTypes={state.story?.types}
                 onSettingChange={handleSettingChange}
                 pluginConfig={state.pluginConfig}
                 onPluginConfigChange={(path, value) => {
