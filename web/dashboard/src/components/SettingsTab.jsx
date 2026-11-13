@@ -232,7 +232,7 @@ function SettingsTab({ config, onSettingChange, pluginConfig, onPluginConfigChan
         <SliderRow
           label="Default Wait Hours"
           value={config.defaultWaitHours}
-          min={6} max={168} step={6}
+          min={6} max={168} step={1}
           unit="hrs"
           onCommit={v => onSettingChange('defaultWaitHours', v)}
           hint="How long NPCs wait at destinations before returning home."
