@@ -921,7 +921,12 @@ namespace IntelEngine {
         // upgrade to request-bound resolution via the Papyrus contract.
         StoryCandidateRejection rejection;
         auto formId = ResolveStoryCandidateFormID(name, m_dmCandidatePool, m_npcCandidatePool, &rejection);
-        const bool tieBreak = !partnerName.empty() && (anchor || std::string_view(rejection.branch) == "ambiguous");
+        // The distance pass only knows actors in the anchor's cell or worldspace. It ran for every second NPC,
+        // so a name that had resolved to exactly one actor elsewhere (an innkeeper indoors and someone in the
+        // street) was thrown away and the pair dropped as "unresolved". It is for a name that fits several
+        // actors, or one that resolved to the anchor itself (two NPCs of the same name).
+        const bool isAnchor = anchor && formId != 0 && formId == anchor->GetFormID();
+        const bool tieBreak = !partnerName.empty() && (isAnchor || std::string_view(rejection.branch) == "ambiguous");
         if (tieBreak) {
             // ponytail: NPC 1 anchors NPC 2, not a closest-pair search; explicit reference labels fix intent.
             auto* anchorActor = anchor ? anchor : RE::PlayerCharacter::GetSingleton();
@@ -3095,6 +3100,26 @@ namespace IntelEngine {
 
         json += "]";
         return json;
+    }
+
+    std::vector<RE::Actor*> NPCIndex::FindActorsWithPackages(const std::vector<RE::FormID>& packageFormIDs) {
+        std::vector<RE::Actor*> result;
+        auto* player = RE::PlayerCharacter::GetSingleton();
+        int seen = 0;
+        ProcessUtils::ForEachLoadedActor([&](RE::Actor* actor) {
+            if (!actor || actor == player) return false;
+            if (actor->IsDead() || actor->IsDisabled()) return false;
+            ++seen;
+            auto* currentPkg = actor->GetCurrentPackage();
+            if (!currentPkg) return false;
+            const RE::FormID id = currentPkg->GetFormID();
+            if (id != 0 && std::find(packageFormIDs.begin(), packageFormIDs.end(), id) != packageFormIDs.end()) {
+                result.push_back(actor);
+            }
+            return false;
+        });
+        logger::debug("[Sweep] {} actors with an AI process, {} currently on an IntelEngine package", seen, result.size());
+        return result;
     }
 
     void NPCIndex::NotifyStoryCooldown(RE::FormID formId, float gameTime) {

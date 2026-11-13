@@ -94,22 +94,6 @@ Actor fuzzy = IntelEngine.FindNPCByName("nazim")  ; typo still works
 
 ---
 
-### FindNPCsNearLocation
-```papyrus
-Actor[] Function FindNPCsNearLocation(String locationName, Float radius) Global Native
-```
-
-Find all NPCs near a named location.
-
-**Parameters:**
-- `locationName` - Location to search near
-- `radius` - Search radius in game units
-
-**Returns:**
-- Array of Actor references
-
----
-
 ### GetNPCCurrentLocation
 ```papyrus
 String Function GetNPCCurrentLocation(Actor akNPC) Global Native
@@ -188,24 +172,6 @@ Find a door in loaded cells that leads to the target location.
 - Door reference if found in current/loaded cells, None otherwise
 
 **Use Case:** If door is found, NPC can walk to it directly. If None, fall back to AI package travel.
-
----
-
-### ResolveLocation (Legacy)
-```papyrus
-ObjectReference Function ResolveLocation(String locationName) Global Native
-```
-
-Legacy function - tries FindDoorToLocation first, returns None if not found.
-
-**Returns:**
-- Door reference or None
-
-**Supports Fuzzy Matching:**
-- City names: "Whiterun", "Solitude", "Riften"
-- Specific places: "Dragonsreach", "Blue Palace"
-- Inns: "Bannered Mare", "Sleeping Giant"
-- Typo tolerance via Levenshtein distance
 
 ---
 
@@ -432,16 +398,13 @@ Rebuild location index from game data.
 
 ## Decorator Registration
 
-The DLL automatically registers these decorators with SkyrimNet on load:
+When the SkyrimNet API is available, the DLL registers one decorator on load (soft dependency: skipped if the API is missing):
 
 | Decorator | Arguments | Returns | Description |
 |-----------|-----------|---------|-------------|
-| `can_resolve_location` | `actor`, `locationName` | bool | Can travel to this location? |
-| `can_resolve_semantic` | `actor`, `term` | bool | Can resolve "upstairs" etc? |
-| `can_find_npc` | `npcName` | bool | Does this NPC exist? |
-| `get_npc_location` | `npcName` | string | Where is this NPC? |
-| `validate_task` | `actor`, `taskType`, `target` | bool | Is task feasible? |
-| `get_task_failure_reason` | `actor`, `taskType`, `target` | string | Why would task fail? |
+| `get_intelengine_quests` | `actor` (unused) | string | Active IntelEngine quest details (location, type, briefing, objectives). Use instead of the generic quest list entry for IntelEngine quests. |
+
+The IntelEngine prompts use SkyrimNet's own `get_place_names("nearby")` for location names.
 
 ---
 

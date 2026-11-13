@@ -68,7 +68,7 @@ function PoliticsTab({ politics, calendar, sendAction }) {
   const otherEvents = events.filter(e => e.type !== 'war_declaration' && e.type !== 'battle_result' && e.type !== 'surrender');
 
   return (
-    <div className="p-3 space-y-4">
+    <div className="ie-page p-3 space-y-4">
       {/* Active Wars */}
       {wars.length > 0 && (
         <section>

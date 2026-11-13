@@ -1,5 +1,7 @@
 # IntelEngine SkyrimNet Beta 25 Migration Plan
 
+> **Historical design document.** Parts were never implemented or have changed; the README and docs/DLL_API.md describe IntelEngine 3.8.0.
+
 ## Status
 
 Implemented and statically verified on branch `migration/beta25-plugin-content`. A complete GamePlugin test package has been assembled; in-game discovery, action, prompt, dashboard, persistence, and log verification remain pending.

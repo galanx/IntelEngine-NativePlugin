@@ -177,33 +177,33 @@ const STORY_TYPE_FIELDS = {
       hint: 'Required. The message text. The NPC you pick is the sender; IE picks a nearby courier.' },
     { key: 'destination', label: 'Meeting place', type: 'text',
       placeholder: 'e.g. The Bee and Barb, Dragonsreach',
-      hint: 'Optional. If set with meetTime, creates a meeting invitation.' },
+      hint: 'Optional. With a Meeting time, creates a meeting invitation.' },
     { key: 'meetTime', label: 'Meeting time', type: 'select', options: MEET_TIMES,
-      hint: 'Optional. Must match msgContent. Avoid night/midnight for palaces/shops.' },
+      hint: 'Optional. Must match the Message content. Avoid night/midnight for palaces/shops.' },
   ] },
   quest: { example: 'e.g. needed help rescuing a friend from Fort Greymoor', hint: 'Sends an NPC to ask for help with combat, a rescue or finding an item; leaders use a courier.', narration: 'Why help is needed, consistent with the quest location and sub-type.', fields: [
     { key: 'questSubType', label: 'Sub-type', type: 'select', options: QUEST_SUB_TYPES, required: true,
       hint: 'Required. combat = kill enemies, rescue = save captive NPC, find_item = retrieve item.' },
     { key: 'questLocation', label: 'Quest location', type: 'text', required: true,
       placeholder: 'e.g. Bleak Falls Barrow, Fort Greymoor, Valtheim Towers',
-      hint: 'Required. A real Skyrim dungeon/fort/ruin. Enemies spawn here.' },
+      hint: 'Required. A real Skyrim dungeon, fort, ruin or camp, not where you are now or a player home. Enemies spawn here.' },
     { key: 'enemyType', label: 'Enemy type', type: 'select', options: ENEMY_TYPES, required: true,
       hint: 'Required. bandit = forts/camps, draugr = Nordic ruins, dragon = open areas.' },
     { key: 'sender', label: 'Quest giver', type: 'text',
       placeholder: 'e.g. Jarl Balgruuf',
       hint: 'Optional. If set, NPC becomes a courier. Required for Jarls/leaders (they never travel).' },
-    { key: 'msgContent', label: 'Plea for help', type: 'text',
+    { key: 'msgContent', label: 'Plea for help', type: 'text', required: true,
       placeholder: 'e.g. Draugr have been crawling out of the barrow at night',
-      hint: 'Optional. Why they need help. Shown in NPC dialogue on arrival.' },
-    { key: 'victimName', label: 'Victim (rescue)', type: 'text',
+      hint: 'Required. Why they need help. Shown in NPC dialogue on arrival.' },
+    { key: 'victimName', label: 'Victim (rescue)', type: 'text', requiredIf: ['questSubType', 'rescue'],
       placeholder: 'e.g. Camilla Valerius',
-      hint: 'Rescue only. Exact NPC name. Must exist in-game or quest is rejected.' },
+      hint: 'Required for rescue. Exact NPC name. Must exist in-game or quest is rejected.' },
     { key: 'itemName', label: 'Item (find_item)', type: 'text',
       placeholder: 'e.g. Ebony Blade, Glass Sword, Spell Tome: Fireball',
       hint: 'Find_item only. Exact in-game item name. Fallback to random if not found.' },
-    { key: 'itemDesc', label: 'Item description', type: 'text',
+    { key: 'itemDesc', label: 'Item description (find_item)', type: 'text', requiredIf: ['questSubType', 'find_item'],
       placeholder: 'e.g. a legendary elven blade, a powerful spell tome',
-      hint: 'Find_item only. Brief narrative description for dialogue context.' },
+      hint: 'Required for find_item. Brief narrative description for dialogue context.' },
   ] },
 };
 
@@ -430,7 +430,9 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
     // fix88: a type left on (auto) is picked here, never by the LLM
     const pool = story ? DIRECTOR_STORY_TYPES : social ? SOCIAL_TYPES : POLITICAL_EVENT_TYPES.filter(t => !['war_declaration','surrender','peace_offer'].includes(t.key)); // war-state types: manual only
     const pick = () => pool[Math.floor(Math.random() * pool.length)].key;
-    const sType = story && !touched.storyType ? pick() : storyType, soType = social && !touched.socialType ? pick() : socialType;
+    // Also when the type was picked and then cleared again (the x, or typing in the box): it counted as "touched",
+    // so a blank type went out and the model chose one, which the page is meant never to allow.
+    const sType = story && (!touched.storyType || !storyType) ? pick() : storyType, soType = social && (!touched.socialType || !socialType) ? pick() : socialType;
     const pType = !story && !social && !action ? (polEventType || pick()) : polEventType;
     if (story && sType !== storyType) setStoryType(sType); if (social && soType !== socialType) setSocialType(soType); if (pType !== polEventType) setPolEventType(pType);
     let actionNpcName = nearby.find(n => n.id === actionNpc)?.name || '';
@@ -576,7 +578,8 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
 
   const storyGuidance = touched.storyType ? STORY_TYPE_FIELDS[storyType] : null, currentFields = STORY_TYPE_FIELDS[storyType]?.fields || [];
   const currentSocialFields = SOCIAL_TYPE_FIELDS[socialType] || [];
-  const variantRequired = (defs, values) => defs.filter(f => f.required).map(f => [f.label, !!(values[f.key] || '').trim()]);
+  const isRequired = (f, values) => !!(f.required || (f.requiredIf && values[f.requiredIf[0]] === f.requiredIf[1]));
+  const variantRequired = (defs, values) => defs.filter(f => isRequired(f, values)).map(f => [f.label, !!(values[f.key] || '').trim()]);
   // An unpicked type shows "(auto)", which only Generate honours, so Dispatch needs a picked (or generated) type.
   const storyTypeValid = !!touched.storyType && DIRECTOR_STORY_TYPES.some(type => type.key === storyType);
   const socialTypeValid = !!touched.socialType && SOCIAL_TYPES.some(type => type.key === socialType);
@@ -693,7 +696,7 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
 
 
   return (
-    <div className="director-tab p-3 space-y-4">
+    <div className="director-tab ie-page p-3 space-y-4">
       {/* Story Dispatch */}
       <section>
         {generateControls('story')}{pending?.form === 'story' && <small className="text-gray-400">Generating…</small>}{generateError && !pending && <small className="text-red-400">{generateError}</small>}
@@ -737,7 +740,7 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
           <div className="grid grid-cols-2 gap-x-2">
           {currentFields.map(f => (
             <div key={f.key} className={f.half ? '' : 'col-span-2'}>
-            <Field label={f.label} required={f.required}>
+            <Field label={f.label} required={isRequired(f, storyFields)}>
               {f.type === 'select' ? (
                 <Select aria-label={f.label}
                   value={storyFields[f.key] || ''}

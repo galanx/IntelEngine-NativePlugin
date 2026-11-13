@@ -361,7 +361,7 @@ int main() try {
       using L=std::vector<std::pair<std::string,std::vector<std::string>>>;
       Require(politics->LoadConfig() && politics->warAllowed_==L{{"A",{"B","guild","C"}},{"military",{"*"}}}, "war_allowed parsed");
       Config("Renamed A");
-      Require(politics->LoadConfig() && politics->warAllowed_==L{{"ImperialFaction",{"StormcloakFaction"}}}, "war_allowed parsed; missing section = default");
+      Require(politics->LoadConfig() && politics->warAllowed_==L{{"military",{"military"}}}, "war_allowed parsed; missing section = default (military vs military)");
       // DM refusal: A/B not allowed under the default list; the throwing DeclareWar stub proves it was not reached.
       const size_t eventsBefore=db->GetRecentEvents(1000).size();
       json dm={{"should_act",true},{"faction_a","A"},{"faction_b","B"},{"event_type","war_declaration"},{"description","A declares war."},{"relation_delta",-15}};
