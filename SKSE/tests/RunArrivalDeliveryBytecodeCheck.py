@@ -307,6 +307,7 @@ class VM:
         # The modeled actors are not talking, not in an interior, run no package of ours, and nobody watches them.
         if method in ("IsActorTalking", "IsInInterior", "HasLOS", "IsDoorExterior", "IsEssential"): return False
         if method == "GetCurrentPackage": return None
+        if method == "GetCurrentScene": return None     # nobody is performing (a bard's songs are scenes)
         if method == "GetBaseActorValue": return 1.0
         if method == "GetCellDoors": return []
         if method in ("ClearLookAt", "MoveToMyEditorLocation", "StopCombat", "StopCombatAlarm"):
@@ -1297,6 +1298,64 @@ def run_soft_stuck_checks(files, history):
     print("actual PEX SoftStuckRecovery: no Wait/PathToReference; travel package and EvaluatePackage retained (player/None, loaded/unloaded)")
 
 
+def run_bard_release_checks(files, history):
+    """The inn's bard and his listeners (full Nolvus profile, 2026-11-13). The vanilla quest BardAudienceQuest has
+    a required seat "Bard" and optional seats for the listeners. Clearing the bard's seat is refused by the game
+    with a script error, and the release tried it every three seconds for a bard sent on an errand."""
+    class Seat(ReferenceAlias):
+        def __init__(self, name, actor):
+            super().__init__(actor)
+            self.name = name
+
+    class BardVM(VM):
+        def external(self, method, args, script):
+            if method == "GetFormFromFile": return self.quest
+            if method == "IsRunning": return True
+            if method == "GetNumAliases": return len(self.seats)
+            if method == "GetNthAlias": return self.seats[args[0]]
+            if method == "GetReference": return args[0].actor
+            if method == "GetName": return args[0].name
+            if method == "Clear":
+                self.effects.append(("Clear", args[0].name))
+                return None
+            return super().external(method, args, script)
+
+    for seats, cleared, released in (
+            (("Bard", "Bystander1"), ["Bystander1"], True),     # listening: out of the audience
+            (("Bard",), [], False),                             # the bard himself: his seat is left alone
+            (("Player Follower",), ["Player Follower"], True)): # the follower's seat is optional too
+        vm = BardVM(files, history)
+        vm.quest = object()
+        vm.seats = [Seat(name, vm.agent) for name in seats] + [Seat("Bystander2", vm.target)]
+        result = vm.invoke("IntelEngine_Core", "ReleaseFromBardAudience", (vm.agent,))
+        done = [event[1] for event in vm.effects if event[0] == "Clear"]
+        require(done == cleared, f"audience release with seats {seats!r} cleared {done!r}, expected {cleared!r}")
+        require(bool(result) == released, f"audience release with seats {seats!r} returned {result!r}")
+    print("actual PEX ReleaseFromBardAudience: listeners' seats cleared, the bard's own (a required alias) left alone")
+
+    class SightVM(VM):
+        loaded, in_view = True, False
+
+        def external(self, method, args, script):
+            if method == "Is3DLoaded": return self.loaded
+            if method == "HasLOS": return self.in_view
+            if method == "GetDistance": return 900.0
+            return super().external(method, args, script)
+
+    for loaded, same_cell, in_view, expected in (
+            (False, False, False, True),    # not loaded: unseen
+            (True, True, False, False),     # in the room with the player: watched, even from behind
+            (True, False, False, True),     # loaded out in the street, the player indoors: unseen
+            (True, False, True, False)):    # outdoors and in view
+        vm = SightVM(files, history)
+        vm.loaded, vm.in_view = loaded, in_view
+        vm.agent.cell = "player-cell" if same_cell else "the street"
+        result = vm.invoke("IntelEngine_Core", "OutOfPlayersSight", (vm.agent,))
+        require(bool(result) == expected,
+                f"OutOfPlayersSight(loaded={loaded}, same_cell={same_cell}, in_view={in_view}) returned {result!r}")
+    print("actual PEX OutOfPlayersSight: unloaded or unseen elsewhere counts as unseen; the player's own cell and anything in view do not")
+
+
 def run_linger_teammate_checks(files, history):
     class LingerVM(VM):
         teammate = False
@@ -1827,6 +1886,7 @@ def main():
     run_load_recovery_checks(files, history)
     run_hold_restriction_checks(files, history)
     run_soft_stuck_checks(files, history)
+    run_bard_release_checks(files, history)
     run_linger_teammate_checks(files, history)
     run_social_range_checks(files, history)
 
