@@ -43,6 +43,9 @@ namespace IntelEngine {
         bool WriteYamlValue(const std::string& section, const std::string& key,
                             const std::string& formattedValue);
 
+        /** Read one value of settings.yaml as text; false when the section or the key is not in the file. */
+        bool ReadSetting(const std::string& section, const std::string& key, std::string& value);
+
         /** Read a string value from settings.yaml. */
         std::string ReadYamlString(const std::string& path, const std::string& section,
                                     const std::string& key, const std::string& defaultVal);

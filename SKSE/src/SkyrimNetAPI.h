@@ -129,6 +129,11 @@ namespace IntelEngine::SkyrimNetAPI {
     inline bool (*SendCustomPromptToLLM)(const char*, const char*, const char*,
         std::function<void(const char*, int)>) = nullptr;
 
+    /** Version of SkyrimNet's AI-package contract (ListPackage, HoldPackages, UnregisterPackageEx and the
+     *  SkyrimNet_OnPackage* ModEvents on the Papyrus side). Resolved by name whatever GetVersion returns;
+     *  nullptr on a SkyrimNet that predates it, and then those Papyrus natives must not be called. */
+    inline uint32_t (*GetPackageApiVersion)() = nullptr;
+
     /**
      * Initialize the SkyrimNet API by loading function pointers from the DLL.
      * Returns true if SkyrimNet was found and API version is >= 3.
@@ -231,6 +236,9 @@ namespace IntelEngine::SkyrimNetAPI {
             GetProcAddress(hDLL, "PublicGetWorldKnowledgeForActor"));
         SendCustomPromptToLLM = reinterpret_cast<decltype(SendCustomPromptToLLM)>(
             GetProcAddress(hDLL, "PublicSendCustomPromptToLLM"));
+        GetPackageApiVersion = reinterpret_cast<uint32_t(*)()>(
+            GetProcAddress(hDLL, "PublicGetPackageApiVersion"));
+        logger::info("SkyrimNet package API: {}", GetPackageApiVersion ? GetPackageApiVersion() : 0u);
 
         // Bio template API
         logger::info("SkyrimNet Data API: Memories={}, Events={}, Dialogue={}, Ready={}, "
