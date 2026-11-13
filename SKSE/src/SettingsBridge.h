@@ -46,6 +46,10 @@ namespace IntelEngine::SettingsBridge {
         const char* description;
         const char* event;        // nullptr: IntelEngine_DashboardSetting with `key`; else this event ...
         const char* eventArg;     // ... with this string argument
+        // The file and the page hold the opposite of the game's value (Bool only). The game stores "skip this
+        // action for followers"; a page of such switches, all off, reads as "switched off for followers".
+        // The page shows "followers can do this", on by default. `def` is the file's side.
+        bool inverted = false;
     };
 
     /** Reads and writes one value of settings.yaml. `read` answers false when the key is not there. */
