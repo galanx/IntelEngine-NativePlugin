@@ -14,10 +14,11 @@ function resizeTextarea(event) {
   handle.onpointerup = up => handle.releasePointerCapture(up.pointerId);
 }
 
-function Field({ label, required, hint, children, className = 'flex-1' }) {
+function Field({ label, required, maybeRequired, hint, children, className = 'flex-1' }) {
   return (
     <div className={`flex ${className} min-w-0 flex-col gap-0.5`}>
-      <label className="text-[10px] text-gray-500">{label} {required && <span className="text-red-400 ml-0.5">*</span>}</label>
+      <label className="text-[10px] text-gray-500">{label} {required ? <span className="text-red-400 ml-0.5">*</span>
+        : maybeRequired && <span className="text-yellow-400 ml-0.5" title="Needed for one of the sub-types">*</span>}</label>
       {Children.map(children, child => ['input', 'textarea'].includes(child?.type) && child.props.type !== 'number' ? (
         <div className="director-text-field relative min-w-0">
           {cloneElement(child, { 'aria-label': child.props['aria-label'] || label })}
@@ -579,6 +580,8 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
   const storyGuidance = touched.storyType ? STORY_TYPE_FIELDS[storyType] : null, currentFields = STORY_TYPE_FIELDS[storyType]?.fields || [];
   const currentSocialFields = SOCIAL_TYPE_FIELDS[socialType] || [];
   const isRequired = (f, values) => !!(f.required || (f.requiredIf && values[f.requiredIf[0]] === f.requiredIf[1]));
+  // A field one sub-type needs: a yellow star while no sub-type is picked, the red one once its own is.
+  const mayBeRequired = (f, values) => !!(f.requiredIf && !values[f.requiredIf[0]]);
   const variantRequired = (defs, values) => defs.filter(f => isRequired(f, values)).map(f => [f.label, !!(values[f.key] || '').trim()]);
   // An unpicked type shows "(auto)", which only Generate honours, so Dispatch needs a picked (or generated) type.
   const storyTypeValid = !!touched.storyType && DIRECTOR_STORY_TYPES.some(type => type.key === storyType);
@@ -740,7 +743,7 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
           <div className="grid grid-cols-2 gap-x-2">
           {currentFields.map(f => (
             <div key={f.key} className={f.half ? '' : 'col-span-2'}>
-            <Field label={f.label} required={isRequired(f, storyFields)}>
+            <Field label={f.label} required={isRequired(f, storyFields)} maybeRequired={mayBeRequired(f, storyFields)}>
               {f.type === 'select' ? (
                 <Select aria-label={f.label}
                   value={storyFields[f.key] || ''}
