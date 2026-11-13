@@ -181,7 +181,8 @@ namespace IntelEngine::SettingsBridge {
 
         /** The game's value of a setting from the config object; false when it is not there or not a value. */
         bool GameValue(const nlohmann::json& config, const Entry& entry, double& value) {
-            const auto it = config.find(entry.key);
+            auto it = config.find(entry.key);
+            if (it == config.end()) it = config.find(Lower(entry.key));     // as ParseConfig stores the keys
             if (it == config.end()) return false;
             if (it->is_boolean()) {
                 value = it->get<bool>() ? 1.0 : 0.0;
@@ -276,6 +277,51 @@ namespace IntelEngine::SettingsBridge {
         value = std::clamp(number, entry.min, entry.max);
         if (entry.kind == Kind::Int) value = static_cast<double>(std::llround(value));
         return true;
+    }
+
+    nlohmann::json ParseConfig(const std::string& scriptJson) {
+        // Outside quoted text the words true, false and null are put in lower case, whatever case they came in.
+        std::string fixed;
+        fixed.reserve(scriptJson.size());
+        bool inText = false;
+        bool escaped = false;
+        for (size_t i = 0; i < scriptJson.size();) {
+            const char c = scriptJson[i];
+            if (inText) {
+                fixed += c;
+                if (escaped) {
+                    escaped = false;
+                } else if (c == '\\') {
+                    escaped = true;
+                } else if (c == '"') {
+                    inText = false;
+                }
+                ++i;
+                continue;
+            }
+            if (c == '"') {
+                inText = true;
+                fixed += c;
+                ++i;
+                continue;
+            }
+            if (std::isalpha(static_cast<unsigned char>(c))) {
+                size_t end = i;
+                while (end < scriptJson.size() && std::isalpha(static_cast<unsigned char>(scriptJson[end]))) ++end;
+                const std::string word = scriptJson.substr(i, end - i);
+                const std::string low = Lower(word);
+                fixed += (low == "true" || low == "false" || low == "null") ? low : word;
+                i = end;
+                continue;
+            }
+            fixed += c;
+            ++i;
+        }
+        const auto parsed = nlohmann::json::parse(fixed, nullptr, false);
+        if (!parsed.is_object()) return nlohmann::json();
+        nlohmann::json config = nlohmann::json::object();
+        for (auto it = parsed.begin(); it != parsed.end(); ++it) config[Lower(it.key())] = it.value();
+        return config;
     }
 
     int SyncToFile(const nlohmann::json& config, const Store& store) {

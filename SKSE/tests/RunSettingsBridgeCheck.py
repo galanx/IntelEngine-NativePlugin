@@ -117,7 +117,39 @@ int main(int, char** argv) {
     assert(ApplyFromFile(json(), store).empty());
     assert(SyncToFile(config, Store{}) == 0);
 
-    // 8. The table itself: unique keys and paths, defaults inside their ranges, choices not empty.
+    // 8. The settings object as the game really hands it over. Script strings are case-insensitive there, so a
+    //    script's "true" arrives as TRUE or True and a key can arrive in another case (seen in game 2026-11-13:
+    //    the plain parser rejected the whole object and nothing was ever synced).
+    {
+        const json parsed = ParseConfig(R"({"StoryEnabled":TRUE,"reportBack":False,"storyinterval":4.000000,"MAXTASKS":2,)"
+                                        R"("note":"True story, \"FALSE\" alarm","nothing":NULL})");
+        assert(parsed.is_object());
+        assert(parsed["storyenabled"] == true && parsed["reportback"] == false);
+        assert(parsed["storyinterval"] == 4.0 && parsed["maxtasks"] == 2);
+        assert(parsed["note"] == "True story, \"FALSE\" alarm");      // quoted text is left alone
+        assert(parsed["nothing"].is_null());
+        std::map<std::string, std::string> other;
+        Store second;
+        second.read = [&](const std::string& s, const std::string& n, std::string& v) {
+            auto it = other.find(s + "." + n);
+            if (it == other.end()) return false;
+            v = it->second;
+            return true;
+        };
+        second.write = [&](const std::string& s, const std::string& n, const std::string& v) { other[s + "." + n] = v; return true; };
+        assert(SyncToFile(parsed, second) == 4);
+        assert(other["stories.enabled"] == "true" && other["tasks.report_back_after_delivery"] == "false");
+        assert(other["stories.check_interval_hours"] == "4" && other["tasks.max_concurrent"] == "2");
+        other["stories.enabled"] = "false";
+        const auto back = ApplyFromFile(parsed, second);
+        assert(back.size() == 1 && back[0].arg == "storyEnabled" && back[0].value == 0.0f);
+        assert(!ParseConfig("").is_object());
+        assert(!ParseConfig("[1,2]").is_object());
+        assert(!ParseConfig(R"({"storyEnabled":maybe})").is_object());
+        assert(!ParseConfig(R"({"storyEnabled":true)").is_object());
+    }
+
+    // 9. The table itself: unique keys and paths, defaults inside their ranges, choices not empty.
     std::map<std::string, int> keys, paths;
     for (const Entry& e : Table()) {
         assert(++keys[e.key] == 1);
@@ -131,7 +163,7 @@ int main(int, char** argv) {
     }
 
     std::ofstream(argv[1], std::ios::binary) << ManifestFields();
-    std::cout << "PASS: sync, apply, clamping, unreadable values, missing keys, table (" << Table().size() << " settings)\n";
+    std::cout << "PASS: sync, apply, clamping, unreadable values, missing keys, script-cased JSON, table (" << Table().size() << " settings)\n";
 }
 ''', encoding='utf-8')
     exe = work / 'check'

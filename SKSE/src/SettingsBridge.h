@@ -63,6 +63,15 @@ namespace IntelEngine::SettingsBridge {
 
     const std::vector<Entry>& Table();
 
+    /**
+     * The settings object as the scripts build it (Core.BuildConfigJson), parsed. Script strings are
+     * case-insensitive in the game: a script's "true" arrives as "TRUE" or "True" when any other script used
+     * that spelling first, which is not JSON, and a key can change case the same way. So the words true, false
+     * and null are read in any case, and the keys of the result are in lower case (the table's keys are looked
+     * up that way). Returns null (not an object) when the text is not a JSON object even so.
+     */
+    nlohmann::json ParseConfig(const std::string& scriptJson);
+
     /** The game wins: every table value present in `config` that differs from the file is written. Returns the count. */
     int SyncToFile(const nlohmann::json& config, const Store& store);
 

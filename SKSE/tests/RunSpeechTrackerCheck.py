@@ -96,6 +96,9 @@ int main() {
     assert(SpeechTracker::KindOf("SkyrimNet_SpeechStarted", k) && k == Kind::Queued);
     assert(SpeechTracker::KindOf("SkyrimNet_AudioStarted", k) && k == Kind::AudioStarted);
     assert(SpeechTracker::KindOf("SkyrimNet_AudioEnded", k) && k == Kind::AudioEnded);
+    assert(SpeechTracker::KindOf("skyrimnet_audiostarted", k) && k == Kind::AudioStarted);   // the string pool's spelling
+    assert(SpeechTracker::KindOf("SKYRIMNET_SPEECHSTARTED", k) && k == Kind::Queued);
+    assert(!SpeechTracker::KindOf("SkyrimNet_AudioEndedX", k) && !SpeechTracker::KindOf("SkyrimNet_AudioEnde", k));
     assert(!SpeechTracker::KindOf("SkyrimNet_SpeechComplete", k));
     assert(!SpeechTracker::KindOf("IntelEngine_DashboardOpened", k));
     assert(!SpeechTracker::KindOf(nullptr, k));
