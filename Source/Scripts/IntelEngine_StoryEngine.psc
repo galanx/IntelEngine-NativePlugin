@@ -692,12 +692,15 @@ Function TickScheduler()
             Core.DebugMsg("Story: watchdog reset IsActive (stuck or stale)")
             If ActiveStoryNPC != None
                 Core.InjectFact(ActiveStoryNPC, "never finished: " + ActiveNarration)
-                ; Same teardown as every other abandon path, or the NPC keeps its travel package.
-                Int watchdogSlot = Core.FindSlotByAgent(ActiveStoryNPC)
-                If watchdogSlot >= 0
-                    Core.ClearSlot(watchdogSlot)
+                ; Give the NPC back as well. Resetting only the story left its "story" slot, its busy flag and
+                ; its jog-to-the-player override on the NPC for good: nothing else looks after story slots.
+                Int staleSlot = Core.FindSlotByAgent(ActiveStoryNPC)
+                If staleSlot >= 0 && Core.SlotTaskTypes[staleSlot] == "story"
+                    StorageUtil.SetStringValue(ActiveStoryNPC, "Intel_Result", "abandoned")
+                    Core.ClearSlot(staleSlot)
+                ElseIf staleSlot < 0
+                    Core.RemoveIntelPackages(ActiveStoryNPC)
                 EndIf
-                Core.RemoveAllPackages(ActiveStoryNPC, false)
             EndIf
             CleanupStoryDispatch()
             ; Don't fall through to dispatch a new story in the same tick —
@@ -2154,6 +2157,12 @@ Function CheckRoadEncounterProximity()
             ; Stale entry -- remove
             StorageUtil.IntListRemoveAt(player, "Intel_FakeEncounterNPCs", i)
             i -= 1
+        ElseIf Core.FindSlotByAgent(npc) >= 0 || Core.IsFollowingPlayer(npc)
+            ; Given a new task, or recruited by the player: the encounter is over for them. Resuming would put a
+            ; priority-100 walk override on a follower, and a day later the stranded-encounter pass would strip
+            ; their packages and teleport them to their editor location.
+            ForgetLingerActor(npc)
+            i -= 1
         Else
             ; Check if NPC has reached destination
             ObjectReference destMarker = StorageUtil.GetFormValue(npc, "Intel_FakeEncounterDest") as ObjectReference
@@ -2247,6 +2256,85 @@ Function StartStoryLinger(Actor npc)
     StorageUtil.SetFloatValue(npc, "Intel_StoryLingerGameStart", Utility.GetCurrentGameTime())
 EndFunction
 
+Function ForgetEncounterKeys(Actor npc)
+    StorageUtil.UnsetFormValue(npc, "Intel_FakeEncounterDest")
+    StorageUtil.UnsetStringValue(npc, "Intel_FakeEncounterNarration")
+    StorageUtil.UnsetIntValue(npc, "Intel_FakeEncounterInteracted")
+    StorageUtil.UnsetFloatValue(npc, "Intel_FakeEncounterGreetTime")
+    StorageUtil.UnsetFloatValue(npc, "Intel_FakeEncounterTime")
+EndFunction
+
+Function ForgetLingerActor(Actor npc)
+    {The NPC is taking up something else (a new task, or the player recruited them): drop them from the linger
+    and road-encounter bookkeeping without sending them anywhere. Only our own leftover overrides go; whoever
+    took them over supplies the next package.}
+    If npc == None
+        return
+    EndIf
+    Actor player = Game.GetPlayer()
+    Bool hasTask = Core.FindSlotByAgent(npc) >= 0
+    Int at = StorageUtil.FormListFind(player, "Intel_StoryLingerActors", npc as Form)
+    If at >= 0
+        If StorageUtil.GetStringValue(npc, "Intel_SocHoldNarr", "") != ""
+            TickSocialHold(npc, true)           ; a held NPC-to-NPC scene is applied as facts, as on a timeout
+        EndIf
+        StorageUtil.FormListRemoveAt(player, "Intel_StoryLingerActors", at)
+        StorageUtil.UnsetFloatValue(npc, "Intel_StoryLingerStart")
+        StorageUtil.UnsetFloatValue(npc, "Intel_StoryLingerElapsed")
+        StorageUtil.UnsetFloatValue(npc, "Intel_StoryLingerGameStart")
+        StorageUtil.UnsetIntValue(npc, "Intel_MeetingLingerApproaching")
+        StorageUtil.UnsetStringValue(npc, "Intel_RescueNarration")
+        ActorUtil.RemovePackageOverride(npc, Core.SandboxNearPlayerPackage)
+        Core.DebugMsg("Story linger dropped for " + npc.GetDisplayName() + " (taken over)")
+    EndIf
+    Int enc = StorageUtil.IntListFind(player, "Intel_FakeEncounterNPCs", npc.GetFormID())
+    If enc >= 0
+        StorageUtil.IntListRemoveAt(player, "Intel_FakeEncounterNPCs", enc)
+        ActorUtil.RemovePackageOverride(npc, Core.SandboxNearPlayerPackage)
+        If !hasTask
+            ; No task of ours behind them: the encounter's walk override and its target are leftovers.
+            ActorUtil.RemovePackageOverride(npc, Core.TravelPackage_Walk)
+            PO3_SKSEFunctions.SetLinkedRef(npc, None, Core.IntelEngine_TravelTarget)
+        EndIf
+        ForgetEncounterKeys(npc)
+        Core.DebugMsg("Road encounter dropped for " + npc.GetDisplayName() + " (taken over)")
+    EndIf
+    If (at >= 0 || enc >= 0) && !hasTask
+        npc.EvaluatePackage()
+    EndIf
+EndFunction
+
+Bool Function HoldsActor(Actor npc)
+    {Does the story engine account for this NPC running one of IntelEngine's packages? Used by Core's sweep of
+    stale overrides: everyone listed here is left alone.}
+    If npc == None
+        return false
+    EndIf
+    If npc == ActiveStoryNPC || npc == ActiveSecondNPC || npc == NPCSocialTraveler || npc == NPCSocialTarget
+        return true
+    EndIf
+    If npc == QuestDepartureNPC || npc == QuestGiver || npc == QuestGuideNPC || npc == QuestVictimNPC || npc == QuestBossNPC
+        return true
+    EndIf
+    If FactionAmbushActors && FactionAmbushActors.Find(npc) >= 0
+        return true
+    EndIf
+    Actor player = Game.GetPlayer()
+    If StorageUtil.FormListFind(player, "Intel_StoryLingerActors", npc as Form) >= 0
+        return true
+    EndIf
+    If StorageUtil.IntListFind(player, "Intel_FakeEncounterNPCs", npc.GetFormID()) >= 0
+        return true
+    EndIf
+    If StorageUtil.FormListFind(player, "Intel_QuestSpawnedNPCs", npc as Form) >= 0
+        return true
+    EndIf
+    If StorageUtil.FormListFind(player, "Intel_RecentlyRescuedNPCs", npc as Form) >= 0
+        return true
+    EndIf
+    return false
+EndFunction
+
 Function FinishArrivalWithLinger(Actor arrivedNPC, ObjectReference lingerTarget)
     {Shared arrival pattern: clear slot, cleanup dispatch, sandbox near target, start linger tracking.
      Caller MUST save arrivedNPC from ActiveStoryNPC BEFORE calling (CleanupStoryDispatch clears it).}
@@ -2254,7 +2342,12 @@ Function FinishArrivalWithLinger(Actor arrivedNPC, ObjectReference lingerTarget)
         return
     EndIf
     Int slot = Core.FindSlotByAgent(arrivedNPC)
-    If slot < 0
+    If slot < 0 || Core.SlotTaskTypes[slot] != "story"
+        ; The slot is gone or belongs to a different task by now. Returning here without cleaning up left
+        ; ArrivalHandling set, which made every later arrival check return early until the 6-hour watchdog.
+        If ActiveStoryNPC == arrivedNPC
+            CleanupStoryDispatch()
+        EndIf
         return
     EndIf
     StorageUtil.SetStringValue(arrivedNPC, "Intel_Result", "arrived")
@@ -2348,9 +2441,12 @@ Function CheckStoryLingerCleanup()
             timedOut = timedOut || (lingerGameStart > 0.0 && Utility.GetCurrentGameTime() - lingerGameStart > 1.0 / 24.0)
             ; Grace period: don't check distance for the first 30 seconds so
             ; NPCs that start far away (e.g. rescued victims) can pathfind to the player
+            Bool shouldRelease = elapsed > 30.0 && Core.ShouldReleaseLinger(npc)
+            ; Taken over: a new IntelEngine task, or the player recruited them (teammate, follower faction,
+            ; SeverActions follow). The linger is over at once; "player far away" never comes true for a follower.
+            Bool takenOver = Core.FindSlotByAgent(npc) >= 0 || Core.IsFollowingPlayer(npc)
 
-            Bool shouldRelease = npc.IsPlayerTeammate() || (elapsed > 30.0 && Core.ShouldReleaseLinger(npc))
-            If timedOut || shouldRelease
+            If timedOut || shouldRelease || takenOver
                 If StorageUtil.GetStringValue(npc, "Intel_SocHoldNarr", "") != ""
                     TickSocialHold(npc, true)
                 EndIf
@@ -2503,7 +2599,10 @@ Function CleanupStrandedEncounters()
         Actor npc = Game.GetForm(formId) as Actor
         If npc != None
             Float encounterTime = StorageUtil.GetFloatValue(npc, "Intel_FakeEncounterTime", 0.0)
-            If encounterTime > 0.0 && (currentTime - encounterTime) > 1.0
+            If Core.FindSlotByAgent(npc) >= 0 || Core.IsFollowingPlayer(npc)
+                ; On a task or with the player now: forget the encounter, send nobody home.
+                ForgetLingerActor(npc)
+            ElseIf encounterTime > 0.0 && (currentTime - encounterTime) > 1.0
                 ; Clean up all state before returning home
                 Core.RemoveAllPackages(npc, false)
                 ClearRoadEncounterTravelState(npc)
@@ -2585,8 +2684,10 @@ Function CheckStoryNPCArrival()
 
     ; Orphan detection: if NPC is valid but no longer in a slot, dispatch was
     ; externally cleared (console, MCM). Clean up to unblock future ticks.
+    ; A slot of another type means the NPC was given a different task meanwhile: the story no longer owns them
+    ; either, and must not keep steering them back to the player or end by clearing that other task's slot.
     Int activeSlot = Core.FindSlotByAgent(storyNPC)
-    If activeSlot < 0
+    If activeSlot < 0 || Core.SlotTaskTypes[activeSlot] != "story"
         Core.DebugMsg("Story: orphaned dispatch detected for " + storyNPC.GetDisplayName() + " [" + storyType + "] - cleaning up")
         If StillOwns(storyNPC, claimedGeneration, storyType)
             CleanupStoryDispatch()

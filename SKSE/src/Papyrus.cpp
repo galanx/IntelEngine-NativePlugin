@@ -28,6 +28,7 @@
 #include "OffScreenTracker.h"
 #include "ProximityMonitor.h"
 #include "ProximityDistance.h"
+#include "ClockTime.h"
 #include "SlotTracker.h"
 #include "MemoryDB.h"
 #include "Settings.h"
@@ -70,6 +71,7 @@ namespace IntelEngine::Papyrus {
     std::vector<int> GetDMCandidatePoolFormIDs(RE::StaticFunctionTag*);
     std::vector<int> GetNPCCandidatePoolFormIDs(RE::StaticFunctionTag*);
     RE::BSFixedString ScanActorsWithPackages(RE::StaticFunctionTag*, std::vector<int>);
+    std::vector<RE::Actor*> GetActorsWithPackages(RE::StaticFunctionTag*, std::vector<int>);
     RE::BSFixedString RenderFactsSection(RE::StaticFunctionTag*, std::vector<RE::BSFixedString>, std::vector<float>, float);
     RE::BSFixedString RenderGossipHeardSection(RE::StaticFunctionTag*, std::vector<RE::BSFixedString>, std::vector<RE::BSFixedString>, std::vector<float>, float);
     RE::BSFixedString RenderGossipToldSection(RE::StaticFunctionTag*, std::vector<RE::BSFixedString>, std::vector<RE::BSFixedString>, std::vector<float>, float);
@@ -407,6 +409,7 @@ namespace IntelEngine::Papyrus {
         a_vm->RegisterFunction("GetDMCandidatePoolFormIDs", SCRIPT_NAME, GetDMCandidatePoolFormIDs); ++count;
         a_vm->RegisterFunction("GetNPCCandidatePoolFormIDs", SCRIPT_NAME, GetNPCCandidatePoolFormIDs); ++count;
         a_vm->RegisterFunction("ScanActorsWithPackages", SCRIPT_NAME, ScanActorsWithPackages); ++count;
+        a_vm->RegisterFunction("GetActorsWithPackages", SCRIPT_NAME, GetActorsWithPackages); ++count;
         a_vm->RegisterFunction("SpawnQuestEnemies", SCRIPT_NAME, SpawnQuestEnemies); ++count;
         a_vm->RegisterFunction("SpawnQuestBoss", SCRIPT_NAME, SpawnQuestBoss); ++count;
         a_vm->RegisterFunction("SpawnQuestChest", SCRIPT_NAME, SpawnQuestChest); ++count;
@@ -1187,7 +1190,8 @@ namespace IntelEngine::Papyrus {
     // ==========================================================================
 
     float ParseTimeCondition(RE::StaticFunctionTag*, RE::BSFixedString condition) {
-        std::string input = StringUtils::ToLowerStd(condition.c_str());
+        // "six a.m." reads like "6 am" and "in two hours" like "in 2 hours" from here on.
+        std::string input = NormalizeTimeText(StringUtils::ToLowerStd(condition.c_str()));
         if (input.empty()) return -1.0f;
 
         // Check for "tomorrow" — adds 24h offset to force next-day scheduling
@@ -1262,6 +1266,24 @@ namespace IntelEngine::Papyrus {
             return relativeHour(1.0f) + dayOffset;
         }
 
+        // --- A clock time, in any spelling ---
+        // Before the day-part words below: "6am tomorrow morning" is 6, not the 8 that "morning" stands for,
+        // and "tonight at 9" is 21. Covers "6am", "5 a.m.", "6:30 pm", "06:00", "18:30", "at 6", "6 o'clock".
+        {
+            float currentHour = -1.0f;                      // unknown, or the time is for another day
+            if (dayOffset == 0.0f) {
+                if (auto* cal = RE::Calendar::GetSingleton()) {
+                    const float now = cal->GetCurrentGameTime();
+                    currentHour = (now - std::floor(now)) * 24.0f;
+                }
+            }
+            const float clock = FindClockTime(input, currentHour);
+            if (clock >= 0.0f) {
+                logger::debug("ParseTimeCondition: '{}' -> clock time {:.2f}", condition.c_str(), clock);
+                return clock + dayOffset;
+            }
+        }
+
         // --- Named time patterns (substring match) ---
         // Order matters: more specific terms before substrings they contain
         // e.g., "midnight" before "night", "afternoon" before "noon"
@@ -1293,43 +1315,6 @@ namespace IntelEngine::Papyrus {
         for (const auto& nt : namedTimes) {
             if (input.find(nt.keyword) != std::string::npos) {
                 return nt.hour + dayOffset;
-            }
-        }
-
-        // --- Specific hour patterns: "Xpm"/"X pm"/"Xam"/"X am" ---
-        struct ClockPattern { const char* text; int hour; };
-        static const ClockPattern pmPatterns[] = {
-            {"12pm", 12}, {"12 pm", 12},
-            {"11pm", 23}, {"11 pm", 23},
-            {"10pm", 22}, {"10 pm", 22},
-            {"9pm", 21}, {"9 pm", 21},
-            {"8pm", 20}, {"8 pm", 20},
-            {"7pm", 19}, {"7 pm", 19},
-            {"6pm", 18}, {"6 pm", 18},
-            {"5pm", 17}, {"5 pm", 17},
-            {"4pm", 16}, {"4 pm", 16},
-            {"3pm", 15}, {"3 pm", 15},
-            {"2pm", 14}, {"2 pm", 14},
-            {"1pm", 13}, {"1 pm", 13},
-        };
-        for (const auto& cp : pmPatterns) {
-            if (input.find(cp.text) != std::string::npos) {
-                return static_cast<float>(cp.hour) + dayOffset;
-            }
-        }
-
-        static const ClockPattern amPatterns[] = {
-            {"12am", 0}, {"12 am", 0},
-            {"11am", 11}, {"11 am", 11},
-            {"10am", 10}, {"10 am", 10},
-            {"9am", 9}, {"9 am", 9},
-            {"8am", 8}, {"8 am", 8},
-            {"7am", 7}, {"7 am", 7},
-            {"6am", 6}, {"6 am", 6},
-        };
-        for (const auto& cp : amPatterns) {
-            if (input.find(cp.text) != std::string::npos) {
-                return static_cast<float>(cp.hour) + dayOffset;
             }
         }
 
@@ -2356,6 +2341,15 @@ namespace IntelEngine::Papyrus {
         }
         auto result = NPCIndex::GetSingleton()->ScanActorsWithPackages(formIds);
         return result;
+    }
+
+    std::vector<RE::Actor*> GetActorsWithPackages(RE::StaticFunctionTag*, std::vector<int> packageFormIDs) {
+        std::vector<RE::FormID> formIds;
+        formIds.reserve(packageFormIDs.size());
+        for (auto fid : packageFormIDs) {
+            formIds.push_back(static_cast<RE::FormID>(fid));
+        }
+        return NPCIndex::GetSingleton()->FindActorsWithPackages(formIds);
     }
 
     // ==========================================================================
@@ -4979,10 +4973,13 @@ namespace IntelEngine::Papyrus {
 
     RE::BSFixedString GetPreciseTimeDescriptionNative(RE::StaticFunctionTag*, float meetTimeHours, float currentGameTime) {
         float currentHours = std::fmod(currentGameTime * 24.f, 24.f);
+        // 24 and up is how the time parser says "tomorrow at (hours - 24)".
+        const bool nextDay = meetTimeHours >= 24.f;
+        if (nextDay) meetTimeHours = std::fmod(meetTimeHours, 24.f);
         float hoursUntil = meetTimeHours - currentHours;
         if (hoursUntil < 0) hoursUntil += 24.f;
 
-        bool tomorrow = (meetTimeHours < currentHours && hoursUntil > 1.f);
+        bool tomorrow = nextDay || (meetTimeHours < currentHours && hoursUntil > 1.f);
         std::string prefix = tomorrow ? "tomorrow " : "";
 
         int hour = static_cast<int>(meetTimeHours);
