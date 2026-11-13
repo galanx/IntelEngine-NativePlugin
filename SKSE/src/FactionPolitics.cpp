@@ -536,14 +536,15 @@ war_allowed:
         maxActiveWars_.store(std::clamp(readInt("max_active_wars", 2), 1, 5));
         warDeclarationCooldownDays_.store(readInt("war_declaration_cooldown_days", 7));
         moraleDecayPerTick_.store(readInt("morale_decay_per_tick", 2));
-        peIntegration_.store(readBool("pe_integration", true));
+        // Off by default: a settings file that does not name the key leaves Political Engine alone.
+        peIntegration_.store(readBool("pe_integration", false));
         PoliticalEngineBridge::GetSingleton()->SetEnabled(peIntegration_.load());
         peReactionsMoveRelations_.store(readBool("pe_reactions_move_relations", true));
 
-        logger::info("FactionPolitics: Settings loaded - enabled={}, tick={}h, maxDelta={}, maxWars={}, warCooldown={}d, moraleDecay={}",
+        logger::info("FactionPolitics: Settings loaded - enabled={}, tick={}h, maxDelta={}, maxWars={}, warCooldown={}d, moraleDecay={}, peIntegration={}",
                      enabled_.load(), tickIntervalHours_.load(),
                      maxRelationChangePerTick_.load(), maxActiveWars_.load(),
-                     warDeclarationCooldownDays_.load(), moraleDecayPerTick_.load());
+                     warDeclarationCooldownDays_.load(), moraleDecayPerTick_.load(), peIntegration_.load());
     }
 
     // =========================================================================

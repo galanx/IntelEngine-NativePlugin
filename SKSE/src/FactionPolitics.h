@@ -482,7 +482,10 @@ namespace IntelEngine {
         std::atomic<int> maxActiveWars_{2};
         std::atomic<int> warDeclarationCooldownDays_{7};
         std::atomic<int> moraleDecayPerTick_{2};
-        std::atomic<bool> peIntegration_{true};
+        // Off unless the player switches it on (settings.yaml `politics.pe_integration`, the MCM, the dashboard
+        // or SkyrimNet's settings page): another mod's campaign should not start feeding IntelEngine's
+        // politics just because both are installed.
+        std::atomic<bool> peIntegration_{false};
         std::atomic<bool> peReactionsMoveRelations_{true};
         std::mutex peMutex_;
         nlohmann::json pendingPE_ = nlohmann::json::object(), eligiblePE_ = nlohmann::json::object();

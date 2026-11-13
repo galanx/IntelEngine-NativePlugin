@@ -100,7 +100,7 @@ public:
     void WritePoliticalStateFile() {}
 private:
     std::atomic<bool> enabled_{true};
-    std::atomic<bool> peIntegration_{true};
+    std::atomic<bool> peIntegration_{false};
     std::atomic<bool> peReactionsMoveRelations_{true};
     std::atomic<bool> initialized_{false};
     bool configLoaded_ = false;
@@ -127,7 +127,15 @@ int main(int argc, char** argv) {
     assert(!politics.IsEnabled());
     assert(politics.IsInitialized());
     assert(politics.IsConfigLoaded());
-    assert(politics.GetPEIntegration());
+    // Off unless the file says otherwise (this file does not name the key).
+    assert(!politics.GetPEIntegration() && !PoliticalEngineBridge::GetSingleton()->enabled);
+    assert(politics.SetPEIntegration(true));
+    assert(politics.GetPEIntegration() && PoliticalEngineBridge::GetSingleton()->enabled);
+    {
+        FactionPolitics switchedOn;          // the choice is in the file now: a reload keeps it
+        switchedOn.LoadSettings();
+        assert(switchedOn.GetPEIntegration() && PoliticalEngineBridge::GetSingleton()->enabled);
+    }
     assert(politics.SetPEIntegration(false));
     assert(!politics.GetPEIntegration() && !PoliticalEngineBridge::GetSingleton()->enabled);
     assert(politics.GetPEReactionsMoveRelations());
