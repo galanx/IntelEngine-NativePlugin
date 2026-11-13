@@ -3097,6 +3097,26 @@ namespace IntelEngine {
         return json;
     }
 
+    std::vector<RE::Actor*> NPCIndex::FindActorsWithPackages(const std::vector<RE::FormID>& packageFormIDs) {
+        std::vector<RE::Actor*> result;
+        auto* player = RE::PlayerCharacter::GetSingleton();
+        int seen = 0;
+        ProcessUtils::ForEachLoadedActor([&](RE::Actor* actor) {
+            if (!actor || actor == player) return false;
+            if (actor->IsDead() || actor->IsDisabled()) return false;
+            ++seen;
+            auto* currentPkg = actor->GetCurrentPackage();
+            if (!currentPkg) return false;
+            const RE::FormID id = currentPkg->GetFormID();
+            if (id != 0 && std::find(packageFormIDs.begin(), packageFormIDs.end(), id) != packageFormIDs.end()) {
+                result.push_back(actor);
+            }
+            return false;
+        });
+        logger::debug("[Sweep] {} actors with an AI process, {} currently on an IntelEngine package", seen, result.size());
+        return result;
+    }
+
     void NPCIndex::NotifyStoryCooldown(RE::FormID formId, float gameTime) {
         std::unique_lock lock(m_mutex);
         m_storyCooldowns[formId] = gameTime;

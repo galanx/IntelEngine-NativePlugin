@@ -693,7 +693,7 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
 
 
   return (
-    <div className="director-tab p-3 space-y-4">
+    <div className="director-tab ie-page p-3 space-y-4">
       {/* Story Dispatch */}
       <section>
         {generateControls('story')}{pending?.form === 'story' && <small className="text-gray-400">Generating…</small>}{generateError && !pending && <small className="text-red-400">{generateError}</small>}

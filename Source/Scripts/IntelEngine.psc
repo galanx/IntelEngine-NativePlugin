@@ -479,7 +479,6 @@ String Function GetActorHoldName(Actor akActor) Global Native
 ; Get recent dialogue history for an NPC. Returns formatted string, empty if no dialogue.
 String Function GetRecentDialogue(Actor akActor, Int maxExchanges = 1) Global Native
 
-
 ; Check if an NPC knows the player (has dialogue, memories, or relationship data).
 Bool Function NPCKnowsPlayer(Actor akActor) Global Native
 
@@ -570,6 +569,10 @@ Int[] Function GetNPCCandidatePoolFormIDs() Global Native
 ; Scan loaded actors for those currently running one of the given packages.
 ; Returns JSON: [{"name":"...","formId":123,"pkgFormId":456},...]
 String Function ScanActorsWithPackages(Int[] packageFormIDs) Global Native
+
+; The same scan, returning the actors themselves (for Core.SweepStalePackages).
+Actor[] Function GetActorsWithPackages(Int[] packageFormIDs) Global Native
+
 
 ; Spawn leveled enemies at a location for quest system.
 ; Looks up vanilla ActorBases by EditorID (no CK properties needed).

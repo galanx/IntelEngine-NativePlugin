@@ -217,6 +217,8 @@ target_link_libraries(ReferenceGetterDispatchCheck PRIVATE CommonLibSSE::CommonL
 
 add_executable(ProximityDistanceCheck EXCLUDE_FROM_ALL tests/ProximityDistanceCheck.cpp)
 target_include_directories(ProximityDistanceCheck PRIVATE src)
+add_executable(ClockTimeCheck EXCLUDE_FROM_ALL tests/ClockTimeCheck.cpp)
+target_include_directories(ClockTimeCheck PRIVATE src)
 
 add_executable(PoliticalEngineReadJSONCheck EXCLUDE_FROM_ALL tests/PoliticalEngineReadJSONCheck.cpp)
 target_include_directories(PoliticalEngineReadJSONCheck PRIVATE src)
