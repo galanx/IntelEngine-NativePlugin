@@ -44,7 +44,7 @@ int main(int, char** argv) {
     // The game's settings as Core.BuildConfigJson sends them: every table key, at its default.
     json config = json::object();
     for (const Entry& e : Table()) {
-        if (e.kind == Kind::Bool) config[e.key] = e.def > 0.5;
+        if (e.kind == Kind::Bool) config[e.key] = e.inverted ? !(e.def > 0.5) : (e.def > 0.5);     // the game's side
         else config[e.key] = e.def;
     }
     config["taskConfirmPrompt"] = true;          // a key the table does not know is ignored
@@ -59,6 +59,9 @@ int main(int, char** argv) {
     assert(file["stories.reach_informant"] == "\"Same town (everyone)\"");
     assert(file["tasks.confirm_schedule_meeting"] == "\"Everyone\"");
     assert(file["stories.danger_zone_policy"] == "\"Block civilians only\"");
+    // "skip for followers" is false in the game: the page says followers can do it
+    assert(config["skipFollowerFetchPerson"] == false && file["tasks.followers_fetch_person"] == "true");
+    assert(file.count("tasks.no_follower_fetch_person") == 0);
     assert(file.count("tasks.taskConfirmPrompt") == 0);
     assert(SyncToFile(config, store) == 0);
 
@@ -75,10 +78,12 @@ int main(int, char** argv) {
     file["tasks.confirm_fetch_person"] = "\"Nobody\"";      // not one of the choices: the game keeps its value
     file["meetings.timeout_hours"] = "soon";                // not a number: the game keeps its value
     file["tasks.confirm_go_to_location"] = "2";             // a choice given by position
+    file["tasks.followers_fetch_person"] = "false";         // switched off on the page: the game must skip it
     auto changes = ApplyFromFile(config, store);
     std::map<std::string, std::pair<std::string, float>> byArg;
     for (const auto& c : changes) byArg[c.arg] = {c.event, c.value};
-    assert(changes.size() == 7);
+    assert(changes.size() == 8);
+    assert(byArg["skipFollowerFetchPerson"].second == 1.0f);
     assert(byArg["storyEnabled"].first == "IntelEngine_DashboardSetting" && byArg["storyEnabled"].second == 0.0f);
     assert(byArg["maxTasks"].second == 3.0f);
     assert(byArg["holdPolicyInformant"].second == 3.0f);
@@ -92,6 +97,7 @@ int main(int, char** argv) {
     //    (the two unreadable ones are rewritten from the game).
     config["storyEnabled"] = false; config["maxTasks"] = 3; config["holdPolicyInformant"] = 3; config["typeAmbush"] = false;
     config["typeNpcGossip"] = false; config["storyInterval"] = 168; config["confirmGoToLocation"] = 2;
+    config["skipFollowerFetchPerson"] = true;
     assert(ApplyFromFile(config, store).empty());
     assert(SyncToFile(config, store) == 2);      // the two unreadable ones: "Nobody" and "soon"
     assert(file["tasks.confirm_fetch_person"] == "\"Followers only\"");

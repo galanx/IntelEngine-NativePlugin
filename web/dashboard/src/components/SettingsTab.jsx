@@ -289,15 +289,16 @@ function SettingsTab({ config, onSettingChange, pluginConfig, onPluginConfigChan
         })}
       </Accordion>
 
-      {/* Skip Action for Followers */}
-      <Accordion title="Skip Action for Followers" isOpen={openSections.skipFollowers} onToggle={() => toggle('skipFollowers')}>
-        <p className="text-[10px] text-gray-500 mb-2">Silently block actions when performed by active followers</p>
+      {/* Actions followers can do. Stored as "skip for followers"; shown the other way round, because a list of
+          switches that are off under "Skip ..." read as "switched off for my followers". */}
+      <Accordion title="Actions Followers Can Do" isOpen={openSections.skipFollowers} onToggle={() => toggle('skipFollowers')}>
+        <p className="text-[10px] text-gray-500 mb-2">All on by default. Switch one off to keep your active followers out of that action (it is refused without a prompt).</p>
         {SKIP_FOLLOWER_ACTIONS.map(({ key, label }) => (
           <ToggleRow
             key={key}
             label={label}
-            value={config[key]}
-            onChange={v => onSettingChange(key, v)}
+            value={!config[key]}
+            onChange={v => onSettingChange(key, !v)}
           />
         ))}
       </Accordion>
