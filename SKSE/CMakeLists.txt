@@ -156,6 +156,7 @@ set(SOURCES
     src/BattleManager.cpp
     src/DialogueTracker.cpp
     src/SpeechTracker.cpp
+    src/SettingsBridge.cpp
     src/AsyncDispatch.cpp
     src/PoliticalEngineBridge.cpp
 )

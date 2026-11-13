@@ -41,6 +41,7 @@
 #include "DialogueTracker.h"
 #include "SkyrimNetAPI.h"
 #include "SpeechTracker.h"
+#include "SettingsBridge.h"
 #include "QuestStateTracker.h"
 #include "AsyncDispatch.h"
 #include "PoliticalEngineBridge.h"
@@ -104,6 +105,8 @@ namespace IntelEngine::Papyrus {
     bool IsNPCSpeechPending(RE::StaticFunctionTag*, RE::Actor*);
     float GetSecondsSinceNPCSpoke(RE::StaticFunctionTag*, RE::Actor*);
     std::int32_t GetSkyrimNetPackageApiVersion(RE::StaticFunctionTag*);
+    std::int32_t SyncPluginSettings(RE::StaticFunctionTag*, RE::BSFixedString);
+    std::int32_t ApplyPluginSettings(RE::StaticFunctionTag*, RE::BSFixedString);
 
     // Political system forward declarations
     int GetFactionRelation(RE::StaticFunctionTag*, RE::BSFixedString, RE::BSFixedString);
@@ -467,6 +470,8 @@ namespace IntelEngine::Papyrus {
         a_vm->RegisterFunction("IsNPCSpeechPending", SCRIPT_NAME, IsNPCSpeechPending); ++count;
         a_vm->RegisterFunction("GetSecondsSinceNPCSpoke", SCRIPT_NAME, GetSecondsSinceNPCSpoke); ++count;
         a_vm->RegisterFunction("GetSkyrimNetPackageApiVersion", SCRIPT_NAME, GetSkyrimNetPackageApiVersion); ++count;
+        a_vm->RegisterFunction("SyncPluginSettings", SCRIPT_NAME, SyncPluginSettings); ++count;
+        a_vm->RegisterFunction("ApplyPluginSettings", SCRIPT_NAME, ApplyPluginSettings); ++count;
 
         // Faction Politics Functions
         a_vm->RegisterFunction("GetFactionRelation", SCRIPT_NAME, GetFactionRelation); ++count;
@@ -2796,6 +2801,57 @@ namespace IntelEngine::Papyrus {
     // then unbound natives, and a script that calls one stops at that line.
     std::int32_t GetSkyrimNetPackageApiVersion(RE::StaticFunctionTag*) {
         return SkyrimNetAPI::GetPackageApiVersion ? static_cast<std::int32_t>(SkyrimNetAPI::GetPackageApiVersion()) : 0;
+    }
+
+    // The gameplay settings shared with SkyrimNet's plugin settings page (SettingsBridge.h). The file is
+    // config/plugins/IntelEngine/settings.yaml, read and written through DashboardConfig.
+    static SettingsBridge::Store SettingsFile() {
+        SettingsBridge::Store store;
+        store.read = [](const std::string& section, const std::string& name, std::string& value) {
+            return DashboardConfig::GetSingleton()->ReadSetting(section, name, value);
+        };
+        store.write = [](const std::string& section, const std::string& name, const std::string& yamlValue) {
+            return DashboardConfig::GetSingleton()->WriteYamlValue(section, name, yamlValue);
+        };
+        return store;
+    }
+
+    // The game's settings (Core.BuildConfigJson) go into the file where they differ. Returns how many were written.
+    std::int32_t SyncPluginSettings(RE::StaticFunctionTag*, RE::BSFixedString configJson) {
+        const auto config = nlohmann::json::parse(configJson.c_str(), nullptr, false);
+        if (!config.is_object()) return 0;
+        const int written = SettingsBridge::SyncToFile(config, SettingsFile());
+        if (written > 0) logger::info("SettingsBridge: {} setting(s) written to settings.yaml", written);
+        return written;
+    }
+
+    // The file's settings go into the game where they differ from `configJson`: one setting event each, the
+    // same events the dashboard sends, delivered on the game thread. Politics and the dashboard keys read the
+    // file themselves. Returns how many settings change.
+    std::int32_t ApplyPluginSettings(RE::StaticFunctionTag*, RE::BSFixedString configJson) {
+        FactionPolitics::GetSingleton()->LoadSettings();
+        DashboardConfig::GetSingleton()->Reload();
+        const auto config = nlohmann::json::parse(configJson.c_str(), nullptr, false);
+        if (!config.is_object()) return 0;
+        auto changes = SettingsBridge::ApplyFromFile(config, SettingsFile());
+        if (changes.empty()) return 0;
+        const auto count = static_cast<std::int32_t>(changes.size());
+        logger::info("SettingsBridge: {} setting(s) taken from settings.yaml", count);
+        if (auto* task = SKSE::GetTaskInterface()) {
+            task->AddTask([changes = std::move(changes)] {
+                auto* source = SKSE::GetModCallbackEventSource();
+                if (!source) return;
+                for (const auto& change : changes) {
+                    SKSE::ModCallbackEvent event{};
+                    event.eventName = change.event;
+                    event.strArg = change.arg;
+                    event.numArg = change.value;
+                    event.sender = nullptr;
+                    source->SendEvent(&event);
+                }
+            });
+        }
+        return count;
     }
 
     int EnableMagelightGamepadKeys(RE::StaticFunctionTag*, int view) {
