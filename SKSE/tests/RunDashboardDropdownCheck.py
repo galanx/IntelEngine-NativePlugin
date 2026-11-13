@@ -71,6 +71,8 @@ SCRIPT = r"""
     window.magelight = { send: (name, value) => escapeCapture.push([name, value]) };
     for (const name of ['dispatchStory','dispatchNpcSocial','dispatchPolitics','executeAction','cancelTask','changePluginConfig','toggleAction','generateDirector'])
       window['onDashboard_' + name] = json => payloads.push([name, json]);
+    window.refreshRequests = 0; window.refreshState = null;
+    window.onRequestRefresh = () => { window.refreshRequests++; if (window.refreshState) window.updateFullState(window.refreshState); };
     window.updateFullState(JSON.stringify({config:{}, pluginConfig:{'ui.scale':1},
       tasks:[{index:0,state:0,cooldownRemaining:30}], scheduled:[],
       story:{enabled:true}, quest:{active:true}, social:{enabled:true},
@@ -81,6 +83,76 @@ SCRIPT = r"""
     await pause();
     const reloadReady = location.hash === '#director_live_polish2' && localStorage.getItem('__directorLivePolish2Reload') === 'ready';
     if (!reloadReady) { clickText('Director'); await pause(); }
+    if (location.hash === '#hotkey_text_focus') {
+      const focused = [];
+      window.onDashboard_textFocus = json => focused.push(JSON.parse(json).focused);
+      const input = document.querySelector('input'), textarea = document.querySelector('textarea');
+      const rich = document.createElement('div'); rich.contentEditable = 'true'; rich.textContent = 'editable'; document.body.append(rich);
+      for (const element of [input, textarea, rich]) {
+        element.focus(); await pause();
+        check(focused.at(-1) === true, 'editable focus was not reported to native');
+        element.dispatchEvent(new KeyboardEvent('keydown', {key:'0', bubbles:true}));
+        element.blur(); await pause();
+        check(focused.at(-1) === false, 'blur did not release native hotkey suppression');
+      }
+      input.focus(); await pause(); textarea.focus(); await pause();
+      check(focused.at(-1) === true, 'editable-to-editable focus released suppression');
+      textarea.blur(); await pause(); rich.remove();
+      document.getElementById('result').textContent=JSON.stringify({status:'PASS',checks:['input_textarea_contenteditable_focus_bridge','blur_releases','editable_transfer']}); return;
+    }
+    if (location.hash === '#picker_rank') {
+      await window.updateFullState(JSON.stringify({config:{},pluginConfig:{},tasks:[],scheduled:[],story:{enabled:true},social:{enabled:true},knownNpcs:['Snow-Shod','Asgeir Snow-Shod','Hod'],loadedNpcs:[{formId:1,name:'Asgeir Snow-Shod'}],actions:[]})); await pause();
+      const npc = document.querySelector('input[placeholder="e.g. Saadia"]');
+      await fill('input[placeholder="e.g. Saadia"]','Hod');
+      npc.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true})); await pause();
+      check(npc.value==='Hod','typing Hod and pressing Enter selected the wrong NPC');
+      await fill('input[placeholder="e.g. Saadia"]','Ho'); await fill('input[placeholder="e.g. Saadia"]','Hod');
+      const options = [...document.querySelectorAll('[role=option]')];
+      npc.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowDown',bubbles:true})); await pause();
+      check(getComputedStyle(options[1]).backgroundColor!==getComputedStyle(options[0]).backgroundColor,'ArrowDown did not visibly highlight the next NPC');
+      document.getElementById('result').textContent=JSON.stringify({status:'PASS',checks:['picker_rank','picker_keyboard_highlight']}); return;
+    }
+    if (location.hash === '#status_visuals') {
+      const generate = [...document.querySelectorAll('section')][0].querySelector('button[data-expand-section]');
+      generate.click(); await pause();
+      check([...document.querySelectorAll('small')].some(e=>e.textContent==='Generating…'&&e.className.includes('text-gray-400')),'Generate status is not gray');
+      const request=JSON.parse(payloads.filter(([name])=>name==='generateDirector').at(-1)[1]);
+      window.directorGenerateResult(JSON.stringify({requestId:request.requestId,form:request.form,ok:false,error:'test error'})); await pause();
+      check([...document.querySelectorAll('small')].some(e=>e.textContent==='test error'&&e.className.includes('text-red-400')),'Generate error is not red');
+      document.getElementById('result').textContent=JSON.stringify({status:'PASS',checks:['status_visuals']}); return;
+    }
+    if (location.hash === '#replacement_confirm') {
+      const fixture = (storyGeneration, socialGeneration) => ({config:{},pluginConfig:{},tasks:[{index:7,state:1,agentName:'Unrelated'}],scheduled:[],story:{enabled:true,isActive:true,generation:storyGeneration,activeNPC:'Old Story',activeType:'seek_player'},social:{enabled:true,isActive:true,generation:socialGeneration,traveler:'Old Traveler',target:'Old Target',type:'npc_interaction'},loadedNpcs:[{formId:1,name:'New Story'},{formId:2,name:'New Traveler'},{formId:3,name:'New Target'}],actions:[]});
+      const section = i => document.querySelectorAll('section')[i-1], button = i => [...section(i).querySelectorAll('button')].find(e=>/Replace|Dispatch|confirm replacement/.test(e.textContent));
+      const sent = name => payloads.filter(([n])=>n===name), click = async i => { check(button(i) && !button(i).disabled,'replacement submit unavailable'); button(i).click(); await pause(); };
+      const idle = {...fixture(0,0),story:{enabled:true,isActive:false},social:{enabled:true,isActive:false}};
+      await window.updateFullState(JSON.stringify(idle)); await pause();
+      await fill('input[placeholder="e.g. Saadia"]','New Story',section(1)); await fill('textarea','Initial story',section(1));
+      window.refreshState=JSON.stringify(fixture(10,11)); const storyRefreshes=window.refreshRequests; await click(1);
+      check(window.refreshRequests===storyRefreshes+1 && button(1).textContent.includes('Replace Story'),'Story dispatch did not request or receive refreshed active state');
+      const storyDispatches=sent('dispatchStory').length; await fill('textarea','Replace refreshed story',section(1)); await click(1);
+      check(sent('dispatchStory').length===storyDispatches,'first refreshed click dispatched instead of arming confirmation');
+      await click(1);
+      check(JSON.parse(sent('dispatchStory').at(-1)[1]).replaceGeneration==='10','refreshed Story replacement did not dispatch on confirmation');
+      window.refreshState=JSON.stringify(fixture(12,13)); await window.updateFullState(JSON.stringify({...idle,story:fixture(12,13).story})); await pause();
+      await fill('input[placeholder="e.g. Mikael"]','New Traveler',section(2)); await fill('input[placeholder="e.g. Sven"]','New Target',section(2)); await fill('textarea','Initial social trip',section(2)); await fill('input[placeholder="e.g. confronted Sven about stolen goods"]','discussed the road',section(2)); await fill('input[placeholder="e.g. was accused by Mikael of stealing goods"]','heard about the road',section(2));
+      const socialRefreshes=window.refreshRequests; await click(2);
+      check(window.refreshRequests===socialRefreshes+1 && button(2).textContent.includes('Replace Social'),'Social dispatch did not request or receive refreshed active state');
+      await fill('textarea','Replace refreshed social',section(2)); await fill('input[placeholder="e.g. confronted Sven about stolen goods"]','discussed the updated road'); await fill('input[placeholder="e.g. was accused by Mikael of stealing goods"]','heard the updated road'); await click(2); await click(2);
+      check(JSON.parse(sent('dispatchNpcSocial').at(-1)[1]).replaceGeneration==='13','refreshed Social replacement did not dispatch on confirmation');
+      payloads.length=0; window.refreshState=null;
+      await window.updateFullState(JSON.stringify(fixture(4,8))); await pause();
+      await fill('input[placeholder="e.g. Saadia"]','New Story',section(1)); await fill('textarea','A replacement story',section(1)); await click(1);
+      check(!sent('dispatchStory').length && !sent('cancelTask').length,'Story first click dispatched or cancelled a task');
+      await fill('textarea','Changed story request',section(1)); await click(1); check(!sent('dispatchStory').length,'changed Story request retained confirmation');
+      await click(1); check(JSON.parse(sent('dispatchStory').at(-1)[1]).replaceGeneration==='4' && !sent('cancelTask').length,'Story replacement payload or no-cancel contract failed');
+      await fill('input[placeholder="e.g. Mikael"]','New Traveler',section(2)); await fill('input[placeholder="e.g. Sven"]','New Target',section(2)); await fill('textarea','A replacement social trip',section(2)); await fill('input[placeholder="e.g. confronted Sven about stolen goods"]','discussed the road',section(2)); await fill('input[placeholder="e.g. was accused by Mikael of stealing goods"]','heard about the road',section(2)); check(!button(2).disabled,'valid Social replacement disabled'); await click(2);
+      check(!sent('dispatchNpcSocial').length,'Social first click dispatched');
+      await window.updateFullState(JSON.stringify(fixture(4,9))); await pause(); await click(2);
+      check(!sent('dispatchNpcSocial').length,'changed active Social dispatch retained confirmation');
+      await click(2); check(JSON.parse(sent('dispatchNpcSocial').at(-1)[1]).replaceGeneration==='9' && !sent('cancelTask').length,'Social replacement payload or no-cancel contract failed');
+      document.getElementById('result').textContent=JSON.stringify({status:'PASS',checks:['replacement_confirm','dispatch_refresh_replacement']}); return;
+    }
     if (location.hash === '#nearby_picks') {
       Math.random=()=>0.999;
       const fixture = {config:{},pluginConfig:{'ui.scale':1},tasks:[],scheduled:[],story:{enabled:true},social:{enabled:true},
@@ -101,15 +173,37 @@ SCRIPT = r"""
       control(4,'Generate').click(); await pause();
       check(requests().at(-1).fields.npcName==='Natch [Merchant]' && requests().at(-1).fields.targetName==='Nearby Guard','actor pre-pick duplicated a typed target');
       await stopClear(4);
-      window.updateFullState(JSON.stringify({...fixture,loadedNpcs:[fixture.loadedNpcs[0]]})); await pause();
+      window.updateFullState(JSON.stringify({...fixture,loadedNpcs:[fixture.loadedNpcs[0],{formId:3,name:'Beaunois Odette [Beggar]'}],knownNpcs:['Distant Person','Beaunois Odette [Beggar]']})); await pause();
       await choose('Story type','Informant'); control(1,'Generate').click(); await pause();
-      check(requests().at(-1).fields.npcName==='Natch [Merchant]' && requests().at(-1).blank.includes('subject'),'exhausted nearby pool fell back to known NPCs');
-      let audit=await reply({subject:'nAtCh',narration:'An individual known as [Subject NPC] was seen',gossip:'[Subject NPC] argued'});
-      check(audit.rejected.subject==='Duplicate NPC' && audit.rejected.narration==='Placeholder text' && audit.rejected.gossip==='Placeholder text','duplicate or placeholder rejection missing: '+JSON.stringify(audit));
-      check(host(1).querySelector('textarea').value==='' && requests().at(-1).followUp && requests().at(-1).blank.includes('gossip'),'rejected text was applied or follow-up missing');
+      const generated=requests().at(-1).fields, tagged=generated.npcName, subject=generated.subject;
+      let audit=await reply({narration:`${tagged} approaches`,gossip:`${subject} was seen`,npcName:tagged,subject});
+      check(audit.applied.includes('narration') && audit.applied.includes('gossip') &&
+        host(1).querySelector('textarea').value===`${tagged} approaches` && tagged.includes('[') && subject.includes('['),
+        'known tagged names were rejected or altered: '+JSON.stringify(audit));
+      await stopClear(1); await choose('Story type','Informant'); control(1,'Generate').click(); await pause();
+      audit=await reply({narration:'An [NPC Name] approaches',gossip:'A [no match] rumor',subject:requests().at(-1).fields.npcName});
+      check(audit.rejected.narration==='Placeholder text' && audit.rejected.gossip==='Placeholder text' &&
+        audit.rejected.subject==='Duplicate NPC','unknown bracket text or subject NPC rejection changed');
+      await stopClear(1); await choose('Story type','Informant'); control(1,'Generate').click(); await pause();
+      const wrongApproach=await reply({narration:'Narfi approached <player name> with news of a debt',subject:'Nearby Guard',sender:'Narfi',gossip:'argued over a debt'});
+      check(wrongApproach.rejected.narration==='Wrong actor','other NPC approach narration was accepted');
+      audit=await reply({narration:'Narfi told <actor> about a debt',subject:'Nearby Guard',sender:'Narfi',gossip:'argued over a debt'});
+      check(audit.applied.includes('narration'),'NPC narration without an approach verb was rejected');
+      await stopClear(1); await choose('Story type','Informant'); control(1,'Generate').click(); await pause();
+      const actor=requests().at(-1).fields.npcName;
+      audit=await reply({narration:`${actor} heard from Narfi about a debt`,subject:'Nearby Guard',sender:'Narfi',gossip:'argued over a debt'});
+      check(audit.applied.includes('narration'),'chosen actor prefix or later Narfi mention was rejected');
       await reply({subject:'Distant Person',narration:'Wanted to share news',gossip:'argued over a debt'});
-      check(host(1).querySelector('textarea').value==='Wanted to share news','follow-up did not refill rejected text');
+      await stopClear(1); await choose('Story type','Informant');
+      control(1,'Generate').click(); await pause(); const reroll=requests().at(-1), countBeforeReject=requests().length;
+      window.directorGenerateResult(JSON.stringify({requestId:reroll.requestId,form:'story',ok:true,
+        fields:{narration:'Jon discussed a debt',subject:'Carlotta Valentia'},rejected:{gossip:'Placeholder NPC reference'}})); await pause();
+      audit=outcomeFor(reroll.requestId);
+      check(host(1).querySelector('textarea').value==='Jon discussed a debt' &&
+        audit.rejected.gossip==='Placeholder NPC reference' && !audit.applied.includes('gossip') &&
+        requests().length===countBeforeReject, 'native rejection retried, discarded a valid sibling, or applied rejected gossip');
       await stopClear(1);
+      window.updateFullState(JSON.stringify({...fixture,loadedNpcs:[fixture.loadedNpcs[0]]})); await pause();
       control(2,'Generate').click(); await pause();
       check(requests().at(-1).blank.includes('npc2Name'),'Social exhausted pool did not stay blank');
       audit=await reply({npc2Name:'nAtCh',socialType:'npc_interaction',narration:'Met over a debt',fact1:'asked about a debt',fact2:'discussed repayment'});
@@ -309,6 +403,31 @@ SCRIPT = r"""
       control(4,'Execute Action').click(); await pause();
       check(payloads.at(-1)[0]==='executeAction' && JSON.parse(payloads.at(-1)[1]).npcFormId===4,
         'Generate changed the selected duplicate actor FormID');
+      for (const generatedNpc of ['Natch [Merchant]', 'Twin [Guard]']) {
+        control(4,'Generate').click(); await pause();
+        check(requests().at(-1).fields.npcName==='Twin [Guard]','Generate lost selection changed after mount');
+        await reply('action',{npcName:generatedNpc,destination:'Whiterun',reason:'Wanted another trip'});
+        const execute=host(4).querySelector('button.w-full'); check(execute && !execute.disabled,'Generated Action not executable'); execute.click(); await pause();
+        check(payloads.at(-1)[0]==='executeAction' && JSON.parse(payloads.at(-1)[1]).npcFormId===4,'Generate replaced selected FormID with generated actor');
+      }
+      control(4,'Clear').click(); await pause(); await choose('Action','GoToLocation');
+      await fill('[aria-label="Action NPC"]','Distant Person',host(4));
+      const beforeUnmatched=requests().length, executions=payloads.filter(([name])=>name==='executeAction').length;
+      control(4,'Generate').click(); await pause();
+      if (requests().length>beforeUnmatched) await reply('action',{npcName:'Natch [Merchant]',destination:'Riften',reason:'Wanted to travel'});
+      check(requests().length===beforeUnmatched,'Unpicked typed Action actor was random-filled by Generate');
+      check(button('Action NPC').value==='Distant Person' && host(4).querySelector('button.w-full').disabled,'Typed Action query lost or became executable');
+      await fill('[aria-label="Action NPC"]','Distant',host(4)); await fill('[aria-label="Action NPC"]','Distant Person',host(4));
+      check(host(4).querySelector('[role=listbox]')?.textContent.includes('no nearby NPC matches'),'Action empty-match feedback missing');
+      host(4).querySelector('button.w-full').click(); await pause();
+      check(payloads.filter(([name])=>name==='executeAction').length===executions,'Unpicked far-away performer was submitted');
+      document.querySelector('[aria-label="Clear Action NPC"]').click(); await pause(); control(4,'Generate').click(); await pause();
+      check(requests().length===beforeUnmatched+1 && button('Action NPC').value==='Natch [Merchant]','Cleared Action query did not restore nearby auto-pick');
+      control(4,'Stop').click(); await pause(); control(4,'Clear').click(); await pause();
+      await choose('Action NPC','Natch [Merchant]'); await choose('Action','GoToLocation');
+      window.updateFullState(JSON.stringify({config:{},pluginConfig:{},tasks:[],scheduled:[],loadedNpcs:[{formId:2,name:'Twin [Guard]'}],actions:[{name:'GoToLocation'}]})); await pause();
+      const beforeMissing=requests().length; control(4,'Generate').click(); await pause();
+      check(requests().length===beforeMissing && JSON.parse(localStorage.getItem('intelengine.director.drafts')).action[0]==='1' && host(4).querySelector('button.w-full').disabled,'Missing selected FormID was replaced');
       document.getElementById('result').textContent=JSON.stringify({status:'PASS',checks:['action_generate','name_snapping'],requests:requests().length});
       return;
     }
@@ -565,7 +684,7 @@ SCRIPT = r"""
       await choose('Story type', 'Message');
       check(text().includes('Sends a nearby courier to deliver a message from the selected NPC.') && text().includes('Why the sender wanted contact.'), 'message hints did not replace road hints');
       check(!text().includes('Where they are heading.') && !text().includes('Why they are travelling'), 'road hints survived type switch');
-      check(text().includes('Optional. If set with meetTime, creates a meeting invitation.'), 'message destination hint missing');
+      check(text().includes('Optional. With a Meeting time, creates a meeting invitation.'), 'message destination hint missing');
       story().querySelector('summary button').click(); await pause();
       const message = JSON.parse(payloads.at(-1)[1]);
       check(message.schema.narration.hint.includes('Why the sender wanted contact.') && !message.schema.narration.hint.includes('travelling'), 'Generate retained previous type guidance');
@@ -593,7 +712,7 @@ SCRIPT = r"""
       const cards = [...document.querySelectorAll('.slot-card')];
       check(cards.find(e=>e.textContent.includes('Traveling') && e.textContent.includes('Courier'))?.textContent.includes('Travel (Jog)'), 'task card missing matched package type');
       check(!cards.find(e=>e.textContent.includes('No package'))?.textContent.includes('Travel (Jog)'), 'unmatched task inherited package type');
-      const section = [...document.querySelectorAll('details')].find(e=>e.querySelector('summary')?.textContent.includes('Other IE packages'));
+      const section = [...document.querySelectorAll('details')].find(e=>e.querySelector('summary')?.textContent.includes('IE packages'));
       check(section && section.open, 'orphan packages missing collapsible section');
       check(section.querySelectorAll('.slot-card').length === 1 && section.textContent.includes('Sandbox') && !section.textContent.includes('Travel (Jog)'), 'package/task identity partition failed');
       section.querySelector('summary').click(); await pause();
@@ -603,7 +722,7 @@ SCRIPT = r"""
       check(payloads.length === 1 && payloads[0][0] === 'removePackages' && JSON.parse(payloads[0][1]).formId === 108197, 'Remove sent wrong action or identity');
       check(section.querySelector('button').disabled && section.querySelector('button').textContent === 'Removing\u2026', 'pending removal state missing');
       push([packages[0]]); await pause();
-      check(![...document.querySelectorAll('h2')].some(e=>e.textContent === 'Other IE packages'), 'empty orphan section remains visible');
+      check(section.isConnected && section.textContent.includes('No NPCs currently running IntelEngine packages.') && !section.querySelector('.slot-card'), 'empty packages section hidden or missing empty state');
       push(packages); await pause();
       const remove = [...document.querySelectorAll('button')].find(e=>e.textContent === 'Remove');
       check(remove && !remove.disabled, 'server-confirmed removal did not clear pending state');
@@ -1358,11 +1477,12 @@ SCRIPT = r"""
     await fill('input[placeholder="e.g. Mikael"]','Mikael');
     await fill('input[placeholder="e.g. Sven"]','Sven');
     await fill('section:nth-of-type(2) textarea','Social proof');
+    await filterPick('Social type','Gossip'); // the Gossip field exists only once the type is picked
     const gossipLabel=[...document.querySelectorAll('section:nth-of-type(2) label')].find(e=>e.textContent.trim().startsWith('Gossip'));
     const gossipControl=gossipLabel?.parentElement?.querySelector('input,textarea');
     Object.getOwnPropertyDescriptor(gossipControl.tagName==='TEXTAREA'?HTMLTextAreaElement.prototype:HTMLInputElement.prototype,'value').set.call(gossipControl,'heard a rumor about a shipment');
     gossipControl.dispatchEvent(new Event('input',{bubbles:true})); await pause();
-    await filterPick('Social type','Gossip'); clickText('Dispatch Social'); await pause();
+    clickText('Dispatch Social'); await pause();
     await fill('input[placeholder="e.g. StormcloakFaction"]','StormcloakFaction');
     await fill('input[placeholder="e.g. ThalmorFaction"]','ThalmorFaction');
     await fill('section:nth-of-type(3) textarea','Politics proof');
@@ -1476,45 +1596,12 @@ SCRIPT = r"""
         {index:4,state:1,agentName:'Guard 1',agentFormId:108197}
       ])); await pause();
       const submit = section => document.querySelector(`section:nth-of-type(${section}) button.w-full`);
-      const arm = async (section, expectedLabel) => {
-        const count = payloads.length;
-        submit(section).click(); await pause();
-        check(payloads.length === count && submit(section).textContent.trim() === 'Busy — you sure?',
-          `busy_confirm_cancel_dispatch: first ${expectedLabel} click dispatched instead of confirming`);
-      };
       const confirm = async (section, expected) => {
         const count = payloads.length;
         submit(section).click(); await pause();
         check(JSON.stringify(payloads.slice(count).map(([name,json])=>[name,JSON.parse(json)])) === JSON.stringify(expected),
           'busy_confirm_cancel_dispatch: cancel/dispatch order or payload changed: '+JSON.stringify(payloads.slice(count)));
       };
-      const setSocialField = (name,value) => {
-        const control=[...document.querySelectorAll('section:nth-of-type(2) label')].find(e=>e.textContent.trim().startsWith(name))?.parentElement?.querySelector('input,textarea');
-        Object.getOwnPropertyDescriptor(control.tagName==='TEXTAREA'?HTMLTextAreaElement.prototype:HTMLInputElement.prototype,'value').set.call(control,value);
-        control.dispatchEvent(new Event('input',{bubbles:true}));
-      };
-      await choose('Story type','Seek Player');
-      await fill('input[placeholder="e.g. Saadia"]',' nazeem ');
-      await fill('section:nth-of-type(1) textarea','Busy story');
-      await arm(1,'Story');
-      await fill('input[placeholder="e.g. Saadia"]','Saadia');
-      check(submit(1).textContent.trim()==='Dispatch Story','busy_confirm_cancel_dispatch: Story NPC change retained confirmation');
-      await fill('input[placeholder="e.g. Saadia"]',' nazeem ');
-      await arm(1,'Story');
-      await confirm(1,[['cancelTask',{slot:2}],['dispatchStory',{npcName:'nazeem',storyType:'seek_player',narration:'Busy story'}]]);
-      await choose('Social type','Gossip');
-      for (const [first,second,slots] of [['Nazeem','Sven',[2]],['Mikael','Nazeem',[2]],['Nazeem','Guard 1',[2,4]]]) {
-        await fill('input[placeholder="e.g. Mikael"]',first);
-        await fill('input[placeholder="e.g. Sven"]',second);
-        await fill('section:nth-of-type(2) textarea','Busy social');
-        setSocialField('Gossip','heard a rumor about a shipment');
-        await arm(2,'Social');
-        await fill('input[placeholder="e.g. Sven"]','Saadia');
-        check(['Dispatch Social','Queued'].includes(submit(2).textContent.trim()),'busy_confirm_cancel_dispatch: Social NPC change retained confirmation');
-        await fill('input[placeholder="e.g. Sven"]',second);
-        await arm(2,'Social');
-        await confirm(2,[...slots.map(slot=>['cancelTask',{slot}]),['dispatchNpcSocial',{npc1Name:first,npc2Name:second,socialType:'npc_gossip',narration:'Busy social',gossip:'heard a rumor about a shipment'}]]);
-      }
       await choose('Action NPC','Nazeem'); await choose('Action','ChangeSpeed');
       await choose('New speed','Jog');
       // ChangeSpeed/CancelCurrentTask act on the busy task: one click, no pre-cancel.

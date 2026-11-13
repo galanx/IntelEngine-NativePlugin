@@ -1,7 +1,7 @@
 # IntelEngine
 ### NPC Autonomy, Faction Politics & Player-Driven Task Framework for SkyrimNet
 
-> **Compatibility:** IntelEngine 3.7.1 requires **SkyrimNet Beta 27** or newer (its travel prompt uses the `get_place_names` decorator added in Beta 27); 3.5.1–3.6.x required Beta 25. Beta 26 and earlier are incompatible with 3.7.1.
+> **Compatibility:** IntelEngine 3.8.0 requires **SkyrimNet Beta 27** or newer (its travel prompt uses the `get_place_names` decorator added in Beta 27); 3.5.1–3.6.x required Beta 25. Beta 26 and earlier are incompatible with 3.8.0.
 > The 3.6.0 native build includes SE/AE/VR. Tested runtimes: Skyrim **1.6.1170.0** and **1.7.104.0**. Skyrim VR **1.4.15** should work and was partly tested. Skyrim SE **1.5.x**: untested; **1.6.640.0** and **1.7.99.0** are also untested targets.
 >
 > This repository carries a compatibility update for current SkyrimNet releases. IntelEngine was originally created by [Galanx](https://github.com/galanx).
@@ -74,14 +74,14 @@ Without any player input, NPCs autonomously:
 - **Offer quests** — bounty hunts, rescue missions, item retrieval, and **faction war battles**
 - **Interact with each other** independently — arguments, deals, whispered conspiracies
 
-### Part 3 — Faction Politics (NEW in v3.0)
+### Part 3 — Faction Politics
 
 A living political system where 9 factions (configurable) scheme, trade, and wage war:
 
 - **Political DM** generates events every 6 game hours — trade deals, espionage, border skirmishes, assassinations, war declarations, and surrenders
 - **Player standing** with each faction rises and falls based on your actions — fight for a faction, betray them, commit crimes in their territory
 - **Faction wars** with morale, army strength, off-screen battles, and **player-present battles** with 5 waves of spawned soldiers (22 per side)
-- **Faction quests** — when your standing is 20+ with a faction, they call on you for combat missions, rescue operations, and full-scale battles that affect war outcomes
+- **Faction quests** — when your standing is 40+ with a faction, they call on you for combat missions, rescue operations, and full-scale battles that affect war outcomes (battles you happen upon: you join automatically at standing 20+)
 - **Political awareness** — NPCs know about recent political events and react to them in conversation
 - **In-game dashboard** (Magelight UI recommended, PrismaUI fallback) with a Politics tab showing all faction relations, active wars, and player standings
 
@@ -123,7 +123,7 @@ NPCs understand natural time expressions:
 
 **Natural arrival** — The NPC waits at the meeting point, idling naturally — sitting, leaning, looking around. When you arrive, the meeting is live. Walk away, and it ends. No arbitrary timer. No "press E to end meeting." Just proximity.
 
-**No-shows are remembered.** If you never arrive, the NPC waits until their patience runs out (configurable, default 3 game hours), then leaves. They remember you didn't show — and it colors future interactions differently than a meeting that went well.
+**No-shows are remembered.** If you never arrive, the NPC waits until their patience runs out (configurable, default 5 game hours), then leaves. They remember you didn't show — and it colors future interactions differently than a meeting that went well.
 
 **Lateness is tracked.** The NPC knows if they arrived late (pathfinding trouble, long distance). You know if the player was late. The meeting outcome — success, late arrival, or no-show — persists in the NPC's memory.
 
@@ -170,7 +170,7 @@ Three travel speeds — **walk**, **jog**, or **run** — chosen based on urgenc
 
 The NPC walks to the target — **anywhere in Skyrim** — has a brief exchange, and escorts them back on foot. Ask someone in Whiterun to fetch an NPC living in Riverwood, and they'll walk the road, find them, and walk back together. The target doesn't need to be nearby, loaded, or even in the same hold. IntelEngine's C++ NPC index locates actors across the entire game world, including unloaded cells.
 
-When they arrive, the fetched person **lingers naturally** — sitting on furniture, leaning against walls, idling in place. They behave like someone who was asked to come over, not a mannequin planted in front of you. They stay as long as you're nearby. Walk away, and they return to their routine.
+When they arrive, the fetched person **lingers naturally** — sitting on furniture, leaning against walls, idling in place. They behave like someone who was asked to come over, not a mannequin planted in front of you. They stay as long as you're nearby. Walk away, and they return to their routine. Physical stopping and the moving-target latency allowance remain unverified live.
 
 NPC names are matched with **typo tolerance** — Levenshtein distance matching means *"Adiranne"* still finds Adrianne. Failed searches return suggestions.
 
@@ -254,10 +254,10 @@ When an NPC is supposed to leave a location, IntelEngine verifies they actually 
 
 ## NPC Memory — Awareness Prompts
 
-IntelEngine injects six **SkyrimNet awareness prompts** into every NPC's character bio. These render live game state as natural-language context the AI sees on every dialogue cycle. NPCs don't just execute tasks — they **know** what they've done, what they're doing, and what they've committed to.
+IntelEngine injects eight **SkyrimNet bio submodules** into every NPC's character bio. These render live game state as natural-language context the AI sees on every dialogue cycle. NPCs don't just execute tasks — they **know** what they've done, what they're doing, and what they've committed to.
 
 ### Task Awareness
-NPCs know their current task — *"traveling to Dragonsreach"*, *"delivering a message to Nazeem"*, *"returning with Adrianne"* — and maintain a timestamped history of completed tasks. *"I fetched Ysolda earlier today. Delivered a message to the Jarl yesterday."*
+NPCs know their current task — *"traveling to Dragonsreach"*, *"delivering a message to Nazeem"*, *"returning with Adrianne"* — and maintain a timestamped history of completed tasks. *"I fetched Ysolda earlier today. Delivered a message to the Jarl yesterday."* Task-outcome evidence is offline/compiled; the run3 raw result spelling was not logged, so the inverse-cause diagnosis remains unproven.
 
 ### Schedule Awareness
 NPCs know their commitments — *"I'm meeting someone at the Bannered Mare this evening"* — and how long until departure. Active meetings, pending schedules, and en-route status are all visible to the NPC's AI.
@@ -274,6 +274,12 @@ Everything the NPC learned through story events — gossip heard, ambush outcome
 ### Gossip Network
 Both rumors the NPC has heard (and from whom) and rumors they've shared (and to whom). Creates a visible web of social information — *"Ysolda told me that Nazeem was seen lurking near the warehouse."*
 
+### Political Awareness
+NPCs know the recent political events, wars and faction standings that concern their own faction (or the territory they are in). Leaders and members see their faction's events; public events reach everyone; secret ones only reach the factions involved. Faction members also know how their faction views you.
+
+### Arrival Purpose
+When an NPC has travelled to find you, they remember why they came, so their first words are about that errand.
+
 ---
 
 ## Concurrency & Persistence
@@ -288,7 +294,7 @@ Both rumors the NPC has heard (and from whom) and rumors they've shared (and to 
 
 ## MCM Configuration
 
-Three pages in the SkyUI Mod Configuration Menu:
+Four pages in the SkyUI Mod Configuration Menu:
 
 ### Active Tasks
 Real-time view of all 5 task slots — what each NPC is doing, where, and current status. Clear individual tasks or reset everything.
@@ -303,9 +309,12 @@ View all pending scheduled tasks with times and targets. Cancel individually or 
 | Debug Mode | Off | On/Off | Shows IE debug messages as in-game notifications (always logged to Papyrus.0.log). |
 | Max Concurrent Tasks | 5 | 1-5 | How many NPCs can be active at once |
 | Default Wait Hours | 48 | 6-168 | How long NPCs wait at destinations |
-| Task Confirmation | On | On/Off | Prompt before executing tasks |
+| Action Confirmation Prompts | Followers Only (Schedule Meeting: Everyone) | Disabled / Followers Only / Everyone | Set per action. With Magelight the prompt is a Magelight popup. Director actions never prompt |
 | Report Back After Delivery | On | On/Off | Messengers narrate delivery completion |
-| Meeting Timeout | 3 hrs | 1-12 | How long NPCs wait at meeting spots |
+| Meeting Timeout | 5 hrs | 1-12 | How long NPCs wait at meeting spots |
+
+### Hold Restrictions
+Per story type (Seek Player, Informant, Road Encounter, Ambush, Stalker, Message, Quest), choose which NPCs may travel from other places: No restriction, Same hold (civilians / except followers / everyone), or Same town (civilians / except followers / everyone). Default: Same hold (civilians).
 
 ### Story Tuning
 
@@ -314,8 +323,7 @@ View all pending scheduled tasks with times and targets. Cancel individually or 
 | Danger Zone Policy | Allow All | Who can be dispatched to dangerous areas (Allow All / Block Civilians / Followers Only / Block All) |
 | Player Home Visit Policy | Allow All | Who can visit when you're at home (same 4 levels) |
 | Story Tick Interval | 3 hrs | How often the Dungeon Master evaluates the world |
-| Travel Timeout | 7 hrs | Max travel time before a story NPC gives up |
-| Meeting Timeout | 5 hrs | Max wait time for scheduled meetings |
+| Max Travel Time | 1 day | 0.25–3 days | Max travel time before a story NPC gives up |
 | Quest Sub-Types | All On | Toggle rescue, find item, and combat quests individually |
 
 ---
@@ -330,33 +338,35 @@ Host selection is fixed until restart. In `Data/SKSE/Plugins/SkyrimNet/config/pl
 
 Change the dashboard hotkey in the dashboard's Settings tab or on the SkyrimNet settings page (click Save); both apply immediately. The MCM has no hotkey option.
 
-Section headers in Tasks, Story, Politics, Director, Actions and Packages toggle their bodies with ▾/▸ indicators. All sections start open; each section's choice is remembered in browser localStorage across reloads. Header controls remain usable without toggling. Offline headless regression: `python SKSE/tests/RunDashboardDropdownCheck.py "<chrome.exe>" web/dashboard/dist --scenario=dashboard_sections_collapse`; game-host behavior is not live-verified.
+Section headers in Tasks (including its IE packages section), Story, Politics, Director and Actions toggle their bodies with ▾/▸ indicators. All sections start open; each section's choice is remembered in browser localStorage across reloads. Header controls remain usable without toggling. Offline headless regression: `python SKSE/tests/RunDashboardDropdownCheck.py "<chrome.exe>" web/dashboard/dist --scenario=dashboard_sections_collapse`; game-host behavior is not live-verified.
 
 ### Tabs
 
-**Tasks** — Live view of all active and scheduled tasks. Cancel individual tasks, see agent names, destinations, task types, speeds, and scheduled meeting timing ("in ~3h", "very soon", "overdue"). A successful task-card cancellation shows `<Name>'s task cancelled.`. Cancelling the active story NPC's task also ends the story and its tracking, clearing the Story tab.
+**Tasks** — Live view of all active and scheduled tasks. Cancel individual tasks, see agent names, destinations, task types, speeds, and scheduled meeting timing ("in ~3h", "very soon", "overdue"). An IE packages section lists NPCs running IntelEngine AI packages (travel, sandbox, stalk) without a task slot; remove packages from stuck NPCs directly. A successful task-card cancellation shows `<Name>'s task cancelled.`. Cancelling the active story NPC's task also ends the story and its tracking, clearing the Story tab.
 Slot allocation and clearing refresh the open dashboard immediately; a closed dashboard skips snapshot building.
 
 Cancelled stories with narration add a `stopped before finishing: ...` NPC fact before cleanup. Generic load abandonment and the six-hour watchdog add `never finished: ...` facts; this is source/compiled-bytecode behavior, not live-verified.
 
 Task cards show recorded origin, in-game allocation time and existing dispatch reason. Scheduled cards retain their creation provenance; legacy missing times stay blank. SkyrimNet dialogue actions currently provide origin only: upstream action mappings do not forward the triggering dialogue response.
 
-**Story Engine** — Toggle the Story Engine and individual story types on/off. See the active dispatch, next DM check-in timer, NPC social activity, active quests, and a log of recent NPC-to-NPC interactions.
+**Story** — Toggle the Story Engine and individual story types on/off. See the active dispatch, next DM check-in timer, NPC social activity, active quests, and a log of recent NPC-to-NPC interactions.
 
 Activity dates use the current save's in-game calendar and display to the nearest minute, including political events, war timelines, battle history and new NPC activity entries. Older entries without a timestamp remain undated; a recorded zero is a valid timestamp.
 
-**Politics** — Faction cards list configured leaders from the existing political data, retaining unloaded names and omitting confirmed permanent deaths.
+**Politics** — Faction cards list configured leaders from the existing political data, retaining unloaded names and omitting confirmed permanent deaths. Live bio-fact injection for leader lookups remains unverified.
 
-**Director** — Manual Dungeon Master controls. Dispatch any story type to any NPC with full parameter fields (informant gossip, quest locations, message content, etc.). Execute any of the 11 player-driven actions, including ReportPlayerConduct, with guided field hints and YAML enum choices. Action Execution's NPC combobox filters the existing loaded-NPC list (within 4000 units in the same exterior worldspace or interior cell) while typing; Enter/click picks the actor's unchanged FormID. Unpicked/free text cannot execute, and × clears the pick. Manual CancelCurrentTask stops the current task even beside the player; SkyrimNet-driven cancellation retains its proximity guard.
+**Director** — Manual Dungeon Master controls. Dispatch any story type to any NPC with full parameter fields (informant gossip, quest locations, message content, etc.). Execute any of the 11 player-driven actions, including ReportPlayerConduct, with guided field hints and YAML enum choices. Action Execution's NPC combobox filters the existing loaded-NPC list (within 4000 units in the same exterior worldspace or interior cell) while typing; Enter/click picks the actor's unchanged FormID. Unpicked/free text cannot execute, and × clears the pick. Manual CancelCurrentTask stops the current task even beside the player; SkyrimNet-driven cancellation retains its proximity guard. Unloaded-reference dispatch is not live-verified.
+Manual Story/Social dispatch requires a unique eligible, case-insensitive full display name; there is no fuzzy, whitespace-normalized or role-suffix fallback.
 
 Every Director NPC-name field uses the shared suggestion picker: nearby names first (marked `nearby`), then sorted known NPC display names, with free text still allowed. This includes informant subjects/sources, quest givers/rescue victims and action target names. Hired by/Encouraged by append marked factions and retain faction IDs. Lists render at most 50 matches, reserving up to 10 rows for matching factions. Action Execution alone requires a nearby list pick and retains its actor FormID. `knownNpcs` is sent on dashboard DOM-ready or index-count changes, retained across periodic snapshots, and kept in coalesced pending snapshots until delivery. Offline `npc_picker_consistent` covers a 5,007-name population-scale synthetic fixture; this is not an installed-modlist count or live-game verification.
 
 Story, NPC Social, Political and Action Execution forms have Generate and Clear controls. **Generate is experimental:** quality depends on the model in SkyrimNet's default slot; small models such as a 4B fill fields unreliably. Generate keeps filled NPCs, factions and the type/action, whether typed or generated, and re-rolls generated text while preserving user-typed text. Clear a name with × to let the next Generate pick a new one; empty identities and `(auto)` types let the model choose. Political event type starts empty and must be picked or generated before Dispatch. Review the result, then Dispatch separately. While generating, that form is disabled and Clear becomes Stop: Stop ignores the eventual result without changing the draft. Clear resets all fields and touched flags. Failures retain the draft for retry; older SkyrimNet builds without the custom-prompt export show `Generate unavailable`. Native completion is delivered through the UI host thread and discarded after dashboard close/reopen. One shared `intel_director_generate` prompt serves all four forms. Action generation selects only nearby actors and excludes CancelCurrentTask/ChangeSpeed; selecting either refuses generation without filling anything. Params reuse the action fields/YAML metadata and required-field follow-up. Built-bundle and native lifecycle checks are offline evidence, not live model/game acceptance.
 
 Generate pre-picks empty required Story/Social NPCs and Action actors/targets only from loaded nearby names, excluding names already used in the form; an exhausted nearby pool stays blank without falling back to known NPCs. Typed values and the full known-NPC suggestion lists are unchanged. Generated NPC fields reject case-insensitive duplicates (`Duplicate NPC`); generated free text rejects `[...]` placeholders (`Placeholder text`), but tagged NPC identities such as `Natch [Merchant]` remain valid. Required blanks still get the single follow-up. Offline/headless regression: `--scenario=nearby_picks`; no installation or live model/game test.
+Action Generate only auto-picks a nearby performer when both the selection and typed filter are empty. Unpicked text stays visible and blocks generation/execution; an empty Action search shows `no nearby NPC matches`. A selected FormID missing from the refreshed nearby list must be cleared or re-picked, never replaced automatically.
 
 Director section titles remain left-aligned with small Generate/Clear/Stop controls on the right. All base fields and Story, Social and Action variants share `Field`: label above, control, hint beneath, with red required markers in labels. Base placeholders are examples; untouched variant dropdowns retain `(auto)`. Missing-field lists remain beneath Dispatch. FetchPerson's optional Refuse reason leaves the person willing to come when empty; a filled reason makes them refuse.
-Director drafts stay mounted but hidden when another dashboard tab is selected. All four forms' field values, Generate touched flags and the active tab are remembered in browser localStorage across page reloads; Clear removes that form's saved draft. Storage errors are ignored, retaining in-memory editing. Active Story and NPC Social engines show italic amber busy details in their section titles, including when collapsed. Story Dispatch is disabled as `Story engine busy`; Social shows `NPC social busy` but remains enabled because Director Papyrus does not refuse it solely for an active social engine. NPC slot confirmation still takes precedence on the enabled Social button.
+Director drafts stay mounted but hidden when another dashboard tab is selected. All four forms' field values, Generate touched flags and the active tab are remembered in browser localStorage across page reloads; Clear removes that form's saved draft. Storage errors are ignored, retaining in-memory editing. Active Story and NPC Social engines show italic amber busy details in their section titles, including when collapsed. Their Dispatch buttons remain enabled for click-twice replacement confirmation.
 Director Story, NPC Social and busy notices format raw keys as friendly words (`seek_player` → `Seek Player`). Political notices use the event label and faction display names.
 Each completed Generate reports its request's filled/blank field names and the dashboard's applied/rejected outcome (with reasons) in one IntelEngine info log line. Native replies are logged at info before parsing (first 600 characters, including field text); malformed errors include the first 120 characters. The shared parser extracts the outermost JSON object to accept code fences or leading prose.
 Generate includes all visible blank variant fields in its request and asks for every base/variant field, including optional text and relation delta. Required fields in the active Story or Social variant show red stars, block Dispatch when empty, appear in the missing-field list, and are marked `required: true` in Generate metadata. The dashboard is the single field-validation boundary: valid returned fields apply even if another field has an invalid key, type, option, identity or relation delta. Invalid fields are skipped with logged reasons; chosen identities and touched values remain unchanged. Model omissions remain blank for review rather than being invented locally. Political variants are empty because no political type-specific controls exist; an empty touched map does not mean selected identities can be replaced.
@@ -366,9 +376,11 @@ Generated identity names snap to a full option name when exactly one option matc
 Shared comboboxes discard their old search draft when a nonempty controlled selection changes, so generated choices remain visible after clearing/filtering a dropdown.
 Every Director text input and textarea has a conditional ×; clearing or deleting all text returns ownership to Generate. Textarea clears sit top-right; input clears stay vertically centred. A shared bottom-right pointer handle resizes textareas from their rows-height minimum up to 400px, including with dashboard zoom; native browser vertical resize remains available. Social NPC 1, NPC 2 and narrow type controls share one row, with full-width narration below. Story narration guidance requires a third-person past-tense verb phrase without a subject prefix, names the character through SkyrimNet's default `player.name` context, and stays under 120 characters. Offline regression: `python SKSE/tests/RunDashboardDropdownCheck.py "<chrome.exe>" web/dashboard/dist --scenario=director_live_polish2` exercises real pointer drags and a CDP page reload; game-host behavior is not live-verified.
 
-Director Story, NPC Social and Action Execution require a second click when a selected NPC owns an active slot: the first click changes the button to `Busy — you sure?`; the second sends the existing slot cancellation(s), then dispatches. Changing an NPC resets confirmation. Papyrus still refuses busy task-creating requests if cancellation has not completed; automatic requests retain their existing behavior.
+Director Story and Social replacement confirmation is bound to the request, active NPC identity and engine generation; editing the request or replacing the active dispatch resets it. The confirmed click sends one dispatch event with its generation, not separate cancellation events. Papyrus validates before cancelling and completing matching singleton cleanup; stale confirmations and unrelated busy NPCs are refused. Action Execution retains its existing selected-slot click-twice cancellation.
 
-Director Story also refuses a new story while the story engine is active, even for a different NPC. Finish or cancel the active story before dispatching another; the notification identifies its NPC and story type.
+Story/Social replacement remains singleton: the old slot, linked refs, message state and follower ownership are cleaned before the new dispatch starts, including when the old singleton has no slot. Offline checks: `--scenario=replacement_confirm` and `RunArrivalDeliveryBytecodeCheck.py`.
+Automatic Story DM callbacks are rejected while a story is active, before pending payload, history or cooldown changes; validation also rechecks dispatch ownership before admission.
+Story arrival polling rechecks ownership after off-screen/stuck teleports; arrival and confrontation continuations recheck after their waits. Offline bytecode checks cover both normal resumes and replacement interleavings; live scheduling is not proven.
 
 Director Action Execution's optional **Reason** is remembered by the NPC and saved only if the action starts; a failed start shows a failure notice. It shows `<Name>: <action> started.` only when one of its nine Bool-returning actions succeeds; cancellation and conduct reports retain their existing feedback. Story shows `<ActiveStoryNPC name> sets out (<type>).` only while active after its dispatch generation advances, including message couriers rather than senders; road encounters do not advance that generation and are skipped. NPC Social notifies after queued travel or an applied off-screen outcome; Politics notifies only when its existing `acted` signal is true. Automatic paths receive no new success notices. Story/Social submissions show `queued: starts on dashboard close`; Action/Politics briefly show `Sent`, which is submission feedback, not proof the game accepted the request.
 
@@ -381,17 +393,17 @@ Category rows use larger bold titles and an amber left border. Disabling a categ
 
 Story toggles affect automatic stories; Action toggles affect AI-chosen actions. Director ignores both. Action-toggle changes apply after SkyrimNet **Reload configs** or a restart.
 
-**Active Packages** — See which NPCs are currently running IntelEngine AI packages (travel, sandbox, stalk). Remove packages from stuck NPCs directly.
-
 **Settings** — Shared settings behavior with the MCM. Politics settings are read from `settings.yaml` and saved there by both interfaces; plugin configuration includes blocklists and LLM overrides.
 
 ### How It Works
 
 The dashboard communicates through a shared C++ host bridge and existing Papyrus ModEvents. All JSON is built with `nlohmann::json` for proper escaping. Papyrus reads live quest properties and pushes comprehensive JSON snapshots. Remove Packages and Execute Action retain exact decimal-string actor FormIDs, including high-bit IDs.
+High-bit FormID dispatch remains offline-verified only; pair the DLL with rebuilt `IntelEngine.pex` and `IntelEngine_Core.pex` for live qualification.
 
 Dashboard JSON serialization replaces invalid UTF-8 bytes in game strings with U+FFFD rather than dropping the whole state update. Offline regression: `cmake --build <native-build> --config Release --target DashboardUtf8DumpCheck`, then run `<native-build>/DashboardUtf8DumpCheck.exe` (Ninja Release). The host check below also exercises a malformed actor name through the production state push.
 
-Director submission does not close the dashboard. Manual cancellation notifies `<Name>'s task was cancelled.` on success or `<Name> has no task to cancel.` on a repeated/no-task request; SkyrimNet-driven cancellation feedback is unchanged. Delivery-recipient rejection also notifies the player. SkyMessage confirmations are unchanged. Magelight lifecycle, Escape, contention and game dispatch require separate live acceptance; offline checks/builds are not runtime proof.
+Director submission does not close the dashboard. Manual cancellation notifies `<Name>'s task was cancelled.` on success or `<Name> has no task to cancel.` on a repeated/no-task request; SkyrimNet-driven cancellation feedback is unchanged. Delivery-recipient rejection also notifies the player. With Magelight, IE's choice prompts (Allow/Deny, door knock, quest offer) open as a Magelight page and wait while another Magelight window holds the screen; without it, the Papyrus MessageBox. Magelight lifecycle, Escape, contention and game dispatch require separate live acceptance; offline checks/builds are not runtime proof.
+Dashboard host exits expose no Escape-specific reason; lifecycle logs identify only a host exit.
 
 DeliverMessage targets the resolved recipient actor, including across cells. An unresolved or invalid recipient is rejected through a player notification/log without replacing an existing task or triggering NPC dialogue that could select an unrelated action. Missing delivery, fetch, search and escort targets use target-first wording: `<Target> could not be found.`
 
@@ -402,6 +414,7 @@ Named checks use `--scenario=<name>`: `director_required_fields` covers unpicked
 `director_live_polish` covers conditional text clears and ownership handback (including Political Faction A), required Message/Informant/base-field follow-ups capped at one, complete-result no-follow-up behavior, merged-draft preservation, picker alignment, the Informant gossip hint and Social narration/grip layout.
 
 Compiled arrival/history smoke: `python -X utf8 SKSE/tests/RunArrivalDeliveryBytecodeCheck.py <papyrus.exe> <GamePlugin-worktree>/Scripts <native-build>/TaskHistoryDescriptionCheck.exe`. This executes the staged PEX delivery/cleanup and common story-arrival paths through a bounded interpreter with modeled engine/storage boundaries and the real native formatter. It checks no-meeting delivery, case-equivalent boundary outcomes, player-absent return, guarded/forced Travel cancellation, forced arrival reentry, dispatch latch reset, and callback cleanup while an arrival poll is suspended. `RunDeliverMessageRejectionCheck.py` takes the same arguments and checks unresolved-recipient rejection preserves an existing Travel task while distant resolved recipients remain actor targets. Neither check reproduces Skyrim scheduling or model behavior.
+Informant fact check: `python -X utf8 SKSE/tests/RunInformantFactBytecodeCheck.py <papyrus.exe> <GamePlugin-worktree>/Scripts` (offline only).
 
 Conduct processing smoke (VS developer shell): `python SKSE/tests/RunPlayerConductCheck.py <vcpkg-triplet-dir>`. It executes production conduct/name-lookup methods with real isolated SQLite and modeled game notification/reporter/clock boundaries, covering primary/rival/ally changes and success/error messages.
 
@@ -418,7 +431,7 @@ IntelEngine operates as two tightly integrated layers, with a third connecting i
 - **Time parsing** — natural language to game-hour conversion for scheduling
 - **Stuck & departure detection** — native position polling at engine speed, independent per task slot
 - **Cell analysis** — door enumeration, exterior/interior classification, directional scanning
-- **Dashboard bridge** — PrismaUI integration with thread-safe C++/Papyrus event routing and JSON state serialization
+- **Dashboard bridge** — shared C++ host bridge for Magelight UI (preferred) and PrismaUI with thread-safe C++/Papyrus event routing and JSON state serialization
 
 **Papyrus Scripts** — game engine integration:
 - AI package management (travel, sandbox, and escort packages at three speed tiers)
@@ -427,9 +440,21 @@ IntelEngine operates as two tightly integrated layers, with a third connecting i
 - Save/load recovery with full package and linked-ref reconstruction
 - MCM management interface
 
-**SkyrimNet External Bundle** — IntelEngine's 11 AI-selectable actions, three category containers, four custom LLM prompts, and seven character-bio submodules ship under `SKSE/Plugins/SkyrimNet/external/galanx.intelengine/`. Action identities and Papyrus entry points remain unchanged.
+**SkyrimNet External Bundle** — IntelEngine's 11 AI-selectable actions, three category containers, five custom LLM prompts, and eight character-bio submodules ship under `SKSE/Plugins/SkyrimNet/external/galanx.intelengine/`. Action identities and Papyrus entry points remain unchanged.
 
 **SkyrimNet Plugin Configuration** — IntelEngine's LLM variant, settings schema, generated `settings.yaml`, and user-editable `factions.yaml` remain under `SKSE/Plugins/SkyrimNet/config/plugins/IntelEngine/`. This configuration path is separate from the Beta 25 external content bundle.
+
+**Extra faction files (`factions.d/`)** — besides `factions.yaml`, IntelEngine loads every `factions.d/*.yaml` next to it (`SKSE/Plugins/SkyrimNet/config/plugins/IntelEngine/`), in filename order. A faction whose `id` already exists is replaced whole; a new `id` is added. A relation for the same pair replaces the earlier one. A broken file is skipped with a log warning. If a file's first line is `requires: political_engine`, it loads only when Political Engine is installed and its integration setting is on; IntelEngine ships `political_engine.yaml` this way. Edits are whole-faction only: copy the full faction into your file to change it, because single fields cannot be overridden. A faction may set an optional `pe_side: 0-3` (Political Engine side: 0 Independent, 1 Empire, 2 Stormcloaks, 3 Aldmeri Dominion); without it the Imperial, Stormcloak and Thalmor engine factions map to 1, 2 and 3.
+
+```yaml
+# factions.d/zz_my_changes.yaml  (files load in name order: this one has to come after political_engine.yaml to change PE_Whiterun)
+factions:
+  - id: "PE_Whiterun"
+    name: "Whiterun (mine)"
+    type: "political"
+    hold: "Whiterun"
+    leader_names: ["Balgruuf the Greater"]
+```
 
 ---
 
@@ -437,12 +462,13 @@ IntelEngine operates as two tightly integrated layers, with a third connecting i
 
 The Story Engine is Part 2 of IntelEngine. Every few in-game hours, an LLM Dungeon Master observes the full world state — your location, time of day, NPC memories and relationships — and decides if something should happen. World facts shared by every candidate are shown once, while each NPC's additional knowledge remains attached to them for silent fact-checking. No random dice rolls. Every event is grounded in the actual history of your playthrough.
 
-Nine story types, each individually toggleable via MCM:
+Ten story types, each individually toggleable via MCM:
 
 - **Seek Player** — NPCs travel to find you because of unfinished business, old friendships, or something they overheard. Forgotten friends don't stay forgotten — NPCs you haven't seen in a while are more likely to come looking.
 - **Informant** — NPCs approach with real gossip traced to actual game events. The chain of who told whom is tracked.
 - **Road Encounter** — You cross paths with NPCs traveling on their own business. Exterior only. They have their own destination.
 - **Ambush** — Hostile NPCs with real grudges stalk and attack you. Stealth or charge variants. Beat them and they yield — talk, kill, or walk away.
+- **Faction Ambush** — A faction that is hostile to you (standing -40 or lower) sends a patrol of 3–7 soldiers to waylay you on the road. Exterior only.
 - **Stalker** — Romantically obsessed NPCs secretly follow you until caught. No combat — the emotional confrontation is the payoff.
 - **Message** — Couriers deliver verbal messages from NPCs who can't come themselves, with optional meeting invitations that schedule the sender.
 - **Quest: Combat** — NPCs ask you to clear enemies from a location. Guide option (they jog with you) or go alone with a map marker. Bandits, draugr, or dragons.
@@ -451,7 +477,10 @@ Nine story types, each individually toggleable via MCM:
 - **NPC Interaction** — Two NPCs interact independently of you. Arguments, deals, training, whispered conspiracies. Happens whether you're watching or not.
 - **NPC Gossip** — Rumors spread through chains of up to 10 people. Information travels realistically through the world.
 
-Every event injects facts into NPC bios that persist and influence all future dialogue. Message and quest courier facts/memories are recorded only after arrival passes the travel rejection checks; rejected pending quests do not publish quest facts or repetition history. The Dungeon Master prompt lists only enabled story types and guards long-absence seek-player guidance accordingly. Anti-repetition, type balancing, and per-NPC cooldowns keep stories varied and meaningful.
+**Background events in SkyrimNet History — implemented, pending live acceptance:** persistent `intel_social` and `intel_story` schemas categorize executed NPC interactions, gossip exchanges and story/seek/informant outcomes. Matching generic memories are replaced rather than duplicated; travel proposals, rejections and cooldown blocks do not emit these types. SkyrimNet's existing automatic-audience distance/configuration filters still apply, so off-screen registration does not guarantee History retention. Politics remains in IntelEngine's Politics tab: SkyrimNet currently has no History-only sink excluded from NPC prompts/memory.
+
+Every event injects facts into NPC bios that persist and influence all future dialogue. Message and quest courier facts/memories are recorded only after arrival passes the travel rejection checks; rejected pending quests do not publish quest facts or repetition history. The Dungeon Master prompt lists only enabled story types and guards long-absence seek-player guidance accordingly. Anti-repetition, type balancing, and per-NPC cooldowns keep stories varied and meaningful. Story arrival interleaving has compiled-PEX coverage, but live acceptance remains pending. Localized-place-name prompt guidance is not localized-install acceptance.
+Localized place-name guidance adds neither Unicode/alias resolution nor custom named-Place routing.
 
 ---
 
@@ -462,7 +491,6 @@ IntelEngine is under active development. The following features are planned for 
 - **Eliminate Target** — dispatch an NPC to kill a specific person. Assassinations, bounty hunting, or settling grudges — carried out autonomously across the world.
 - **Lockpick Door** — send an NPC to pick a locked door, gaining access to restricted areas without doing the dirty work yourself.
 - **Steal Item** — task an NPC with stealing something from someone's inventory or home. Risk and reward — their skill determines success.
-- **Background events in SkyrimNet History — implemented, pending live acceptance:** persistent `intel_social` and `intel_story` schemas categorize executed NPC interactions, gossip exchanges and story/seek/informant outcomes. Matching generic memories are replaced rather than duplicated; travel proposals, rejections and cooldown blocks do not emit these types. SkyrimNet's existing automatic-audience distance/configuration filters still apply, so off-screen registration does not guarantee History retention. Politics remains in IntelEngine's Politics tab: SkyrimNet currently has no History-only sink excluded from NPC prompts/memory.
 - **Timeline-rewind notification — backlog, not implemented:** when loading an earlier save removes later political history (`CleanupFutureEvents` > 0), show a top-left `RE::DebugNotification` hint with the count, deferred until the load completes. Separate native feature, not part of the migration release.
 
 ---
@@ -491,7 +519,7 @@ Rendered caches were first stored in IntelEngine 2.0.0; this history does not es
 
 One real VR fixture passed bounded converted-copy acceptance: six repaired facts/task-history caches, recovered task progression, a roughly 39-minute sampled soak and one cold reload. It contained no gossip caches or stored names, so those migration cases remain untested on a real VR fixture. Cold comparisons matched all 66 cache comparisons and 76/77 state fields; a small scalar deadline difference and SkyrimNet timeline differences remain unexplained, three actor mappings were absent both before and after, and the original SkyrimNet database baseline and native name index were not established. This is not full VR, historical database restoration or general old-save qualification. Expert VR `convert` still refuses because no historical VR PapyrusUtil provider hash is qualified; `inspect` alone grants no eligibility.
 
-Only rendered-cache values are rewritten. Non-cache fields, including BEL-bearing task destinations and stored names, pass through byte-for-byte without normalization. If STRV is absent and the PapyrusUtil owner contains only recognized record types/versions, `fix` can publish a verified byte-identical cache-free pair; this is a copy, not a repair. Unknown records in that path or a present STRV with no eligible targets refuse.
+Only rendered-cache values are rewritten. Non-cache fields, including BEL-bearing task destinations and stored names, pass through byte-for-byte without normalization. If STRV is absent and the PapyrusUtil owner contains only recognized record types/versions, `fix` can publish a verified byte-identical cache-free pair; this is a copy, not a repair. Unknown records in that path still refuse. A valid present STRV with no eligible targets reports “no conversion needed; originals unchanged” and returns **2** without publishing any files; this is not old-save safety clearance.
 
 Player `fix` also re-encodes save-local `0xFF` rendered-cache holders in place when their serialized type is actor (`62`), and orphaned global (object `0`) cache entries; no form resolution or remapping is needed. Both use the same legacy policy: restore BEL to space, then encode. Target values are byte strings: malformed UTF-8 (including historical byte-truncated messages) is preserved without transcoding or replacement. TAB, LF, VT, FF, CR and embedded ESC are encoded; a lone ESC (ambiguous empty sentinel), NUL, DEL and unsupported C0 controls still refuse, as do restored-original mismatches. Native target assignments and reverse-patch byte equality must still verify. Human output lists converted fields, temporary identities (decimal object ID plus hexadecimal form ID), orphaned global keys, and each output path on separate lines. Expert `inspect`/`convert` JSON, strict UTF-8 and qualification rules are unchanged.
 
@@ -505,7 +533,7 @@ Converter build candidate **3.7.0** embeds IntelEngine Windows version metadata.
 
 Linked/cloud-managed components and extended/device paths remain unsupported. Copy **both** `.ess` and `.skse` to a short writable normal physical folder, e.g. `C:\IE-convert`, preserving the originals. Desktop/Documents may themselves be cloud-managed. Ordinary `.\My Save.ess` spelling and case-insensitive `.ess` extensions are accepted without renaming the input. Access failures identify paths and OS errors; runtime refusals list the detected and supported runtime/SKSE tuples. Existing backup/output/staging collisions must be inspected, never overwritten: retry the original pair in a fresh physical folder, and do not load an incomplete output pair.
 
-It preserves the originals in `<stem>_IEbackup/` and creates sibling `<stem>_IEconverted.ess` / `<stem>_IEconverted.skse` without replacing existing files. Exit **0** means both outputs were published; **2** is a usage, eligibility or safety refusal; **3** is an I/O, verification or publication failure. If the second rename fails, the first converted file may remain; do not load an incomplete pair. Install the complete repaired DLL, both affected PEX files and all three prompts before using the converted pair. Never load a converted save with 3.5.2 or earlier.
+It preserves the originals in `<stem>_IEbackup/` and creates sibling `<stem>_IEconverted.ess` / `<stem>_IEconverted.skse` without replacing existing files. Exit **0** means both outputs were published; **2** means no output (usage, eligibility or safety refusal, or no conversion needed); **3** is an I/O, verification or publication failure. If the second rename fails, the first converted file may remain; do not load an incomplete pair. Install the complete repaired DLL, both affected PEX files and all three prompts before using the converted pair. Never load a converted save with 3.5.2 or earlier.
 
 Do not repeat conversion or mix original and converted companions. `fix` refuses input stems ending in `_IEconverted` (case-insensitive), but renaming bypasses this filename guard. There is no reliable save marker distinguishing legacy values from already-encoded 3.6.x values; percent-looking text is legitimate legacy text too. **Do not convert a save written by 3.6.x or a previously converted save**, even after renaming: it can double-encode values. Writer provenance cannot be proved from the save; BEL-to-space is owner policy. Rollback requires the original pair, matching old components and corresponding IntelEngine/SkyrimNet external-data backups; the converter backs up only the pair.
 
@@ -517,33 +545,25 @@ Both preserved legacy pairs reproduced their verified converted bytes through th
 
 > **Papyrus API and array guards:** seven existing native functions are now declared in `IntelEngine.psc`, and three array-null checks use boolean guards. Maintenance, recovery and schedule retention were exercised across save/reload.
 
-> **3.6.0 Story DM actor resolution:** model-selected NPC names now resolve only within the latest Story DM/social candidate pools, using exact display names or a unique case/whitespace-normalized name with a trailing bracketed role removed. Unknown and ambiguous names reject instead of falling back to worldwide fuzzy search. Duplicate display names remain ambiguous. Overlapping requests are not request-isolated; the existing Courier/Messenger substitution path is unchanged. Live selection and unknown-name rejection were verified; duplicate-name rejection remains unverified live.
+> **3.6.0 Story DM actor resolution:** model-selected NPC names resolve only within the latest Story DM/social candidate pools, using exact display names or a unique case/whitespace-normalized name with a trailing bracketed role removed. Unknown names and distinct same-name references reject instead of falling back to worldwide fuzzy search; repeated entries for one nonzero reference resolve. Overlapping requests are not request-isolated. The earlier strict selection/unknown-name live checks do not qualify these unreleased identity changes.
+Automatic rejection diagnostics remain unverified live.
 
-> **Unreleased — localized place-name prompts (source/offline only):** action and DM/scheduling prompts require exact in-game/context place names in the game's language, never translations; semantic keywords stay English. GoToLocation lists nearby names through SkyrimNet's `get_place_names("nearby")` decorator. This is prompt guidance only, not Unicode/alias resolver support or custom named-Place routing; localized-install acceptance remains pending.
+> **Courier/Messenger substitution (offline only):** faction-first then sender-messenger is retained; sender identity uses strict candidate resolution. Substitutions log original rejection/dead/disabled reason, route and actor; failed attempts log as failures. Native rejection warnings retain subtype detail; no new status API or live qualification.
 
-> **Unreleased — same-faction dispatch (source/offline only):** reject identical faction IDs in political event validation, direct war declaration, relation adjustment and database recording/seeding. Hide legacy self-pair relations on read without changing the save format. Conduct reports never apply cross-faction effects to the same faction; one-sided political events remain supported.
+### IntelEngine 3.8.0
 
-> **Unreleased — actor arrival (source/offline only):** actor targets use a 200-unit radial base plus current speed times a 0.50-second response allowance (150ms polling + estimated 350ms VM/package delay), with a 120-unit Z gate. A claimed native threshold survives a speed drop before the Papyrus recheck; disarm/re-arm clears it. Markers retain 300-unit horizontal/200-unit Z bounds. Story sandbox evaluation no longer waits an extra 100ms; player-targeted sandbox remains self-linked, not player-following. Run3 confirmed running overshoot at the old fixed threshold. Physical stopping and the latency allowance still need live verification.
+- **Director (dashboard).** Manual Story replacement now accepts Director fields and explains refusals; a cancelling story must finish before it is replaced. NPC suggestions rank exact names first, then prefixes, and highlight the keyboard choice. Generate requires real NPC names (generic placeholders are rejected per field), its status is gray and errors red, and Director-dispatched actions skip the confirmation prompt. The dashboard hotkey no longer toggles while you are typing in a text field. Dispatch notices use plain dashes.
+- **Story travel and arrival.** A story NPC now counts as arrived after 15 seconds within talking range of the player. Arrival timers use real time, so menus and faster polls cannot skew them; after 75 seconds without arriving the NPC is re-placed once behind the target, and after another 75 seconds the story aborts with a notice. Arrival waits until save-load recovery finishes. Director stories ignore the Hold Restriction (automatic stories still turn back and say why). Story NPCs who become your teammate are released from linger.
+- **Off-screen placement and fetch.** Unloaded NPCs are placed after the off-screen deadline, the Director says when an NPC can't be sent because they are not loaded (they only exist near their home), a nearby fetched NPC is no longer teleported across an exterior cell boundary, and a linger NPC that is still approaching is no longer released early; linger timeouts survive pausing.
+- **Stuck recovery.** Soft recovery no longer waits on latent calls, and stuck detection samples at most every three seconds.
+- **Informants and narration.** Informant gossip keeps the subject's name and avoids repeated subjects; generated narration attributes the right actor; bracket tags in NPC names are handled.
+- **Political Engine bridge (optional).** With Political Engine API v3, public territory, campaign, ruler and initiative news is recorded as faction-less rumors. Political DM context can trigger one organization reaction per development using the current owner's side; a persisted MCM/dashboard toggle controls reaction relation and standing changes. Existing IntelEngine wars and battles are unaffected.
+- **Localized place names.** Action and DM/scheduling prompts ask for exact in-game place names in the game's language, and GoToLocation lists nearby names via SkyrimNet's `get_place_names("nearby")`. This is prompt guidance only, not new name-resolution support.
+- **Diagnostics.** Extra bounded travel and Director logging was added for bug reports.
 
-> **Unreleased — absent meeting location (source/offline only):** the shared meeting description omits the location clause for the `none` sentinel, including declined-meeting facts.
+3.8.0 was tested live in Skyrim for Director dispatch, story and fetch travel, off-screen placement and linger. The Political Engine bridge and the rarer stuck-recovery paths were checked offline only.
 
-> **Unreleased — log cleanup (source/offline only):** optional response fields use a separate native accessor that logs missing keys at debug; required fields and malformed JSON still warn. Dashboard lifecycle and input-contention events log at info once per event. Page-close and hotkey causes are explicit; the host does not supply an Escape-specific exit reason. `DispatchToTarget` already returns Bool on every source/compiled exit.
-
-> **Unreleased — Action Execution actors (source/offline only):** the loaded same-cell actor list includes non-unique guards and mod-added citizens, retaining exact reference FormIDs and existing unavailable-actor checks. Automatic DM/social selection is unchanged.
-
-> **Unreleased — #44 task-history outcomes (source/offline only):** failed/aborted/unknown-result travel and story tasks use attempted wording; successful story journeys and proven escort arrivals record their outcomes. Native success-token comparisons now preserve Papyrus's case-insensitive semantics, including `delivered`/`Delivered`, without modifying message or target text. The run3 delivery path writes the result before player-present cleanup reads the same actor/key and then unsets it; no intervening overwrite exists in that path. The raw run3 result spelling was not logged, so the casing defect is fixed offline without claiming that it proves the live inverse's cause.
-
-> **Unreleased — single story arrival (source/offline only):** a shared entry latch prevents callback/poll re-entry for seek-player and other story types, while retaining ambush/quest monitoring and resetting for new dispatches. Queued or suspended arrival polls stop after cleanup or dispatch replacement; stable actor/target references prevent cleared-global dereferences. The compiled-PEX cleanup interleaving regression fails on the prior artifact and passes on the rebuilt script; live acceptance remains pending.
-
-> **Unreleased — Director actions and faction picker (source/offline/browser only):** Action Execution excludes unsupported `ReportPlayerConduct` and includes parameter-less `CancelCurrentTask`. Clicking/focusing a filled faction field opens the full list; typing filters it, free text remains valid, and the clear button empties it in one click.
-
-> **Unreleased — #41 automatic rejection diagnostics (source/offline only):** automatic candidate selection remains bounded to the DM/social pools, including rejection of duplicate entries for the same actor. Rejection warnings distinguish `empty-pools`, `no-match`, `ambiguous`, `zero-formid`, `lookup-null`, `deleted`, and `id-mismatch`, with both pool sizes. Ambiguity includes all matching pool/name/FormID entries and whether they identify the same actor. Live verification remains pending.
-
-> **Unreleased — #43 leader identity (source/offline only):** political leader lookups reject empty names and use case-insensitive, forward word-boundary matching: `Jarl Ulfric Stormcloak` matches configured `Ulfric Stormcloak`, but `Ulfric` alone and unrelated longer names do not. Loaded-actor selection still prefers the player's cell. Indexed leader/liveness lookups share that contract without fuzzy fallback; matched loaded leaders log their FormIDs at info level. Live bio-fact injection remains unverified.
-
-> **Unreleased — #42 dashboard FormIDs (source/offline only):** Remove Packages and Execute Action carry decimal FormID strings, not ModEvent floats. `IntelEngine.ParseFormID` parses unsigned 32-bit values into Papyrus Int bit patterns, preserving FE/FF IDs; malformed/overflow values and zero are rejected before actor lookup. Dashboard JSON IDs must be positive integers within `uint32_t`. The DLL and rebuilt `IntelEngine.pex`/`IntelEngine_Core.pex` must be staged together; live dispatch remains unverified.
-
-> **Unreleased — #41 manual Director identity (source/offline only):** Story and NPC Social Director selections use a separate case-insensitive exact full-display-name lookup across indexed actor references, including persistent/interior references without loaded 3D and current process-list actors. Unavailable, mismatched, deleted, dead, and disabled references are filtered before ambiguity: repeated entries for one eligible reference are allowed; distinct eligible references reject with both FormIDs logged. If none are eligible, the most specific rejection state is logged. There is no fuzzy, whitespace, or role-suffix fallback. Automatic DM/social candidate selection is unchanged. The existing story dispatcher has an off-screen arrival path, but unloaded-NPC dispatch has not been verified live.
+> **Automatic Social proximity (offline only):** NPC 1 resolves strictly, or nearest the player when ambiguous; NPC 2 is nearest resolved NPC 1, excluding itself. Ties use lowest FormID; only shared interiors/exterior worldspaces compare, with no global/fuzzy fallback. Proximity cannot identify the model's intended same-name actor; explicit reference labels are the later full fix. If NPC 1 is the wrong twin, NPC 2 follows it. Latest-pool overlap remains; engine positions and game behavior are unverified.
 
 > **3.6.0 NPC Social DM threading repair:** the async tick now queues game-state snapshotting through SKSE's main-thread task interface, including callback-quest inspection. Results and candidate pools from before a save load/revert are discarded. SE/AE soaks passed; stale-result drop and Phase B thread identity remain unverified. The 1.5.97 crash report on the original IntelEngine repo is not confirmed fixed. The faction-name expression and legacy synchronous APIs are unchanged.
 
@@ -559,11 +579,11 @@ The native MSVC Release profile disables optimization with `/Od /Ob0`, retains C
 
 - The 3.6.0 native build includes Skyrim SE, AE and VR. Tested: Skyrim **1.6.1170.0** and **1.7.104.0**; Skyrim VR **1.4.15** should work and was partly tested. Skyrim SE **1.5.x**: untested. Other listed targets are untested.
 - [SKSE](https://skse.silverlock.org/)
-- [SkyrimNet Beta 27 or newer](https://github.com/MinLL/SkyrimNet-GamePlugin) (3.7.1 minimum; 3.6.0 tested with official Beta 28)
+- [SkyrimNet Beta 27 or newer](https://github.com/MinLL/SkyrimNet-GamePlugin) (3.8.0 minimum; 3.6.0 tested with official Beta 28)
 - [SkyUI](https://www.nexusmods.com/skyrimspecialedition/mods/12604) (MCM)
 - [PapyrusUtil](https://www.nexusmods.com/skyrimspecialedition/mods/13048) (persistent storage)
 - [powerofthree's Papyrus Extender](https://www.nexusmods.com/skyrimspecialedition/mods/22854) (package management, linked refs)
-- Papyrus MessageBox (confirmation prompts): [Papyrus MessageBox - SKSE NG](https://www.nexusmods.com/skyrimspecialedition/mods/83578) for Skyrim 1.6 and earlier, or [PapyrusMessageBox-1.7.104](https://www.nexusmods.com/skyrimspecialedition/mods/193932) for Skyrim 1.7
+- Papyrus MessageBox (choice prompts; only needed without Magelight UI): [Papyrus MessageBox - SKSE NG](https://www.nexusmods.com/skyrimspecialedition/mods/83578) for Skyrim 1.6 and earlier, or [PapyrusMessageBox-1.7.104](https://www.nexusmods.com/skyrimspecialedition/mods/193932) for Skyrim 1.7
 
 ### Optional
 

@@ -6,7 +6,7 @@ cmake_minimum_required(VERSION 3.21)
 
 project(
     IntelEngine
-    VERSION 3.7.1
+    VERSION 3.8.0
     DESCRIPTION "Intelligent NPC Task Execution for SkyrimNet"
     LANGUAGES CXX
 )
@@ -131,6 +131,7 @@ find_package(unofficial-sqlite3 CONFIG REQUIRED)
 set(SOURCES
     src/Plugin.cpp
     src/Papyrus.cpp
+    src/NaturalTimeParser.cpp
     src/NPCIndex.cpp
     src/ItemIndex.cpp
     src/LocationResolver.cpp
@@ -155,6 +156,7 @@ set(SOURCES
     src/BattleManager.cpp
     src/DialogueTracker.cpp
     src/AsyncDispatch.cpp
+    src/PoliticalEngineBridge.cpp
 )
 
 # =============================================================================
@@ -205,6 +207,8 @@ add_executable(DirectorActorResolutionCheck EXCLUDE_FROM_ALL tests/DirectorActor
 target_include_directories(DirectorActorResolutionCheck PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 add_executable(FactionPairValidationCheck EXCLUDE_FROM_ALL tests/FactionPairValidationCheck.cpp)
 target_include_directories(FactionPairValidationCheck PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+add_executable(InformantRumorValidationCheck EXCLUDE_FROM_ALL tests/InformantRumorValidationCheck.cpp)
+target_include_directories(InformantRumorValidationCheck PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 add_executable(TaskHistoryDescriptionCheck EXCLUDE_FROM_ALL tests/TaskHistoryDescriptionCheck.cpp)
 target_include_directories(TaskHistoryDescriptionCheck PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 # Offline synthetic engine vtables exercise the production CommonLib getter.
@@ -214,6 +218,12 @@ target_link_libraries(ReferenceGetterDispatchCheck PRIVATE CommonLibSSE::CommonL
 
 add_executable(ProximityDistanceCheck EXCLUDE_FROM_ALL tests/ProximityDistanceCheck.cpp)
 target_include_directories(ProximityDistanceCheck PRIVATE src)
+add_executable(NaturalTimeParserCheck EXCLUDE_FROM_ALL tests/NaturalTimeParserCheck.cpp src/NaturalTimeParser.cpp)
+target_include_directories(NaturalTimeParserCheck PRIVATE src)
+
+add_executable(PoliticalEngineReadJSONCheck EXCLUDE_FROM_ALL tests/PoliticalEngineReadJSONCheck.cpp)
+target_include_directories(PoliticalEngineReadJSONCheck PRIVATE src)
+target_link_libraries(PoliticalEngineReadJSONCheck PRIVATE nlohmann_json::nlohmann_json)
 
 # =============================================================================
 # Output Configuration

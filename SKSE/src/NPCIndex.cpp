@@ -850,7 +850,7 @@ namespace IntelEngine {
         return nullptr;
     }
 
-    RE::Actor* NPCIndex::ResolveDirectorActor(const std::string& name) {
+    RE::Actor* NPCIndex::ResolveDirectorActor(const std::string& name, std::string* rejection) {
         std::unique_lock lock(m_mutex);
         // Merge current references: actors can spawn or change display names after the load-time build.
         ProcessUtils::ForEachLoadedActor([this](RE::Actor* actor) {
@@ -873,25 +873,74 @@ namespace IntelEngine {
             actor = candidate;
             return Rejection::None;
         });
+        if (rejection) *rejection = match.clashId ? "ambiguous" : DirectorActorRejectionName(match.rejection);
         if (match.clashId) {
             logger::warn("ResolveDirectorActor('{}') -> rejected: ambiguous FormIDs=0x{:08X},0x{:08X}",
                 name, match.formId, match.clashId);
             return nullptr;
         }
         if (!match.formId) {
+            // Indexed but not loaded this session: report lookup-null so Papyrus shows the "isn't loaded" message.
+            const bool indexedUnloaded = match.rejection == DirectorActorRejection::NotFound && m_npcFormIds.find(StringUtils::ToLowerStd(name)) != m_npcFormIds.end();
+            const char* branch = indexedUnloaded ? "lookup-null" : DirectorActorRejectionName(match.rejection);
+            if (rejection) *rejection = branch;
+            if (spdlog::default_logger()->should_log(spdlog::level::debug)) {
+                const auto lowerName = StringUtils::ToLowerStd(name);
+                const auto base = m_npcFormIds.find(lowerName);
+                if (base == m_npcFormIds.end()) logger::debug("[diag:director] miss name='{}' baseFormID=none", name);
+                else {
+                    auto* indexed = RE::TESForm::LookupByID(base->second);
+                    auto* reference = indexed ? indexed->As<RE::Actor>() : nullptr;
+                    auto* npcBase = reference ? reference->GetActorBase() : indexed ? indexed->As<RE::TESNPC>() : nullptr;
+                    logger::debug("[diag:director] miss name='{}' indexedFormID=0x{:08X} baseFormID=0x{:08X}", name, base->second, npcBase ? npcBase->GetFormID() : 0);
+                }
+                for (const auto& [id, indexedName] : m_directorActorNames) {
+                    const auto lowerIndexed = StringUtils::ToLowerStd(indexedName);
+                    if (lowerIndexed == lowerName || lowerIndexed.find(lowerName) != std::string::npos ||
+                        lowerName.find(lowerIndexed) != std::string::npos) {
+                        logger::debug("[diag:director] near name='{}' indexed='{}' FormID=0x{:08X}", name, indexedName, id);
+                        break;
+                    }
+                }
+            }
             logger::warn("ResolveDirectorActor('{}') -> rejected: {} FormID=0x{:08X}",
-                name, DirectorActorRejectionName(match.rejection), match.rejectedFormId);
+                name, branch, match.rejectedFormId);
             return nullptr;
+        }
+        if (spdlog::default_logger()->should_log(spdlog::level::debug)) {
+            auto* cell = actor->GetParentCell();
+            logger::debug("[diag:director] resolved name='{}' ref=0x{:08X} cellFormID=0x{:08X}",
+                name, actor->GetFormID(), cell ? cell->GetFormID() : 0);
         }
         return actor;
     }
 
-    RE::Actor* NPCIndex::ResolveStoryCandidate(const std::string& name) {
+    RE::Actor* NPCIndex::ResolveStoryCandidate(const std::string& name, const std::string& partnerName, RE::Actor* anchor) {
         std::shared_lock lock(m_mutex);
         // ponytail: latest-tick pools cannot isolate overlapping requests;
         // upgrade to request-bound resolution via the Papyrus contract.
         StoryCandidateRejection rejection;
-        const auto formId = ResolveStoryCandidateFormID(name, m_dmCandidatePool, m_npcCandidatePool, &rejection);
+        auto formId = ResolveStoryCandidateFormID(name, m_dmCandidatePool, m_npcCandidatePool, &rejection);
+        // The distance pass only knows actors in the anchor's cell or worldspace. It ran for every second NPC,
+        // so a name that had resolved to exactly one actor elsewhere (an innkeeper indoors and someone in the
+        // street) was thrown away and the pair dropped as "unresolved". It is for a name that fits several
+        // actors, or one that resolved to the anchor itself (two NPCs of the same name).
+        const bool isAnchor = anchor && formId != 0 && formId == anchor->GetFormID();
+        const bool tieBreak = !partnerName.empty() && (isAnchor || std::string_view(rejection.branch) == "ambiguous");
+        if (tieBreak) {
+            // ponytail: NPC 1 anchors NPC 2, not a closest-pair search; explicit reference labels fix intent.
+            auto* anchorActor = anchor ? anchor : RE::PlayerCharacter::GetSingleton();
+            formId = ResolveStoryCandidateFormID(name, m_dmCandidatePool, m_npcCandidatePool, &rejection, [anchorActor](std::uint32_t id) -> double {
+                auto* candidate = RE::TESForm::LookupByID<RE::Actor>(id);
+                if (!anchorActor || !candidate || candidate == anchorActor || candidate->IsDeleted() || candidate->IsDead() || candidate->IsDisabled()) return -1;
+                auto* cell = candidate->GetParentCell();
+                auto* nearCell = anchorActor->GetParentCell();
+                if (!cell || !nearCell || (nearCell->IsInteriorCell() ? cell != nearCell :
+                    cell->IsInteriorCell() || !anchorActor->GetWorldspace() || candidate->GetWorldspace() != anchorActor->GetWorldspace())) return -1;
+                const auto delta = candidate->GetPosition() - anchorActor->GetPosition();
+                return delta.x * delta.x + delta.y * delta.y + delta.z * delta.z;
+            });
+        }
         // Candidate IDs are actor references, never base forms or global name aliases.
         auto* actor = formId ? RE::TESForm::LookupByID<RE::Actor>(formId) : nullptr;
         if (!actor || actor->IsDeleted() || actor->GetFormID() != formId) {
@@ -921,6 +970,8 @@ namespace IntelEngine {
                 name, rejection.branch, m_dmCandidatePool.size(), m_npcCandidatePool.size(), formId, matches);
             return nullptr;
         }
+        // run1 2026-11-12: a tie-break pick was invisible (SkyLink shows Actor returns as complex_type).
+        if (tieBreak) logger::debug("ResolveStoryCandidate('{}') -> tie-break picked FormID=0x{:08X}", name, formId);
         return actor;
     }
 
@@ -1031,6 +1082,11 @@ namespace IntelEngine {
         auto displayName = actor->GetDisplayFullName();
         if (!displayName || !displayName[0] || std::string_view(displayName) == "Unknown") {
             if (verbose) logger::debug("[StoryDM] Rejected 0x{:08X}: no display name", actor->GetFormID());
+            return false;
+        }
+        // fix97: runtime-spawned actors (battle soldiers, ambushers) vanish on delete; live 17:43:41 NPC DM chose a brawl thief.
+        if (actor->IsDynamicForm()) {
+            if (verbose) logger::debug("[StoryDM] Rejected '{}': spawned (0xFF) actor", displayName);
             return false;
         }
         if (actor->IsDead()) {
@@ -1813,7 +1869,7 @@ namespace IntelEngine {
             if (!actor || actor == player) return false;
             auto* cell = actor->GetParentCell();
             if (!cell) return false;
-            if (actor->IsDead() || actor->IsDisabled()) return false;
+            if (actor->IsDead() || actor->IsDisabled() || actor->IsDynamicForm()) return false;  // fix97: no spawned actors
             if (actor->IsInCombat()) return false;
             if (actor->IsHostileToActor(player)) return false;
             if (tracker && (tracker->HasActiveTask(actor) || tracker->IsOnCooldown(actor))) return false;
@@ -2063,6 +2119,11 @@ namespace IntelEngine {
         // Pre-resolve political faction (engine-touch — must be on main thread)
         auto npcFaction = FactionPolitics::GetSingleton()->GetNPCFaction(actor);
         if (npcFaction) a.factionName = npcFaction->name;
+
+        // Restored (removed in 923d5f9): the DM must see which story types each candidate may be used for.
+        auto* pcell = RE::PlayerCharacter::GetSingleton()->GetParentCell();
+        a.eligibleTypes = NPCIndex::GetEligibleStoryTypes(actor, a.archetype,
+            CellAnalyzer::GetSingleton()->IsPlayerInDangerousLocation(), pcell && pcell->IsInteriorCell());
     }
 
     // Phase 0 — worker thread. Pre-fetch the SQL inputs Phase A needs.
@@ -2570,6 +2631,7 @@ namespace IntelEngine {
             md += "### ";  md += std::to_string(i + 1);  md += ". ";  md += a->nameDisplay;
             md += " [";    md += a->archetype;  md += ", ";  md += gender;  md += "] - ";  md += a->location;
             md += " (";    md += uuid;          md += ")\n";
+            md += "Eligible: ";   md += a->eligibleTypes;  md += "\n";
             md += "Hold: ";       md += a->npcHold;        md += "\n";
             md += "Distance: ";   md += distStr;           md += "\n";
             md += "Knows player: ";  md += familiarityStr; md += "\n";
@@ -3038,6 +3100,26 @@ namespace IntelEngine {
 
         json += "]";
         return json;
+    }
+
+    std::vector<RE::Actor*> NPCIndex::FindActorsWithPackages(const std::vector<RE::FormID>& packageFormIDs) {
+        std::vector<RE::Actor*> result;
+        auto* player = RE::PlayerCharacter::GetSingleton();
+        int seen = 0;
+        ProcessUtils::ForEachLoadedActor([&](RE::Actor* actor) {
+            if (!actor || actor == player) return false;
+            if (actor->IsDead() || actor->IsDisabled()) return false;
+            ++seen;
+            auto* currentPkg = actor->GetCurrentPackage();
+            if (!currentPkg) return false;
+            const RE::FormID id = currentPkg->GetFormID();
+            if (id != 0 && std::find(packageFormIDs.begin(), packageFormIDs.end(), id) != packageFormIDs.end()) {
+                result.push_back(actor);
+            }
+            return false;
+        });
+        logger::debug("[Sweep] {} actors with an AI process, {} currently on an IntelEngine package", seen, result.size());
+        return result;
     }
 
     void NPCIndex::NotifyStoryCooldown(RE::FormID formId, float gameTime) {

@@ -126,6 +126,10 @@ def main():
                 return json.loads(args[0]).get(args[1], "")
             if method in ("ResolveStoryCandidate", "ResolveDirectorActor"):
                 return self.actors.get(args[0])
+            if method == "GetConfigFloat":
+                return 800.0 if args[1] == "interaction.maxDistance" else 2.0
+            if method == "Is3DLoaded":
+                return True  # fix66: scene is in SkyrimNet range (1000 <= 0.85*800*2)
             if method == "GetDistance":
                 return 1000.0
             if method == "IsPlayerTeammate":
@@ -157,6 +161,16 @@ def main():
     def events_of(vm):
         return [effect[1] for effect in vm.effects if effect[0] == "RegisterEvent"]
 
+    def free_traveler(vm):
+        # 3.8 stuck fix: DispatchNPCSocial no longer sends someone who already holds a task slot or a story
+        # role (they got a second slot and a jog override on top of what they were doing); for them the
+        # meeting counts as having happened off-screen. The base VM starts with the agent in slot 0 and as
+        # the active story NPC, so a scenario about a walk-over has to start with a free traveler.
+        vm.properties["SlotStates"] = [0] * 5
+        vm.properties["AgentAlias00"].actor = None
+        vm.properties.update({"IsActive": False, "ActiveStoryNPC": None})
+        return vm
+
     rejected = SocialVM(files, history)
     rejected.should_act = False
     rejected.invoke("IntelEngine_StoryEngine", "OnNPCInteractionResponse",
@@ -171,7 +185,7 @@ def main():
     require(not events_of(cooldown) and not any(e[0] == "InjectFact" for e in cooldown.effects),
             "cooldown-blocked response emitted/applied a social outcome")
 
-    social = SocialVM(files, history)
+    social = free_traveler(SocialVM(files, history))
     social.invoke("IntelEngine_StoryEngine", "OnNPCInteractionResponse",
                   (social_response(social, "npc_interaction"), 1))
     require(not events_of(social) and not any(e[0] == "InjectFact" for e in social.effects) and
@@ -192,7 +206,7 @@ def main():
     require(any(effect[0] == "SendTaskNarration" for effect in social.effects),
             "social arrival lost dialogue-driving DirectNarration")
 
-    cancelled = SocialVM(files, history)
+    cancelled = free_traveler(SocialVM(files, history))
     cancelled.properties.update({"IsActive": False, "ActiveStoryNPC": None,
         "ActiveStoryType": "", "ActiveNarration": ""})
     cancelled.invoke("IntelEngine_StoryEngine", "OnNPCInteractionResponse",
@@ -209,7 +223,7 @@ def main():
             cancelled.properties["NPCSocialTraveler"] is None,
             "cancelled social arrival left monitoring latched or blocked the next dispatch")
 
-    gossip = SocialVM(files, history)
+    gossip = free_traveler(SocialVM(files, history))
     gossip.invoke("IntelEngine_StoryEngine", "OnNPCInteractionResponse",
                   (social_response(gossip, "npc_gossip"), 1))
     require(not events_of(gossip) and
@@ -226,6 +240,25 @@ def main():
             gossip.storage[(gossip.agent, "Intel_GossipTold")] == ["heard the Jarl raised taxes"],
             "gossip exchange did not update both StorageUtil records")
 
+    # fix 84/96: with a "subject" the gossip is stored and told as "<Subject> <gossip>", unless the gossip
+    # names the subject itself (whole word). The case above has no subject and must not gain a leading blank
+    # (3.8 review fix in Core.InformantRumor).
+    for subject, phrase, expected in (
+            ("Balgruuf", "raised the taxes again", "Balgruuf raised the taxes again"),
+            ("Balgruuf", "saw Balgruuf raise the taxes", "saw Balgruuf raise the taxes"),
+            ("Ria", "was seen leaving Riften at night", "Ria was seen leaving Riften at night")):
+        named = free_traveler(SocialVM(files, history))
+        named_response = json.loads(social_response(named, "npc_gossip"))
+        named_response.update({"subject": subject, "gossip": phrase})
+        named.invoke("IntelEngine_StoryEngine", "OnNPCInteractionResponse", (json.dumps(named_response), 1))
+        named.invoke("IntelEngine_StoryEngine", "OnNPCSocialArrived")
+        named_events = events_of(named)
+        require(len(named_events) == 1 and
+                json.loads(named_events[0][1]) == {"line": "Courier told Recipient a rumor: " + expected} and
+                named.storage[(named.target, "Intel_GossipHeard")] == [expected] and
+                named.storage[(named.agent, "Intel_GossipTold")] == [expected],
+                f"gossip with subject {subject!r} was not stored and told as {expected!r}: {named_events!r}")
+
     chain = SocialVM(files, history)
     chain.agent.cell = chain.target.cell = chain.extra.cell = "far-cell"
     chain.invoke("IntelEngine_Core", "InjectGossip",
@@ -237,7 +270,7 @@ def main():
             chain_events[1][2:] == (chain.target, chain.extra),
             f"gossip chain did not emit one typed event per stored exchange: {chain_events!r}")
 
-    director = SocialVM(files, history)
+    director = free_traveler(SocialVM(files, history))
     director.properties["SlotStates"] = [0] * 5
     director.properties.update({f"AgentAlias{i:02d}": runner.ReferenceAlias() for i in range(5)})
     director_response = json.dumps({"fact1": "found a map", "fact2": "likes ale",
@@ -250,6 +283,8 @@ def main():
     require(not events_of(director) and not any(e[0] == "InjectFact" for e in director.effects) and
             director.properties["NPCSocialTraveler"] is director.agent,
             "Director social travel did not defer facts/event until arrival")
+    require([e[1][5] for e in director.effects if e[0] == "AddNPCSocialLog"] == ["Courier: found a map | Recipient: likes ale"],
+            "Director npc_interaction log lost its detail")
     director.invoke("IntelEngine_StoryEngine", "OnNPCSocialArrived")
     require(len(events_of(director)) == 1 and
             json.loads(events_of(director)[0][1]) == {"line": "Courier met with Recipient"},
@@ -287,6 +322,9 @@ def main():
     quest = SocialVM(files, history)
     quest.slot_owner = quest.agent
     quest.halt_after_story_event = True
+    # A story dispatch holds a "story" slot; 3.8: with any other type in that slot the NPC has been given
+    # another task during the wait, and the quest offer is not made on top of it.
+    quest.properties["SlotTaskTypes"] = ["story"] + [""] * 4
     quest.properties.update({"DispatchGeneration": 1, "QuestActive": True,
         "ActiveStoryType": "quest", "ActiveStoryNPC": quest.agent, "ActiveNarration": "A request for help",
         "QuestDepartureNPC": quest.target, "QuestDepartureFact": "", "QuestGiver": quest.agent,

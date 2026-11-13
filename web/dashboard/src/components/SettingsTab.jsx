@@ -3,9 +3,9 @@ import Select from './Select';
 
 const DANGER_POLICIES = ['Allow All', 'Block Civilians', 'Followers Only', 'Block All'];
 const DANGER_HINTS = [
-  'No filtering. All NPC types can visit you in dungeons and caves.',
-  'Farmers, merchants and civilians stay away. Warriors and mages can still visit.',
-  'Only NPCs who can be followers visit you in dangerous locations.',
+  'No filtering. All NPC types can visit you in dungeons and caves. Informants always turn back.',
+  'Farmers, merchants and civilians stay away. Warriors and mages can still visit. Informants always turn back.',
+  'Only NPCs who can be followers visit you in dangerous locations. Informants always turn back.',
   'Nobody visits you in dangerous locations.',
 ];
 const HOME_POLICIES = ['Allow All', 'Block Civilians', 'Followers Only', 'Block All'];
@@ -96,7 +96,7 @@ function SettingsTab({ config, onSettingChange, pluginConfig, onPluginConfigChan
   }
 
   return (
-    <div className="p-3 space-y-1">
+    <div className="ie-settings p-3 space-y-1">
       {/* Story Engine */}
       <Accordion title="Story Engine" isOpen={openSections.storyEngine} onToggle={() => toggle('storyEngine')}>
         <ToggleRow
@@ -240,7 +240,7 @@ function SettingsTab({ config, onSettingChange, pluginConfig, onPluginConfigChan
         <SliderRow
           label="Release Distance"
           value={config.releaseDistance}
-          min={200} max={2000} step={100}
+          min={300} max={2000} step={100}
           unit="u"
           onCommit={v => onSettingChange('releaseDistance', v)}
           hint="How far you must walk before an NPC stops lingering."
@@ -360,6 +360,13 @@ function SettingsTab({ config, onSettingChange, pluginConfig, onPluginConfigChan
               onChange={v => onPluginConfigChange('politics.enabled', v)}
               hint="Factions autonomously trade, negotiate, scheme, and go to war."
             />
+            <p className="text-xs text-gray-400">Political Engine detected: {pluginConfig['politics.pe_detected'] ? 'Yes' : 'No'}</p>
+            <ToggleRow label="Political Engine integration" value={pluginConfig['politics.pe_integration'] !== false && pluginConfig['politics.pe_integration'] !== 'false'}
+              onChange={v => onPluginConfigChange('politics.pe_integration', v)}
+              hint="When off, IE ignores Political Engine even if installed." />
+            <ToggleRow label="PE reactions move relations" value={pluginConfig['politics.pe_reactions_move_relations'] !== false && pluginConfig['politics.pe_reactions_move_relations'] !== 'false'}
+              onChange={v => onPluginConfigChange('politics.pe_reactions_move_relations', v)}
+              hint="When off, PE reactions are recorded without changing relations or player standing." />
             <SliderRow
               label="Tick Interval"
               value={parseInt(pluginConfig['politics.tick_interval_hours']) || 6}

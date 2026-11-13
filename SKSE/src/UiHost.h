@@ -50,4 +50,10 @@ std::unique_ptr<IUiHost> CreateUiHostWithResolver(std::string_view preference,
                                                  UiHostEventSink eventSink,
                                                  const UiHostApiResolver& resolver);
 
+// Types the pad as keys (A Enter, B Escape, d-pad and left stick the arrows) on a Magelight view made elsewhere,
+// such as the choice popup created through Magelight's Papyrus tier, which has no gamepad call of its own.
+// 1 = done, 0 = no gamepad layer (no Magelight, a host before 1.6.0, VR, switched off), -1 = refused by the host.
+int SetMagelightViewGamepadKeys(std::uint32_t view);
+int SetMagelightViewGamepadKeysWithResolver(std::uint32_t view, const UiHostApiResolver& resolver);
+
 }  // namespace IntelEngine

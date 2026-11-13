@@ -632,6 +632,19 @@ int fix(const fs::path& essPath, void (*requireGameClosed)() = verifyBeforePubli
             return 2;
         }
     }
+    if (parsed.chunk != 0 && parsed.refusals.empty() && std::none_of(parsed.fields.begin(),parsed.fields.end(),
+            [](const Field& field) { return target(field.key); })) {
+        // ponytail: cache-key-valued opaque tokens still refuse; parse native key positions if needed.
+        const auto raw=view(skse.bytes(),parsed.begin,std::find(skse.bytes().begin()+parsed.begin,skse.bytes().begin()+parsed.end,0)-skse.bytes().begin());
+        for (auto start=raw.find_first_not_of(" \t\n\v\f\r"); start != std::string_view::npos;) {
+            const auto end=raw.find_first_of(" \t\n\v\f\r",start);
+            require(!target(raw.substr(start,end == std::string_view::npos ? raw.size()-start : end-start)),
+                "possible native cache target in non-cache STRV; originals unchanged");
+            start=end == std::string_view::npos ? end : raw.find_first_not_of(" \t\n\v\f\r",end);
+        }
+        std::cout << "No conversion needed: no IntelEngine rendered-cache targets. Originals unchanged.\n";
+        return 2;
+    }
     auto converted=parsed.chunk == 0 ? Converted{skse.bytes(),Json::array(),0} :
         convert(skse.bytes(),parsed,fixEvidence(skse.bytes(),parsed),true);
     const auto backup=fs::path(base.wstring()+L"_IEbackup");

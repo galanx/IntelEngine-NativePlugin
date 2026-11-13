@@ -24,6 +24,7 @@
 #include "StringUtils.h"
 #include "AsyncDispatch.h"
 #include "ProximityMonitor.h"
+#include "PoliticalEngineBridge.h"
 
 #include <fstream>
 #include <chrono>
@@ -105,10 +106,14 @@ namespace IntelEngine {
                     continue;
                 }
                 uint32_t strLen = 0;
-                a_intfc->ReadRecordData(&strLen, sizeof(strLen));
+                if (a_intfc->ReadRecordData(&strLen, sizeof(strLen)) != sizeof(strLen)) {
+                    continue;
+                }
                 if (strLen > 0 && strLen < 256) {
                     std::string id(strLen, '\0');
-                    a_intfc->ReadRecordData(id.data(), strLen);
+                    if (a_intfc->ReadRecordData(id.data(), strLen) != strLen) {
+                        continue;
+                    }
                     g_currentSaveID = id;
                     logger::info("LoadCallback: Loaded save ID '{}'", g_currentSaveID);
                 }
@@ -119,6 +124,9 @@ namespace IntelEngine {
     }
 
     void RevertCallback(SKSE::SerializationInterface*) {
+        intelEngineStoryLoadRecovered.store(false);
+        PoliticalEngineBridge::GetSingleton()->MarkDirty(true);
+        PoliticalDB::GetSingleton()->BeginLoad();
         g_currentSaveID.clear();
         g_hasReverted = true;
         // Cancel deferred Maintenance and NPC tick snapshots/results from the previous load.
@@ -138,6 +146,7 @@ namespace IntelEngine {
 
     /** Initialize PoliticalDB with per-save database path + timeline cleanup. */
     static void InitializePoliticalDB() {
+        FactionPolitics::GetSingleton()->ClearCaches();
         std::string saveID = GetSaveUniqueID();
 
         // Build path: Data/SKSE/Plugins/IntelEngine/data/IntelEngine-{saveID}.db
@@ -154,13 +163,14 @@ namespace IntelEngine {
             db->Shutdown();
         }
 
-        if (!db->Initialize(PathToUtf8(dbPath))) {
+        if (!db->Initialize(PathToUtf8(dbPath), saveID)) {
             logger::error("Failed to initialize PoliticalDB");
             return;
         }
 
         // Timeline cleanup: delete events from the future (save-scumming)
         auto* calendar = RE::Calendar::GetSingleton();
+        if (!calendar) logger::warn("PoliticalDB: No calendar for cleanup; pipe 2 remains not ready");
         if (calendar) {
             float currentGameTime = calendar->GetCurrentGameTime();
             int cleaned = db->CleanupFutureEvents(currentGameTime);
@@ -171,9 +181,6 @@ namespace IntelEngine {
 
         // Recalculate player standings from history (handles save-scumming correctly)
         db->RecalculatePlayerStandings();
-
-        // Clear FactionPolitics in-memory caches
-        FactionPolitics::GetSingleton()->ClearCaches();
     }
 
     // =========================================================================
@@ -337,6 +344,10 @@ namespace IntelEngine {
 
     void MessageHandler(SKSE::MessagingInterface::Message* a_msg) {
         switch (a_msg->type) {
+            case SKSE::MessagingInterface::kPreLoadGame:
+                intelEngineStoryLoadRecovered.store(false);
+                PoliticalDB::GetSingleton()->BeginLoad();
+                break;
             case SKSE::MessagingInterface::kDataLoaded:
                 // Game data is loaded - initialize SkyrimNet API and build NPC index
                 // Note: PoliticalDB + FactionPolitics init deferred to kNewGame/kPostLoadGame
@@ -344,6 +355,8 @@ namespace IntelEngine {
                 logger::info("Data loaded - initializing SkyrimNet API and NPC index");
                 MemoryDB::GetSingleton()->InitializeAPI();
                 DialogueTracker::GetSingleton()->Initialize();
+                PoliticalEngineBridge::GetSingleton()->onLoaded = [] { Papyrus::PollAndSyncPE(); };
+                PoliticalEngineBridge::GetSingleton()->Initialize();
 
                 // Register quest decorator with SkyrimNet (soft dependency — skipped if API unavailable)
                 if (SkyrimNetAPI::RegisterDecorator) {
@@ -372,6 +385,7 @@ namespace IntelEngine {
             case SKSE::MessagingInterface::kNewGame:
                 // New game — clear SlotTracker state, force DB re-discovery
                 logger::info("New game - clearing SlotTracker, clearing MemoryDB caches");
+                PoliticalEngineBridge::GetSingleton()->MarkDirty(true);
                 SlotTracker::GetSingleton()->ClearAll();
                 ProximityMonitor::GetSingleton()->DisarmAll();
                 NPCIndex::GetSingleton()->RefreshIndex();
@@ -392,6 +406,8 @@ namespace IntelEngine {
                 // Game loaded — SlotTracker already populated from co-save (LoadCallback).
                 // ClearAll moved to RevertCallback to avoid wiping co-save data.
                 logger::info("Game loaded - refreshing indexes, clearing MemoryDB caches");
+                PoliticalEngineBridge::GetSingleton()->MarkDirty(true);
+                AsyncDispatch::Submit([] { Papyrus::PollAndSyncPE(); });  // no-op unless PE data is already ready; PE's own "loaded" event covers the other order
                 NPCIndex::GetSingleton()->RefreshIndex();
                 MemoryDB::GetSingleton()->ClearCaches();
                 // Initialize per-save political DB (save ID restored via serialization)
@@ -518,6 +534,7 @@ SKSEPluginLoad(const SKSE::LoadInterface* skse) {
     // Register Shutdown via atexit so the worker is joined before static destructors
     // tear down singletons / SQLite connections / spdlog. Without this, an in-flight
     // Phase B task could touch destroyed state at process exit.
+    IntelEngine::PoliticalEngineBridge::GetSingleton(); // Outlive the async worker's atexit drain.
     IntelEngine::AsyncDispatch::Initialize();
     std::atexit([]() { IntelEngine::AsyncDispatch::Shutdown(); });
 

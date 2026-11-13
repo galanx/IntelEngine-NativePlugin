@@ -28,7 +28,7 @@ function StoryTab({ story, quest, social, npcSocialLog, calendar, sendAction }) 
   }
 
   return (
-    <div className="p-3 space-y-4">
+    <div className="ie-page p-3 space-y-4">
       {/* Story Engine Status */}
       <section>
         <div className="flex items-center justify-between mb-2">

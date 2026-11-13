@@ -23,6 +23,8 @@ namespace IntelEngine {
     struct FactionConfigLoadResult {
         std::vector<FactionConfig> factions;
         std::vector<DefaultRelation> defaultRelations;
+        std::vector<std::pair<std::string, std::vector<std::string>>> warAllowed;  // fix94
+        bool hasWarAllowed = false;
         bool success = false;
     };
 
