@@ -192,18 +192,18 @@ const STORY_TYPE_FIELDS = {
     { key: 'sender', label: 'Quest giver', type: 'text',
       placeholder: 'e.g. Jarl Balgruuf',
       hint: 'Optional. If set, NPC becomes a courier. Required for Jarls/leaders (they never travel).' },
-    { key: 'msgContent', label: 'Plea for help', type: 'text',
+    { key: 'msgContent', label: 'Plea for help', type: 'text', required: true,
       placeholder: 'e.g. Draugr have been crawling out of the barrow at night',
-      hint: 'Optional. Why they need help. Shown in NPC dialogue on arrival.' },
-    { key: 'victimName', label: 'Victim (rescue)', type: 'text',
+      hint: 'Required. Why they need help. Shown in NPC dialogue on arrival.' },
+    { key: 'victimName', label: 'Victim (rescue)', type: 'text', requiredIf: ['questSubType', 'rescue'],
       placeholder: 'e.g. Camilla Valerius',
-      hint: 'Rescue only. Exact NPC name. Must exist in-game or quest is rejected.' },
+      hint: 'Required for rescue. Exact NPC name. Must exist in-game or quest is rejected.' },
     { key: 'itemName', label: 'Item (find_item)', type: 'text',
       placeholder: 'e.g. Ebony Blade, Glass Sword, Spell Tome: Fireball',
       hint: 'Find_item only. Exact in-game item name. Fallback to random if not found.' },
-    { key: 'itemDesc', label: 'Item description', type: 'text',
+    { key: 'itemDesc', label: 'Item description', type: 'text', requiredIf: ['questSubType', 'find_item'],
       placeholder: 'e.g. a legendary elven blade, a powerful spell tome',
-      hint: 'Find_item only. Brief narrative description for dialogue context.' },
+      hint: 'Required for find_item. Brief narrative description for dialogue context.' },
   ] },
 };
 
@@ -578,7 +578,7 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
 
   const storyGuidance = touched.storyType ? STORY_TYPE_FIELDS[storyType] : null, currentFields = STORY_TYPE_FIELDS[storyType]?.fields || [];
   const currentSocialFields = SOCIAL_TYPE_FIELDS[socialType] || [];
-  const variantRequired = (defs, values) => defs.filter(f => f.required).map(f => [f.label, !!(values[f.key] || '').trim()]);
+  const variantRequired = (defs, values) => defs.filter(f => f.required || (f.requiredIf && values[f.requiredIf[0]] === f.requiredIf[1])).map(f => [f.label, !!(values[f.key] || '').trim()]);
   // An unpicked type shows "(auto)", which only Generate honours, so Dispatch needs a picked (or generated) type.
   const storyTypeValid = !!touched.storyType && DIRECTOR_STORY_TYPES.some(type => type.key === storyType);
   const socialTypeValid = !!touched.socialType && SOCIAL_TYPES.some(type => type.key === socialType);
