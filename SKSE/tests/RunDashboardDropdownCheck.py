@@ -684,7 +684,7 @@ SCRIPT = r"""
       await choose('Story type', 'Message');
       check(text().includes('Sends a nearby courier to deliver a message from the selected NPC.') && text().includes('Why the sender wanted contact.'), 'message hints did not replace road hints');
       check(!text().includes('Where they are heading.') && !text().includes('Why they are travelling'), 'road hints survived type switch');
-      check(text().includes('Optional. If set with meetTime, creates a meeting invitation.'), 'message destination hint missing');
+      check(text().includes('Optional. With a Meeting time, creates a meeting invitation.'), 'message destination hint missing');
       story().querySelector('summary button').click(); await pause();
       const message = JSON.parse(payloads.at(-1)[1]);
       check(message.schema.narration.hint.includes('Why the sender wanted contact.') && !message.schema.narration.hint.includes('travelling'), 'Generate retained previous type guidance');
