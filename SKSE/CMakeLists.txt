@@ -6,7 +6,7 @@ cmake_minimum_required(VERSION 3.21)
 
 project(
     IntelEngine
-    VERSION 3.7.1
+    VERSION 3.7.2
     DESCRIPTION "Intelligent NPC Task Execution for SkyrimNet"
     LANGUAGES CXX
 )
@@ -214,6 +214,8 @@ target_link_libraries(ReferenceGetterDispatchCheck PRIVATE CommonLibSSE::CommonL
 
 add_executable(ProximityDistanceCheck EXCLUDE_FROM_ALL tests/ProximityDistanceCheck.cpp)
 target_include_directories(ProximityDistanceCheck PRIVATE src)
+add_executable(ClockTimeCheck EXCLUDE_FROM_ALL tests/ClockTimeCheck.cpp)
+target_include_directories(ClockTimeCheck PRIVATE src)
 
 # =============================================================================
 # Output Configuration

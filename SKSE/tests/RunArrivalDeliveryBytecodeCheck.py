@@ -258,6 +258,15 @@ class VM:
             self.effects.append((method, tuple(args)))
             return None
         if method == "IsPlayerInOwnHome": return False
+        # 3.7.2: who may be sent on a task, and who still owns an NPC's packages. The modeled actors are
+        # ordinary adults outside every faction, no optional plugin is installed, and nothing is tracked.
+        if method in ("GetFormFromFile", "GetLinkedRef"): return None
+        if method in ("IsPluginInstalled", "IsChild", "IsInFaction"): return False
+        if method == "GetFactionRank": return -2
+        if method == "FormListFind": return -1
+        if method in ("FormListAdd", "FormListRemove", "FormListRemoveAt", "IntListRemove"):
+            self.effects.append((method, tuple(args)))
+            return None
         if method in ("AddToFaction", "StopScheduler", "UpdateSlotState", "SetSlotSpeed",
                       "InitOffScreenTracking", "InitOffScreenTravel", "MarkSystemPending",
                       "ClearSystemPending", "ArmProximityArrival", "RemovePackageOverride"):
@@ -1046,7 +1055,9 @@ def main():
                 "stale arrival poll mutated replacement slot tracking")
 
     combat = VM(files, history)
-    combat.properties.update({"ArrivalHandling": True, "ActiveStoryType": "ambush_combat"})
+    # A story dispatch holds a "story" slot; any other slot type means another task took the NPC over (3.7.2).
+    combat.properties.update({"ArrivalHandling": True, "ActiveStoryType": "ambush_combat",
+        "SlotTaskTypes": ["story"] + [""] * 4})
     combat.halt_before = "CheckAmbushCombat"
     combat.invoke("IntelEngine_StoryEngine", "CheckStoryNPCArrival")
     require(combat.halt_reached,

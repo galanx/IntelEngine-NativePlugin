@@ -9,6 +9,7 @@
 #include "Plugin.h"
 #include "UiHost.h"
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <mutex>
 #include <string>
@@ -34,6 +35,16 @@ namespace IntelEngine {
         void PushSlotData();
         void PushFullState(const std::string& json);
         void ReloadView();
+
+        // Timed prompt: a card with a text, up to three answers and a draining time bar, shown by the
+        // dashboard's own page (alone when the dashboard is closed, on top of it when it is open).
+        // ShowPrompt returns an id, or 0 when no prompt can be shown now (no UI host, or one is already up).
+        // GetPromptResult: -1 while it is open, the chosen answer (0-based) once decided, kPromptUnavailable
+        // when the view could not be shown at all, so the caller can fall back to a message box.
+        static constexpr int kPromptUnavailable = -2;
+        int ShowPrompt(const std::string& title, const std::string& body,
+                       const std::vector<std::string>& options, float timeoutSeconds, int timeoutChoice);
+        int GetPromptResult(int promptId);
 
     private:
         DashboardUIManager() = default;
@@ -76,6 +87,22 @@ namespace IntelEngine {
         mutable std::mutex mutex_;
         std::condition_variable pollCondition_;
         std::thread hotkeyThread_;
+        int promptId_ = 0;
+        int promptCounter_ = 0;
+        int promptFallback_ = 0;
+        int lastPromptId_ = 0;
+        int lastPromptResult_ = -1;
+        int promptAbortResult_ = kPromptUnavailable;
+        bool promptSent_ = false;
+        bool promptWantsOpen_ = false;
+        bool promptOpenedView_ = false;
+        bool promptAbort_ = false;
+        std::string promptJson_;
+        std::chrono::steady_clock::time_point promptDeadline_{};
+        void ServicePrompt();
+        void FinishPrompt(int result);
+        static void OnPromptResultStatic(const char* jsonArg);
+
         void HotkeyPollLoop();
         void OnHostEvent(UiHostEvent event, std::uint64_t expectedIntentGeneration = 0);
         void RequestClose();

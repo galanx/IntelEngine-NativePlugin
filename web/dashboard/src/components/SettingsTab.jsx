@@ -96,7 +96,7 @@ function SettingsTab({ config, onSettingChange, pluginConfig, onPluginConfigChan
   }
 
   return (
-    <div className="p-3 space-y-1">
+    <div className="ie-settings p-3 space-y-1">
       {/* Story Engine */}
       <Accordion title="Story Engine" isOpen={openSections.storyEngine} onToggle={() => toggle('storyEngine')}>
         <ToggleRow
