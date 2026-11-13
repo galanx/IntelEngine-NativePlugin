@@ -2392,7 +2392,7 @@ String Function InformantRumor(String subject, String rumor, String gossip)
     If rumor != "" || gossip == ""
         Return rumor
     EndIf
-    If StringUtil.Find(gossip, UntagName(subject)) < 0
+    If ReplaceText(gossip, UntagName(subject), "") == gossip ; fix96: whole-word, "Ria" is not in "Victoria" (live 17:27)
         gossip = subject + " " + gossip
     EndIf
     Return gossip
@@ -2562,7 +2562,11 @@ Event OnDashboardDispatchStory(String eventName, String strArg, Float numArg, Fo
     ; Director skips cooldown/MCM checks intentionally — it's a manual DM override
     Int g = StoryEngine.DispatchGeneration
     If storyType == "seek_player"
-        InjectFact(npc, "set out to find " + Game.GetPlayer().GetDisplayName() + " -- " + narration)
+        String seekFact = narration
+        If StringUtil.Find(narration, Game.GetPlayer().GetDisplayName()) < 0
+            seekFact = "set out to find " + Game.GetPlayer().GetDisplayName() + " -- " + narration
+        EndIf
+        InjectFact(npc, seekFact)
         StoryEngine.ActiveStoryType = storyType
         StoryEngine.DispatchToTarget(npc, Game.GetPlayer(), narration, "story", "Director")
 
@@ -2662,11 +2666,25 @@ Event OnDashboardDispatchNpcSocial(String eventName, String strArg, Float numArg
     If socialType == "npc_interaction"
         fact1 = StoryEngine.ExtractJsonField(response, "fact1")
         fact2 = StoryEngine.ExtractJsonField(response, "fact2")
-        StoryEngine.AddNPCSocialLog("npc_interaction", npc1Name, npc2Name, narration, npc1)
+        String logDetail = ""
+        If fact1 != ""
+            logDetail = npc1Name + ": " + fact1
+        EndIf
+        If fact2 != ""
+            If logDetail != ""
+                logDetail += " | "
+            EndIf
+            logDetail += npc2Name + ": " + fact2
+        EndIf
+        StoryEngine.AddNPCSocialLog("npc_interaction", npc1Name, npc2Name, narration, npc1, logDetail)
         StoryEngine.AddRecentStoryEvent("npc_interaction: " + npc1Name + " and " + npc2Name + " - " + narration)
     ElseIf socialType == "npc_gossip"
-        gossip = StoryEngine.ExtractJsonField(response, "gossip")
-        StoryEngine.AddNPCSocialLog("npc_gossip", npc1Name, npc2Name, narration, npc1)
+        gossip = InformantRumor(StoryEngine.ExtractJsonField(response, "subject"), "", StoryEngine.ExtractJsonField(response, "gossip")) ; fix84: "<Subject> <gossip>"
+        If gossip == ""
+            StoryEngine.AddNPCSocialLog("npc_gossip", npc1Name, npc2Name, narration, npc1)
+        Else
+            StoryEngine.AddNPCSocialLog("npc_gossip", npc1Name, npc2Name, gossip, npc1) ; fix87: log the rumour
+        EndIf
         StoryEngine.AddRecentStoryEvent("npc_gossip: " + npc1Name + " told " + npc2Name + " - " + narration)
     EndIf
 
@@ -2676,9 +2694,21 @@ Event OnDashboardDispatchNpcSocial(String eventName, String strArg, Float numArg
     If dist < 5000.0 && dist > 200.0
         ok = StoryEngine.DispatchNPCSocial(npc1, npc2, narration, socialType, npc1, npc2, fact1, fact2, gossip, "Director")
     Else
-        ; Existing off-screen Director outcome: no travel is needed.
-        StoryEngine.CompleteNPCSocialOutcome(npc1, npc2, socialType, fact1, fact2, gossip)
-        DebugMsg("Director: NPCs too far apart or already close - applied off-screen")
+        ; fix 95c: loaded near the player, not same parent cell (outdoor grid cells split a few steps; live 16:55:11 dist=59 both cells False)
+        If dist <= 200.0 && npc1.Is3DLoaded() && npc2.Is3DLoaded()
+            ; fix 95: already together where the player is - play it there (in earshot) or hold until the player comes in range
+            If StoryEngine.InNarrationRange(npc1)
+                StoryEngine.PerformVisibleInteraction(npc1, npc2, narration, socialType)
+                StoryEngine.CompleteNPCSocialOutcome(npc1, npc2, socialType, fact1, fact2, gossip)
+            Else
+                StoryEngine.HoldSocialScene(npc1, npc2, npc1, npc2, narration, socialType, fact1, fact2, gossip)
+            EndIf
+            DebugMsg("Director: NPCs already together near the player - scene played in place")
+        Else
+            ; Existing off-screen Director outcome: no travel is needed.
+            StoryEngine.CompleteNPCSocialOutcome(npc1, npc2, socialType, fact1, fact2, gossip)
+            DebugMsg("Director: NPCs too far apart or already close - applied off-screen (dist=" + dist + " npc1Loaded=" + npc1.Is3DLoaded() + " npc2Loaded=" + npc2.Is3DLoaded() + ")")
+        EndIf
     EndIf
     If ok
         NotifyPlayer(npc1Name + " and " + npc2Name + ": " + IntelEngine.FriendlyKey(socialType) + " started.")

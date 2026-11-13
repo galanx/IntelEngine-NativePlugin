@@ -1540,9 +1540,9 @@ Function CleanupManifestation()
                 ManifestActors[i].DisableNoWait()
                 ManifestActors[i].Delete()
             Else
-                ; Living actors: remove from battle factions, let them wander off
                 ManifestActors[i].RemoveFromFaction(Intel_BattleSideA)
                 ManifestActors[i].RemoveFromFaction(Intel_BattleSideB)
+                ManifestActors[i].Delete() ; fix98: spawned survivors used to stay forever (live 2026-11-12)
             EndIf
             ManifestActors[i] = None
         EndIf

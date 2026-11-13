@@ -726,10 +726,14 @@ Function TickScheduler()
                     String gNpc2 = StorageUtil.StringListGet(player, "Intel_SocialLog_NPC2", gi)
                     String gText = StorageUtil.StringListGet(player, "Intel_SocialLog_Text", gi)
                     String gLoc = StorageUtil.StringListGet(player, "Intel_SocialLog_Location", gi)
+                    String gEntry = gNpc1 + " told " + gNpc2 + ": " + gText
+                    If StorageUtil.StringListGet(player, "Intel_SocialLog_Type", gi) == "npc_interaction"
+                        gEntry = BuildInteractionLine(gNpc1, gText, gNpc2) ; fix87: interactions are not "told"
+                    EndIf
                     If gLoc != ""
-                        gossipLines += "- [" + gLoc + "] " + gNpc1 + " told " + gNpc2 + ": " + gText + "\n"
+                        gossipLines += "- [" + gLoc + "] " + gEntry + "\n"
                     Else
-                        gossipLines += "- " + gNpc1 + " told " + gNpc2 + ": " + gText + "\n"
+                        gossipLines += "- " + gEntry + "\n"
                     EndIf
                     gossipShown += 1
                     gi -= 1
@@ -973,7 +977,7 @@ Function OnNPCInteractionResponse(String response, Int success)
             logDetail += npc2.GetDisplayName() + ": " + fact2
         EndIf
     ElseIf storyType == "npc_gossip"
-        gossipContent = ExtractJsonField(response, "gossip")
+        gossipContent = Core.InformantRumor(ExtractJsonField(response, "subject"), "", ExtractJsonField(response, "gossip")) ; fix84: "<Subject> <gossip>"
         If gossipContent != ""
             logDetail = "Gossip: " + gossipContent
             dashboardText = gossipContent
@@ -1839,7 +1843,11 @@ Function OnDungeonMasterResponse(String response, Int success)
 
     ; Route by type
     If storyType == "seek_player"
-        Core.InjectFact(npc, "set out to find " + Game.GetPlayer().GetDisplayName() + " -- " + narration)
+        String seekFact = narration
+        If StringUtil.Find(narration, Game.GetPlayer().GetDisplayName()) < 0
+            seekFact = "set out to find " + Game.GetPlayer().GetDisplayName() + " -- " + narration
+        EndIf
+        Core.InjectFact(npc, seekFact)
         ActiveStoryType = storyType
         DispatchToTarget(npc, Game.GetPlayer(), narration, "story")
 
@@ -5565,7 +5573,38 @@ EndFunction
 ; =============================================================================
 
 String Function BuildInteractionSummary(Actor npc1, String eventText, Actor npc2)
-    return npc1.GetDisplayName() + " " + eventText + " with " + npc2.GetDisplayName()
+    String n2 = ""
+    If npc2
+        n2 = npc2.GetDisplayName()
+    EndIf
+    Return BuildInteractionLine(npc1.GetDisplayName(), eventText, n2)
+EndFunction
+
+String Function BuildInteractionLine(String npc1Name, String eventText, String npc2Name)
+    {"<npc1> <eventText> with <npc2>", without a leading npc1 name or "with npc2" the text already carries (fix86: "Hulda Hulda told...").
+    Names match on the first word of the untagged name, as the narration writes them ("Ollfar told Aldis").}
+    String text = eventText
+    If StringUtil.Find(text, FirstName(npc1Name) + " ") != 0
+        text = npc1Name + " " + text
+    EndIf
+    ; ponytail: substring match ("Ria" in "Riften") only drops the "with" tail; whole-word if that shows up
+    If npc2Name != "" && StringUtil.Find(text, FirstName(npc2Name)) < 0
+        Int last = StringUtil.GetLength(text) - 1
+        If last > 0 && StringUtil.GetNthChar(text, last) == "."
+            text = StringUtil.Substring(text, 0, last)
+        EndIf
+        text += " with " + npc2Name
+    EndIf
+    return text
+EndFunction
+
+String Function FirstName(String name)
+    String n = Core.UntagName(name)
+    Int sp = StringUtil.Find(n, " ")
+    If sp > 0
+        Return StringUtil.Substring(n, 0, sp)
+    EndIf
+    Return n
 EndFunction
 
 ; =============================================================================
