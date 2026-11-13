@@ -161,7 +161,7 @@ namespace IntelEngine::SettingsBridge {
                      "Asks SkyrimNet to update an NPC's dynamic profile once you have exchanged enough lines with them."),
                 Num(Kind::Int, "autoBioThreshold", "other", "auto_bio_threshold", 5, 1000, 20, O, "Lines before a profile refresh", ""),
                 Bool("debugMode", "other", "debug_messages", false, O, "Debug messages",
-                     "Writes what IntelEngine does to the Papyrus log and shows more notices on screen."),
+                     "Shows what IntelEngine does as notices on screen. The Papyrus log has it either way; for more in the DLL's own log set DebugLevel=4 in IntelEngine.ini."),
             };
         }
 

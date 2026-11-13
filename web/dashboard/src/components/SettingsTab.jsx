@@ -27,13 +27,14 @@ const HOLD_HINTS = [
   'All NPCs must be in the same town/city as you.',
 ];
 const HOLD_TYPES = [
-  { key: 'holdPolicySeekPlayer', label: 'Seek Player' },
-  { key: 'holdPolicyInformant', label: 'Informant' },
-  { key: 'holdPolicyRoadEncounter', label: 'Road Encounter' },
-  { key: 'holdPolicyAmbush', label: 'Ambush' },
-  { key: 'holdPolicyStalker', label: 'Stalker' },
-  { key: 'holdPolicyMessage', label: 'Message' },
-  { key: 'holdPolicyQuest', label: 'Quest' },
+  // def: the game's default for that type (index into HOLD_POLICIES); they differ.
+  { key: 'holdPolicySeekPlayer', label: 'Seek Player', def: 1 },
+  { key: 'holdPolicyInformant', label: 'Informant', def: 6 },
+  { key: 'holdPolicyRoadEncounter', label: 'Road Encounter', def: 0 },
+  { key: 'holdPolicyAmbush', label: 'Ambush', def: 1 },
+  { key: 'holdPolicyStalker', label: 'Stalker', def: 1 },
+  { key: 'holdPolicyMessage', label: 'Message', def: 2 },
+  { key: 'holdPolicyQuest', label: 'Quest', def: 0 },
 ];
 
 const CONFIRM_MODES = ['Disabled', 'Followers Only', 'Everyone'];
@@ -79,7 +80,7 @@ const MOD_FLAGS = [
   { label: 'Alt', value: 4 },
 ];
 
-function SettingsTab({ config, onSettingChange, pluginConfig, onPluginConfigChange }) {
+function SettingsTab({ config, storyTypes, onSettingChange, pluginConfig, onPluginConfigChange }) {
   // Track which accordion sections are open (by key)
   const [openSections, setOpenSections] = useState({ storyEngine: true, tasks: true });
 
@@ -113,21 +114,15 @@ function SettingsTab({ config, onSettingChange, pluginConfig, onPluginConfigChan
           onCommit={v => onSettingChange('storyInterval', v)}
           hint="How often (game hours) the Story Engine checks for NPCs with reasons to find you. Max 168 = 1 week."
         />
-        <SliderRow
-          label="NPC Cooldown"
-          value={config.storyCooldown}
-          min={6} max={72} step={6}
-          unit="hrs"
-          onCommit={v => onSettingChange('storyCooldown', v)}
-          hint="How long a picked NPC's priority stays reduced. Higher = more variety."
-        />
+        {/* No "NPC Cooldown" row: the game uses the longer of it and Long Absence (three days by default), so
+            its 6 to 72 hours changed nothing. Long Absence is the setting. */}
         <SliderRow
           label="Long Absence"
           value={config.longAbsenceDays}
           min={1} max={14} step={1}
           unit="days"
           onCommit={v => onSettingChange('longAbsenceDays', v)}
-          hint="Minimum game days since last interaction before an NPC becomes a Story Engine candidate."
+          hint="Minimum game days since last interaction before an NPC becomes a Story Engine candidate. An NPC who has just come to you is left alone for at least as long."
         />
         <SliderRow
           label="Max Travel Time"
@@ -188,13 +183,13 @@ function SettingsTab({ config, onSettingChange, pluginConfig, onPluginConfigChan
           />
           <ToggleRow
             label="NPC-to-NPC Interactions"
-            value={config.npc_interaction !== false}
+            value={!storyTypes || storyTypes.npc_interaction !== false}
             onChange={v => onSettingChange('npc_interaction', v)}
             hint="NPCs interact with each other autonomously (arguments, trades, conversations)."
           />
           <ToggleRow
             label="NPC Gossip"
-            value={config.npc_gossip !== false}
+            value={!storyTypes || storyTypes.npc_gossip !== false}
             onChange={v => onSettingChange('npc_gossip', v)}
             hint="NPCs spread rumors and gossip among themselves."
           />
@@ -204,14 +199,15 @@ function SettingsTab({ config, onSettingChange, pluginConfig, onPluginConfigChan
       {/* Hold Restrictions */}
       <Accordion title="Hold Restrictions" isOpen={openSections.holdRestrictions} onToggle={() => toggle('holdRestrictions')}>
         <p className="text-[9px] text-gray-600 mb-2">
-          Restrict NPCs from traveling across holds per story type. Default: same hold for civilians.
+          Restrict NPCs from traveling across holds per story type. The defaults differ and are shown with each type.
         </p>
         {HOLD_TYPES.map(type => (
           <div key={type.key} className="mb-1.5">
-            <span className="text-[10px] text-gray-500 uppercase tracking-wider block mb-0.5">{type.label}</span>
+            <span className="text-[10px] text-gray-500 uppercase tracking-wider block mb-0.5">{type.label}
+              <span className="normal-case tracking-normal text-gray-600"> · default: {HOLD_POLICIES[type.def]}</span></span>
             <PolicyRow
               label=""
-              value={config[type.key] ?? 1}
+              value={config[type.key] ?? type.def}
               options={HOLD_POLICIES}
               hints={HOLD_HINTS}
               onChange={v => onSettingChange(type.key, v)}
@@ -335,12 +331,7 @@ function SettingsTab({ config, onSettingChange, pluginConfig, onPluginConfigChan
           hint="Rescue a captive from hostile faction soldiers. Rewards faction standing." />
         <ToggleRow label="Faction Battle" value={config.questFactionBattle} onChange={v => onSettingChange('questFactionBattle', v)}
           hint="A friendly faction invites you to join an upcoming battle. Requires high standing (40+)." />
-        <ToggleRow
-          label="Allow NPC Death (Rescue)"
-          value={config.questAllowVictimDeath}
-          onChange={v => onSettingChange('questAllowVictimDeath', v)}
-          hint="WARNING: Rescued NPCs can die during combat. Can break main quests!"
-        />
+        {/* No "Allow NPC Death (Rescue)" switch: nothing reads the setting, a rescue's victim is always kept alive. */}
         <SliderRow
           label="Quest Timeout"
           value={config.questTimeoutDays}
@@ -573,7 +564,9 @@ function SliderRow({ label, value, min, max, step, unit, onCommit, hint }) {
   const dragging = useRef(false);
 
   const current = localVal !== null ? localVal : (value || min);
-  const displayVal = Number.isInteger(step) ? current : current?.toFixed?.(1) || current;
+  // As many decimals as the step has: with one decimal a 0.25 step showed 0.25 as "0.3".
+  const decimals = Number.isInteger(step) ? 0 : (String(step).split('.')[1] || '').length;
+  const displayVal = decimals ? (current?.toFixed?.(decimals) ?? current) : current;
 
   const handleInput = useCallback((e) => {
     dragging.current = true;
