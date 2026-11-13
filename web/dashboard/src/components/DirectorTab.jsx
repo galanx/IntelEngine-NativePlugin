@@ -430,7 +430,9 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
     // fix88: a type left on (auto) is picked here, never by the LLM
     const pool = story ? DIRECTOR_STORY_TYPES : social ? SOCIAL_TYPES : POLITICAL_EVENT_TYPES.filter(t => !['war_declaration','surrender','peace_offer'].includes(t.key)); // war-state types: manual only
     const pick = () => pool[Math.floor(Math.random() * pool.length)].key;
-    const sType = story && !touched.storyType ? pick() : storyType, soType = social && !touched.socialType ? pick() : socialType;
+    // Also when the type was picked and then cleared again (the x, or typing in the box): it counted as "touched",
+    // so a blank type went out and the model chose one, which the page is meant never to allow.
+    const sType = story && (!touched.storyType || !storyType) ? pick() : storyType, soType = social && (!touched.socialType || !socialType) ? pick() : socialType;
     const pType = !story && !social && !action ? (polEventType || pick()) : polEventType;
     if (story && sType !== storyType) setStoryType(sType); if (social && soType !== socialType) setSocialType(soType); if (pType !== polEventType) setPolEventType(pType);
     let actionNpcName = nearby.find(n => n.id === actionNpc)?.name || '';

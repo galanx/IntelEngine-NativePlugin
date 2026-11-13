@@ -727,6 +727,13 @@ Function PushDashboardFullState(String json) Global Native
 ; Check if dashboard is currently visible
 Bool Function IsDashboardOpen() Global Native
 
+; Lets a pad answer a Magelight view made from Papyrus (the choice popup): A is Enter, B is Escape, the d-pad and
+; the left stick are the arrow keys. 1 = done, 0 = no gamepad layer (no Magelight 1.6+, VR, switched off), -1 = refused.
+Int Function EnableMagelightGamepadKeys(Int view) Global Native
+
+; Is this NPC saying a line right now? False for an unloaded actor.
+Bool Function IsActorTalking(Actor akActor) Global Native
+
 
 ; =============================================================================
 ; DEBUG / TESTING FUNCTIONS

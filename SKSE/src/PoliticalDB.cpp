@@ -409,7 +409,9 @@ namespace IntelEngine {
         sqlite3_bind_double(stmt, 6, gameTime);
         sqlite3_bind_text(stmt, 7, instigatorNpc.c_str(), -1, SQLITE_TRANSIENT);
         sqlite3_bind_text(stmt, 8, locationName.c_str(), -1, SQLITE_TRANSIENT);
-        const auto positionText = position.dump();
+        // The position carries a plugin file name taken from the game as it is. dump() throws on bytes that are not
+        // UTF-8 (a plugin with an accented name), and nothing catches it between here and the Papyrus native.
+        const auto positionText = position.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
         if (position.is_null()) sqlite3_bind_null(stmt, 9);
         else sqlite3_bind_text(stmt, 9, positionText.c_str(), -1, SQLITE_TRANSIENT);
 
@@ -445,7 +447,7 @@ namespace IntelEngine {
 
         const char* sql = R"SQL(
             SELECT id, faction_a, faction_b, event_type, description, relation_delta, game_time, instigator_npc
-            FROM faction_events WHERE event_type != 'relation_adjustment' ORDER BY game_time DESC LIMIT ?
+            FROM faction_events WHERE event_type != 'relation_adjustment' ORDER BY game_time DESC, id DESC LIMIT ?
         )SQL";
 
         sqlite3_stmt* stmt = nullptr;

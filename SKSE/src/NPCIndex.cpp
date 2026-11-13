@@ -921,7 +921,12 @@ namespace IntelEngine {
         // upgrade to request-bound resolution via the Papyrus contract.
         StoryCandidateRejection rejection;
         auto formId = ResolveStoryCandidateFormID(name, m_dmCandidatePool, m_npcCandidatePool, &rejection);
-        const bool tieBreak = !partnerName.empty() && (anchor || std::string_view(rejection.branch) == "ambiguous");
+        // The distance pass only knows actors in the anchor's cell or worldspace. It ran for every second NPC,
+        // so a name that had resolved to exactly one actor elsewhere (an innkeeper indoors and someone in the
+        // street) was thrown away and the pair dropped as "unresolved". It is for a name that fits several
+        // actors, or one that resolved to the anchor itself (two NPCs of the same name).
+        const bool isAnchor = anchor && formId != 0 && formId == anchor->GetFormID();
+        const bool tieBreak = !partnerName.empty() && (isAnchor || std::string_view(rejection.branch) == "ambiguous");
         if (tieBreak) {
             // ponytail: NPC 1 anchors NPC 2, not a closest-pair search; explicit reference labels fix intent.
             auto* anchorActor = anchor ? anchor : RE::PlayerCharacter::GetSingleton();

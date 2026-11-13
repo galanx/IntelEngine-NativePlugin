@@ -404,15 +404,35 @@ namespace IntelEngine::NaturalTime {
 
         // "tonight at 10" / "10 tonight" → 22:00; bare "tonight" falls through to named times
         periodHit = matchClockWithPeriod("tonight", [](int h) {
-            return (h == 12) ? 0 : h + 12;
+            return (h == 12) ? 0 : (h <= 4 ? h : h + 12);  // "1 tonight" is after midnight
         });
         if (periodHit >= 0.0f) return periodHit;
 
         // "10 at night" / "10 in the night"
         periodHit = matchClockWithPeriod("night", [](int h) {
-            return (h == 12) ? 0 : h + 12;
+            return (h == 12) ? 0 : (h <= 4 ? h : h + 12);  // "2 at night" is 02:00
         });
         if (periodHit >= 0.0f) return periodHit;
+
+        // "6 o'clock", "six o'clock" and a lone "6" read like "at 6".
+        {
+            for (const char* word : {"o'clock", "oclock", "o clock"}) {
+                const size_t at = input.find(word);
+                if (at == std::string::npos) continue;
+                input.erase(at, std::strlen(word));
+                size_t tokenEnd = at;
+                while (tokenEnd > 0 && input[tokenEnd - 1] == ' ') --tokenEnd;
+                size_t tokenStart = tokenEnd;
+                while (tokenStart > 0 && isTokenChar(static_cast<unsigned char>(input[tokenStart - 1]))) --tokenStart;
+                const bool hasAt = tokenStart >= 3 && input.compare(tokenStart - 3, 3, "at ") == 0;
+                if (tokenStart < tokenEnd && !hasAt) input.insert(tokenStart, "at ");
+                break;
+            }
+            trimInput();
+            const bool onlyDigits = !input.empty() && input.size() <= 2 &&
+                std::all_of(input.begin(), input.end(), [](unsigned char c) { return std::isdigit(c) != 0; });
+            if (onlyDigits) input.insert(0, "at ");
+        }
 
         // --- Bare "at N" / "at N o'clock" (no am/pm) ---
         // Prefer morning hours for 1-11; "at 12" → noon. Past-hour roll handled by CalculateTargetGameTime.
@@ -440,6 +460,12 @@ namespace IntelEngine::NaturalTime {
             const char after = (pos + len < input.size()) ? input[pos + len] : ' ';
             // Don't treat "at 10" as a hit inside "at 100" / "at 10th" / "at tenth"
             if (std::isalnum(static_cast<unsigned char>(after))) continue;
+            // "Meet me at 6", said at two in the afternoon, is six in the evening; said at eight in the
+            // evening it is six in the morning. With no clock, or for another day, the morning stands.
+            if (cp.hour < 12 && dayOffset == 0.0f && currentHour >= 0.0f) {
+                const float morning = static_cast<float>(cp.hour);
+                if (currentHour >= morning && currentHour < morning + 12.0f) return morning + 12.0f;
+            }
             return static_cast<float>(cp.hour) + dayOffset;
         }
 
