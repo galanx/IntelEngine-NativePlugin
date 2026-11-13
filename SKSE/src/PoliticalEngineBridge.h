@@ -41,7 +41,7 @@ namespace IntelEngine {
         Reader reader_ = nullptr;
         bool initialized_ = false;
         std::atomic<bool> active_{false};
-        std::atomic<bool> enabled_{true};
+        std::atomic<bool> enabled_{false};      // FactionPolitics::LoadSettings sets it from politics.pe_integration (off by default)
         std::mutex mutex_;
         std::atomic<bool> dirty_{false};
         std::atomic<unsigned> resetEpoch_{0};

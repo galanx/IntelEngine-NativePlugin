@@ -171,7 +171,11 @@ int main() try {
                 politics->defaultRelations_.size() == 1 && politics->defaultRelations_[0].relation == 9, "fragment replaces id, adds id, replaces relation pair");
         Require(!politics->GetFaction("PE_X"), "PE fragment skipped when PE absent");
         PoliticalEngineBridge::GetSingleton()->detected = true;
-        Require(politics->LoadConfig() && politics->GetFaction("PE_X"), "PE fragment loaded when PE detected");
+        // Detected is not enough: the integration is off until the player switches it on.
+        Require(!politics->peIntegration_.load(), "PE integration is off by default");
+        Require(politics->LoadConfig() && !politics->GetFaction("PE_X"), "PE fragment skipped while the integration is off");
+        politics->peIntegration_.store(true);
+        Require(politics->LoadConfig() && politics->GetFaction("PE_X"), "PE fragment loaded when PE detected and the integration is on");
         std::ofstream(dir + "/d.yaml") << "factions:\n  - id: Thal\n    name: Thal\n    skyrim_faction_id: ThalmorFaction\n    leader_names: []\n"
             "  - id: Pe2\n    name: Pe2\n    pe_side: 2\n    leader_names: []\n  - id: Bad\n    name: Bad\n    pe_side: 9\n    leader_names: []\n";
         Require(politics->LoadConfig() && OrganizationPESide(*politics->GetFaction("Thal")) == 3 && OrganizationPESide(*politics->GetFaction("Pe2")) == 2 &&
