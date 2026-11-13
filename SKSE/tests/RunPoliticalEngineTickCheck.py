@@ -11,8 +11,8 @@ import tempfile
 repo = pathlib.Path(__file__).resolve().parents[2]
 source = pathlib.Path(sys.argv[2]) if len(sys.argv) > 2 else repo / 'SKSE/src/Papyrus.cpp'
 text = source.read_text(encoding='utf-8')
-start = text.index('    void BeginAsyncPoliticalTick(RE::StaticFunctionTag*,\n')
-end = text.index('\n    }\n', start) + len('\n    }')
+start = text.index('    nlohmann::json PollAndSyncPE() {')
+end = text.index('\n    }\n', text.index('    void BeginAsyncPoliticalTick(RE::StaticFunctionTag*,\n')) + len('\n    }')
 with tempfile.TemporaryDirectory(prefix='pe-tick-') as directory:
     work = pathlib.Path(directory)
     cpp = r'''
@@ -50,6 +50,7 @@ struct FactionPolitics {
     static FactionPolitics* GetSingleton(){static FactionPolitics value;return &value;}
     bool IsReady() const {return true;}
     Snapshot BuildPoliticsTickSnapshot(float time){Require(gameThread,"engine snapshot on worker");return {time};}
+    void SyncPERulers(const json&){} void SyncPESides(const json&){}
     std::string BuildPoliticalContextFromSnapshot(const Snapshot&){Require(!gameThread,"context must stay on worker");return "fixture context";}
     int RecordPoliticalEvent(const std::string&,const std::string&,const std::string&,const std::string&,int,float time){
         Require(gameThread,"PE recording reaches engine state writer on worker");
@@ -63,6 +64,7 @@ struct PoliticalEngineBridge {
         if(resetInPoll){++SlotTracker::GetSingleton()->loadGeneration;resetInPoll=false;}
         return json::array({{{"type","pe_visit"},{"text","A public ruler visit."}}});
     }
+    json Rulers(){return nullptr;} json RealmSides(){return nullptr;}
 };
 namespace AsyncDispatch {
 void Submit(std::function<void()> task){workers.push_back(std::move(task));}

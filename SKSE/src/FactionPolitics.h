@@ -54,7 +54,29 @@ namespace IntelEngine {
         std::string soldierTemplate; // EditorID of leveled actor list for battle spawning
         std::string prisonLocation;  // Cell EditorID for prisoner holding (Phase 4)
         float prisonMarker[3] = {};  // [x, y, z] position within prison cell (Phase 4)
+        int peSide = -1;            // optional Political Engine side (0-3); -1 = derive from skyrimFactionId
     };
+
+    /** Political Engine side of an organization: its pe_side if set, else its engine-faction default (-1 = none). */
+    inline int OrganizationPESide(const FactionConfig& f) {
+        if (f.peSide >= 0) return f.peSide;
+        if (f.skyrimFactionId == "CWImperialFaction") return 1;
+        if (f.skyrimFactionId == "CWSonsFaction") return 2;
+        if (f.skyrimFactionId == "ThalmorFaction") return 3;
+        return -1;
+    }
+
+    /** Allies/rivals of a realm on PE side `side`, from the organizations' sides: same side = ally; Stormcloaks vs Empire or Aldmeri = rival; Empire/Aldmeri = neither; Independent (0) = none. */
+    inline std::pair<std::vector<std::string>, std::vector<std::string>> PESideRelations(int side, const std::vector<FactionConfig>& factions) {
+        std::pair<std::vector<std::string>, std::vector<std::string>> out;
+        if (side < 1 || side > 3) return out;
+        for (const auto& f : factions) {
+            const int s = OrganizationPESide(f);
+            if (s == side) out.first.push_back(f.id);
+            else if (s >= 1 && s <= 3 && s + side != 4) out.second.push_back(f.id);  // {1,3} (Empire/Aldmeri) is neither
+        }
+        return out;
+    }
 
     struct DefaultRelation {
         std::string factionA;
@@ -319,6 +341,12 @@ namespace IntelEngine {
         int GetMaxActiveWars() const { return maxActiveWars_.load(); }
         int GetWarDeclarationCooldownDays() const { return warDeclarationCooldownDays_.load(); }
         int GetMoraleDecayPerTick() const { return moraleDecayPerTick_.load(); }
+        bool GetPEIntegration() const { return peIntegration_.load(); }
+        bool SetPEIntegration(bool val);
+        /** Sets each PE_<realm> faction's leader to the realm's current ruler ({"<realm_id>": actor form id}). */
+        void SyncPERulers(const nlohmann::json& rulers);
+        /** Sets each PE_<realm> faction's allies/rivals from its live PE side ({"<realm_id>": side}); PoliticalDB relation scores are untouched. */
+        void SyncPESides(const nlohmann::json& sides);
         bool GetPEReactionsMoveRelations() const { return peReactionsMoveRelations_.load(); }
         bool SetPEReactionsMoveRelations(bool val);
 
@@ -339,6 +367,12 @@ namespace IntelEngine {
          *  cooldown not active. Creates faction_wars row and records war_declaration event.
          *  Returns war ID or -1 on failure. */
         int DeclareWar(const std::string& factionA, const std::string& factionB, float gameTime);
+
+        /** fix 94: may this pair ever be at war? (war_allowed in factions.yaml; PE_ realms never). Takes configMutex_. */
+        bool WarPossible(const FactionConfig& a, const FactionConfig& b) const;
+
+        /** fix 94: declare the lowest-scored eligible Critical pair (Rule 3) in code. Returns war id or -1. */
+        int EnforceWarRule(const PoliticsTickSnapshot& snap);
 
         /** Process one war tick for all active wars.
          *  Applies morale decay, checks surrender conditions.
@@ -434,6 +468,7 @@ namespace IntelEngine {
         mutable std::mutex configMutex_;
         std::vector<FactionConfig> factions_;
         std::vector<DefaultRelation> defaultRelations_;
+        std::vector<std::pair<std::string, std::vector<std::string>>> warAllowed_;  // fix 94; under configMutex_
         uint64_t factionRevision_ = 0;
         std::string revisionLoadId_;
         std::unordered_map<std::string, bool> disbandedSnapshot_;
@@ -447,6 +482,7 @@ namespace IntelEngine {
         std::atomic<int> maxActiveWars_{2};
         std::atomic<int> warDeclarationCooldownDays_{7};
         std::atomic<int> moraleDecayPerTick_{2};
+        std::atomic<bool> peIntegration_{true};
         std::atomic<bool> peReactionsMoveRelations_{true};
         std::mutex peMutex_;
         nlohmann::json pendingPE_ = nlohmann::json::object(), eligiblePE_ = nlohmann::json::object();

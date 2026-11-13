@@ -42,7 +42,7 @@ function TasksTab({ tasks, scheduled, calendar, sendAction, packages, removingId
           </div>
         )}
       </section>
-      {otherPackages.length > 0 && <PackagesTab packages={otherPackages} sendAction={sendAction} removingIds={removingIds} onMarkRemoving={onMarkRemoving} />}
+      <PackagesTab packages={otherPackages} sendAction={sendAction} removingIds={removingIds} onMarkRemoving={onMarkRemoving} />
 
       {/* Cooldowns */}
       {cooldownTasks.length > 0 && (

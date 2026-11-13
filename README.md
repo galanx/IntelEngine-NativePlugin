@@ -1,7 +1,7 @@
 # IntelEngine
 ### NPC Autonomy, Faction Politics & Player-Driven Task Framework for SkyrimNet
 
-> **Compatibility:** IntelEngine 3.7.1 requires **SkyrimNet Beta 27** or newer (its travel prompt uses the `get_place_names` decorator added in Beta 27); 3.5.1–3.6.x required Beta 25. Beta 26 and earlier are incompatible with 3.7.1.
+> **Compatibility:** IntelEngine 3.8.0 requires **SkyrimNet Beta 27** or newer (its travel prompt uses the `get_place_names` decorator added in Beta 27); 3.5.1–3.6.x required Beta 25. Beta 26 and earlier are incompatible with 3.8.0.
 > The 3.6.0 native build includes SE/AE/VR. Tested runtimes: Skyrim **1.6.1170.0** and **1.7.104.0**. Skyrim VR **1.4.15** should work and was partly tested. Skyrim SE **1.5.x**: untested; **1.6.640.0** and **1.7.99.0** are also untested targets.
 >
 > This repository carries a compatibility update for current SkyrimNet releases. IntelEngine was originally created by [Galanx](https://github.com/galanx).
@@ -408,6 +408,7 @@ Named checks use `--scenario=<name>`: `director_required_fields` covers unpicked
 `director_live_polish` covers conditional text clears and ownership handback (including Political Faction A), required Message/Informant/base-field follow-ups capped at one, complete-result no-follow-up behavior, merged-draft preservation, picker alignment, the Informant gossip hint and Social narration/grip layout.
 
 Compiled arrival/history smoke: `python -X utf8 SKSE/tests/RunArrivalDeliveryBytecodeCheck.py <papyrus.exe> <GamePlugin-worktree>/Scripts <native-build>/TaskHistoryDescriptionCheck.exe`. This executes the staged PEX delivery/cleanup and common story-arrival paths through a bounded interpreter with modeled engine/storage boundaries and the real native formatter. It checks no-meeting delivery, case-equivalent boundary outcomes, player-absent return, guarded/forced Travel cancellation, forced arrival reentry, dispatch latch reset, and callback cleanup while an arrival poll is suspended. `RunDeliverMessageRejectionCheck.py` takes the same arguments and checks unresolved-recipient rejection preserves an existing Travel task while distant resolved recipients remain actor targets. Neither check reproduces Skyrim scheduling or model behavior.
+Informant fact check: `python -X utf8 SKSE/tests/RunInformantFactBytecodeCheck.py <papyrus.exe> <GamePlugin-worktree>/Scripts` (offline only).
 
 Conduct processing smoke (VS developer shell): `python SKSE/tests/RunPlayerConductCheck.py <vcpkg-triplet-dir>`. It executes production conduct/name-lookup methods with real isolated SQLite and modeled game notification/reporter/clock boundaries, covering primary/rival/ally changes and success/error messages.
 
@@ -436,6 +437,18 @@ IntelEngine operates as two tightly integrated layers, with a third connecting i
 **SkyrimNet External Bundle** — IntelEngine's 11 AI-selectable actions, three category containers, four custom LLM prompts, and seven character-bio submodules ship under `SKSE/Plugins/SkyrimNet/external/galanx.intelengine/`. Action identities and Papyrus entry points remain unchanged.
 
 **SkyrimNet Plugin Configuration** — IntelEngine's LLM variant, settings schema, generated `settings.yaml`, and user-editable `factions.yaml` remain under `SKSE/Plugins/SkyrimNet/config/plugins/IntelEngine/`. This configuration path is separate from the Beta 25 external content bundle.
+
+**Extra faction files (`factions.d/`)** — besides `factions.yaml`, IntelEngine loads every `factions.d/*.yaml` next to it (`SKSE/Plugins/SkyrimNet/config/plugins/IntelEngine/`), in filename order. A faction whose `id` already exists is replaced whole; a new `id` is added. A relation for the same pair replaces the earlier one. A broken file is skipped with a log warning. If a file's first line is `requires: political_engine`, it loads only when Political Engine is installed and its integration setting is on; IntelEngine ships `political_engine.yaml` this way. Edits are whole-faction only: copy the full faction into your file to change it, because single fields cannot be overridden. A faction may set an optional `pe_side: 0-3` (Political Engine side: 0 Independent, 1 Empire, 2 Stormcloaks, 3 Aldmeri Dominion); without it the Imperial, Stormcloak and Thalmor engine factions map to 1, 2 and 3.
+
+```yaml
+# factions.d/my_changes.yaml
+factions:
+  - id: "PE_Whiterun"
+    name: "Whiterun (mine)"
+    type: "political"
+    hold: "Whiterun"
+    leader_names: ["Balgruuf the Greater"]
+```
 
 ---
 
@@ -529,9 +542,18 @@ Automatic rejection diagnostics remain unverified live.
 
 > **Courier/Messenger substitution (offline only):** faction-first then sender-messenger is retained; sender identity uses strict candidate resolution. Substitutions log original rejection/dead/disabled reason, route and actor; failed attempts log as failures. Native rejection warnings retain subtype detail; no new status API or live qualification.
 
-> **Unreleased — Political Engine bridge (offline only):** optional API v3 intake records public territory, campaign, ruler and initiative news without relation deltas or load replay. Active-only Political DM context supports one next-tick organization reaction per development and authoritative current-owner sides. The persisted MCM/dashboard reaction toggle affects only tagged reaction relation/player-standing deltas; absent sides exports permit vanilla-only CWOwner context. Existing IE wars and battles remain independent. DLL/PEX/dashboard builds and offline checks do not establish installed or game behavior.
+### IntelEngine 3.8.0
 
-> **Unreleased — localized place-name prompts (source/offline only):** action and DM/scheduling prompts require exact in-game/context place names in the game's language, never translations; semantic keywords stay English. GoToLocation lists nearby names through SkyrimNet's `get_place_names("nearby")` decorator. This is prompt guidance only, not Unicode/alias resolver support or custom named-Place routing; localized-install acceptance remains pending.
+- **Director (dashboard).** Manual Story replacement now accepts Director fields and explains refusals; a cancelling story must finish before it is replaced. NPC suggestions rank exact names first, then prefixes, and highlight the keyboard choice. Generate requires real NPC names (generic placeholders are rejected per field), its status is gray and errors red, and Director-dispatched actions skip the confirmation prompt. The dashboard hotkey no longer toggles while you are typing in a text field. Dispatch notices use plain dashes.
+- **Story travel and arrival.** A story NPC now counts as arrived after 15 seconds within talking range of the player. Arrival timers use real time, so menus and faster polls cannot skew them; after 75 seconds without arriving the NPC is re-placed once behind the target, and after another 75 seconds the story aborts with a notice. Arrival waits until save-load recovery finishes. Director stories ignore the Hold Restriction (automatic stories still turn back and say why). Story NPCs who become your teammate are released from linger.
+- **Off-screen placement and fetch.** Unloaded NPCs are placed after the off-screen deadline, the Director says when an NPC can't be sent because they are not loaded (they only exist near their home), a nearby fetched NPC is no longer teleported across an exterior cell boundary, and a linger NPC that is still approaching is no longer released early; linger timeouts survive pausing.
+- **Stuck recovery.** Soft recovery no longer waits on latent calls, and stuck detection samples at most every three seconds.
+- **Informants and narration.** Informant gossip keeps the subject's name and avoids repeated subjects; generated narration attributes the right actor; bracket tags in NPC names are handled.
+- **Political Engine bridge (optional).** With Political Engine API v3, public territory, campaign, ruler and initiative news is recorded as faction-less rumors. Political DM context can trigger one organization reaction per development using the current owner's side; a persisted MCM/dashboard toggle controls reaction relation and standing changes. Existing IntelEngine wars and battles are unaffected.
+- **Localized place names.** Action and DM/scheduling prompts ask for exact in-game place names in the game's language, and GoToLocation lists nearby names via SkyrimNet's `get_place_names("nearby")`. This is prompt guidance only, not new name-resolution support.
+- **Diagnostics.** Extra bounded travel and Director logging was added for bug reports.
+
+3.8.0 was tested live in Skyrim for Director dispatch, story and fetch travel, off-screen placement and linger. The Political Engine bridge and the rarer stuck-recovery paths were checked offline only.
 
 > **Automatic Social proximity (offline only):** NPC 1 resolves strictly, or nearest the player when ambiguous; NPC 2 is nearest resolved NPC 1, excluding itself. Ties use lowest FormID; only shared interiors/exterior worldspaces compare, with no global/fuzzy fallback. Proximity cannot identify the model's intended same-name actor; explicit reference labels are the later full fix. If NPC 1 is the wrong twin, NPC 2 follows it. Latest-pool overlap remains; engine positions and game behavior are unverified.
 
@@ -549,7 +571,7 @@ The native MSVC Release profile disables optimization with `/Od /Ob0`, retains C
 
 - The 3.6.0 native build includes Skyrim SE, AE and VR. Tested: Skyrim **1.6.1170.0** and **1.7.104.0**; Skyrim VR **1.4.15** should work and was partly tested. Skyrim SE **1.5.x**: untested. Other listed targets are untested.
 - [SKSE](https://skse.silverlock.org/)
-- [SkyrimNet Beta 27 or newer](https://github.com/MinLL/SkyrimNet-GamePlugin) (3.7.1 minimum; 3.6.0 tested with official Beta 28)
+- [SkyrimNet Beta 27 or newer](https://github.com/MinLL/SkyrimNet-GamePlugin) (3.8.0 minimum; 3.6.0 tested with official Beta 28)
 - [SkyUI](https://www.nexusmods.com/skyrimspecialedition/mods/12604) (MCM)
 - [PapyrusUtil](https://www.nexusmods.com/skyrimspecialedition/mods/13048) (persistent storage)
 - [powerofthree's Papyrus Extender](https://www.nexusmods.com/skyrimspecialedition/mods/22854) (package management, linked refs)

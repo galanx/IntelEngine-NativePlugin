@@ -11,11 +11,12 @@ inline nlohmann::json PEComparable(const nlohmann::json& snapshot) {
     using nlohmann::json;
     json result = json::object();
     const auto& governments = PEField(PEField(snapshot, "campaign080"), "governments");
-    auto publicRealm = [&](const json& id) {
+    // A puppet realm (kind 2) keeps territory private, but its ruler sits on the throne in public.
+    auto publicRealm = [&](const json& id, bool ruler = false) {
         if (!id.is_number_integer() || id < 0 || id > 9 || !governments.is_array()) return false;
         const auto index = id.get<std::size_t>();
         return index < governments.size() && PEField(governments[index], "kind").is_number_integer() &&
-            PEField(governments[index], "kind") != 2;
+            (ruler || PEField(governments[index], "kind") != 2);
     };
     const auto& regions = PEField(PEField(snapshot, "campaign070"), "regions");
     if (regions.is_array()) result["regions"] = json::object();
@@ -31,7 +32,7 @@ inline nlohmann::json PEComparable(const nlohmann::json& snapshot) {
     if (rulers.is_array()) for (const auto& row : rulers) {
         const auto& id = PEField(row, "realm_id");
         const auto& actor = PEField(row, "actor_id");
-        if (publicRealm(id) && PEField(row, "present") == true && actor.is_number_integer() && actor > 0)
+        if (publicRealm(id, true) && PEField(row, "present") == true && actor.is_number_integer() && actor > 0)
             result["rulers"][id.dump()] = actor;
     }
     const auto& wars = PEField(PEField(PEField(snapshot, "campaign080"), "wars"), "wars");
@@ -51,10 +52,28 @@ inline nlohmann::json PEComparable(const nlohmann::json& snapshot) {
     const auto& factions = PEField(snapshot, "factions");
     if (factions.is_array()) for (const auto& row : factions) {
         const auto& id = PEField(row, "realm_id");
-        if (publicRealm(id) && PEField(row, "name").is_string()) result["realms"][id.dump()] = PEField(row, "name");
+        // A puppet realm's name is public like its ruler; without it a puppet's ruler change has no news text.
+        if (publicRealm(id, true) && PEField(row, "name").is_string()) result["realms"][id.dump()] = PEField(row, "name");
     }
     result["revision"] = PEField(snapshot, "revision");
     return result;
+}
+// Dashboard only, never a prompt: {"<realm_id>": "puppet"|"vassal"} for realms whose overlord is the player's realm.
+inline nlohmann::json PEOwnedRealms(const nlohmann::json& snapshot) {
+    nlohmann::json owned = nlohmann::json::object();
+    const auto& rulers = PEField(snapshot, "rulers");
+    const auto& governments = PEField(PEField(snapshot, "campaign080"), "governments");
+    if (!rulers.is_array() || !governments.is_array()) return owned;
+    for (const auto& r : rulers) {
+        if (PEField(r, "player_realm") != true) continue;
+        for (std::size_t i = 0; i < governments.size(); ++i) {
+            const auto& kind = PEField(governments[i], "kind");
+            if (PEField(governments[i], "overlord") == PEField(r, "realm_id") && PEField(r, "realm_id").is_number_integer() &&
+                kind.is_number_integer() && (kind == 2 || kind == 3))
+                owned[std::to_string(i)] = kind == 2 ? "puppet" : "vassal";
+        }
+    }
+    return owned;
 }
 inline nlohmann::json PEDiff(const nlohmann::json& before, const nlohmann::json& after) {
     using nlohmann::json;

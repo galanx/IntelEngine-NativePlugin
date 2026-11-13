@@ -19,6 +19,10 @@ namespace IntelEngine {
 
         std::unique_lock lock(m_mutex);
         auto& state = m_slots[slot];
+        const auto now = std::chrono::steady_clock::now();
+        // ponytail: a long gap counts as one sample; no elapsed-time catch-up.
+        if (state.lastSample != std::chrono::steady_clock::time_point{} && now - state.lastSample < std::chrono::seconds(3)) return 0;
+        state.lastSample = now;
 
         // Auto-initialize on first call
         if (!state.initialized) {
@@ -33,7 +37,6 @@ namespace IntelEngine {
             return 0;
         }
 
-        // Read current position
         auto pos = actor->GetPosition();
         float dx = pos.x - state.lastX;
         float dy = pos.y - state.lastY;
@@ -101,6 +104,7 @@ namespace IntelEngine {
         state.stuckCheckCount = 0;
         state.recoveryAttempts = 0;
         state.teleportAttempts = 0;
+        state.lastSample = {};
     }
 
     float StuckDetector::GetTeleportDistance(int slot) const {
