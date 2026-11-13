@@ -396,7 +396,7 @@ High-bit FormID dispatch remains offline-verified only; pair the DLL with rebuil
 
 Dashboard JSON serialization replaces invalid UTF-8 bytes in game strings with U+FFFD rather than dropping the whole state update. Offline regression: `cmake --build <native-build> --config Release --target DashboardUtf8DumpCheck`, then run `<native-build>/DashboardUtf8DumpCheck.exe` (Ninja Release). The host check below also exercises a malformed actor name through the production state push.
 
-Director submission does not close the dashboard. Manual cancellation notifies `<Name>'s task was cancelled.` on success or `<Name> has no task to cancel.` on a repeated/no-task request; SkyrimNet-driven cancellation feedback is unchanged. Delivery-recipient rejection also notifies the player. SkyMessage confirmations are unchanged. Magelight lifecycle, Escape, contention and game dispatch require separate live acceptance; offline checks/builds are not runtime proof.
+Director submission does not close the dashboard. Manual cancellation notifies `<Name>'s task was cancelled.` on success or `<Name> has no task to cancel.` on a repeated/no-task request; SkyrimNet-driven cancellation feedback is unchanged. Delivery-recipient rejection also notifies the player. With Magelight, IE's choice prompts (Allow/Deny, door knock, quest offer) open as a Magelight page and wait while another Magelight window holds the screen; without it, the Papyrus MessageBox. Magelight lifecycle, Escape, contention and game dispatch require separate live acceptance; offline checks/builds are not runtime proof.
 Dashboard host exits expose no Escape-specific reason; lifecycle logs identify only a host exit.
 
 DeliverMessage targets the resolved recipient actor, including across cells. An unresolved or invalid recipient is rejected through a player notification/log without replacing an existing task or triggering NPC dialogue that could select an unrelated action. Missing delivery, fetch, search and escort targets use target-first wording: `<Target> could not be found.`
@@ -575,7 +575,7 @@ The native MSVC Release profile disables optimization with `/Od /Ob0`, retains C
 - [SkyUI](https://www.nexusmods.com/skyrimspecialedition/mods/12604) (MCM)
 - [PapyrusUtil](https://www.nexusmods.com/skyrimspecialedition/mods/13048) (persistent storage)
 - [powerofthree's Papyrus Extender](https://www.nexusmods.com/skyrimspecialedition/mods/22854) (package management, linked refs)
-- Papyrus MessageBox (confirmation prompts): [Papyrus MessageBox - SKSE NG](https://www.nexusmods.com/skyrimspecialedition/mods/83578) for Skyrim 1.6 and earlier, or [PapyrusMessageBox-1.7.104](https://www.nexusmods.com/skyrimspecialedition/mods/193932) for Skyrim 1.7
+- Papyrus MessageBox (choice prompts; only needed without Magelight UI): [Papyrus MessageBox - SKSE NG](https://www.nexusmods.com/skyrimspecialedition/mods/83578) for Skyrim 1.6 and earlier, or [PapyrusMessageBox-1.7.104](https://www.nexusmods.com/skyrimspecialedition/mods/193932) for Skyrim 1.7
 
 ### Optional
 
