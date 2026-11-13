@@ -325,6 +325,13 @@ class VM:
         if method in ("ResolveAnyDestination", "GetEditorLocationRef"): return None
         if method == "CountPackageOverride": return 0
         if method == "GetDialogueTarget": return None  # nobody is in a dialogue menu with them
+        # SkyrimNet kit: the package contract is there (so a task is listed on its Package Manager page and
+        # unlisted when it ends), and SkyrimNet reports no generated line on its way for the modeled actors.
+        if method == "GetSkyrimNetPackageApiVersion": return 1
+        if method == "IsNPCSpeechPending": return False
+        if method in ("ListPackage", "UnregisterPackageEx"):
+            self.effects.append((method, tuple(args)))
+            return 1
         raise ValueError(f"unmodeled external call {script}.{method}({args!r})")
 
     def run(self, script, name, code, env):

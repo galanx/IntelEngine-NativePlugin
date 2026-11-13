@@ -20,6 +20,7 @@
 #include "FactionPolitics.h"
 #include "SkyrimNetAPI.h"
 #include "DialogueTracker.h"
+#include "SpeechTracker.h"
 #include "QuestStateTracker.h"
 #include "StringUtils.h"
 #include "AsyncDispatch.h"
@@ -346,6 +347,7 @@ namespace IntelEngine {
         switch (a_msg->type) {
             case SKSE::MessagingInterface::kPreLoadGame:
                 intelEngineStoryLoadRecovered.store(false);
+                SpeechTracker::GetSingleton()->Reset();
                 PoliticalDB::GetSingleton()->BeginLoad();
                 break;
             case SKSE::MessagingInterface::kDataLoaded:
@@ -355,6 +357,7 @@ namespace IntelEngine {
                 logger::info("Data loaded - initializing SkyrimNet API and NPC index");
                 MemoryDB::GetSingleton()->InitializeAPI();
                 DialogueTracker::GetSingleton()->Initialize();
+                SpeechTracker::GetSingleton()->Register();
                 PoliticalEngineBridge::GetSingleton()->onLoaded = [] { Papyrus::PollAndSyncPE(); };
                 PoliticalEngineBridge::GetSingleton()->Initialize();
 
@@ -385,6 +388,7 @@ namespace IntelEngine {
             case SKSE::MessagingInterface::kNewGame:
                 // New game — clear SlotTracker state, force DB re-discovery
                 logger::info("New game - clearing SlotTracker, clearing MemoryDB caches");
+                SpeechTracker::GetSingleton()->Reset();
                 PoliticalEngineBridge::GetSingleton()->MarkDirty(true);
                 SlotTracker::GetSingleton()->ClearAll();
                 ProximityMonitor::GetSingleton()->DisarmAll();

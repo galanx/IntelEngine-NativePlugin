@@ -125,13 +125,52 @@ int main() {
 
     // ---- added on top of the original ----
 
-    // A bare hour is the next time the clock shows it; without a clock, or for another day, the morning.
+    // A bare hour is the next time the clock shows it.
     static const TimedCase nextOccurrence[] = {
         {"at 6", 14.0f, 18.0f}, {"at 6", 20.0f, 6.0f}, {"at 6", 3.0f, 6.0f}, {"at six", 8.5f, 18.0f},
-        {"at 10", 14.0f, 22.0f}, {"at 1", 14.0f, 1.0f}, {"at 6", -1.0f, 6.0f}, {"at 12", 14.0f, 12.0f},
-        {"tomorrow at 6", 14.0f, 30.0f},
+        {"at 10", 14.0f, 22.0f}, {"at 1", 14.0f, 1.0f}, {"at 12", 14.0f, 12.0f},
     };
     for (const auto& c : nextOccurrence) ExpectHour(c.input, c.expected, c.now);
+
+    // Without a clock, or for another day, the waking hours decide: 1 to 6 are the afternoon and evening,
+    // 7 to 12 are as written. (The 3.7.2 time reader's rule; for a while the morning stood here, which made
+    // "tomorrow at 3" three in the night.)
+    static const TimedCase wakingHours[] = {
+        {"at 6", -1.0f, 18.0f}, {"at 9", -1.0f, 9.0f}, {"at 12", -1.0f, 12.0f}, {"at 1", -1.0f, 13.0f},
+        {"tomorrow at 6", 14.0f, 42.0f}, {"tomorrow at 3", 14.0f, 39.0f}, {"tomorrow at 9", 14.0f, 33.0f},
+        {"tomorrow at 12", 14.0f, 36.0f}, {"tomorrow at six o'clock", 14.0f, 42.0f}, {"in 3 days at 5", 14.0f, 89.0f},
+        // said outright, the small hours stay the small hours
+        {"tomorrow at 6 am", 14.0f, 30.0f}, {"tomorrow at 6 in the morning", 14.0f, 30.0f}, {"tomorrow at 6:00", 14.0f, 30.0f},
+    };
+    for (const auto& c : wakingHours) ExpectHour(c.input, c.expected, c.now);
+
+    // A spelled-out hour with am / pm, and H:MM with the part of the day (both read by 3.7.2, then lost:
+    // "six a.m." came back unread and "6:30 in the evening" as half past six in the morning).
+    static const Case spelledAndPeriod[] = {
+        {"six a.m.", 6.0f}, {"six am", 6.0f}, {"at six a.m.", 6.0f}, {"ten p.m.", 22.0f}, {"ten pm", 22.0f},
+        {"twelve am", 0.0f}, {"twelve pm", 12.0f}, {"one pm", 13.0f}, {"tomorrow at six pm", 42.0f},
+        {"6:30 in the evening", 18.5f}, {"9:30 tonight", 21.5f}, {"2:30 in the afternoon", 14.5f},
+        {"7:15 in the morning", 7.25f}, {"12:30 at night", 0.5f}, {"12:30 in the afternoon", 12.5f},
+        {"tomorrow morning at 6:30", 30.5f}, {"18:30 in the evening", 18.5f}, {"6:30", 6.5f},
+    };
+    ExpectAll(spelledAndPeriod);
+    ExpectHour("someone amazing", -1.0f);
+    ExpectHour("ten amulets", -1.0f);
+
+    // The cases of the 3.7.2 time reader's own check (tests/ClockTimeCheck.cpp of that branch), as hours of
+    // the day: what it understood, this parser understands the same way.
+    static const TimedCase from372[] = {
+        {"6am", 12, 6}, {"6 am", 12, 6}, {"6 a.m.", 12, 6}, {"at 5am", 12, 5}, {"1 am", 12, 1}, {"12am", 12, 0},
+        {"12pm", 3, 12}, {"6:30 pm", 3, 18.5f}, {"six a.m.", 12, 6}, {"11pm", 3, 23},
+        {"6 in the morning", 20, 6}, {"six in the evening", 3, 18}, {"9 tonight", 10, 21}, {"2 at night", 10, 2},
+        {"3 in the afternoon", 20, 15}, {"morning, around 7", 20, 7},
+        {"06:00", 20, 6}, {"06:00", 3, 6}, {"18:30", 3, 18.5f}, {"at 18", 3, 18}, {"0:30", 12, 0.5f},
+        {"at 6", 14, 18}, {"at 6", 20, 6}, {"at 6", 3, 6}, {"6 o'clock", 7, 18}, {"6:00", 23, 6}, {"6:00", 14, 6},
+        {"at 6:00", -1, 6}, {"12:30", 3, 12.5f}, {"6:30 in the evening", 3, 18.5f}, {"6", 14, 18},
+        {"at 6", -1, 18}, {"at 9", -1, 9}, {"at 12", -1, 12},
+        {"someone", 12, -1}, {"room 101", 12, -1},
+    };
+    for (const auto& c : from372) ExpectHour(c.input, c.expected, c.now);
 
     // Spellings a language model produces for "six in the morning"
     static const Case spellings[] = {
