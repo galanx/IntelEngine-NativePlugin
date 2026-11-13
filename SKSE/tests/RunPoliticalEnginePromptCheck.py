@@ -1,7 +1,8 @@
 """Render production political prompts with the existing SkyrimNet Inja header.
 Usage: python SKSE/tests/RunPoliticalEnginePromptCheck.py <triplet> <inja-single-include>
-Baseline templates come from origin/dev, not copied fixtures.
+Baseline templates come from origin/dev, not copied fixtures (IE_PROMPT_BASELINE names another ref).
 """
+import os
 import pathlib
 import subprocess
 import sys
@@ -14,7 +15,7 @@ with tempfile.TemporaryDirectory(prefix="pe-prompts-") as directory:
     names = ["submodules/character_bio/0810_intel_political_awareness.prompt", "intel_political_dm.prompt"]
     for i, name in enumerate(names):
         (work / f"current{i}.prompt").write_bytes((repo / (base+name)).read_bytes())
-        data = subprocess.check_output(["git", "show", "origin/dev:"+base+name], cwd=repo)
+        data = subprocess.check_output(["git", "show", os.environ.get("IE_PROMPT_BASELINE", "origin/dev")+":"+base+name], cwd=repo)
         if i == 1:  # fix38 rewords two non-PE lines on purpose; apply it to the origin/dev baseline so only PE gating is compared
             data = data.replace(b"warring factions may appear in consecutive ticks for battle_result or surrender events;",
                 b"warring factions may appear in consecutive ticks, but a war gets at most ONE battle_result in any two consecutive ticks \xe2\x80\x94 on the tick after a battle, that pair may appear only for surrender, otherwise pick a different pair or return should_act:false;")
@@ -28,7 +29,9 @@ with tempfile.TemporaryDirectory(prefix="pe-prompts-") as directory:
                 (b"**Critical-pair interaction (Rule 3 below):**", b"**Critical-pair interaction (Rule 3 below, `war_possible: true` pairs only):**"),
                 (b'If ANY faction pair has status "Critical"', b'If ANY faction pair with `war_possible: true` has status "Critical"'),
                 (b"If multiple Critical pairs exist without wars", b"If multiple such pairs exist without wars"),
-                (b'(b) if a pair\'s status is "Critical", war_declaration', b'(b) if a pair\'s status is "Critical" and `war_possible` is true, war_declaration')]:
+                (b'(b) if a pair\'s status is "Critical", war_declaration', b'(b) if a pair\'s status is "Critical" and `war_possible` is true, war_declaration'),
+                # fix94: the conflict-style line names the war_possible condition too
+                (b"(Imperial Legion, Stormcloaks, Thalmor): border_skirmish, war_declaration", b"(Imperial Legion, Stormcloaks, Thalmor): border_skirmish, and war_declaration only for pairs with `war_possible: true`")]:
                 assert o in data, o
                 data = data.replace(o, n)
         (work / f"baseline{i}.prompt").write_bytes(data)
