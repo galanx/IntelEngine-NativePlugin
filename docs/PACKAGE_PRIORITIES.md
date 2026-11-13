@@ -1,5 +1,7 @@
 # IntelEngine Package Priority System
 
+> **Historical design document.** Parts were never implemented or have changed; the README and docs/DLL_API.md describe IntelEngine 3.8.0.
+
 ## The Challenge
 
 Skyrim AI packages use priorities to determine which package "wins" when multiple are applied. Higher priority = takes precedence.
