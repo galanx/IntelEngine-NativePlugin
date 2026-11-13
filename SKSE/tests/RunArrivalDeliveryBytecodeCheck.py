@@ -975,6 +975,9 @@ class NearPlayerVM(DirectorVM):
         if method == "Is3DLoaded": return self.loaded
         if method in ("IsInterior", "IsSneaking"): return False
         if method == "GetWorldSpace": return None
+        # The near-player arrival fallback also requires the same floor; everyone here stands on one.
+        if method == "GetPositionZ": return 0.0
+        if method == "Abs": return abs(args[0])
         if method == "CheckHoldRestriction": return self.hold_allowed
         if method == "FormListFind": return -1
         if method in ("CheckStuckStatus", "CheckOffScreenProgress"): return 0
@@ -1111,11 +1114,14 @@ def run_last_stretch_checks(files, history):
             vm.invoke("IntelEngine_StoryEngine", "CheckStoryNPCArrival")
             require(vm.properties["IsActive"], "fast polls aborted before another 75 seconds")
         vm.now = 150.0
+        # The "couldn't reach you" notice is only for a story started from the dashboard: for an automatic one
+        # it told the player about a visitor they never saw.
+        expected_notices = 1 if vm.storage.get((vm.agent, "Intel_TaskOrigin")) == "Director" else 0
         vm.invoke("IntelEngine_StoryEngine", "CheckStoryNPCArrival")
         vm.invoke("IntelEngine_StoryEngine", "OnProximityArrived", ("0",))
         require(not vm.properties["IsActive"] and vm.teleports == 2 and
                 sum(e == ("Notification", "Story: Nazeem couldn't reach you - story ended")
-                    for e in vm.effects) == 1 and
+                    for e in vm.effects) == expected_notices and
                 vm.call_counts.get(("IntelEngine_StoryEngine", "AbortStoryTravel"), 0) == 1 and
                 vm.call_counts.get(("IntelEngine_StoryEngine", "OnStoryNPCArrived"), 0) == 0,
                 "second expiry did not abort and notify exactly once")
@@ -1242,16 +1248,16 @@ def run_hold_restriction_checks(files, history):
             require(vm.properties["IsActive"] and vm.properties["SlotStates"][0] == 1 and not notices,
                     "Director informant was aborted by MCM hold restriction")
         else:
-            require(not vm.properties["IsActive"] and vm.properties["SlotStates"][0] == 0 and
-                    len(notices) == 1 and vm.agent.name in notices[0][1],
-                    "automatic hold abort did not clean up with an NPC/reason notification")
+            # No on-screen notice any more: it told the player about someone they never saw setting out.
+            require(not vm.properties["IsActive"] and vm.properties["SlotStates"][0] == 0 and not notices,
+                    "automatic hold abort did not clean up silently")
     vm = NearPlayerVM(files, history)
     vm.hold_allowed = False
     vm.invoke("IntelEngine_StoryEngine", "ShouldAbortForHoldRestriction",
         (vm.agent, vm.player, "seek_player", "", -1))
     require(vm.properties["IsActive"] and not any(e[0] == "Notification" for e in vm.effects),
             "stale hold check aborted or notified for a replacement")
-    print("actual PEX hold restriction: Director informant retained, automatic abort notified, stale guard passed")
+    print("actual PEX hold restriction: Director informant retained, automatic abort silent, stale guard passed")
 
 
 def run_soft_stuck_checks(files, history):
