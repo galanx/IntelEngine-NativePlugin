@@ -39,6 +39,8 @@
 #include "BattleManager.h"
 #include "ProcessUtils.h"
 #include "DialogueTracker.h"
+#include "SkyrimNetAPI.h"
+#include "SpeechTracker.h"
 #include "QuestStateTracker.h"
 #include "AsyncDispatch.h"
 #include "PoliticalEngineBridge.h"
@@ -99,6 +101,9 @@ namespace IntelEngine::Papyrus {
     bool IsDashboardOpen(RE::StaticFunctionTag*);
     int EnableMagelightGamepadKeys(RE::StaticFunctionTag*, int);
     bool IsActorTalking(RE::StaticFunctionTag*, RE::Actor*);
+    bool IsNPCSpeechPending(RE::StaticFunctionTag*, RE::Actor*);
+    float GetSecondsSinceNPCSpoke(RE::StaticFunctionTag*, RE::Actor*);
+    std::int32_t GetSkyrimNetPackageApiVersion(RE::StaticFunctionTag*);
 
     // Political system forward declarations
     int GetFactionRelation(RE::StaticFunctionTag*, RE::BSFixedString, RE::BSFixedString);
@@ -459,6 +464,9 @@ namespace IntelEngine::Papyrus {
         a_vm->RegisterFunction("IsDashboardOpen", SCRIPT_NAME, IsDashboardOpen); ++count;
         a_vm->RegisterFunction("EnableMagelightGamepadKeys", SCRIPT_NAME, EnableMagelightGamepadKeys); ++count;
         a_vm->RegisterFunction("IsActorTalking", SCRIPT_NAME, IsActorTalking); ++count;
+        a_vm->RegisterFunction("IsNPCSpeechPending", SCRIPT_NAME, IsNPCSpeechPending); ++count;
+        a_vm->RegisterFunction("GetSecondsSinceNPCSpoke", SCRIPT_NAME, GetSecondsSinceNPCSpoke); ++count;
+        a_vm->RegisterFunction("GetSkyrimNetPackageApiVersion", SCRIPT_NAME, GetSkyrimNetPackageApiVersion); ++count;
 
         // Faction Politics Functions
         a_vm->RegisterFunction("GetFactionRelation", SCRIPT_NAME, GetFactionRelation); ++count;
@@ -2771,6 +2779,23 @@ namespace IntelEngine::Papyrus {
         item.data.object = RE::CONDITIONITEMOBJECT::kSelf;
         RE::ConditionCheckParams params(actor, actor);
         return item(params);
+    }
+
+    // SkyrimNet's own account of an NPC's generated speech (SpeechTracker): a line queued for synthesis,
+    // being synthesized or audible. The engine's talking test above only sees the audible part.
+    bool IsNPCSpeechPending(RE::StaticFunctionTag*, RE::Actor* actor) {
+        return actor && SpeechTracker::GetSingleton()->IsSpeechPending(actor->GetFormID());
+    }
+
+    // Seconds since the NPC's last generated line stopped being audible; -1 when none was heard this session.
+    float GetSecondsSinceNPCSpoke(RE::StaticFunctionTag*, RE::Actor* actor) {
+        return actor ? SpeechTracker::GetSingleton()->SecondsSinceSpeechEnded(actor->GetFormID()) : -1.0f;
+    }
+
+    // 0 on a SkyrimNet without the package contract: ListPackage, HoldPackages and UnregisterPackageEx are
+    // then unbound natives, and a script that calls one stops at that line.
+    std::int32_t GetSkyrimNetPackageApiVersion(RE::StaticFunctionTag*) {
+        return SkyrimNetAPI::GetPackageApiVersion ? static_cast<std::int32_t>(SkyrimNetAPI::GetPackageApiVersion()) : 0;
     }
 
     int EnableMagelightGamepadKeys(RE::StaticFunctionTag*, int view) {

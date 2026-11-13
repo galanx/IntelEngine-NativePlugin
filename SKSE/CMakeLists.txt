@@ -155,6 +155,7 @@ set(SOURCES
     src/FactionConfigLoader.cpp
     src/BattleManager.cpp
     src/DialogueTracker.cpp
+    src/SpeechTracker.cpp
     src/AsyncDispatch.cpp
     src/PoliticalEngineBridge.cpp
 )
