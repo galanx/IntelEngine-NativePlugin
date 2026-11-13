@@ -1,5 +1,7 @@
 # IntelEngine Anti-Hallucination System
 
+> **Historical design document.** Parts were never implemented or have changed; the README and docs/DLL_API.md describe IntelEngine 3.8.0.
+
 ## The Problem
 
 AI-powered NPCs often "hallucinate" - they claim to perform actions that are impossible in the game:

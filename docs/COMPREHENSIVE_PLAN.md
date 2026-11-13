@@ -1,5 +1,7 @@
 # IntelEngine Comprehensive Implementation Plan
 
+> **Historical design document.** Parts were never implemented or have changed; the README and docs/DLL_API.md describe IntelEngine 3.8.0.
+
 ## Requirements Analysis & Feasibility Mapping
 
 This document maps all requirements to SkyrimNet capabilities and determines implementation approach.
