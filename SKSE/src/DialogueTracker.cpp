@@ -1,5 +1,6 @@
 #include "DialogueTracker.h"
 #include "SkyrimNetAPI.h"
+#include "SpeechTracker.h"
 #include <nlohmann/json.hpp>
 
 namespace IntelEngine {
@@ -36,6 +37,16 @@ namespace IntelEngine {
         } else {
             logger::warn("DialogueTracker: Failed to register dialogue callback");
         }
+
+        // The player's own lines, for "has the player just said something" (an NPC's own cancel of a task counts
+        // only then). Not tied to the auto-bio switch above: every line is noted.
+        for (const char* type : SpeechTracker::kPlayerLineTypes) {
+            const auto id = SkyrimNetAPI::RegisterEventCallback(
+                type, [](const char*) { SpeechTracker::GetSingleton()->NotePlayerLine(SpeechTracker::Clock::now()); });
+            if (id > 0) playerLineCallbackIds_.push_back(id);
+        }
+        logger::info("DialogueTracker: listening for the player's lines ({} of {} event types)",
+                     playerLineCallbackIds_.size(), std::size(SpeechTracker::kPlayerLineTypes));
     }
 
     void DialogueTracker::Shutdown() {
@@ -44,6 +55,10 @@ namespace IntelEngine {
             SkyrimNetAPI::UnregisterEventCallback(callbackId_);
             callbackId_ = 0;
         }
+        if (SkyrimNetAPI::UnregisterEventCallback) {
+            for (const auto id : playerLineCallbackIds_) SkyrimNetAPI::UnregisterEventCallback(id);
+        }
+        playerLineCallbackIds_.clear();
     }
 
     int DialogueTracker::GetCount(RE::FormID formId) const {
