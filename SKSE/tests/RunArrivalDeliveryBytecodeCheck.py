@@ -115,6 +115,8 @@ class VM:
         # Slots picked for a task that is being set up (ClaimFreeAgentSlot); None until the first pick, as in a save
         # from before the variable existed.
         self.properties.update({"_slotClaimedAt": None, "SLOT_CLAIM_SECONDS": 30.0})
+        # Held by talk, and an NPC's own cancel: Core's constants.
+        self.properties.update({"TALK_HOLD_SECONDS": 12.0, "CANCEL_ASKED_SECONDS": 45.0, "CANCEL_EARSHOT_DISTANCE": 2500.0})
         # Core constants other scripts do arithmetic with (a property read of another script is not executed here).
         self.properties.update({"SPEECH_GRACE_SECONDS": 7.0, "UPDATE_INTERVAL": 3.0})
         # Constants added with the 3.8 stuck and immersion fixes, with their script values (a property that is
@@ -329,6 +331,9 @@ class VM:
         if method in ("ResolveAnyDestination", "GetEditorLocationRef"): return None
         if method == "CountPackageOverride": return 0
         if method == "GetDialogueTarget": return None  # nobody is in a dialogue menu with them
+        # Nor held by talk (Core.IsHeldByTalk), and the player has said nothing this session.
+        if method == "IsInDialogueWithPlayer": return False
+        if method in ("GetSecondsSinceNPCSpoke", "GetSecondsSincePlayerSpoke"): return -1.0
         # SkyrimNet kit: the package contract is there (so a task is listed on its Package Manager page and
         # unlisted when it ends), and SkyrimNet reports no generated line on its way for the modeled actors.
         if method == "GetSkyrimNetPackageApiVersion": return 1
@@ -1792,9 +1797,13 @@ def main():
                 return None
             return super().invoke(script, name, args)
 
+        loaded = True
+        since_player_spoke = 10.0       # the player has just said something
+
         def external(self, method, args, script):
-            if method == "Is3DLoaded": return True
+            if method == "Is3DLoaded": return self.loaded
             if method == "GetDistance": return self.distance
+            if method == "GetSecondsSincePlayerSpoke": return self.since_player_spoke
             if method == "ClearPackageOverride": self.packages.clear()
             # 3.8: a task that ends removes IntelEngine's own packages one by one instead of every mod's overrides.
             if method == "RemovePackageOverride" and args[0] is self.agent: self.packages.discard("travel")
@@ -1844,6 +1853,63 @@ def main():
                 ("EvaluatePackage", (cancelled.agent,)) in cancelled.effects,
                 "Travel cancellation did not reset native tracking and resume AI")
     print("actual PEX Travel cancel: YAML-mapped nearby guarded; forced nearby and mapped distant cleanup passed")
+
+    # Away from the player an NPC's own cancel counts only when the player has just said something within
+    # earshot. It used to be taken whenever the player was far: when nobody can have told the NPC to stop, and
+    # the model had called the trip off by itself (twice in a row, 47 and 52 seconds into it, 2026-11-14).
+    for why, distance, since, loaded in (
+            ("the player has said nothing this session", 2000.0, -1.0, True),
+            ("the player's last line is long past", 2000.0, 100.0, True),
+            ("the NPC is out of earshot", 5000.0, 10.0, True),
+            ("the NPC is not loaded", 2000.0, 10.0, False)):
+        own = CancelVM(distance)
+        own.since_player_spoke, own.loaded = since, loaded
+        require(own.invoke("IntelEngine_Core", "CancelCurrentTask", automatic_cancel_args(own.agent)) is False,
+                f"an NPC's own cancel was taken although {why}")
+        require(own.properties["SlotStates"][0] == 1 and own.packages == {"travel"},
+                f"a refused cancel changed the task ({why})")
+        forced = CancelVM(distance)
+        forced.since_player_spoke, forced.loaded = since, loaded
+        require(forced.invoke("IntelEngine_Core", "CancelCurrentTask", (forced.agent, True)) is True,
+                f"a cancel from the dashboard or the MCM was refused ({why})")
+    print("actual PEX own cancel: away from the player it needs a line of the player's within earshot; forced cancels are not asked")
+
+    # Held by talk: a dialogue target alone does not say so (SkyrimNet leaves it set for minutes).
+    class TalkVM(VM):
+        menu = talking = pending = False
+        since_spoke = -1.0
+        partner = None
+
+        def external(self, method, args, script):
+            if method == "IsInDialogueWithPlayer": return self.menu
+            if method == "IsActorTalking": return self.talking
+            if method == "IsNPCSpeechPending": return self.pending
+            if method == "GetSecondsSinceNPCSpoke": return self.since_spoke
+            if method == "GetDialogueTarget": return self.partner
+            if method == "IsInCombat": return False
+            if method == "ResetStuckSlot":
+                self.effects.append((method, tuple(args)))
+                return None
+            return super().external(method, args, script)
+
+    for label, settings, held in (
+            ("a dialogue target left over from an earlier chat", {"partner": "someone"}, False),
+            ("nothing at all", {}, False),
+            ("the game's dialogue menu with the player", {"menu": True}, True),
+            ("speaking", {"talking": True}, True),
+            ("a line on its way", {"pending": True}, True),
+            ("a line finished three seconds ago", {"since_spoke": 3.0}, True),
+            ("a line finished half a minute ago", {"since_spoke": 30.0, "partner": "someone"}, False)):
+        talk = TalkVM(files, history)
+        talk.properties["TALK_HOLD_SECONDS"] = 12.0
+        for key, value in settings.items():
+            setattr(talk, key, talk.target if value == "someone" else value)
+        require(bool(talk.invoke("IntelEngine_Core", "IsHeldByTalk", (talk.agent,))) == held,
+                f"IsHeldByTalk with {label}: expected {held}")
+        talk.invoke("IntelEngine_NPCTasks", "CheckIfStuck", (0, talk.agent)) if held else None
+        require((("ResetStuckSlot", (0, talk.agent)) in talk.effects) == held,
+                f"the stuck check with {label}: stood down {not held} where it should {'stand down' if held else 'run'}")
+    print("actual PEX IsHeldByTalk: the dialogue menu, a line being spoken, on its way or just finished; a leftover dialogue target is not it")
 
     director = CancelVM(100.0)
     director.halt_before = "PushDashboardState"

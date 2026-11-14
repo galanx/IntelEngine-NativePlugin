@@ -12,6 +12,7 @@
 #include <mutex>
 #include <unordered_map>
 #include <atomic>
+#include <vector>
 
 namespace IntelEngine {
 
@@ -60,6 +61,7 @@ namespace IntelEngine {
         std::unordered_map<RE::FormID, int> lineCounts_;
         std::atomic<int> threshold_{20};
         std::atomic<bool> enabled_{false};
+        std::vector<uint64_t> playerLineCallbackIds_;     // the player's own lines, passed on to SpeechTracker
         uint64_t callbackId_ = 0;
     };
 
