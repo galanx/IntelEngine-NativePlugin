@@ -6,6 +6,7 @@
  */
 
 #include "BattleManager.h"
+#include "SoldierTemplates.h"
 #include "LocationResolver.h"
 #include "FactionPolitics.h"
 #include "StringUtils.h"
@@ -1586,6 +1587,52 @@ namespace IntelEngine {
         return dist(rng);
     }
 
+    namespace {
+        /** The record a soldier_template names: a form id as text, an editor id the game knows, or one of the
+         *  stock names by its form id (see SoldierTemplates.h for why the name alone is not enough). */
+        RE::TESBoundObject* ResolveSoldierTemplate(const std::string& templateId, const char*& foundBy) {
+            foundBy = "";
+            if (templateId.empty()) return nullptr;
+            RE::TESForm* form = nullptr;
+            SoldierTemplates::Ref ref;
+            if (SoldierTemplates::ParseRef(templateId, ref)) {
+                foundBy = "form id";
+                if (ref.plugin.empty()) {
+                    form = RE::TESForm::LookupByID(ref.formId);
+                } else if (auto* data = RE::TESDataHandler::GetSingleton()) {
+                    form = data->LookupForm(ref.formId, ref.plugin);
+                }
+            } else {
+                foundBy = "editor id";
+                form = RE::TESForm::LookupByEditorID(templateId);
+                if (!form) {
+                    foundBy = "stock name";
+                    if (const auto stock = SoldierTemplates::StockFormId(templateId)) form = RE::TESForm::LookupByID(stock);
+                }
+            }
+            return form ? form->As<RE::TESBoundObject>() : nullptr;
+        }
+
+        /** A spawned soldier loses the factions they came with: the battle side they are put into afterwards
+         *  alone decides who is their enemy. With their own factions two groups from the same list stayed
+         *  friends (seen 2026-11-14 with both armies from the bandit list: nobody fought), and so would any two
+         *  armies whose own factions are friends in the game's data. It also takes them out of every crime faction. */
+        void StripOwnFactions(RE::Actor* actor) {
+            if (!actor) return;
+            std::vector<RE::TESFaction*> own;
+            if (auto* base = actor->GetActorBase()) {
+                for (const auto& entry : base->factions) {
+                    if (entry.faction) own.push_back(entry.faction);
+                }
+            }
+            actor->VisitFactions([&own](RE::TESFaction* faction, std::int8_t) -> bool {
+                if (faction) own.push_back(faction);
+                return false;
+            });
+            for (auto* faction : own) actor->AddToFaction(faction, -1);      // -1: not a member, whatever the base says
+        }
+    }  // namespace
+
     std::vector<RE::Actor*> BattleManager::SpawnSoldiersForFaction(
             const std::string& factionId, RE::TESFaction* battleFaction,
             int count, RE::TESObjectREFR* spawnRef, RE::Actor* player,
@@ -1594,19 +1641,21 @@ namespace IntelEngine {
         auto* fp = FactionPolitics::GetSingleton();
 
         auto templateId = fp->GetSoldierTemplate(factionId);
-        RE::TESBoundObject* base = nullptr;
-        if (!templateId.empty()) {
-            auto* form = RE::TESForm::LookupByEditorID(templateId);
-            if (form) base = form->As<RE::TESBoundObject>();
-        }
+        const char* foundBy = "";
+        RE::TESBoundObject* base = ResolveSoldierTemplate(templateId, foundBy);
         if (!base) {
-            auto* fallback = RE::TESForm::LookupByEditorID("LvlBanditMeleeAny");
-            if (fallback) base = fallback->As<RE::TESBoundObject>();
+            if (auto* fallback = RE::TESForm::LookupByID(SoldierTemplates::kFallbackFormId)) {
+                base = fallback->As<RE::TESBoundObject>();
+            }
             if (!base) {
                 logger::error("SpawnSoldiersForFaction: no template for {} and fallback failed", factionId);
                 return soldiers;
             }
-            logger::warn("SpawnSoldiersForFaction: no template for {}, using LvlBanditMeleeAny", factionId);
+            logger::warn("SpawnSoldiersForFaction: template '{}' of {} not found, using LCharBanditMeleeAny",
+                         templateId, factionId);
+        } else {
+            logger::info("SpawnSoldiersForFaction: {} from template '{}' ({:08X}, by {})",
+                         factionId, templateId, base->GetFormID(), foundBy);
         }
 
         // Resolve leveled list to concrete NPC forms
@@ -1642,6 +1691,7 @@ namespace IntelEngine {
 
             actor->AsActorValueOwner()->SetActorValue(RE::ActorValue::kAggression, 1.f);
             actor->AsActorValueOwner()->SetActorValue(RE::ActorValue::kConfidence, 4.f);
+            StripOwnFactions(actor);
             if (battleFaction) actor->AddToFaction(battleFaction, 0);
 
             // Reposition if offsets provided (wave 1 at anchor, reinforcements at player)
@@ -1864,6 +1914,11 @@ namespace IntelEngine {
 
         logger::info("[BattleManager] CleanupBattleSoldiers: {} remaining, forceAll={}", remaining, forceAll);
         return remaining;
+    }
+
+    void BattleManager::ForgetBattleSoldiers() {
+        std::lock_guard<std::mutex> cLock(cleanupMutex_);
+        cleanupFormIds_.clear();
     }
 
     void BattleManager::ForceCleanupAllSoldiers() {
