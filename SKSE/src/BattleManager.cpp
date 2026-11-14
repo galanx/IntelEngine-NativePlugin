@@ -7,6 +7,7 @@
 
 #include "BattleManager.h"
 #include "SoldierTemplates.h"
+#include "Papyrus.h"
 #include "LocationResolver.h"
 #include "FactionPolitics.h"
 #include "StringUtils.h"
@@ -1588,29 +1589,57 @@ namespace IntelEngine {
     }
 
     namespace {
-        /** The record a soldier_template names: a form id as text, an editor id the game knows, or one of the
-         *  stock names by its form id (see SoldierTemplates.h for why the name alone is not enough). */
-        RE::TESBoundObject* ResolveSoldierTemplate(const std::string& templateId, const char*& foundBy) {
-            foundBy = "";
+        /** The record a soldier_template names. A form id as text ("0x0001FC5B", "MyMod.esp|0x000801") is taken
+         *  as it stands; a name goes through the lookup every other spawn uses (Papyrus::LookupLeveledActor). */
+        RE::TESBoundObject* ResolveSoldierTemplate(const std::string& templateId) {
             if (templateId.empty()) return nullptr;
-            RE::TESForm* form = nullptr;
             SoldierTemplates::Ref ref;
-            if (SoldierTemplates::ParseRef(templateId, ref)) {
-                foundBy = "form id";
-                if (ref.plugin.empty()) {
-                    form = RE::TESForm::LookupByID(ref.formId);
-                } else if (auto* data = RE::TESDataHandler::GetSingleton()) {
-                    form = data->LookupForm(ref.formId, ref.plugin);
-                }
-            } else {
-                foundBy = "editor id";
-                form = RE::TESForm::LookupByEditorID(templateId);
-                if (!form) {
-                    foundBy = "stock name";
-                    if (const auto stock = SoldierTemplates::StockFormId(templateId)) form = RE::TESForm::LookupByID(stock);
-                }
+            if (!SoldierTemplates::ParseRef(templateId, ref)) {
+                return Papyrus::LookupLeveledActor(templateId.c_str());
             }
-            return form ? form->As<RE::TESBoundObject>() : nullptr;
+            RE::TESForm* form = nullptr;
+            if (ref.plugin.empty()) {
+                form = RE::TESForm::LookupByID(ref.formId);
+            } else if (auto* data = RE::TESDataHandler::GetSingleton()) {
+                form = data->LookupForm(ref.formId, ref.plugin);
+            }
+            if (!form) return nullptr;
+            const auto type = form->GetFormType();
+            if (type != RE::FormType::LeveledNPC && type != RE::FormType::NPC) {
+                logger::warn("soldier_template '{}' is neither an NPC nor a leveled NPC list (form type {})",
+                             templateId, static_cast<int>(type));
+                return nullptr;
+            }
+            return static_cast<RE::TESBoundObject*>(form);
+        }
+
+        /** The concrete NPCs a template yields for `count` soldiers at the player's level: a leveled list is
+         *  rolled, nested lists too; a plain NPC is taken `count` times. Empty when the list yields nobody,
+         *  which is what a list emptied by an overhaul does: such a template counts as not there. */
+        std::vector<RE::TESBoundObject*> RollSoldiers(RE::TESBoundObject* base, int count, RE::Actor* player) {
+            std::vector<RE::TESBoundObject*> resolved;
+            if (!base || count <= 0) return resolved;
+            if (base->GetFormType() != RE::FormType::LeveledNPC) {
+                resolved.assign(static_cast<std::size_t>(count), base);
+                return resolved;
+            }
+            const auto playerLevel = player ? player->GetLevel() : static_cast<std::uint16_t>(25);
+            RE::BSScrapArray<RE::CALCED_OBJECT> calced;
+            static_cast<RE::TESLevCharacter*>(base)->CalculateCurrentFormList(
+                playerLevel, static_cast<std::int16_t>(count), calced, 0, false);
+            for (std::uint32_t ci = 0; ci < calced.size(); ++ci) {
+                auto* f = calced[ci].form;
+                if (!f) continue;
+                for (int d = 0; d < 10 && f->GetFormType() == RE::FormType::LeveledNPC; ++d) {
+                    RE::BSScrapArray<RE::CALCED_OBJECT> sub;
+                    static_cast<RE::TESLevCharacter*>(f)->CalculateCurrentFormList(playerLevel, 1, sub, 0, false);
+                    if (!sub.empty() && sub[0].form) f = sub[0].form;
+                    else break;
+                }
+                if (f->GetFormType() != RE::FormType::LeveledNPC)
+                    resolved.push_back(static_cast<RE::TESBoundObject*>(f));
+            }
+            return resolved;
         }
 
         /** A spawned soldier loses the factions they came with: the battle side they are put into afterwards
@@ -1640,45 +1669,39 @@ namespace IntelEngine {
         std::vector<RE::Actor*> soldiers;
         auto* fp = FactionPolitics::GetSingleton();
 
-        auto templateId = fp->GetSoldierTemplate(factionId);
-        const char* foundBy = "";
-        RE::TESBoundObject* base = ResolveSoldierTemplate(templateId, foundBy);
-        if (!base) {
-            if (auto* fallback = RE::TESForm::LookupByID(SoldierTemplates::kFallbackFormId)) {
-                base = fallback->As<RE::TESBoundObject>();
+        // Whom to raise. The faction's own template first. A faction without a usable one raises its first
+        // ally's soldiers that work: the Political Engine realms ship without a template, and a realm allied to
+        // the Legion then fields Legion soldiers instead of bandits. The generic bandits come last.
+        const auto templateId = fp->GetSoldierTemplate(factionId);
+        auto resolved = RollSoldiers(ResolveSoldierTemplate(templateId), count, player);
+        if (!resolved.empty()) {
+            logger::info("SpawnSoldiersForFaction: {} from its template '{}'", factionId, templateId);
+        } else if (const auto self = fp->GetFaction(factionId)) {
+            for (const auto& ally : self->allies) {
+                const auto allyTemplate = fp->GetSoldierTemplate(ally);
+                resolved = RollSoldiers(ResolveSoldierTemplate(allyTemplate), count, player);
+                if (!resolved.empty()) {
+                    logger::warn("SpawnSoldiersForFaction: template '{}' of {} yields nobody, raised from its ally {}'s '{}'",
+                                 templateId, factionId, ally, allyTemplate);
+                    break;
+                }
             }
-            if (!base) {
-                logger::error("SpawnSoldiersForFaction: no template for {} and fallback failed", factionId);
+        }
+        if (resolved.empty()) {
+            resolved = RollSoldiers(Papyrus::LookupLeveledActor("LvlBanditMeleeAny"), count, player);
+            if (resolved.empty()) {
+                if (auto* form = RE::TESForm::LookupByID(SoldierTemplates::kFallbackFormId);
+                    form && form->GetFormType() == RE::FormType::LeveledNPC) {
+                    resolved = RollSoldiers(static_cast<RE::TESBoundObject*>(form), count, player);
+                }
+            }
+            if (resolved.empty()) {
+                logger::error("SpawnSoldiersForFaction: template '{}' of {} yields nobody and the bandit fallback failed",
+                              templateId, factionId);
                 return soldiers;
             }
-            logger::warn("SpawnSoldiersForFaction: template '{}' of {} not found, using LCharBanditMeleeAny",
+            logger::warn("SpawnSoldiersForFaction: template '{}' of {} yields nobody and no ally has one, using the bandit fallback",
                          templateId, factionId);
-        } else {
-            logger::info("SpawnSoldiersForFaction: {} from template '{}' ({:08X}, by {})",
-                         factionId, templateId, base->GetFormID(), foundBy);
-        }
-
-        // Resolve leveled list to concrete NPC forms
-        std::vector<RE::TESBoundObject*> resolved;
-        if (base->GetFormType() == RE::FormType::LeveledNPC) {
-            auto playerLevel = player->GetLevel();
-            RE::BSScrapArray<RE::CALCED_OBJECT> calced;
-            static_cast<RE::TESLevCharacter*>(base)->CalculateCurrentFormList(
-                playerLevel, static_cast<std::int16_t>(count), calced, 0, false);
-            for (std::uint32_t ci = 0; ci < calced.size(); ++ci) {
-                auto* f = calced[ci].form;
-                if (!f) continue;
-                for (int d = 0; d < 10 && f->GetFormType() == RE::FormType::LeveledNPC; ++d) {
-                    RE::BSScrapArray<RE::CALCED_OBJECT> sub;
-                    static_cast<RE::TESLevCharacter*>(f)->CalculateCurrentFormList(playerLevel, 1, sub, 0, false);
-                    if (!sub.empty() && sub[0].form) f = sub[0].form;
-                    else break;
-                }
-                if (f->GetFormType() != RE::FormType::LeveledNPC)
-                    resolved.push_back(static_cast<RE::TESBoundObject*>(f));
-            }
-        } else {
-            for (int i = 0; i < count; ++i) resolved.push_back(base);
         }
 
         // Spawn + configure

@@ -18,6 +18,14 @@ namespace IntelEngine::Papyrus {
      * Register all Papyrus native functions with the VM.
      */
     bool Register(RE::BSScript::IVirtualMachine* a_vm);
+
+    /**
+     * The NPC or leveled NPC list a name stands for, the way every spawn looks it up: the game's editor ids, an
+     * enumeration by editor id, prefix matches (a Requiem-style setup replaces "LvlBanditMelee..." lists by
+     * variants of that name), and the form ids of the stock lists in Skyrim.esm. nullptr when nothing fits;
+     * results are cached, misses too.
+     */
+    RE::TESBoundObject* LookupLeveledActor(const char* editorID);
     nlohmann::json PollAndSyncPE();
 
     // ==========================================================================
