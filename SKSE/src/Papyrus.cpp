@@ -104,6 +104,7 @@ namespace IntelEngine::Papyrus {
     bool IsActorTalking(RE::StaticFunctionTag*, RE::Actor*);
     bool IsNPCSpeechPending(RE::StaticFunctionTag*, RE::Actor*);
     float GetSecondsSinceNPCSpoke(RE::StaticFunctionTag*, RE::Actor*);
+    float GetSecondsSincePlayerSpoke(RE::StaticFunctionTag*);
     std::int32_t GetSkyrimNetPackageApiVersion(RE::StaticFunctionTag*);
     std::int32_t SyncPluginSettings(RE::StaticFunctionTag*, RE::BSFixedString);
     std::int32_t ApplyPluginSettings(RE::StaticFunctionTag*, RE::BSFixedString);
@@ -469,6 +470,7 @@ namespace IntelEngine::Papyrus {
         a_vm->RegisterFunction("IsActorTalking", SCRIPT_NAME, IsActorTalking); ++count;
         a_vm->RegisterFunction("IsNPCSpeechPending", SCRIPT_NAME, IsNPCSpeechPending); ++count;
         a_vm->RegisterFunction("GetSecondsSinceNPCSpoke", SCRIPT_NAME, GetSecondsSinceNPCSpoke); ++count;
+        a_vm->RegisterFunction("GetSecondsSincePlayerSpoke", SCRIPT_NAME, GetSecondsSincePlayerSpoke); ++count;
         a_vm->RegisterFunction("GetSkyrimNetPackageApiVersion", SCRIPT_NAME, GetSkyrimNetPackageApiVersion); ++count;
         a_vm->RegisterFunction("SyncPluginSettings", SCRIPT_NAME, SyncPluginSettings); ++count;
         a_vm->RegisterFunction("ApplyPluginSettings", SCRIPT_NAME, ApplyPluginSettings); ++count;
@@ -2795,6 +2797,12 @@ namespace IntelEngine::Papyrus {
     // Seconds since the NPC's last generated line stopped being audible; -1 when none was heard this session.
     float GetSecondsSinceNPCSpoke(RE::StaticFunctionTag*, RE::Actor* actor) {
         return actor ? SpeechTracker::GetSingleton()->SecondsSinceSpeechEnded(actor->GetFormID()) : -1.0f;
+    }
+
+    // Seconds since the player last said a line (typed, spoken or picked in the game's menu), as SkyrimNet
+    // reports it; -1 when none this session. SkyrimNet names no addressee for a typed or spoken line.
+    float GetSecondsSincePlayerSpoke(RE::StaticFunctionTag*) {
+        return SpeechTracker::GetSingleton()->SecondsSincePlayerSpoke();
     }
 
     // 0 on a SkyrimNet without the package contract: ListPackage, HoldPackages and UnregisterPackageEx are

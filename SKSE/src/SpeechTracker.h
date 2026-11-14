@@ -1,7 +1,8 @@
 #pragma once
 
 /**
- * SpeechTracker — who SkyrimNet is about to make speak, who is speaking, and when they stopped.
+ * SpeechTracker — who SkyrimNet is about to make speak, who is speaking, when they stopped, and when the player
+ * last said a line.
  *
  * SkyrimNet sends SKSE ModEvents for every generated line (ai_docs/GAME_INTEGRATION.md, "Outbound Mod
  * Events"): SkyrimNet_SpeechStarted when a segment is queued for synthesis, SkyrimNet_AudioStarted when it
@@ -54,6 +55,16 @@ namespace IntelEngine {
         bool IsSpeechPendingAt(RE::FormID actor, Clock::time_point now) const;
         float SecondsSinceSpeechEndedAt(RE::FormID actor, Clock::time_point now) const;
 
+        /** The player said a line (SkyrimNet's event callbacks, hooked up by DialogueTracker). A typed or spoken
+         *  line names no addressee there, so this is one time for everybody. */
+        void NotePlayerLine(Clock::time_point now);
+        /** Seconds since the player's last line; -1 if none this session. */
+        float SecondsSincePlayerSpoke() const { return SecondsSincePlayerSpokeAt(Clock::now()); }
+        float SecondsSincePlayerSpokeAt(Clock::time_point now) const;
+        /** SkyrimNet's event types for a line of the player's: typed, spoken, picked in the game's own menu. */
+        static constexpr const char* kPlayerLineTypes[] = {"dialogue_player_text", "dialogue_player_stt", "dialogue_player"};
+        static bool IsPlayerLineType(const char* eventType);
+
         /** The event kind for a ModEvent name, false for any other event. */
         static bool KindOf(const char* eventName, Kind& kind);
         /** Whether the payload says the segment is narration (not the actor's own speech). Bad JSON: false. */
@@ -81,6 +92,8 @@ namespace IntelEngine {
 
         mutable std::mutex mutex_;
         std::unordered_map<RE::FormID, State> states_;
+        bool playerSpoke_ = false;
+        Clock::time_point playerSpokeAt_{};
         std::atomic<bool> seenEvents_{false};
         bool registered_ = false;
     };
