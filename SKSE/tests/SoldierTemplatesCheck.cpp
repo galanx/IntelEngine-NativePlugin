@@ -1,4 +1,4 @@
-// What a faction's soldier_template names: stock names by form id, form ids as text, anything else a name.
+// What a faction's soldier_template names: a form id as text, anything else a name for the shared lookup.
 // Build: cl /std:c++20 /EHsc /I SKSE\src SKSE\tests\SoldierTemplatesCheck.cpp
 #include "SoldierTemplates.h"
 
@@ -8,17 +8,7 @@
 int main() {
     using namespace IntelEngine::SoldierTemplates;
 
-    // The stock templates of the default faction file, whatever their case or quotes.
-    assert(StockFormId("LCharSoldierImperial") == 0x0001FC5B);
-    assert(StockFormId("lcharsoldiersons") == 0x0001FC5C);
-    assert(StockFormId("\"LCharThalmorMelee1H\"") == 0x0002B129);
-    assert(StockFormId(" LCharBanditMeleeAny ") == kFallbackFormId);
-    assert(StockFormId("LCharBanditWizard") == 0x0001E771);
-    assert(StockFormId("LCharForswornMelee1H") == 0x0001E792);
-    assert(StockFormId("WEThiefSubChar") == 0x00104DC9);
-    assert(StockFormId("WEAssassinSubChar") == 0x001051F4);
-    assert(StockFormId("LvlBanditMeleeAny") == 0);          // the old fallback's name: not a stock template
-    assert(StockFormId("") == 0);
+    assert(kFallbackFormId == 0x0003DECD);
 
     // A template written as a form id.
     Ref ref;
@@ -34,6 +24,6 @@ int main() {
     assert(!ParseRef("|0x801", ref) && !ParseRef("MyMod.esp|", ref) && !ParseRef("MyMod.esp|0", ref));
     assert(!ParseRef("", ref));
 
-    std::cout << "PASS: stock templates by form id, form ids as text, names left to the editor-id lookup\n";
+    std::cout << "PASS: form ids as text are told from names, names are left to the shared lookup\n";
     return 0;
 }

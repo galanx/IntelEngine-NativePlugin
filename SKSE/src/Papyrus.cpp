@@ -3052,7 +3052,7 @@ namespace IntelEngine::Papyrus {
         {"LCharForswornMelee1H",   0x01E792},
     };
 
-    static RE::TESBoundObject* LookupLeveledActor(const char* editorID) {
+    RE::TESBoundObject* LookupLeveledActor(const char* editorID) {
         std::lock_guard<std::mutex> lock(s_lookupCacheMutex);
         std::string key(editorID);
 
