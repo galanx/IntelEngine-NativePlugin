@@ -11,6 +11,7 @@
 #include "Utf8Truncate.h"
 #include "TaskHistoryDescription.h"
 #include "FriendlyKey.h"
+#include "JsonKeys.h"
 #include "NPCIndex.h"
 #include "ItemIndex.h"
 #include <random>
@@ -179,6 +180,7 @@ namespace IntelEngine::Papyrus {
     int CountDeadBattleSoldiers(RE::StaticFunctionTag*, RE::BSFixedString);
     int CleanupBattleSoldiers(RE::StaticFunctionTag*, float, float, float, float, bool);
     void ForceCleanupAllSoldiers(RE::StaticFunctionTag*);
+    void ForgetBattleSoldiers(RE::StaticFunctionTag*);
     void SnapshotBounties(RE::StaticFunctionTag*);
     void ClearBattleTeammates(RE::StaticFunctionTag*);
     void ClearAllHoldBounties(RE::StaticFunctionTag*);
@@ -565,6 +567,7 @@ namespace IntelEngine::Papyrus {
         a_vm->RegisterFunction("CountDeadBattleSoldiers", SCRIPT_NAME, CountDeadBattleSoldiers); ++count;
         a_vm->RegisterFunction("CleanupBattleSoldiers", SCRIPT_NAME, CleanupBattleSoldiers); ++count;
         a_vm->RegisterFunction("ForceCleanupAllSoldiers", SCRIPT_NAME, ForceCleanupAllSoldiers); ++count;
+        a_vm->RegisterFunction("ForgetBattleSoldiers", SCRIPT_NAME, ForgetBattleSoldiers); ++count;
         a_vm->RegisterFunction("SnapshotBounties", SCRIPT_NAME, SnapshotBounties); ++count;
         a_vm->RegisterFunction("ClearBattleTeammates", SCRIPT_NAME, ClearBattleTeammates); ++count;
         a_vm->RegisterFunction("ClearAllHoldBounties", SCRIPT_NAME, ClearAllHoldBounties); ++count;
@@ -4800,18 +4803,10 @@ namespace IntelEngine::Papyrus {
 
     int GetJsonArrayInt(RE::StaticFunctionTag*, RE::BSFixedString jsonStr,
                         RE::BSFixedString arrayKey, int index) {
+        // The name arrives in whatever spelling the game's string pool holds ("formIds" as "formIDs"): JsonKeys
+        // matches it in any case and keeps the bits of ids above INT_MAX (created references start with FF).
         try {
-            auto j = nlohmann::json::parse(jsonStr.c_str());
-            auto key = std::string(arrayKey.c_str());
-            if (j.contains(key) && j[key].is_array()) {
-                auto& arr = j[key];
-                if (index >= 0 && static_cast<size_t>(index) < arr.size()) {
-                    // FormIDs can exceed INT_MAX (0xFF prefix = 4278190080+).
-                    // Use uint32 to avoid overflow, then reinterpret as signed for Papyrus.
-                    auto val = arr[index].get<uint32_t>();
-                    return static_cast<int>(val);
-                }
-            }
+            return JsonKeys::ArrayInt(nlohmann::json::parse(jsonStr.c_str()), std::string(arrayKey.c_str()), index);
         } catch (...) {}
         return 0;
     }
@@ -4871,6 +4866,10 @@ namespace IntelEngine::Papyrus {
     void ForceCleanupAllSoldiers(RE::StaticFunctionTag*) {
         auto* bm = BattleManager::GetSingleton();
         if (bm) bm->ForceCleanupAllSoldiers();
+    }
+
+    void ForgetBattleSoldiers(RE::StaticFunctionTag*) {
+        BattleManager::GetSingleton()->ForgetBattleSoldiers();
     }
 
     void SnapshotBounties(RE::StaticFunctionTag*) {

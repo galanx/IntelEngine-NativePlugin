@@ -255,6 +255,9 @@ namespace IntelEngine {
 
         /** Force cleanup ALL battle soldiers (hard timeout). Disables+deletes all tracked actors. */
         void ForceCleanupAllSoldiers();
+        /** Drop the list of soldiers left to clean up, without touching them: the script removes them itself
+         *  at the end of a battle, where it can tell which ones the player is looking at. */
+        void ForgetBattleSoldiers();
 
         /** Remove crime factions from battle soldiers (no bounty for kills). Called at spawn. */
         void SnapshotBounties();
