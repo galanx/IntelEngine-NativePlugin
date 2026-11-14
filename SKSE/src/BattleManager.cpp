@@ -6,6 +6,8 @@
  */
 
 #include "BattleManager.h"
+#include "SoldierTemplates.h"
+#include "Papyrus.h"
 #include "LocationResolver.h"
 #include "FactionPolitics.h"
 #include "StringUtils.h"
@@ -1586,33 +1588,42 @@ namespace IntelEngine {
         return dist(rng);
     }
 
-    std::vector<RE::Actor*> BattleManager::SpawnSoldiersForFaction(
-            const std::string& factionId, RE::TESFaction* battleFaction,
-            int count, RE::TESObjectREFR* spawnRef, RE::Actor* player,
-            float offsetX, float offsetY, float centerX, float centerY) {
-        std::vector<RE::Actor*> soldiers;
-        auto* fp = FactionPolitics::GetSingleton();
-
-        auto templateId = fp->GetSoldierTemplate(factionId);
-        RE::TESBoundObject* base = nullptr;
-        if (!templateId.empty()) {
-            auto* form = RE::TESForm::LookupByEditorID(templateId);
-            if (form) base = form->As<RE::TESBoundObject>();
-        }
-        if (!base) {
-            auto* fallback = RE::TESForm::LookupByEditorID("LvlBanditMeleeAny");
-            if (fallback) base = fallback->As<RE::TESBoundObject>();
-            if (!base) {
-                logger::error("SpawnSoldiersForFaction: no template for {} and fallback failed", factionId);
-                return soldiers;
+    namespace {
+        /** The record a soldier_template names. A form id as text ("0x0001FC5B", "MyMod.esp|0x000801") is taken
+         *  as it stands; a name goes through the lookup every other spawn uses (Papyrus::LookupLeveledActor). */
+        RE::TESBoundObject* ResolveSoldierTemplate(const std::string& templateId) {
+            if (templateId.empty()) return nullptr;
+            SoldierTemplates::Ref ref;
+            if (!SoldierTemplates::ParseRef(templateId, ref)) {
+                return Papyrus::LookupLeveledActor(templateId.c_str());
             }
-            logger::warn("SpawnSoldiersForFaction: no template for {}, using LvlBanditMeleeAny", factionId);
+            RE::TESForm* form = nullptr;
+            if (ref.plugin.empty()) {
+                form = RE::TESForm::LookupByID(ref.formId);
+            } else if (auto* data = RE::TESDataHandler::GetSingleton()) {
+                form = data->LookupForm(ref.formId, ref.plugin);
+            }
+            if (!form) return nullptr;
+            const auto type = form->GetFormType();
+            if (type != RE::FormType::LeveledNPC && type != RE::FormType::NPC) {
+                logger::warn("soldier_template '{}' is neither an NPC nor a leveled NPC list (form type {})",
+                             templateId, static_cast<int>(type));
+                return nullptr;
+            }
+            return static_cast<RE::TESBoundObject*>(form);
         }
 
-        // Resolve leveled list to concrete NPC forms
-        std::vector<RE::TESBoundObject*> resolved;
-        if (base->GetFormType() == RE::FormType::LeveledNPC) {
-            auto playerLevel = player->GetLevel();
+        /** The concrete NPCs a template yields for `count` soldiers at the player's level: a leveled list is
+         *  rolled, nested lists too; a plain NPC is taken `count` times. Empty when the list yields nobody,
+         *  which is what a list emptied by an overhaul does: such a template counts as not there. */
+        std::vector<RE::TESBoundObject*> RollSoldiers(RE::TESBoundObject* base, int count, RE::Actor* player) {
+            std::vector<RE::TESBoundObject*> resolved;
+            if (!base || count <= 0) return resolved;
+            if (base->GetFormType() != RE::FormType::LeveledNPC) {
+                resolved.assign(static_cast<std::size_t>(count), base);
+                return resolved;
+            }
+            const auto playerLevel = player ? player->GetLevel() : static_cast<std::uint16_t>(25);
             RE::BSScrapArray<RE::CALCED_OBJECT> calced;
             static_cast<RE::TESLevCharacter*>(base)->CalculateCurrentFormList(
                 playerLevel, static_cast<std::int16_t>(count), calced, 0, false);
@@ -1628,8 +1639,69 @@ namespace IntelEngine {
                 if (f->GetFormType() != RE::FormType::LeveledNPC)
                     resolved.push_back(static_cast<RE::TESBoundObject*>(f));
             }
-        } else {
-            for (int i = 0; i < count; ++i) resolved.push_back(base);
+            return resolved;
+        }
+
+        /** A spawned soldier loses the factions they came with: the battle side they are put into afterwards
+         *  alone decides who is their enemy. With their own factions two groups from the same list stayed
+         *  friends (seen 2026-11-14 with both armies from the bandit list: nobody fought), and so would any two
+         *  armies whose own factions are friends in the game's data. It also takes them out of every crime faction. */
+        void StripOwnFactions(RE::Actor* actor) {
+            if (!actor) return;
+            std::vector<RE::TESFaction*> own;
+            if (auto* base = actor->GetActorBase()) {
+                for (const auto& entry : base->factions) {
+                    if (entry.faction) own.push_back(entry.faction);
+                }
+            }
+            actor->VisitFactions([&own](RE::TESFaction* faction, std::int8_t) -> bool {
+                if (faction) own.push_back(faction);
+                return false;
+            });
+            for (auto* faction : own) actor->AddToFaction(faction, -1);      // -1: not a member, whatever the base says
+        }
+    }  // namespace
+
+    std::vector<RE::Actor*> BattleManager::SpawnSoldiersForFaction(
+            const std::string& factionId, RE::TESFaction* battleFaction,
+            int count, RE::TESObjectREFR* spawnRef, RE::Actor* player,
+            float offsetX, float offsetY, float centerX, float centerY) {
+        std::vector<RE::Actor*> soldiers;
+        auto* fp = FactionPolitics::GetSingleton();
+
+        // Whom to raise. The faction's own template first. A faction without a usable one raises its first
+        // ally's soldiers that work: the Political Engine realms ship without a template, and a realm allied to
+        // the Legion then fields Legion soldiers instead of bandits. The generic bandits come last.
+        const auto templateId = fp->GetSoldierTemplate(factionId);
+        auto resolved = RollSoldiers(ResolveSoldierTemplate(templateId), count, player);
+        if (!resolved.empty()) {
+            logger::info("SpawnSoldiersForFaction: {} from its template '{}'", factionId, templateId);
+        } else if (const auto self = fp->GetFaction(factionId)) {
+            for (const auto& ally : self->allies) {
+                const auto allyTemplate = fp->GetSoldierTemplate(ally);
+                resolved = RollSoldiers(ResolveSoldierTemplate(allyTemplate), count, player);
+                if (!resolved.empty()) {
+                    logger::warn("SpawnSoldiersForFaction: template '{}' of {} yields nobody, raised from its ally {}'s '{}'",
+                                 templateId, factionId, ally, allyTemplate);
+                    break;
+                }
+            }
+        }
+        if (resolved.empty()) {
+            resolved = RollSoldiers(Papyrus::LookupLeveledActor("LvlBanditMeleeAny"), count, player);
+            if (resolved.empty()) {
+                if (auto* form = RE::TESForm::LookupByID(SoldierTemplates::kFallbackFormId);
+                    form && form->GetFormType() == RE::FormType::LeveledNPC) {
+                    resolved = RollSoldiers(static_cast<RE::TESBoundObject*>(form), count, player);
+                }
+            }
+            if (resolved.empty()) {
+                logger::error("SpawnSoldiersForFaction: template '{}' of {} yields nobody and the bandit fallback failed",
+                              templateId, factionId);
+                return soldiers;
+            }
+            logger::warn("SpawnSoldiersForFaction: template '{}' of {} yields nobody and no ally has one, using the bandit fallback",
+                         templateId, factionId);
         }
 
         // Spawn + configure
@@ -1642,6 +1714,7 @@ namespace IntelEngine {
 
             actor->AsActorValueOwner()->SetActorValue(RE::ActorValue::kAggression, 1.f);
             actor->AsActorValueOwner()->SetActorValue(RE::ActorValue::kConfidence, 4.f);
+            StripOwnFactions(actor);
             if (battleFaction) actor->AddToFaction(battleFaction, 0);
 
             // Reposition if offsets provided (wave 1 at anchor, reinforcements at player)
@@ -1864,6 +1937,11 @@ namespace IntelEngine {
 
         logger::info("[BattleManager] CleanupBattleSoldiers: {} remaining, forceAll={}", remaining, forceAll);
         return remaining;
+    }
+
+    void BattleManager::ForgetBattleSoldiers() {
+        std::lock_guard<std::mutex> cLock(cleanupMutex_);
+        cleanupFormIds_.clear();
     }
 
     void BattleManager::ForceCleanupAllSoldiers() {

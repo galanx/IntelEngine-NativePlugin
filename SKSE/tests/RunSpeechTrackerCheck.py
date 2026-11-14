@@ -125,7 +125,20 @@ int main() {
     t->ProcessEvent(&ev, nullptr);
     assert(!t->IsSpeechPending(npc));
     t->ProcessEvent(nullptr, nullptr);
-    std::cout << "PASS: pending across segments, grace for unplayed and unended lines, per actor, reset, event names, narration, sink\\n";
+
+    // The player's own lines: one time for everybody, forgotten at a load.
+    assert(t->SecondsSincePlayerSpokeAt(at(500.0)) < 0.0f);
+    t->NotePlayerLine(at(500.0));
+    assert(t->SecondsSincePlayerSpokeAt(at(512.0)) > 11.9f && t->SecondsSincePlayerSpokeAt(at(512.0)) < 12.1f);
+    t->NotePlayerLine(at(520.0));
+    assert(t->SecondsSincePlayerSpokeAt(at(521.0)) < 1.1f);
+    t->Reset();
+    assert(t->SecondsSincePlayerSpokeAt(at(530.0)) < 0.0f);
+    assert(SpeechTracker::IsPlayerLineType("dialogue_player_text") && SpeechTracker::IsPlayerLineType("dialogue_player_stt"));
+    assert(SpeechTracker::IsPlayerLineType("dialogue_player") && SpeechTracker::IsPlayerLineType("Dialogue_Player_STT"));
+    assert(!SpeechTracker::IsPlayerLineType("dialogue") && !SpeechTracker::IsPlayerLineType("dialogue_player_telepathy"));
+    assert(!SpeechTracker::IsPlayerLineType(nullptr));
+    std::cout << "PASS: pending across segments, grace for unplayed and unended lines, per actor, reset, event names, narration, sink, the player's lines\\n";
 }
 ''', encoding='utf-8')
     exe = work / 'check'

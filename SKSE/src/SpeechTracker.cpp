@@ -86,6 +86,26 @@ namespace IntelEngine {
         return static_cast<float>(SecondsBetween(it->second.lastEnded, now));
     }
 
+    bool SpeechTracker::IsPlayerLineType(const char* eventType) {
+        if (!eventType) return false;
+        for (const char* known : kPlayerLineTypes) {
+            if (SameName(eventType, known)) return true;
+        }
+        return false;
+    }
+
+    void SpeechTracker::NotePlayerLine(Clock::time_point now) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        playerSpoke_ = true;
+        playerSpokeAt_ = now;
+    }
+
+    float SpeechTracker::SecondsSincePlayerSpokeAt(Clock::time_point now) const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (!playerSpoke_) return -1.0f;
+        return static_cast<float>(SecondsBetween(playerSpokeAt_, now));
+    }
+
     void SpeechTracker::Register() {
         if (registered_) return;
         if (auto* source = SKSE::GetModCallbackEventSource()) {
@@ -100,6 +120,7 @@ namespace IntelEngine {
     void SpeechTracker::Reset() {
         std::lock_guard<std::mutex> lock(mutex_);
         states_.clear();
+        playerSpoke_ = false;
     }
 
     RE::BSEventNotifyControl SpeechTracker::ProcessEvent(const SKSE::ModCallbackEvent* event,
