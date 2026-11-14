@@ -112,6 +112,9 @@ class VM:
         self.properties.update({"NPCTickIntervalHours": 1.5, "MONITOR_INTERVAL": 5.0, "IDLE_POLL_INTERVAL": 30.0})
         # Core's own bookkeeping variables (3.8): pending tick, last sweep, open popup request.
         self.properties.update({"_tickDueRealTime": 0.0, "_lastSweepGameTime": 0.0, "_mlRequest": ""})
+        # Slots picked for a task that is being set up (ClaimFreeAgentSlot); None until the first pick, as in a save
+        # from before the variable existed.
+        self.properties.update({"_slotClaimedAt": None, "SLOT_CLAIM_SECONDS": 30.0})
         # Core constants other scripts do arithmetic with (a property read of another script is not executed here).
         self.properties.update({"SPEECH_GRACE_SECONDS": 7.0, "UPDATE_INTERVAL": 3.0})
         # Constants added with the 3.8 stuck and immersion fixes, with their script values (a property that is
@@ -381,6 +384,10 @@ class VM:
             elif op == "propset":
                 prop = a[0][1].removeprefix("::").removesuffix("_var")
                 self.properties[prop] = v(a[2])
+            elif op == "array_create":      # "new Float[5]": elements start at the type's zero
+                kind = (self.scripts[script][name][2].get(a[0][1]) or "").removesuffix("[]").lower()
+                zero = {"float": 0.0, "int": 0, "bool": False, "string": ""}.get(kind)
+                env[a[0][1]] = [zero] * v(a[1])
             elif op == "array_length": env[a[0][1]] = len(v(a[1]))
             elif op == "array_getelement": env[a[0][1]] = v(a[1])[v(a[2])]
             elif op == "array_setelement":
@@ -1403,6 +1410,77 @@ def run_review_note_checks(files, history):
     print("actual PEX ForgetTaskStartStamps: the start stamp of everyone on a task is dropped, and Maintenance calls it")
 
 
+def run_slot_claim_checks(files, history):
+    """Two tasks started in the same instant were handed the same slot (full Nolvus profile, 2026-11-14): a task
+    function picked a free slot and took it some calls later, and a script gives way to others at every call
+    into another object. The second agent went into the slot, the first task gave up without a word, and its
+    agent stayed flagged as busy with it. The pick now takes the slot in the same breath (ClaimFreeAgentSlot)."""
+    class ClaimVM(VM):
+        now = 100.0
+        other = None        # "armed": at the next call into another object, a second task picks its slot
+
+        def external(self, method, args, script):
+            if method == "GetCurrentRealTime": return self.now
+            if method == "IsInFaction": return True
+            if method == "GetActorReference" and self.other == "armed":
+                self.other = "running"
+                self.other = self.invoke("IntelEngine_Core", "ClaimFreeAgentSlot")
+            return super().external(method, args, script)
+
+    def make(max_tasks=5.0):
+        vm = ClaimVM(files, history)            # slot 0 is busy in the model, 1 to 4 are free
+        vm.storage[(vm.player, "Intel_MCM_MaxTasks")] = max_tasks
+        return vm
+
+    # 1. The other task's pick runs in the middle of this one's search: two different slots.
+    vm = make()
+    vm.other = "armed"
+    mine = vm.invoke("IntelEngine_Core", "ClaimFreeAgentSlot")
+    require(isinstance(vm.other, int) and vm.other >= 1, f"the interleaved pick did not run or found no slot: {vm.other!r}")
+    require(mine >= 1 and mine != vm.other, f"two tasks started at once were both handed slot {mine} (the other got {vm.other})")
+    # 2. Picks one after the other, none of them taken yet: each its own slot, and no fifth.
+    vm = make()
+    picked = [vm.invoke("IntelEngine_Core", "ClaimFreeAgentSlot") for _ in range(5)]
+    require(picked == [1, 2, 3, 4, -1], f"five picks in a row gave {picked!r}")
+    # 3. The limit on tasks at once counts a picked slot as taken.
+    vm = make(max_tasks=2.0)
+    picked = [vm.invoke("IntelEngine_Core", "ClaimFreeAgentSlot") for _ in range(2)]
+    require(picked == [1, -1], f"with two tasks allowed and one running, two picks gave {picked!r}")
+    # 4. A pick nobody follows up runs out; one given back is free at once; one from before a restart is void.
+    vm = make()
+    first = vm.invoke("IntelEngine_Core", "ClaimFreeAgentSlot")
+    vm.now = 110.0
+    second = vm.invoke("IntelEngine_Core", "ClaimFreeAgentSlot")
+    vm.now = 131.0                              # 31 s after the first, 21 s after the second
+    third = vm.invoke("IntelEngine_Core", "ClaimFreeAgentSlot")
+    require((first, second, third) == (1, 2, 1), f"an abandoned pick did not run out after 30 s: {(first, second, third)!r}")
+    vm.invoke("IntelEngine_Core", "ReleaseSlotClaim", (2,))
+    vm.now = 132.0
+    require(vm.invoke("IntelEngine_Core", "ClaimFreeAgentSlot") == 2, "a pick that was given back was not free again")
+    vm = make()
+    vm.properties["_slotClaimedAt"] = [0.0, 5000.0, 0.0, 0.0, 0.0]      # set in an earlier session
+    vm.now = 10.0
+    require(vm.invoke("IntelEngine_Core", "ClaimFreeAgentSlot") == 1, "a pick from before the game was restarted still held its slot")
+    # 5. Taking the slot lifts the mark.
+    vm = make()
+    slot = vm.invoke("IntelEngine_Core", "ClaimFreeAgentSlot")
+    newcomer = Actor("Second Courier", "player-cell")
+    vm.invoke("IntelEngine_Core", "AllocateSlot", (slot, newcomer, "travel", "Dragonsreach", 0, "test", ""))
+    require(vm.properties["SlotStates"][slot] == 1 and vm.properties["_slotClaimedAt"][slot] == 0.0,
+            "AllocateSlot did not take the slot and lift the mark")
+    print("actual PEX ClaimFreeAgentSlot: two picks at once get two slots; a pick counts as taken, runs out when abandoned, and is lifted by AllocateSlot")
+
+    # An NPC flagged as on a task with no slot behind them is not busy with it.
+    vm = make()
+    require(vm.invoke("IntelEngine_Core", "IsDuplicateTask", (vm.agent, "deliver_message", "Recipient")),
+            "the same task for an agent who is on it was not recognised as a duplicate")
+    vm.storage[(vm.target, "Intel_TaskType")] = "fetch_npc"
+    vm.storage[(vm.target, "Intel_Target")] = "Adrianne Avenicci"
+    require(not vm.invoke("IntelEngine_Core", "IsDuplicateTask", (vm.target, "fetch_npc", "Adrianne Avenicci")),
+            "an NPC with leftover task fields and no slot was refused the task as a duplicate")
+    print("actual PEX IsDuplicateTask: leftover task fields without a slot do not block the same request")
+
+
 def run_linger_teammate_checks(files, history):
     class LingerVM(VM):
         teammate = False
@@ -1935,6 +2013,7 @@ def main():
     run_soft_stuck_checks(files, history)
     run_bard_release_checks(files, history)
     run_review_note_checks(files, history)
+    run_slot_claim_checks(files, history)
     run_linger_teammate_checks(files, history)
     run_social_range_checks(files, history)
 
