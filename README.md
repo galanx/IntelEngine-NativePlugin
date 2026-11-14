@@ -2,7 +2,7 @@
 ### NPC Autonomy, Faction Politics & Player-Driven Task Framework for SkyrimNet
 
 > **Compatibility:** IntelEngine 3.8.0 requires **SkyrimNet Beta 27** or newer (its travel prompt uses the `get_place_names` decorator added in Beta 27); 3.5.1–3.6.x required Beta 25. Beta 26 and earlier are incompatible with 3.8.0.
-> The 3.6.0 native build includes SE/AE/VR. Tested runtimes: Skyrim **1.6.1170.0** and **1.7.104.0**. Skyrim VR **1.4.15** should work and was partly tested. Skyrim SE **1.5.x**: untested; **1.6.640.0** and **1.7.99.0** are also untested targets.
+> The native build includes SE/AE/VR. 3.8.0 was tested on Skyrim SE **1.5.97** (with SkyrimNet 1.1.1 Alpha), on a small test setup and on a full Nolvus Awakening load order; it was not retested on the newer runtimes. 3.6.0 was tested on Skyrim **1.6.1170.0** and **1.7.104.0**. Skyrim VR **1.4.15** should work and was partly tested. **1.6.640.0** and **1.7.99.0** are untested targets.
 >
 > This repository carries a compatibility update for current SkyrimNet releases. IntelEngine was originally created by [Galanx](https://github.com/galanx).
 > Players: report bugs at [IntelEngine GamePlugin issues](https://github.com/galanx/IntelEngine-GamePlugin/issues). This repository holds the SKSE DLL source.
@@ -604,9 +604,9 @@ The native MSVC Release profile disables optimization with `/Od /Ob0`, retains C
 
 ## Requirements
 
-- The 3.6.0 native build includes Skyrim SE, AE and VR. Tested: Skyrim **1.6.1170.0** and **1.7.104.0**; Skyrim VR **1.4.15** should work and was partly tested. Skyrim SE **1.5.x**: untested. Other listed targets are untested.
+- The native build includes Skyrim SE, AE and VR. 3.8.0 was tested on Skyrim SE **1.5.97**; 3.6.0 on Skyrim **1.6.1170.0** and **1.7.104.0**; Skyrim VR **1.4.15** should work and was partly tested. Other listed targets are untested.
 - [SKSE](https://skse.silverlock.org/)
-- [SkyrimNet Beta 27 or newer](https://github.com/MinLL/SkyrimNet-GamePlugin) (3.8.0 minimum; 3.6.0 tested with official Beta 28)
+- [SkyrimNet Beta 27 or newer](https://github.com/MinLL/SkyrimNet-GamePlugin) (3.8.0 minimum; 3.8.0 was tested with SkyrimNet 1.1.1 Alpha, 3.6.0 with official Beta 28)
 - [SkyUI](https://www.nexusmods.com/skyrimspecialedition/mods/12604) (MCM)
 - [PapyrusUtil](https://www.nexusmods.com/skyrimspecialedition/mods/13048) (persistent storage)
 - [powerofthree's Papyrus Extender](https://www.nexusmods.com/skyrimspecialedition/mods/22854) (package management, linked refs)
