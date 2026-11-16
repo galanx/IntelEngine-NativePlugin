@@ -1936,12 +1936,16 @@ namespace IntelEngine {
         const float radius = place->radius > 0.0f ? place->radius : (interiorCell ? 350.0f : 1500.0f);
         const RE::NiPoint3 center{place->x, place->y, place->z};
 
+        // SkyrimNet's containment rule: a place reaches 200 units up or down (PublicAPI.h "Named places")
+        constexpr float kPlaceHalfHeight = 200.0f;
         RE::TESObjectREFR* bestRef = nullptr;
         float bestDistance = radius;
         const auto consider = [&](RE::TESObjectREFR* ref) -> RE::BSContainer::ForEachResult {
             if (ref && !ref->IsDisabled() && !ref->IsDeleted() && !ref->As<RE::Actor>()) {
-                const float distance = ref->GetPosition().GetDistance(center);
-                if (distance <= bestDistance) {
+                const auto pos = ref->GetPosition();
+                const float dz = pos.z - center.z;
+                const float distance = pos.GetDistance(center);
+                if (dz >= -kPlaceHalfHeight && dz <= kPlaceHalfHeight && distance <= bestDistance) {
                     bestDistance = distance;
                     bestRef = ref;
                 }
