@@ -2279,18 +2279,32 @@ namespace IntelEngine {
             std::unordered_set<RE::FormID> stagedIds;
             for (auto& c : staged) stagedIds.insert(c.actor->GetFormID());
 
-            int randomsAdded = 0;
+            // Drawn at random, people of the player's own hold first: taking the first three of the process lists
+            // gave the same three every time, Largashbur's orcs while the player was in Whiterun (2026-11-17).
+            // At most one from another hold, for the odd stranger on the road.
+            std::vector<RE::Actor*> sameHold, otherHold;
             ProcessUtils::ForEachLoadedActor([&](RE::Actor* actor) {
-                if (randomsAdded >= RANDOM_ENCOUNTER_SLOTS) return true;
+                if (sameHold.size() >= 12) return true;      // enough to draw from (this runs on the main thread)
                 if (stagedIds.count(actor->GetFormID())) return false;
                 if (recentPlayerNPCs.count(StringUtils::ToLowerStd(actor->GetDisplayFullName()))) return false;
                 if (!IsEligibleStoryCandidate(actor, player, playerCell, tracker)) return false;
-                staged.push_back({actor, actor->GetFormID(), 0.f, false});
-                stagedIds.insert(actor->GetFormID());
-                randomsAdded++;
-                logger::info("[StoryDM Pass2] ACCEPTED-loaded: '{}'", actor->GetDisplayFullName());
+                (GetNPCHoldName(actor) == snap.playerHold ? sameHold : otherHold).push_back(actor);
                 return false;
             });
+            static thread_local std::mt19937 encounterRng(std::random_device{}());
+            std::shuffle(sameHold.begin(), sameHold.end(), encounterRng);
+            std::shuffle(otherHold.begin(), otherHold.end(), encounterRng);
+            if (otherHold.size() > 1) otherHold.resize(1);
+            int randomsAdded = 0;
+            for (auto* list : {&sameHold, &otherHold}) {
+                for (auto* actor : *list) {
+                    if (randomsAdded >= RANDOM_ENCOUNTER_SLOTS) break;
+                    staged.push_back({actor, actor->GetFormID(), 0.f, false});
+                    stagedIds.insert(actor->GetFormID());
+                    randomsAdded++;
+                    logger::info("[StoryDM Pass2] ACCEPTED-loaded: '{}'", actor->GetDisplayFullName());
+                }
+            }
             logger::info("[StoryDM Pass2] added {} random-encounter slots", randomsAdded);
         }
 

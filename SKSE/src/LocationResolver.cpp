@@ -278,10 +278,21 @@ namespace IntelEngine {
             std::string lowerName = StringUtils::ToLowerStd(locationName);
             RE::TESObjectCELL* destCell = nullptr;
             {
+                // "Drunken Huntsman" names the cell "The Drunken Huntsman" (and "The Bannered Mare" is often said
+                // without "the"): an exact name with or without a leading "the " is still exact.
+                std::vector<std::string> names{lowerName};
+                if (lowerName.rfind("the ", 0) == 0) {
+                    names.push_back(lowerName.substr(4));
+                } else {
+                    names.push_back("the " + lowerName);
+                }
                 std::shared_lock lock(m_mutex);
-                auto cellIt = m_cellIndex.find(lowerName);
-                if (cellIt != m_cellIndex.end()) {
-                    destCell = RE::TESForm::LookupByID<RE::TESObjectCELL>(cellIt->second);
+                for (const auto& name : names) {
+                    auto cellIt = m_cellIndex.find(name);
+                    if (cellIt != m_cellIndex.end()) {
+                        destCell = RE::TESForm::LookupByID<RE::TESObjectCELL>(cellIt->second);
+                        if (destCell) break;
+                    }
                 }
             }
             if (destCell && destCell->IsInteriorCell()) {
@@ -313,6 +324,19 @@ namespace IntelEngine {
             auto worldMarkerPtr = std::as_const(bgsLocation->worldLocMarker).get();
             if (worldMarkerPtr) {
                 auto* markerRef = worldMarkerPtr.get();
+                // A marker standing inside another building is the game data's mistake, not a destination: the
+                // Drunken Huntsman's own marker is placed in Belethor's General Goods next door, so everyone sent
+                // to the inn waited in the shop (seen 2026-11-17). Used only when its interior belongs to this place.
+                if (markerRef) {
+                    auto* markerCell = markerRef->GetParentCell();
+                    auto* markerLoc = markerCell ? markerCell->GetLocation() : nullptr;
+                    if (markerCell && markerCell->IsInteriorCell() && markerLoc && markerLoc != bgsLocation &&
+                        !markerLoc->IsParent(bgsLocation)) {
+                        logger::info("  Strategy 1: worldLocMarker lies in '{}', another place: not used",
+                                     markerCell->GetName() ? markerCell->GetName() : "unnamed");
+                        markerRef = nullptr;
+                    }
+                }
                 if (markerRef) {
                     auto pos = markerRef->GetPosition();
                     logger::info("  Strategy 1 SUCCESS: worldLocMarker at ({:.0f}, {:.0f}, {:.0f})",

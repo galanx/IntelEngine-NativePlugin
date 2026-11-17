@@ -13,6 +13,7 @@
 #include <memory>
 #include <mutex>
 #include <thread>
+#include <unordered_map>
 
 namespace IntelEngine::StoryDirector {
 
@@ -36,6 +37,44 @@ namespace IntelEngine::StoryDirector {
 
         constexpr auto kWaitForAnswers = std::chrono::seconds(25);
         std::atomic<bool> g_noDecisionRoute{false};   // the player has no decision provider: ask the chat model
+
+        // Someone the director chose whose moment never went out (the writer turned it down, a check at dispatch
+        // refused it) rests for half a game day. Without it the same person was chosen again on every tick: Uthgerd
+        // five times in ten seconds at a fast clock, each time a whole round of decision calls (2026-11-17).
+        constexpr float kRestDays = 0.5f;
+        std::mutex g_restMutex;
+        std::unordered_map<RE::FormID, float> g_restUntil;
+        RE::FormID g_lastChosen = 0;
+        float g_lastChosenDay = 0.0f;
+
+        float GameDays() {
+            auto* calendar = RE::Calendar::GetSingleton();
+            return calendar ? calendar->GetCurrentGameTime() : 0.0f;
+        }
+
+        // Called at the start of a round: was the last choice ever dispatched? If not, it rests.
+        void NoteLastChoice() {
+            std::scoped_lock lock(g_restMutex);
+            if (!g_lastChosen) return;
+            const float now = GameDays();
+            const float since = LivingWorldBridge::GetSingleton()->DaysSincePicked(g_lastChosen);
+            if (since > now - g_lastChosenDay + 0.001f) {
+                g_restUntil[g_lastChosen] = now + kRestDays;
+                logger::info("[Director] {:08X} was chosen but no moment went out: rests for {:.1f} days", g_lastChosen, kRestDays);
+            }
+            g_lastChosen = 0;
+        }
+
+        bool Resting(RE::FormID actor) {
+            std::scoped_lock lock(g_restMutex);
+            auto it = g_restUntil.find(actor);
+            if (it == g_restUntil.end()) return false;
+            if (GameDays() >= it->second) {
+                g_restUntil.erase(it);
+                return false;
+            }
+            return true;
+        }
 
         struct Session {
             NPCIndex::StoryDMTickSnapshot snap;
@@ -188,13 +227,24 @@ namespace IntelEngine::StoryDirector {
                 session->done(all.empty() ? std::string() : session->build(all, session->excluded, "", ""));
                 return;
             }
-            const int index = Pick(verdicts, [](const std::string& kind) { return NPCIndex::GetSingleton()->StoryTypePickCount(kind); });
+            const float quietDays = LivingWorldBridge::GetSingleton()->QuietDays();
+            const bool quiet = quietDays >= kQuietDays;
+            const int index = Pick(
+                verdicts, [](const std::string& kind) { return NPCIndex::GetSingleton()->StoryTypePickCount(kind); }, quiet);
             if (index < 0) {
-                logger::info("[Director] nobody has a real reason to act now: no moment");
+                logger::info("[Director] nobody has a reason enough to act now: no moment ({:.1f} days quiet)", quietDays);
                 session->done("");
                 return;
             }
             const auto& chosen = verdicts[index];
+            if (chosen.level < kRealLevel) {
+                logger::info("[Director] {:.1f} quiet days: a gentle moment on a mild reason", quietDays);
+            }
+            {
+                std::scoped_lock lock(g_restMutex);
+                g_lastChosen = chosen.formId;
+                g_lastChosenDay = GameDays();
+            }
             // The dungeon master sees that one person and that kind of moment only (a quest keeps its sub-types).
             std::unordered_set<std::string> writerExcluded = session->excluded;
             for (const char* type : kAllTypes) {
@@ -221,8 +271,12 @@ namespace IntelEngine::StoryDirector {
         session->excluded = std::move(excluded);
         session->build = std::move(build);
         session->done = std::move(done);
+        NoteLastChoice();
         session->pool = NPCIndex::GetSingleton()->RankStoryDMCandidates(session->snap);   // points into session->snap
+        // Those who rest after a moment that never went out are not asked again yet (no decision call is spent).
+        std::erase_if(session->pool, [](const NPCIndex::RankedCandidate& c) { return c.a && Resting(c.a->formId); });
         if (session->pool.empty()) {
+            logger::info("[Director] nobody to consider yet: no candidates");
             session->done("");
             return;
         }
@@ -234,6 +288,7 @@ namespace IntelEngine::StoryDirector {
             v.name = candidate.a->nameDisplay;
             v.rank = candidate.score;
             v.allowed = candidate.a->eligibleTypes;
+            v.sincePicked = LivingWorldBridge::GetSingleton()->DaysSincePicked(v.formId);
             const auto kinds = KindsFor(*candidate.a, session->excluded);
             nlohmann::json context;
             context["name"] = v.name;

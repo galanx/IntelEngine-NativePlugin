@@ -233,7 +233,9 @@ namespace IntelEngine {
                             ((s.changes & SL::Changed::Raised) ? ", more than at first." : ".");
                     if (!s.note.empty()) line += " Why I changed it: " + s.note + ".";
                 } else if (now - s.stageSince < 30.0f) {
-                    line = Fill(SL::OwnerMemory(s), s) + " (" + Ago(now - s.stageSince) + ")";
+                    line = Fill(SL::OwnerMemory(s), s);
+                    if (const auto paid = SL::PaidLine(s, level); !line.empty() && !paid.empty()) line += " " + Fill(paid, s);
+                    if (!line.empty()) line += " (" + Ago(now - s.stageSince) + ")";
                 }
                 if (!line.empty()) mine += "- " + line + "\n";
             } else if (s.other == id && (s.request == SL::Request::FindPerson || s.request == SL::Request::DeliverWord)) {

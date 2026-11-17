@@ -40,6 +40,15 @@ namespace IntelEngine {
 
         /** A story moment was dispatched with this NPC: count it for pacing and rotation. */
         void OnStoryDispatched(RE::FormID actor, const std::string& storyType);
+        /** Game days since the last story moment (since the game began when there was none). */
+        float QuietDays() const;
+        /** Game days since this NPC was last part of a story moment (very many when never). */
+        float DaysSincePicked(RE::FormID actor) const;
+        /** The people whose life the record keeps (followers now or left behind), most recent first, at most
+         *  `limit`: the scripts hold them in the lives quest's aliases so the game keeps them in memory. A hireling's
+         *  reference is not persistent: once they walked into a cell that was unloaded, the game let go of them, their
+         *  record froze at "near the player" and their own life never began (Jenassa, 2026-11-17). */
+        std::vector<RE::Actor*> Keepers(std::size_t limit) const;
 
         // ---- lives of followers the player left behind (LivingWorldLives.cpp) ----
 

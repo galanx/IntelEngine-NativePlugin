@@ -248,6 +248,9 @@ static void Branches() {
     Require(OwnerMemory(done) == "I asked {player} to bring me {item} (at first it was {before}), and {player} did it.",
             "remembered with what it was at first");
     Require(RewardGold(done, 30) == 600, "the promised gold is paid");
+    Require(PaidLine(done, 30) == "I paid {player} the 600 gold I had offered, so that is settled.",
+            "the asker knows it is paid");
+    Require(PaidLine(At(book, item, "done"), 1) == PaidLine(done, 30), "the same sum at any level once promised");
 
     // Another person; a threat cannot change.
     const auto word = book.Open(Ask(3, Request::DeliverWord, 60), 10.0f);

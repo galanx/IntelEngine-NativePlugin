@@ -563,6 +563,15 @@ namespace IntelEngine::Storylines {
         return OfferedGold(s, playerLevel);
     }
 
+    // What the one who asked knows of the reward once it is done, {player} filled in by the caller. Without it in
+    // their prompt they saw the haggle in recent talk and paid again (Ysolda, 2026-11-17: "Here's your coin, as
+    // agreed"). Empty when nothing was paid.
+    inline std::string PaidLine(const Storyline& s, int playerLevel) {
+        const int gold = RewardGold(s, playerLevel);
+        if (gold <= 0) return {};
+        return "I paid {player} the " + std::to_string(gold) + " gold I had offered, so that is settled.";
+    }
+
     // ------------------------------------------------------------------ save data (co-save record 'IESL')
 
     constexpr std::uint32_t kRecordType = 'IESL';

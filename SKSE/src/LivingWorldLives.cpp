@@ -188,11 +188,15 @@ namespace IntelEngine {
         // Could the player see this spot, or someone at it? Then nothing may appear or vanish there now.
         bool PlayerCouldSee(RE::TESObjectREFR* ref, RE::PlayerCharacter* player) {
             if (!ref) return true;
-            if (ref->Is3DLoaded()) return true;
             auto* pc = player->GetParentCell();
             auto* rc = ref->GetSaveParentCell();
             if (!rc) rc = ref->GetParentCell();
             if (rc && pc && rc == pc) return true;
+            // A player indoors sees only that room, one outdoors no room: whatever is loaded. Outdoor cells the player
+            // walked through stay loaded a while, so "3D loaded" alone kept Jenassa in Riverwood "where the player
+            // could see" while the player sat in the Bannered Mare, and her own life never began (2026-11-17).
+            if (pc && rc && (pc->IsInteriorCell() || rc->IsInteriorCell())) return false;
+            if (ref->Is3DLoaded()) return true;
             if (!pc || pc->IsInteriorCell() || (rc && rc->IsInteriorCell())) return false;
             if (ref->GetWorldspace() != player->GetWorldspace()) return false;
             return ref->GetPosition().GetDistance(player->GetPosition()) < 10000.0f;
