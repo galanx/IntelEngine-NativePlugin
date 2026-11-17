@@ -41,6 +41,20 @@ namespace IntelEngine {
         /** The one who asked's first-person memory of how it ended, names filled in. Empty when none. */
         std::string MemoryFor(std::uint32_t id) const;
 
+        // 4.0 branches from conversation (Storylines::Book::CallOff, Amend, Reply).
+        bool CallOff(std::uint32_t id, const std::string& note);
+        /** Empty = changed; otherwise why not. The gold offered now is filled in here. */
+        std::string Amend(std::uint32_t id, Storylines::Book::Amendment amendment);
+        std::string Reply(std::uint32_t id, RE::FormID speaker, const std::string& text, bool comesAlong);
+        /** The open request this person is the one to find or to speak with, 0 = none. */
+        std::uint32_t AboutId(RE::FormID person) const;
+        /** The id of a request this NPC may answer through the player now (the player is with them, no answer
+         *  sent yet), empty when none: the eligibility of the SendWordBack action. */
+        std::string AnswerPending(RE::Actor* actor) const;
+        /** What the one it was about remembers of their answer, names filled in. Empty when nothing. */
+        std::string OtherMemoryFor(std::uint32_t id) const;
+        int OfferedGold(std::uint32_t id, int playerLevel) const;
+
         void Save(SKSE::SerializationInterface* intfc);
         void Load(SKSE::SerializationInterface* intfc, std::uint32_t version, std::uint32_t length);
         void Revert();

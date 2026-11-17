@@ -4,6 +4,7 @@
 
 #include <iostream>
 #include <string>
+#include <vector>
 #include <stdexcept>
 
 using namespace IntelEngine::Storylines;
@@ -180,9 +181,149 @@ static void Deeds() {
     Require(PublicDeed(s).find(" I ") == std::string::npos, "third person, never the asker's own words");
 }
 
+static void Branches() {
+    using A = Book::Amendment;
+    Book book;
+    // Calling off: only while open, nobody's fault, no follow-up, no deed, remembered with the reason.
+    const auto find = book.Open(Ask(1, Request::FindPerson, 50), 10.0f);
+    Require(book.CallOff(find, "  she came home\n on her own. ", 10.2f), "a request can be called off");
+    const auto& off = At(book, find, "called off");
+    Require(off.stage == Stage::Withdrawn && !IsOpen(off) && !IsUnhappy(off), "called off: ended, not unhappy");
+    Require(off.note == "she came home on her own", "the reason is one clean line");
+    Require(OwnerMemory(off) == "I asked {player} to find {other}, but then I called it off: she came home on her own.",
+            "remembered with the reason");
+    Require(PublicDeed(off).empty(), "nobody hears of a request called off");
+    Require(!book.Unresolved(1), "nothing left to follow up");
+    Require(!book.CallOff(find, "again", 10.3f), "an ended one cannot be called off again");
+    Require(book.Amend(find, A{Change::MoreTime}, 10.3f) == "nothing is open", "an ended one cannot change");
+
+    // More time and hurry.
+    const auto item = book.Open(Ask(2, Request::BringItem), 10.0f);
+    book.Find(item)->item = 7;
+    book.Find(item)->deadline = 13.0f;
+    A more{Change::MoreTime};
+    more.note = "none";
+    Require(book.Amend(item, more, 11.0f).empty() && At(book, item, "more").deadline == 15.0f, "two more days");
+    Require(At(book, item, "more").note.empty(), "\"none\" is no reason");
+    Require(book.Amend(item, more, 11.0f).empty() && At(book, item, "more").deadline == 17.0f, "and two more");
+    Require(book.Amend(item, more, 11.0f).empty() && At(book, item, "more").deadline == 18.0f, "at most a week from now");
+    Require(!book.Amend(item, more, 11.0f).empty(), "no more than that");
+    Require(book.Amend(item, A{Change::Hurry}, 11.0f).empty(), "it can become urgent");
+    Require(At(book, item, "hurry").deadline == 11.5f, "half a day from now");
+    Require((At(book, item, "hurry").changes & Changed::Hurried) && !(At(book, item, "hurry").changes & Changed::MoreTime),
+            "urgent, not more time");
+    Require(!book.Amend(item, A{Change::Hurry}, 11.1f).empty(), "not more urgent than that");
+
+    // The reward: what was offered stays, more is at most three times as much, less is refused.
+    auto& s = *book.Find(item);
+    s.promised = 120;
+    Require(OfferedGold(s, 30) == 120, "the promised sum is the offer");
+    A raise{Change::RaiseReward};
+    raise.offered = 120;
+    raise.gold = 100;
+    Require(book.Amend(item, raise, 11.0f).find("120 gold") != std::string::npos, "less is refused, with the sum");
+    raise.gold = 200;
+    Require(book.Amend(item, raise, 11.0f).empty() && OfferedGold(At(book, item, "raise"), 30) == 200, "raised to the sum named");
+    raise.offered = 200;
+    raise.gold = 5000;
+    Require(book.Amend(item, raise, 11.0f).empty() && OfferedGold(At(book, item, "raise"), 30) == 600, "at most three times");
+    Require(RewardGold(At(book, item, "raise"), 30) == 0, "no gold before it is done");
+
+    // Another item: the objective stays true, the old one is remembered.
+    A other{Change::NewSubject};
+    other.item = 7;
+    Require(!book.Amend(item, other, 11.0f).empty(), "the same item is no change");
+    other.item = 9;
+    other.note = "the inn ran out";
+    Require(book.Amend(item, other, 11.0f).empty(), "another item");
+    const auto& changed = At(book, item, "another item");
+    Require(changed.item == 9 && changed.before == 7 && changed.note == "the inn ran out", "the new item, the old one kept");
+    Require(changed.deadline >= 12.0f, "at least a day for something new");
+    Require(ObjectiveFor(changed) == Objective::Recover, "still the same objective");
+    book.Apply(item, Event::Achieved, 11.5f);
+    Require(!book.Amend(item, other, 11.6f).empty(), "no new subject once the deed is done");
+    Require(!book.CallOff(item, "", 11.6f), "nor calling it off");
+    book.Apply(item, Event::Met, 11.7f);
+    const auto& done = At(book, item, "done");
+    Require(OwnerMemory(done) == "I asked {player} to bring me {item} (at first it was {before}), and {player} did it.",
+            "remembered with what it was at first");
+    Require(RewardGold(done, 30) == 600, "the promised gold is paid");
+
+    // Another person; a threat cannot change.
+    const auto word = book.Open(Ask(3, Request::DeliverWord, 60), 10.0f);
+    other = A{Change::NewSubject};
+    other.other = 3;
+    Require(!book.Amend(word, other, 10.5f).empty(), "not the asker themselves");
+    other.other = 61;
+    other.place = 900;
+    Require(book.Amend(word, other, 10.5f).empty(), "another person to speak with");
+    Require(At(book, word, "word").other == 61 && At(book, word, "word").before == 60 && At(book, word, "word").place == 900,
+            "the new person and where they are");
+    const auto threat = book.Open(Ask(4, Request::DealWithThreat, 70), 10.0f);
+    other.other = 71;
+    Require(!book.Amend(threat, other, 10.5f).empty(), "a threat does not change in talk");
+
+    // An answer sent back: only by the one it is about; it moves the request on; both remember it.
+    Require(book.AboutId(61) == word && book.AboutId(60) == 0, "the request is about the new person");
+    Require(!book.Reply(word, 60, "hello", false, 10.6f).empty(), "not by someone else");
+    Require(!book.Reply(word, 61, "none", false, 10.6f).empty(), "no answer, not going along: nothing");
+    Require(book.Reply(word, 61, "Tell him I will think about it.", true, 10.6f).empty(), "an answer and going along");
+    const auto& replied = At(book, word, "replied");
+    Require(replied.stage == Stage::ReturnTo && ObjectiveFor(replied) == Objective::ReturnTo, "go back with it");
+    Require(replied.reply == "Tell him I will think about it." && (replied.changes & Changed::ComesAlong), "recorded");
+    Require(OtherMemory(replied) ==
+                "{owner} had asked {player} to speak with me. I gave {player} my answer for {owner}: \"Tell him I will think "
+                "about it.\" I went along with {player} to see {owner}.",
+            "the one it was about remembers");
+    book.Apply(word, Event::Met, 11.0f);
+    const auto memory = OwnerMemory(At(book, word, "word done"));
+    Require(memory.find("{player} brought me {other}'s answer: \"Tell him I will think about it.\"") != std::string::npos &&
+                memory.find("{other} came along with {player} to see me.") != std::string::npos,
+            "the asker remembers the answer and the visit");
+    const auto item2 = book.Open(Ask(5, Request::BringItem), 10.0f);
+    Require(!book.Reply(item2, 0, "x", false, 10.0f).empty(), "nobody answers for an item");
+
+    // A long reason is cut at a word.
+    const auto esc = book.Open(Ask(6, Request::EscortMe), 10.0f);
+    book.Find(esc)->target = 500;
+    std::string longText;
+    for (int i = 0; i < 60; ++i) longText += "word ";
+    Require(book.CallOff(esc, longText, 10.1f) && At(book, esc, "long").note.size() <= kMaxNote &&
+                At(book, esc, "long").note.back() != ' ',
+            "a long reason is cut at a word");
+}
+
+static void SaveDataV2() {
+    Book book;
+    const auto r = book.Open(Ask(2, Request::DeliverWord, 9), 10.0f);
+    auto& s = *book.Find(r);
+    s.promised = 250;
+    s.changes = Changed::Raised | Changed::ComesAlong;
+    s.before = 8;
+    s.note = "he moved to Riverwood";
+    s.reply = "Tell her \"yes\".";
+    const auto bytes = Serialize(book);
+    Book back;
+    Require(Deserialize(bytes, back), "a version 2 round trip");
+    const auto* b = back.Find(r);
+    Require(b && b->promised == 250 && b->changes == s.changes && b->before == 8 && b->note == s.note && b->reply == s.reply,
+            "the branch fields come back");
+    // A version 1 record (the same storyline without the branch fields) still loads.
+    const std::size_t header = 11, v1 = 42, extra = 4 + 1 + 4 + 2 + s.note.size() + 2 + s.reply.size();
+    Require(bytes.size() == header + v1 + extra, "the record is the size it should be");
+    std::vector<std::uint8_t> old(bytes.begin(), bytes.begin() + header + v1);
+    Book older;
+    Require(Deserialize(old, older, 1), "a version 1 record loads");
+    Require(older.Find(r) && older.Find(r)->promised == 0 && older.Find(r)->reply.empty(), "with no branch fields");
+    Require(!Deserialize(old, older, 2), "but not as version 2");
+    Require(!Deserialize(bytes, older, 3), "an unknown version is refused");
+}
+
 int main() {
     try {
         Deeds();
+        Branches();
+        SaveDataV2();
         Meetings();
         Requests();
         Variety();

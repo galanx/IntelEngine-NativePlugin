@@ -390,6 +390,13 @@ namespace IntelEngine {
                             return id ? std::to_string(id) : std::string();
                         });
                     logger::info("{} SkyrimNet decorator: get_intelengine_open_storyline", openRegistered ? "Registered" : "Failed to register");
+                    // Whether this NPC is the one a request is about and may answer it through the player now: the
+                    // SendWordBack action's eligibility (is_not_empty).
+                    const bool aboutRegistered = SkyrimNetAPI::RegisterDecorator(
+                        "get_intelengine_storyline_about",
+                        "Returns the id of a request about this NPC they may answer through the player now, empty when none.",
+                        [](RE::Actor* actor) -> std::string { return StorylineBridge::GetSingleton()->AnswerPending(actor); });
+                    logger::info("{} SkyrimNet decorator: get_intelengine_storyline_about", aboutRegistered ? "Registered" : "Failed to register");
                     // A former follower's own life since the player left them (prompt submodule 0203_intel_life).
                     const bool lifeRegistered = SkyrimNetAPI::RegisterDecorator(
                         "get_intelengine_life",
