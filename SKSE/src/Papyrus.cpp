@@ -15,6 +15,7 @@
 #include "NPCIndex.h"
 #include "LivingWorldBridge.h"
 #include "StorylineBridge.h"
+#include "PlaceTargets.h"
 #include "ItemIndex.h"
 #include <random>
 #include <algorithm>
@@ -100,6 +101,8 @@ namespace IntelEngine::Papyrus {
     void LivingWorldOrderDone(RE::StaticFunctionTag*, bool);
     RE::BSFixedString LivingWorldDescribe(RE::StaticFunctionTag*, RE::Actor*);
     bool LivingWorldMayMove(RE::StaticFunctionTag*, RE::Actor*, RE::BSFixedString);
+    RE::TESObjectREFR* ResolveSkyrimNetPlace(RE::StaticFunctionTag*, RE::Actor*, RE::BSFixedString);
+    float SkyrimNetPlaceOffset(RE::StaticFunctionTag*, RE::Actor*, std::int32_t);
     RE::TESForm* ResolveItemByName(RE::StaticFunctionTag*, RE::BSFixedString);
     RE::TESForm* FindItemNamedExactly(RE::StaticFunctionTag*, RE::Actor*, RE::BSFixedString);
     void MarkLastDispatchFailed(RE::StaticFunctionTag*, RE::BSFixedString);
@@ -477,6 +480,8 @@ namespace IntelEngine::Papyrus {
         a_vm->RegisterFunction("LivingWorldOrderDone", SCRIPT_NAME, LivingWorldOrderDone); ++count;
         a_vm->RegisterFunction("LivingWorldDescribe", SCRIPT_NAME, LivingWorldDescribe); ++count;
         a_vm->RegisterFunction("LivingWorldMayMove", SCRIPT_NAME, LivingWorldMayMove); ++count;
+        a_vm->RegisterFunction("ResolveSkyrimNetPlace", SCRIPT_NAME, ResolveSkyrimNetPlace); ++count;
+        a_vm->RegisterFunction("SkyrimNetPlaceOffset", SCRIPT_NAME, SkyrimNetPlaceOffset); ++count;
         a_vm->RegisterFunction("ResolveItemByName", SCRIPT_NAME, ResolveItemByName); ++count;
         a_vm->RegisterFunction("FindItemNamedExactly", SCRIPT_NAME, FindItemNamedExactly); ++count;
         a_vm->RegisterFunction("MarkLastDispatchFailed", SCRIPT_NAME, MarkLastDispatchFailed); ++count;
@@ -2401,6 +2406,31 @@ namespace IntelEngine::Papyrus {
     RE::BSFixedString LivingWorldDescribe(RE::StaticFunctionTag*, RE::Actor* actor) {
         return LivingWorldBridge::GetSingleton()->Describe(actor).c_str();
     }
+    // ---------------------------------------------------------------- 4.0 places named in SkyrimNet
+
+    namespace {
+        std::mutex g_placeOffsetsMutex;
+        std::unordered_map<RE::FormID, RE::NiPoint3> g_placeOffsets;  // per NPC: from the anchor to the place
+    }
+
+    RE::TESObjectREFR* ResolveSkyrimNetPlace(RE::StaticFunctionTag*, RE::Actor* npc, RE::BSFixedString destination) {
+        if (!npc) return nullptr;
+        const auto target = PlaceTargets::Resolve(npc, destination.c_str() ? destination.c_str() : "");
+        if (!target) return nullptr;
+        LocationResolver::GetSingleton()->ClearLastResolvedHome();
+        std::scoped_lock lock(g_placeOffsetsMutex);
+        g_placeOffsets[npc->GetFormID()] = target->offset;
+        return target->anchor;
+    }
+
+    float SkyrimNetPlaceOffset(RE::StaticFunctionTag*, RE::Actor* npc, std::int32_t axis) {
+        if (!npc) return 0.0f;
+        std::scoped_lock lock(g_placeOffsetsMutex);
+        const auto it = g_placeOffsets.find(npc->GetFormID());
+        if (it == g_placeOffsets.end()) return 0.0f;
+        return axis == 0 ? it->second.x : axis == 1 ? it->second.y : axis == 2 ? it->second.z : 0.0f;
+    }
+
     bool LivingWorldMayMove(RE::StaticFunctionTag*, RE::Actor* npc, RE::BSFixedString storyType) {
         return LivingWorldBridge::GetSingleton()->MayMoveForStory(npc, storyType.c_str() ? storyType.c_str() : "");
     }

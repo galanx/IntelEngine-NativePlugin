@@ -199,6 +199,8 @@ namespace IntelEngine {
          * Used by Papyrus to store the cell ID for later re-locking.
          */
         RE::FormID GetLastResolvedHomeCellId() const { return m_lastResolvedHomeCellId; }
+        /** A destination resolved elsewhere (a SkyrimNet place) is no one's home: no door gets unlocked for it. */
+        void ClearLastResolvedHome() { m_lastResolvedHomeCellId = 0; }
 
         /**
          * Get cached LocTypePlayerHouse keyword.
