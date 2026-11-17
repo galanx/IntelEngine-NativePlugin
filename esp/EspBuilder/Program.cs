@@ -15,6 +15,7 @@ public static class Program
 {
     public const string ThreadQuest = "IntelEngine_Threads";
     public const string LivesQuest = "IntelEngine_Lives";
+    public const int LifeKeepSlots = 12;
     public const string LifeSandbox = "IntelEngine_LifeSandbox";
     public const int Slots = 6;
 
@@ -145,6 +146,20 @@ public static class Program
         quest.Aliases.Clear();
         quest.Objectives.Clear();
         quest.Stages.Clear();
+        // Followers the lives record keeps are held here, so the game keeps them in memory (IntelEngine_Lives.psc
+        // KeepInMemory): a hireling's reference is not persistent, and once Jenassa walked into a cell that was not
+        // loaded the game let go of her and her own life never began (2026-11-17).
+        uint nextAlias = 0;
+        for (int i = 0; i < LifeKeepSlots; ++i)
+        {
+            quest.Aliases.Add(new QuestAlias
+            {
+                ID = nextAlias++,
+                Name = $"LifeKeep{i:00}",
+                Type = QuestAlias.TypeEnum.Reference,
+                Flags = QuestAlias.Flag.Optional | QuestAlias.Flag.AllowReuseInQuest | QuestAlias.Flag.AllowDisabled,
+            });
+        }
         quest.VirtualMachineAdapter = new QuestAdapter
         {
             Version = 5,

@@ -187,6 +187,43 @@ namespace IntelEngine {
         return score;
     }
 
+    std::vector<RE::Actor*> LivingWorldBridge::Keepers(std::size_t limit) const {
+        std::vector<std::pair<float, RE::FormID>> ranked;
+        {
+            std::scoped_lock lock(m_mutex);
+            for (const auto& life : m_lives) {
+                if (!LivingWorld::Has(life, LivingWorld::kWasFollower)) continue;
+                const bool withPlayer = LivingWorld::Has(life, LivingWorld::kWithPlayer);
+                if (!withPlayer && life.parkedSince < 0.0f && !LivingWorld::OwnLife(life)) continue;
+                // Those with the player first, then the most recently met.
+                ranked.emplace_back(withPlayer ? 1.0e9f : life.lastMet, life.actor);
+            }
+        }
+        std::sort(ranked.begin(), ranked.end(), [](const auto& a, const auto& b) { return a.first > b.first; });
+        std::vector<RE::Actor*> keep;
+        for (const auto& [order, id] : ranked) {
+            if (keep.size() >= limit) break;
+            auto* actor = RE::TESForm::LookupByID<RE::Actor>(id);
+            if (actor && !actor->IsDead()) keep.push_back(actor);
+        }
+        return keep;
+    }
+
+    float LivingWorldBridge::DaysSincePicked(RE::FormID actor) const {
+        const float now = NowDays();
+        std::scoped_lock lock(m_mutex);
+        for (const auto& life : m_lives) {
+            if (life.actor == actor) return life.lastPicked < -1.0e5f ? 1.0e6f : now - life.lastPicked;
+        }
+        return 1.0e6f;
+    }
+
+    float LivingWorldBridge::QuietDays() const {
+        const float now = NowDays();
+        std::scoped_lock lock(m_mutex);
+        return m_state.lastMomentDay < -1.0e5f ? now : now - m_state.lastMomentDay;
+    }
+
     void LivingWorldBridge::OnStoryDispatched(RE::FormID actor, const std::string& storyType) {
         if (actor == 0 || storyType.empty() || IsClassic()) return;
         std::scoped_lock lock(m_mutex);

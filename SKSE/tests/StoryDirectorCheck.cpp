@@ -58,6 +58,29 @@ static void Picks() {
             "freshness never beats a clearly stronger reason");
     Require(Allowed(V("a", 3, 3.0f, "quest", 1.0f, "quest")), "a single allowed kind");
     Require(!Allowed(V("a", 3, 3.0f, "quest", 1.0f, "quest_combat")), "no partial match");
+
+    // A quiet world: a mild reason may bring a gentle moment, never a quest or an ambush, and a real one still wins.
+    Require(Pick({V("a", 2, 1.9f, "informant")}, never, true) == 0, "quiet: a mild reason brings a gentle moment");
+    Require(Pick({V("a", 2, 1.9f, "informant")}, never, false) == -1, "not quiet: a mild reason is not enough");
+    Require(Pick({V("a", 2, 2.0f, "quest"), V("b", 2, 2.0f, "ambush")}, never, true) == -1,
+            "quiet: never a quest or an ambush on a mild reason");
+    Require(Pick({V("a", 2, 1.2f, "seek_player")}, never, true) == -1, "quiet: the probabilities must lean to mild");
+    Require(Pick({V("a", 2, 2.0f, "message"), V("b", 4, 3.9f, "seek_player")}, never, true) == 1,
+            "quiet: a real reason still wins over a mild one");
+
+    // Nobody twice running: someone who acted lately needs a pressing reason to act again.
+    Verdict again = V("a", 3, 3.0f, "seek_player");
+    again.sincePicked = 0.5f;
+    Require(Pick({again}, never) == -1, "a real reason again within two days: no");
+    again.level = 4;
+    again.expected = 4.0f;
+    Require(Pick({again}, never) == 0, "a pressing reason may come back sooner");
+    Verdict other = V("b", 3, 2.8f, "message");
+    Verdict repeat = V("a", 3, 3.4f, "seek_player");
+    repeat.sincePicked = 1.0f;
+    Require(Pick({repeat, other}, never) == 1, "someone else with a real reason acts instead");
+    repeat.sincePicked = 3.0f;
+    Require(Pick({repeat, other}, never) == 0, "after two days they may act again");
 }
 
 int main() {

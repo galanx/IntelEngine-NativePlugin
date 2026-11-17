@@ -56,7 +56,14 @@ namespace IntelEngine::StoryDirector {
         float expected = 0.0f;      // the probability-weighted level
         std::string kind;           // the kind of moment the model chose for them; "" or "none" = none
         std::string allowed;        // the kinds they may be used for, ", "-separated (the candidate's Eligible line)
+        float sincePicked = 1.0e6f; // game days since the last moment they were part of
     };
+
+    // Nobody acts again this soon unless their reason became pressing: Elrindir came after the player twice running
+    // over the same unpaid bow (2026-11-17), the "same unresolved question on every visit" the old dungeon master
+    // was faulted for in the user's own play data.
+    inline constexpr float kRepeatDays = 2.0f;
+    inline constexpr int kPressingLevel = 4;
 
     inline bool Allowed(const Verdict& v) {
         if (v.kind.empty() || v.kind == "none") return false;
@@ -73,17 +80,32 @@ namespace IntelEngine::StoryDirector {
         return false;
     }
 
-    inline bool Qualifies(const Verdict& v) {
-        return v.answered && v.level >= kRealLevel && v.expected >= kRealExpected && Allowed(v);
+    // A world where nothing has happened for this long may bring a gentle moment on a mild reason: someone drops by,
+    // passes on news, sends word. Never a quest, an ambush or a stalker on a mild reason. In the first play test
+    // (2026-11-17) a whole game day went by with every candidate judged "none" or "mild": nobody ever came, the
+    // silence the rework set out to end.
+    inline constexpr int kMildLevel = 2;
+    inline constexpr float kMildExpected = 1.5f;
+    inline constexpr float kQuietDays = 1.5f;
+
+    inline bool Gentle(std::string_view kind) { return kind == "seek_player" || kind == "informant" || kind == "message"; }
+
+    inline bool Qualifies(const Verdict& v, bool quiet = false) {
+        if (!v.answered || !Allowed(v)) return false;
+        if (v.sincePicked < kRepeatDays && v.level < kPressingLevel) return false;
+        if (v.level >= kRealLevel && v.expected >= kRealExpected) return true;
+        return quiet && Gentle(v.kind) && v.level >= kMildLevel && v.expected >= kMildExpected;
     }
 
-    // Index of the one who acts, or -1 (nobody has a real reason: no moment now).
+    // Index of the one who acts, or -1 (nobody has a reason enough: no moment now).
     // timesPicked: how often a kind of moment was picked this session (fewer = fresher).
-    inline int Pick(const std::vector<Verdict>& verdicts, const std::function<int(const std::string&)>& timesPicked) {
+    // quiet: no moment for kQuietDays or more (a mild reason may then bring a gentle moment).
+    inline int Pick(const std::vector<Verdict>& verdicts, const std::function<int(const std::string&)>& timesPicked,
+                    bool quiet = false) {
         int best = -1;
         for (int i = 0; i < static_cast<int>(verdicts.size()); ++i) {
             const auto& v = verdicts[i];
-            if (!Qualifies(v)) continue;
+            if (!Qualifies(v, quiet)) continue;
             if (best < 0) {
                 best = i;
                 continue;

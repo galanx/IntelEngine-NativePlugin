@@ -104,6 +104,7 @@ namespace IntelEngine::Papyrus {
     RE::BSFixedString StorylineText(RE::StaticFunctionTag*, std::int32_t, RE::BSFixedString);
     void LivingWorldTrack(RE::StaticFunctionTag*);
     RE::Actor* LivingWorldTakeOrder(RE::StaticFunctionTag*);
+    std::vector<RE::Actor*> LivingWorldKeepers(RE::StaticFunctionTag*, std::int32_t);
     std::int32_t LivingWorldOrderKind(RE::StaticFunctionTag*);
     RE::TESObjectREFR* LivingWorldOrderTarget(RE::StaticFunctionTag*);
     float LivingWorldOrderOffset(RE::StaticFunctionTag*, std::int32_t);
@@ -492,6 +493,7 @@ namespace IntelEngine::Papyrus {
         a_vm->RegisterFunction("StorylineText", SCRIPT_NAME, StorylineText); ++count;
         a_vm->RegisterFunction("LivingWorldTrack", SCRIPT_NAME, LivingWorldTrack); ++count;
         a_vm->RegisterFunction("LivingWorldTakeOrder", SCRIPT_NAME, LivingWorldTakeOrder); ++count;
+        a_vm->RegisterFunction("LivingWorldKeepers", SCRIPT_NAME, LivingWorldKeepers); ++count;
         a_vm->RegisterFunction("LivingWorldOrderKind", SCRIPT_NAME, LivingWorldOrderKind); ++count;
         a_vm->RegisterFunction("LivingWorldOrderTarget", SCRIPT_NAME, LivingWorldOrderTarget); ++count;
         a_vm->RegisterFunction("LivingWorldOrderOffset", SCRIPT_NAME, LivingWorldOrderOffset); ++count;
@@ -2517,6 +2519,9 @@ namespace IntelEngine::Papyrus {
 
     void LivingWorldTrack(RE::StaticFunctionTag*) { LivingWorldBridge::GetSingleton()->Track(); }
     RE::Actor* LivingWorldTakeOrder(RE::StaticFunctionTag*) { return LivingWorldBridge::GetSingleton()->TakeOrder(); }
+    std::vector<RE::Actor*> LivingWorldKeepers(RE::StaticFunctionTag*, std::int32_t limit) {
+        return LivingWorldBridge::GetSingleton()->Keepers(static_cast<std::size_t>(std::clamp(limit, 0, 32)));
+    }
     std::int32_t LivingWorldOrderKind(RE::StaticFunctionTag*) {
         return static_cast<std::int32_t>(LivingWorldBridge::GetSingleton()->CurrentOrderKind());
     }
