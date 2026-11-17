@@ -89,6 +89,17 @@ namespace IntelEngine::Papyrus {
     RE::BSFixedString StorylineMemory(RE::StaticFunctionTag*, std::int32_t);
     std::int32_t StorylineReward(RE::StaticFunctionTag*, std::int32_t, std::int32_t);
     std::int32_t StorylineOpenIdFor(RE::StaticFunctionTag*, RE::Actor*);
+    void LivingWorldTrack(RE::StaticFunctionTag*);
+    RE::Actor* LivingWorldTakeOrder(RE::StaticFunctionTag*);
+    std::int32_t LivingWorldOrderKind(RE::StaticFunctionTag*);
+    RE::TESObjectREFR* LivingWorldOrderTarget(RE::StaticFunctionTag*);
+    float LivingWorldOrderOffset(RE::StaticFunctionTag*, std::int32_t);
+    RE::Actor* LivingWorldOrderCompanion(RE::StaticFunctionTag*);
+    bool LivingWorldOrderProtect(RE::StaticFunctionTag*);
+    RE::BSFixedString LivingWorldOrderNarration(RE::StaticFunctionTag*);
+    void LivingWorldOrderDone(RE::StaticFunctionTag*, bool);
+    RE::BSFixedString LivingWorldDescribe(RE::StaticFunctionTag*, RE::Actor*);
+    bool LivingWorldMayMove(RE::StaticFunctionTag*, RE::Actor*, RE::BSFixedString);
     RE::TESForm* ResolveItemByName(RE::StaticFunctionTag*, RE::BSFixedString);
     RE::TESForm* FindItemNamedExactly(RE::StaticFunctionTag*, RE::Actor*, RE::BSFixedString);
     void MarkLastDispatchFailed(RE::StaticFunctionTag*, RE::BSFixedString);
@@ -455,6 +466,17 @@ namespace IntelEngine::Papyrus {
         a_vm->RegisterFunction("StorylineMemory", SCRIPT_NAME, StorylineMemory); ++count;
         a_vm->RegisterFunction("StorylineReward", SCRIPT_NAME, StorylineReward); ++count;
         a_vm->RegisterFunction("StorylineOpenIdFor", SCRIPT_NAME, StorylineOpenIdFor); ++count;
+        a_vm->RegisterFunction("LivingWorldTrack", SCRIPT_NAME, LivingWorldTrack); ++count;
+        a_vm->RegisterFunction("LivingWorldTakeOrder", SCRIPT_NAME, LivingWorldTakeOrder); ++count;
+        a_vm->RegisterFunction("LivingWorldOrderKind", SCRIPT_NAME, LivingWorldOrderKind); ++count;
+        a_vm->RegisterFunction("LivingWorldOrderTarget", SCRIPT_NAME, LivingWorldOrderTarget); ++count;
+        a_vm->RegisterFunction("LivingWorldOrderOffset", SCRIPT_NAME, LivingWorldOrderOffset); ++count;
+        a_vm->RegisterFunction("LivingWorldOrderCompanion", SCRIPT_NAME, LivingWorldOrderCompanion); ++count;
+        a_vm->RegisterFunction("LivingWorldOrderProtect", SCRIPT_NAME, LivingWorldOrderProtect); ++count;
+        a_vm->RegisterFunction("LivingWorldOrderNarration", SCRIPT_NAME, LivingWorldOrderNarration); ++count;
+        a_vm->RegisterFunction("LivingWorldOrderDone", SCRIPT_NAME, LivingWorldOrderDone); ++count;
+        a_vm->RegisterFunction("LivingWorldDescribe", SCRIPT_NAME, LivingWorldDescribe); ++count;
+        a_vm->RegisterFunction("LivingWorldMayMove", SCRIPT_NAME, LivingWorldMayMove); ++count;
         a_vm->RegisterFunction("ResolveItemByName", SCRIPT_NAME, ResolveItemByName); ++count;
         a_vm->RegisterFunction("FindItemNamedExactly", SCRIPT_NAME, FindItemNamedExactly); ++count;
         a_vm->RegisterFunction("MarkLastDispatchFailed", SCRIPT_NAME, MarkLastDispatchFailed); ++count;
@@ -2357,6 +2379,30 @@ namespace IntelEngine::Papyrus {
 
     std::int32_t StorylineOpenIdFor(RE::StaticFunctionTag*, RE::Actor* owner) {
         return owner ? static_cast<std::int32_t>(StorylineBridge::GetSingleton()->OpenIdFor(owner->GetFormID())) : 0;
+    }
+
+    // ---------------------------------------------------------------- 4.0 lives of followers left behind
+
+    void LivingWorldTrack(RE::StaticFunctionTag*) { LivingWorldBridge::GetSingleton()->Track(); }
+    RE::Actor* LivingWorldTakeOrder(RE::StaticFunctionTag*) { return LivingWorldBridge::GetSingleton()->TakeOrder(); }
+    std::int32_t LivingWorldOrderKind(RE::StaticFunctionTag*) {
+        return static_cast<std::int32_t>(LivingWorldBridge::GetSingleton()->CurrentOrderKind());
+    }
+    RE::TESObjectREFR* LivingWorldOrderTarget(RE::StaticFunctionTag*) { return LivingWorldBridge::GetSingleton()->OrderTarget(); }
+    float LivingWorldOrderOffset(RE::StaticFunctionTag*, std::int32_t axis) {
+        return LivingWorldBridge::GetSingleton()->OrderOffset(axis);
+    }
+    RE::Actor* LivingWorldOrderCompanion(RE::StaticFunctionTag*) { return LivingWorldBridge::GetSingleton()->OrderCompanion(); }
+    bool LivingWorldOrderProtect(RE::StaticFunctionTag*) { return LivingWorldBridge::GetSingleton()->OrderProtect(); }
+    RE::BSFixedString LivingWorldOrderNarration(RE::StaticFunctionTag*) {
+        return LivingWorldBridge::GetSingleton()->OrderNarration().c_str();
+    }
+    void LivingWorldOrderDone(RE::StaticFunctionTag*, bool ok) { LivingWorldBridge::GetSingleton()->OrderDone(ok); }
+    RE::BSFixedString LivingWorldDescribe(RE::StaticFunctionTag*, RE::Actor* actor) {
+        return LivingWorldBridge::GetSingleton()->Describe(actor).c_str();
+    }
+    bool LivingWorldMayMove(RE::StaticFunctionTag*, RE::Actor* npc, RE::BSFixedString storyType) {
+        return LivingWorldBridge::GetSingleton()->MayMoveForStory(npc, storyType.c_str() ? storyType.c_str() : "");
     }
 
     /** 4.0 living world: a story moment really started with this NPC (the success path only, never a rejection). */

@@ -99,8 +99,9 @@ namespace IntelEngine::SettingsBridge {
                 // ── Living world (4.0) ──
                 Choice("livingWorldLevel", "living_world", "level", kLwLevels, 2, LW, "How alive the world is",
                        "Classic: as before 4.0. Rumors: the world moves on while you are away and you hear about it, but "
-                       "followers you left wait where you left them. Lives: followers you left behind and people close to "
-                       "you live their own lives, and you can find them later."),
+                       "followers you left wait where you left them. Lives: followers you left behind live lives of their "
+                       "own (work at an inn, an adventure, a trip) and you can come upon them later; people close to you "
+                       "miss you while you are away."),
                 Choice("livingWorldInterruptions", "living_world", "interruptions", kLwInterruptions, 1, LW,
                        "Interruptions at bad moments",
                        "Whether someone may turn up during a fight, a conversation, a scene or a menu: never, only for "
@@ -114,7 +115,8 @@ namespace IntelEngine::SettingsBridge {
                        "for a good time: arriving in a town or an inn, coming home, leaving a dungeon, waking up."),
                 Num(Kind::Float, "livingWorldWaitDays", "living_world", "wait_order_days", 1, 120, 30, LW,
                     "A follower told to wait waits (days)",
-                    "How long a follower you told to wait keeps waiting before starting a life of their own."),
+                    "How long after you told a follower to wait they start a life of their own, once their follower mod "
+                    "lets them go. While it still holds them, they keep waiting."),
                 Num(Kind::Float, "livingWorldLifeDays", "living_world", "life_start_days", 1, 60, 7, LW,
                     "A follower left behind moves on after (days)",
                     "How long a follower you dismissed stays where you left them before starting a life of their own."),

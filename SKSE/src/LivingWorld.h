@@ -21,6 +21,7 @@
 #include <cstring>
 #include <optional>
 #include <span>
+#include <string>
 #include <vector>
 
 namespace IntelEngine::LivingWorld {
@@ -62,6 +63,8 @@ namespace IntelEngine::LivingWorld {
         kWaitOrder    = 1 << 7,  // the player told them to wait somewhere
         kKeepsShop    = 1 << 8,  // merchant, trainer, steward: keeps working, only short trips at night
         kWasFollower  = 1 << 9,  // has followed the player at some point
+        kNeedsRelease = 1 << 10, // the package of their own life must come off (back with the player, a task, a story)
+        kGreeted      = 1 << 11, // has greeted the player since the current step of their own life began
     };
 
     enum class Activity : std::uint8_t { Home = 0, WithPlayer, OnTask, Waiting, Working, Travelling, Adventuring, Visiting };
@@ -79,6 +82,9 @@ namespace IntelEngine::LivingWorld {
         std::uint32_t place = 0;         // where the record says they are, 0 = their usual place
         std::uint32_t companion = 0;     // who they are with, 0 = alone
         float nextChange = 0.0f;         // game days: when their off-screen life may move on
+        std::int32_t rumor = 0;          // SkyrimNet world-knowledge entry of what people heard of them, 0 = none
+        std::uint16_t steps = 0;         // steps of their own life since the player left them
+        float stepAt = -1.0f;            // game days: when the current step began
     };
 
     constexpr std::size_t kMaxLives = 64;
@@ -135,6 +141,182 @@ namespace IntelEngine::LivingWorld {
             return a.lastMet > b.lastMet;
         });
         lives.resize(max);
+    }
+
+    // ------------------------------------------------------------------ lives of followers left behind
+
+    // Living a life of their own: the life's package is on them and the record says where they are.
+    inline bool OwnLife(const Life& life) {
+        return life.activity == Activity::Working || life.activity == Activity::Adventuring ||
+               life.activity == Activity::Travelling || life.activity == Activity::Visiting;
+    }
+
+    // A real place a life can go: an inn, a dungeon or a town, with the hold it lies in.
+    struct PlaceOption {
+        std::uint32_t location = 0;
+        std::uint32_t hold = 0;
+    };
+
+    struct LifeStep {
+        Activity activity = Activity::Home;
+        std::uint32_t place = 0;       // 0 = their own home
+        std::uint32_t companion = 0;   // another former follower who goes along, 0 = alone
+        float until = 0.0f;            // game days: when the next step may come
+    };
+
+    namespace detail {
+        inline std::uint32_t Mix(std::uint32_t a, std::uint32_t b) {
+            std::uint32_t h = a * 0x9E3779B1u ^ (b + 0x7F4A7C15u + (a << 6) + (a >> 2));
+            h ^= h >> 15;
+            h *= 0x2C1B3C6Du;
+            h ^= h >> 12;
+            return h;
+        }
+
+        // One of the places, those of the given hold first; never the one they are at already.
+        inline std::uint32_t PickPlace(std::span<const PlaceOption> options, std::uint32_t hold, std::uint32_t avoid,
+                                       std::uint32_t seed) {
+            std::vector<std::uint32_t> inHold, anywhere;
+            for (const auto& o : options) {
+                if (o.location == 0 || o.location == avoid) continue;
+                anywhere.push_back(o.location);
+                if (hold != 0 && o.hold == hold) inHold.push_back(o.location);
+            }
+            const auto& pool = inHold.empty() ? anywhere : inHold;
+            if (pool.empty()) return 0;
+            return pool[seed % pool.size()];
+        }
+    }
+
+    // What a follower left behind does next: work at an inn of their hold most often, an adventure at a dungeon of
+    // the hold (now and then with another former follower who is free), a trip to a town, or home for a while.
+    // Every place is one of the given real places; a step lasts days, never hours. "others" are the lives that may
+    // go along (the caller has checked they are free and unseen).
+    inline LifeStep NextStep(const Life& life, std::uint32_t hold, std::span<const PlaceOption> inns,
+                             std::span<const PlaceOption> dungeons, std::span<const PlaceOption> towns,
+                             std::span<const Life> others, float now, std::uint32_t seed) {
+        const std::uint32_t roll = detail::Mix(seed, life.actor) % 100u;
+        LifeStep step;
+        auto days = [&](float least, float most) {
+            const float span = most - least;
+            return now + least + span * static_cast<float>(detail::Mix(seed + 7u, life.actor) % 1000u) / 1000.0f;
+        };
+        // Back from an adventure or a trip: work or home next, not another adventure at once.
+        const bool restless = life.activity == Activity::Adventuring || life.activity == Activity::Travelling;
+        if (roll < 45 || (restless && roll < 75)) {
+            step.activity = Activity::Working;
+            step.place = detail::PickPlace(inns, hold, life.place, detail::Mix(seed, 1u));
+            step.until = days(4.0f, 9.0f);
+        } else if (roll < 75) {
+            step.activity = Activity::Adventuring;
+            step.place = detail::PickPlace(dungeons, hold, life.place, detail::Mix(seed, 2u));
+            step.until = days(2.0f, 4.0f);
+            for (const auto& other : others) {
+                const bool free = Has(other, kWasFollower) && other.actor != life.actor && !PinnedByReality(other) &&
+                                  !Has(other, kQuestTarget) && !Has(other, kQuestBound) && !Has(other, kKeepsShop) &&
+                                  (other.activity == Activity::Home || other.activity == Activity::Working) &&
+                                  other.companion == 0 && other.parkedSince >= 0.0f;
+                if (free && detail::Mix(seed, other.actor) % 3u == 0u) {
+                    step.companion = other.actor;
+                    break;
+                }
+            }
+        } else if (roll < 90) {
+            step.activity = Activity::Travelling;
+            step.place = detail::PickPlace(towns, hold, life.place, detail::Mix(seed, 3u));
+            step.until = days(1.0f, 3.0f);
+        } else {
+            step.activity = Activity::Home;
+            step.until = days(5.0f, 10.0f);
+        }
+        if (step.activity != Activity::Home && step.place == 0) {  // no such place in this load order: home
+            step = LifeStep{Activity::Home, 0, 0, days(5.0f, 10.0f)};
+        }
+        return step;
+    }
+
+    // How long ago, in words: "today", "a day ago", "5 days ago", "about 3 weeks ago", "about 2 months ago".
+    inline std::string Ago(float days) {
+        if (!(days >= 1.0f)) return "today";
+        const int whole = static_cast<int>(days);
+        if (whole < 2) return "a day ago";
+        if (whole < 14) return std::to_string(whole) + " days ago";
+        if (whole < 60) return "about " + std::to_string((whole + 3) / 7) + " weeks ago";
+        return "about " + std::to_string((whole + 15) / 30) + " months ago";
+    }
+
+    // The memory a step leaves with the NPC, first person and past, so it stays true: {player}, {place}, {parked},
+    // {companion} are filled in with real names (" at {parked}" goes when the place is not known).
+    inline const char* StepMemory(Activity activity, bool firstStep, bool withCompanion) {
+        switch (activity) {
+            case Activity::Working:
+                return firstStep ? "After {player} and I parted ways at {parked}, I made my way to {place} and found work there to earn my keep."
+                                 : "I moved on to {place} and found work there to earn my keep.";
+            case Activity::Adventuring:
+                if (firstStep) {
+                    return withCompanion ? "After {player} and I parted ways at {parked}, I set out with {companion} to clear out {place}."
+                                         : "After {player} and I parted ways at {parked}, I set out alone to clear out {place}.";
+                }
+                return withCompanion ? "I set out with {companion} to clear out {place}."
+                                     : "I set out alone to clear out {place}.";
+            case Activity::Travelling:
+                return firstStep ? "After {player} and I parted ways at {parked}, I took to the road and travelled to {place}."
+                                 : "I took to the road and travelled to {place}.";
+            case Activity::Home:
+                return firstStep ? "After {player} and I parted ways at {parked}, I went back home."
+                                 : "I went back home for a while.";
+            default:
+                return "";
+        }
+    }
+
+    // What people heard (a SkyrimNet world-knowledge entry), past tense: {name} is the former follower.
+    inline const char* StepRumor(Activity activity, bool withCompanion) {
+        switch (activity) {
+            case Activity::Working: return "{name}, who used to travel with {player}, took work at {place}.";
+            case Activity::Adventuring:
+                return withCompanion ? "{name}, who used to travel with {player}, set out with {companion} to clear out {place}."
+                                     : "{name}, who used to travel with {player}, set out alone to clear out {place}.";
+            case Activity::Travelling: return "{name}, who used to travel with {player}, was seen on the road to {place}.";
+            default: return "";
+        }
+    }
+
+    // The NPC's own view of where their life stands, for their prompt (rendered each time, so it is never stale):
+    // {player}, {parked}, {place}, {companion}, {ago}. Empty when there is nothing of their own to tell.
+    inline const char* OwnLifeLine(const Life& life) {
+        if (Has(life, kWithPlayer)) {
+            return Has(life, kWaitOrder) ? "I am waiting for {player} at {parked}, as {player} asked of me {ago}." : "";
+        }
+        if (!Has(life, kWasFollower) || life.parkedSince < 0.0f || life.steps == 0) return "";
+        switch (life.activity) {
+            case Activity::Working:
+                return "Since {player} and I parted ways at {parked} {ago}, I have found work at {place} to earn my keep.";
+            case Activity::Adventuring:
+                return life.companion ? "Since {player} and I parted ways at {parked} {ago}, I have gone with {companion} to clear out {place}."
+                                      : "Since {player} and I parted ways at {parked} {ago}, I have gone to clear out {place}.";
+            case Activity::Travelling:
+                return "Since {player} and I parted ways at {parked} {ago}, I have taken to the road and come to {place}.";
+            case Activity::Home:
+                return "Since {player} and I parted ways at {parked} {ago}, I have lived my own life, and now I am back home.";
+            default:
+                return "";
+        }
+    }
+
+    // The same for the story director, third person.
+    inline const char* DirectorLifeLine(const Life& life) {
+        if (Has(life, kWithPlayer)) return Has(life, kWaitOrder) ? "waiting at {parked}, as {player} told them {ago}" : "";
+        if (!Has(life, kWasFollower) || life.parkedSince < 0.0f || life.steps == 0) return "";
+        switch (life.activity) {
+            case Activity::Working: return "parted from {player} at {parked} {ago}; has found work at {place}";
+            case Activity::Adventuring:
+                return life.companion ? "parted from {player} at {parked} {ago}; has gone with {companion} to clear out {place}"
+                                      : "parted from {player} at {parked} {ago}; has gone to clear out {place}";
+            case Activity::Travelling: return "parted from {player} at {parked} {ago}; on the road, now in {place}";
+            case Activity::Home: return "parted from {player} at {parked} {ago}; lived their own life and is back home";
+            default: return "";
+        }
     }
 
     // ------------------------------------------------------------------ the director
@@ -364,7 +546,7 @@ namespace IntelEngine::LivingWorld {
     // ------------------------------------------------------------------ save data (co-save record 'IELW')
 
     constexpr std::uint32_t kRecordType = 'IELW';
-    constexpr std::uint32_t kRecordVersion = 1;
+    constexpr std::uint32_t kRecordVersion = 2;
 
     namespace detail {
         template <class T>
@@ -399,6 +581,9 @@ namespace IntelEngine::LivingWorld {
             detail::Put(out, l.place);
             detail::Put(out, l.companion);
             detail::Put(out, l.nextChange);
+            detail::Put(out, l.rumor);
+            detail::Put(out, l.steps);
+            detail::Put(out, l.stepAt);
         }
         detail::Put(out, state.budget);
         detail::Put(out, state.budgetDay);
@@ -422,7 +607,8 @@ namespace IntelEngine::LivingWorld {
                 !detail::Get(in, at, l.lastKind) || !detail::Get(in, at, l.bond) || !detail::Get(in, at, l.lastMet) ||
                 !detail::Get(in, at, l.lastPicked) || !detail::Get(in, at, l.parkedSince) ||
                 !detail::Get(in, at, l.parkedAt) || !detail::Get(in, at, l.place) ||
-                !detail::Get(in, at, l.companion) || !detail::Get(in, at, l.nextChange)) {
+                !detail::Get(in, at, l.companion) || !detail::Get(in, at, l.nextChange) ||
+                !detail::Get(in, at, l.rumor) || !detail::Get(in, at, l.steps) || !detail::Get(in, at, l.stepAt)) {
                 return false;
             }
             if (activity > static_cast<std::uint8_t>(Activity::Visiting) || !std::isfinite(l.bond)) return false;

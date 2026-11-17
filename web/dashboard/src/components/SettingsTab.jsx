@@ -10,7 +10,7 @@ const LW_LEVELS = ['Classic', 'Rumors', 'Lives'];
 const LW_LEVEL_HINTS = [
   'As before 4.0.',
   'The world moves on while you are away and you hear about it, but followers you left wait where you left them.',
-  'Followers you left behind and people close to you live their own lives, and you can find them later.',
+  'Followers you left behind live lives of their own (work at an inn, an adventure, a trip) and you can come upon them later; people close to you miss you while you are away.',
 ];
 const LW_INTERRUPTIONS = ['Never', 'Only when urgent', 'Realistic'];
 const LW_INTERRUPTION_HINTS = [
@@ -204,7 +204,7 @@ function SettingsTab({ config, storyTypes, onSettingChange, pluginConfig, onPlug
           min={1} max={120} step={1}
           unit="days"
           onCommit={v => onSettingChange('livingWorldWaitDays', v)}
-          hint="How long a follower you told to wait keeps waiting before starting a life of their own."
+          hint="How long after you told a follower to wait they start a life of their own, once their follower mod lets them go. While it still holds them, they keep waiting."
         />
         <SliderRow
           label="A follower left behind moves on after"
