@@ -126,7 +126,7 @@ namespace IntelEngine {
             bool home = false;     // married to the player, or engaged: keeps the home
         };
 
-        Ties TiesOf(RE::Actor* actor) {
+        Ties TiesOf(RE::Actor* actor, bool skipStorylines = false) {
             Ties t;
             auto* aliases = actor->extraList.GetByType<RE::ExtraAliasInstanceArray>();
             if (!aliases) return t;
@@ -143,7 +143,7 @@ namespace IntelEngine {
                     continue;
                 }
                 if (id == "IntelEngine_Threads") {
-                    t.journal = true;
+                    if (!skipStorylines) t.journal = true;
                     continue;
                 }
                 if (id.starts_with("IntelEngine")) continue;
@@ -856,9 +856,9 @@ namespace IntelEngine {
         return "no record";
     }
 
-    int LivingWorldBridge::QuestTie(RE::Actor* actor) {
+    int LivingWorldBridge::QuestTie(RE::Actor* actor, bool skipStorylines) {
         if (!actor) return 0;
-        const auto ties = TiesOf(actor);
+        const auto ties = TiesOf(actor, skipStorylines);
         return ties.journal ? 2 : ties.quest ? 1 : 0;
     }
 

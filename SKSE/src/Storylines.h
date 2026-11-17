@@ -118,6 +118,7 @@ namespace IntelEngine::Storylines {
         std::uint32_t before = 0;         // what was asked before a new subject: the person, the item or the place
         std::string note;                 // the asker's reason for the last change, in their words
         std::string reply;                // the answer the one it was about sent back through the player
+        std::string about;                // why it was asked, in the asker's words ("she owes two months' rent")
     };
 
     namespace detail {
@@ -404,6 +405,14 @@ namespace IntelEngine::Storylines {
             return {};
         }
 
+        // Why it was asked, in the asker's words, recorded when they ask. Only while it is open.
+        bool SetAbout(std::uint32_t id, const std::string& text) {
+            Storyline* s = Find(id);
+            if (!s || !IsOpen(*s) || s->kind != Kind::Request) return false;
+            s->about = detail::CleanNote(text);
+            return !s->about.empty();
+        }
+
         // The open request this person is the subject of (to find or to speak with), 0 = none.
         std::uint32_t AboutId(std::uint32_t person) const {
             for (const auto& s : all) {
@@ -476,7 +485,9 @@ namespace IntelEngine::Storylines {
                     default: what = "help me"; break;
                 }
                 std::string w = what;
-                if ((s.changes & Changed::NewSubject) && s.before) w += " (at first it was {before})";
+                std::string aside = s.about;
+                if ((s.changes & Changed::NewSubject) && s.before) aside += (aside.empty() ? "" : "; ") + std::string("at first it was {before}");
+                if (!aside.empty()) w += " (" + aside + ")";
                 std::string end;
                 if (s.stage == Stage::Done) {
                     end = "I asked {player} to " + w + ", and {player} did it.";
@@ -503,8 +514,10 @@ namespace IntelEngine::Storylines {
     inline std::string OtherMemory(const Storyline& s) {
         if (s.kind != Kind::Request || (s.request != Request::FindPerson && s.request != Request::DeliverWord)) return {};
         if (s.reply.empty() && !(s.changes & Changed::ComesAlong)) return {};
-        std::string out = s.request == Request::FindPerson ? "{owner} had asked {player} to find me."
-                                                           : "{owner} had asked {player} to speak with me.";
+        std::string out = s.request == Request::FindPerson ? "{owner} had asked {player} to find me"
+                                                           : "{owner} had asked {player} to speak with me";
+        // The reason is in the asker's own words ("she owes me rent"): quoted as theirs, never as this person's.
+        out += s.about.empty() ? "." : " (in {owner}'s words: \"" + s.about + "\").";
         if (!s.reply.empty()) out += " I gave {player} my answer for {owner}: \"" + s.reply + "\"";
         if (s.changes & Changed::ComesAlong) out += " I went along with {player} to see {owner}.";
         return out;
@@ -553,7 +566,8 @@ namespace IntelEngine::Storylines {
     // ------------------------------------------------------------------ save data (co-save record 'IESL')
 
     constexpr std::uint32_t kRecordType = 'IESL';
-    constexpr std::uint32_t kRecordVersion = 2;  // 2: promised, changes, before, note, reply (4.0 branches); 1 still loads
+    constexpr std::uint32_t kRecordVersion = 3;  // 2: promised, changes, before, note, reply (4.0 branches); 3: about.
+                                                 // Older versions still load.
 
     namespace detail {
         template <class T>
@@ -612,6 +626,7 @@ namespace IntelEngine::Storylines {
             detail::Put(out, s.before);
             detail::PutText(out, s.note, kMaxNote);
             detail::PutText(out, s.reply, kMaxReply);
+            detail::PutText(out, s.about, kMaxNote);
         }
         return out;
     }
@@ -643,6 +658,7 @@ namespace IntelEngine::Storylines {
                                  !detail::GetText(in, at, s.note, kMaxNote) || !detail::GetText(in, at, s.reply, kMaxReply))) {
                 return false;
             }
+            if (version >= 3 && !detail::GetText(in, at, s.about, kMaxNote)) return false;
             const bool stageOk = stage <= 1 || (stage >= 10 && stage <= 14);
             if (!validKind(kind) || request > static_cast<std::uint8_t>(Request::Rescue) || !stageOk ||
                 (s.slot != 0xFF && s.slot >= kSlots) || !std::isfinite(s.deadline)) {

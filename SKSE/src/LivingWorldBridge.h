@@ -69,13 +69,15 @@ namespace IntelEngine {
         static std::string HoldName(RE::Actor* actor);
         /** How an NPC is tied to the player's quests: 0 not, 1 takes part in a running quest of the journal's kinds,
          *  2 the target of an objective the player has open (any quest, IntelEngine's included). */
-        static int QuestTie(RE::Actor* actor);
+        // skipStorylines: leave IntelEngine's own storyline objectives out (someone a request is about may go
+        // along with the player to the one who asked: that is the storyline itself, not a move away from it).
+        static int QuestTie(RE::Actor* actor, bool skipStorylines = false);
         /** May the story director offer this NPC at all? Never the target of an open objective; nobody in a running
          *  quest when "NPCs of running quests may move" is Never. Below the Lives and Rumors levels: as before 4.0. */
         bool MayOfferForStory(RE::Actor* actor) const;
         /** May this kind of moment move this NPC? With "only for something important", someone in a running quest
          *  comes only to bring a quest (a message always goes by courier, the sender stays). */
-        bool MayMoveForStory(RE::Actor* actor, const std::string& storyType) const;
+        bool MayMoveForStory(RE::Actor* actor, const std::string& storyType, bool skipStorylines = false) const;
         /** The line for the director's candidate list when the setting limits this NPC, else empty. */
         std::string QuestTieLine(RE::Actor* actor) const;
         /** The record of one NPC, for tests and the log. */

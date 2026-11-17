@@ -14,6 +14,7 @@
 #include "JsonKeys.h"
 #include "NPCIndex.h"
 #include "LivingWorldBridge.h"
+#include "ItemNames.h"
 #include "StorylineBridge.h"
 #include "PlaceTargets.h"
 #include "ItemIndex.h"
@@ -97,6 +98,9 @@ namespace IntelEngine::Papyrus {
     std::int32_t StorylineAboutId(RE::StaticFunctionTag*, RE::Actor*);
     RE::BSFixedString StorylineOtherMemory(RE::StaticFunctionTag*, std::int32_t);
     std::int32_t StorylineOfferedGold(RE::StaticFunctionTag*, std::int32_t, std::int32_t);
+    bool StorylineMayComeAlong(RE::StaticFunctionTag*, RE::Actor*);
+    bool StorylineSetAbout(RE::StaticFunctionTag*, std::int32_t, RE::BSFixedString);
+    RE::BSFixedString StorylineText(RE::StaticFunctionTag*, std::int32_t, RE::BSFixedString);
     void LivingWorldTrack(RE::StaticFunctionTag*);
     RE::Actor* LivingWorldTakeOrder(RE::StaticFunctionTag*);
     std::int32_t LivingWorldOrderKind(RE::StaticFunctionTag*);
@@ -482,6 +486,9 @@ namespace IntelEngine::Papyrus {
         a_vm->RegisterFunction("StorylineAboutId", SCRIPT_NAME, StorylineAboutId); ++count;
         a_vm->RegisterFunction("StorylineOtherMemory", SCRIPT_NAME, StorylineOtherMemory); ++count;
         a_vm->RegisterFunction("StorylineOfferedGold", SCRIPT_NAME, StorylineOfferedGold); ++count;
+        a_vm->RegisterFunction("StorylineMayComeAlong", SCRIPT_NAME, StorylineMayComeAlong); ++count;
+        a_vm->RegisterFunction("StorylineSetAbout", SCRIPT_NAME, StorylineSetAbout); ++count;
+        a_vm->RegisterFunction("StorylineText", SCRIPT_NAME, StorylineText); ++count;
         a_vm->RegisterFunction("LivingWorldTrack", SCRIPT_NAME, LivingWorldTrack); ++count;
         a_vm->RegisterFunction("LivingWorldTakeOrder", SCRIPT_NAME, LivingWorldTakeOrder); ++count;
         a_vm->RegisterFunction("LivingWorldOrderKind", SCRIPT_NAME, LivingWorldOrderKind); ++count;
@@ -2310,7 +2317,8 @@ namespace IntelEngine::Papyrus {
     std::int32_t StorylineField(RE::StaticFunctionTag*, std::int32_t id, RE::BSFixedString field) {
         const auto s = StorylineBridge::GetSingleton()->Get(static_cast<std::uint32_t>(id));
         if (!s) return -1;
-        const std::string_view f = field.c_str() ? field.c_str() : "";
+        // Lower case first: the game's string pool hands back the first spelling it saw ("Stage", "Request").
+        const auto f = StringUtils::ToLowerStd(field.c_str() ? field.c_str() : "");
         if (f == "slot") return s->slot;
         if (f == "objective") return static_cast<std::int32_t>(Storylines::ObjectiveFor(*s));
         if (f == "stage") return static_cast<std::int32_t>(s->stage);
@@ -2356,45 +2364,83 @@ namespace IntelEngine::Papyrus {
         return s ? Storylines::RewardGold(*s, playerLevel) : 0;
     }
 
-    /** The base form of an item with exactly this name (any case), searched in every kind of item a person can
-     *  carry; the first plugin's wins. No fuzzy match: a storyline must never ask for "Vase" when "Ale" was said
-     *  (the item index has no drinks, and its fuzzy match did exactly that). */
+    /** Every kind of item a person can carry, in this order; fn returns true to stop. */
+    template <class Fn>
+    static void ForEachItemForm(RE::TESDataHandler* data, Fn&& fn) {
+        bool stop = false;
+        const auto each = [&](auto& forms) {
+            for (auto* form : forms) {
+                if (stop) return;
+                if (!form) continue;
+                const char* name = form->GetName();
+                if (name && *name && fn(form, name)) stop = true;
+            }
+        };
+        each(data->GetFormArray<RE::AlchemyItem>());
+        each(data->GetFormArray<RE::IngredientItem>());
+        each(data->GetFormArray<RE::TESObjectMISC>());
+        each(data->GetFormArray<RE::TESObjectWEAP>());
+        each(data->GetFormArray<RE::TESObjectARMO>());
+        each(data->GetFormArray<RE::TESObjectBOOK>());
+        each(data->GetFormArray<RE::TESSoulGem>());
+        each(data->GetFormArray<RE::TESAmmo>());
+    }
+
+    /** The base form of the item someone named, searched in every kind of item a person can carry; the first
+     *  plugin's wins. In this order: exactly that name (any case); the same item under the modlist's own spelling
+     *  (sorting tags, words turned round, "Sweetroll" for "Sweet Roll": ItemNames::Same); else the plainest item whose
+     *  name ends in the said words ("Mead" is "Nord Mead": ItemNames::Loose). Never part of a word: a storyline must
+     *  never ask for "Vase" when "Ale" was said (the item index has no drinks, and its fuzzy match did exactly that). */
     RE::TESForm* ResolveItemByName(RE::StaticFunctionTag*, RE::BSFixedString itemName) {
         if (!itemName.c_str() || !*itemName.c_str()) return nullptr;
         auto* data = RE::TESDataHandler::GetSingleton();
         if (!data) return nullptr;
-        const auto wanted = StringUtils::ToLowerStd(itemName.c_str());
-        const auto find = [&wanted](auto& forms) -> RE::TESForm* {
-            for (auto* form : forms) {
-                if (!form) continue;
-                const char* name = form->GetName();
-                if (name && *name && StringUtils::ToLowerStd(name) == wanted) return form;
-            }
-            return nullptr;
-        };
+        const std::string said = itemName.c_str();
+        const auto wanted = StringUtils::ToLowerStd(said);
         RE::TESForm* found = nullptr;
-        if (!found) found = find(data->GetFormArray<RE::AlchemyItem>());
-        if (!found) found = find(data->GetFormArray<RE::IngredientItem>());
-        if (!found) found = find(data->GetFormArray<RE::TESObjectMISC>());
-        if (!found) found = find(data->GetFormArray<RE::TESObjectWEAP>());
-        if (!found) found = find(data->GetFormArray<RE::TESObjectARMO>());
-        if (!found) found = find(data->GetFormArray<RE::TESObjectBOOK>());
-        if (!found) found = find(data->GetFormArray<RE::TESSoulGem>());
-        if (!found) found = find(data->GetFormArray<RE::TESAmmo>());
+        ForEachItemForm(data, [&](RE::TESForm* form, const char* name) {
+            if (StringUtils::ToLowerStd(name) != wanted) return false;
+            found = form;
+            return true;
+        });
+        if (found) return found;
+        ForEachItemForm(data, [&](RE::TESForm* form, const char* name) {
+            if (!ItemNames::Same(said, name)) return false;
+            found = form;
+            return true;
+        });
+        if (found) {
+            logger::info("ResolveItemByName: '{}' is called '{}' here", said, found->GetName());
+            return found;
+        }
+        int best = 0;
+        ForEachItemForm(data, [&](RE::TESForm* form, const char* name) {
+            const int rank = ItemNames::Loose(said, name);
+            if (rank > 0 && (best == 0 || rank < best)) {
+                best = rank;
+                found = form;
+            }
+            return false;
+        });
+        if (found) logger::info("ResolveItemByName: no item is called '{}'; taking '{}'", said, found->GetName());
         return found;
     }
 
-    /** An item this actor carries whose name is exactly this one (any case), else None. Two mods' "Ale" both count;
-     *  "Pale Ale" does not. */
+    /** An item this actor carries that is the named item (exactly, or under another spelling of the same words:
+     *  ItemNames::Same), else None. Two mods' "Ale" both count, "[Drink] Ale" too; "Pale Ale" does not. */
     RE::TESForm* FindItemNamedExactly(RE::StaticFunctionTag*, RE::Actor* actor, RE::BSFixedString itemName) {
         if (!actor || !itemName.c_str() || !*itemName.c_str()) return nullptr;
-        const auto wanted = StringUtils::ToLowerStd(itemName.c_str());
+        const std::string said = itemName.c_str();
+        const auto wanted = StringUtils::ToLowerStd(said);
+        RE::TESForm* same = nullptr;
         for (const auto& [item, data] : actor->GetInventory()) {
             if (!item || data.first <= 0) continue;
             const char* name = item->GetName();
-            if (name && StringUtils::ToLowerStd(name) == wanted) return item;
+            if (!name || !*name) continue;
+            if (StringUtils::ToLowerStd(name) == wanted) return item;
+            if (!same && ItemNames::Same(said, name)) same = item;
         }
-        return nullptr;
+        return same;
     }
 
     std::int32_t StorylineOpenIdFor(RE::StaticFunctionTag*, RE::Actor* owner) {
@@ -2442,6 +2488,28 @@ namespace IntelEngine::Papyrus {
 
     std::int32_t StorylineOfferedGold(RE::StaticFunctionTag*, std::int32_t id, std::int32_t playerLevel) {
         return StorylineBridge::GetSingleton()->OfferedGold(static_cast<std::uint32_t>(id), playerLevel);
+    }
+
+    /** Whether a running quest lets this person go along with the player to whoever asked about them (the setting
+     *  "NPCs of running quests may move", as for a quest moment); the storyline's own objective does not count. */
+    bool StorylineMayComeAlong(RE::StaticFunctionTag*, RE::Actor* person) {
+        return LivingWorldBridge::GetSingleton()->MayMoveForStory(person, "quest", true);
+    }
+
+    bool StorylineSetAbout(RE::StaticFunctionTag*, std::int32_t id, RE::BSFixedString text) {
+        if (id <= 0 || !text.c_str()) return false;
+        return StorylineBridge::GetSingleton()->SetAbout(static_cast<std::uint32_t>(id), text.c_str());
+    }
+
+    RE::BSFixedString StorylineText(RE::StaticFunctionTag*, std::int32_t id, RE::BSFixedString field) {
+        const auto s = StorylineBridge::GetSingleton()->Get(static_cast<std::uint32_t>(id));
+        if (!s) return "";
+        // Lower case first: the game's string pool hands back the first spelling it saw ("Reply", "Note").
+        const auto f = StringUtils::ToLowerStd(field.c_str() ? field.c_str() : "");
+        if (f == "about") return s->about.c_str();
+        if (f == "reply") return s->reply.c_str();
+        if (f == "note") return s->note.c_str();
+        return "";
     }
 
     // ---------------------------------------------------------------- 4.0 lives of followers left behind

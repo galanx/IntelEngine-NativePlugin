@@ -283,6 +283,21 @@ static void Branches() {
     const auto item2 = book.Open(Ask(5, Request::BringItem), 10.0f);
     Require(!book.Reply(item2, 0, "x", false, 10.0f).empty(), "nobody answers for an item");
 
+    // Why it was asked: in both people's memories, and not the cut of a line at ", and ".
+    const auto why = book.Open(Ask(7, Request::DeliverWord, 80), 10.0f);
+    Require(book.SetAbout(why, "she owes two months' rent, and more."), "the reason is recorded");
+    Require(At(book, why, "why").about == "she owes two months' rent, and more", "one clean phrase");
+    Require(!book.SetAbout(why + 100, "x"), "nothing to record it on");
+    book.Reply(why, 80, "Tell him tomorrow.", false, 10.5f);
+    Require(OtherMemory(At(book, why, "why")).find("to speak with me (in {owner}'s words: \"she owes two months' rent, and more\").") !=
+                std::string::npos,
+            "the one it is about remembers why, as the asker's words");
+    book.Apply(why, Event::Met, 10.6f);
+    Require(OwnerMemory(At(book, why, "why done")) ==
+                "I asked {player} to speak with {other} for me (she owes two months' rent, and more), and {player} did it. "
+                "{player} brought me {other}'s answer: \"Tell him tomorrow.\"",
+            "the asker remembers why");
+
     // A long reason is cut at a word.
     const auto esc = book.Open(Ask(6, Request::EscortMe), 10.0f);
     book.Find(esc)->target = 500;
@@ -309,14 +324,23 @@ static void SaveDataV2() {
     Require(b && b->promised == 250 && b->changes == s.changes && b->before == 8 && b->note == s.note && b->reply == s.reply,
             "the branch fields come back");
     // A version 1 record (the same storyline without the branch fields) still loads.
-    const std::size_t header = 11, v1 = 42, extra = 4 + 1 + 4 + 2 + s.note.size() + 2 + s.reply.size();
-    Require(bytes.size() == header + v1 + extra, "the record is the size it should be");
+    s.about = "his debt";
+    const auto withAbout = Serialize(book);
+    Book back3;
+    Require(Deserialize(withAbout, back3) && back3.Find(r)->about == "his debt", "the reason comes back");
+    s.about.clear();
+    const std::size_t header = 11, v1 = 42, extra = 4 + 1 + 4 + 2 + s.note.size() + 2 + s.reply.size(), v3 = 2;
+    Require(bytes.size() == header + v1 + extra + v3, "the record is the size it should be");
+    std::vector<std::uint8_t> v2(bytes.begin(), bytes.end() - v3);
+    Book older2;
+    Require(Deserialize(v2, older2, 2) && older2.Find(r)->reply == s.reply && older2.Find(r)->about.empty(),
+            "a version 2 record loads, without a reason");
     std::vector<std::uint8_t> old(bytes.begin(), bytes.begin() + header + v1);
     Book older;
     Require(Deserialize(old, older, 1), "a version 1 record loads");
     Require(older.Find(r) && older.Find(r)->promised == 0 && older.Find(r)->reply.empty(), "with no branch fields");
     Require(!Deserialize(old, older, 2), "but not as version 2");
-    Require(!Deserialize(bytes, older, 3), "an unknown version is refused");
+    Require(!Deserialize(bytes, older, kRecordVersion + 1), "an unknown version is refused");
 }
 
 int main() {

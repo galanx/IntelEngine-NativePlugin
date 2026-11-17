@@ -112,10 +112,10 @@ namespace IntelEngine {
         return !(tie == 1 && settings.questNpcMoves == LivingWorld::QuestNpcMoves::Never);
     }
 
-    bool LivingWorldBridge::MayMoveForStory(RE::Actor* actor, const std::string& storyType) const {
+    bool LivingWorldBridge::MayMoveForStory(RE::Actor* actor, const std::string& storyType, bool skipStorylines) const {
         const auto settings = GetSettings();
         if (settings.level == LivingWorld::WorldLevel::Classic || !actor || storyType == "message") return true;
-        const int tie = QuestTie(actor);
+        const int tie = QuestTie(actor, skipStorylines);
         if (tie == 2) return false;
         if (tie == 0 || settings.questNpcMoves == LivingWorld::QuestNpcMoves::Freely) return true;
         if (settings.questNpcMoves == LivingWorld::QuestNpcMoves::Never) return false;
