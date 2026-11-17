@@ -72,6 +72,7 @@ namespace IntelEngine::Papyrus {
     void RecordStoryDispatch(RE::StaticFunctionTag*, RE::BSFixedString, RE::BSFixedString, RE::BSFixedString);
     bool LivingWorldMayDeliver(RE::StaticFunctionTag*, std::int32_t, bool);
     void SetLivingWorldSettings(RE::StaticFunctionTag*, std::int32_t, std::int32_t, std::int32_t, std::int32_t, float, float);
+    void LivingWorldMomentDispatched(RE::StaticFunctionTag*, RE::Actor*, RE::BSFixedString);
     void MarkLastDispatchFailed(RE::StaticFunctionTag*, RE::BSFixedString);
     void WarmStoryTypeCountsFromCSV(RE::StaticFunctionTag*, RE::BSFixedString);
     void SetRecentGossipContext(RE::StaticFunctionTag*, RE::BSFixedString);
@@ -421,6 +422,7 @@ namespace IntelEngine::Papyrus {
         a_vm->RegisterFunction("RecordStoryDispatch", SCRIPT_NAME, RecordStoryDispatch); ++count;
         a_vm->RegisterFunction("LivingWorldMayDeliver", SCRIPT_NAME, LivingWorldMayDeliver); ++count;
         a_vm->RegisterFunction("SetLivingWorldSettings", SCRIPT_NAME, SetLivingWorldSettings); ++count;
+        a_vm->RegisterFunction("LivingWorldMomentDispatched", SCRIPT_NAME, LivingWorldMomentDispatched); ++count;
         a_vm->RegisterFunction("MarkLastDispatchFailed", SCRIPT_NAME, MarkLastDispatchFailed); ++count;
         a_vm->RegisterFunction("WarmStoryTypeCountsFromCSV", SCRIPT_NAME, WarmStoryTypeCountsFromCSV); ++count;
         a_vm->RegisterFunction("SetRecentGossipContext", SCRIPT_NAME, SetRecentGossipContext); ++count;
@@ -2185,6 +2187,11 @@ namespace IntelEngine::Papyrus {
         s.waitOrderDays = std::clamp(waitDays, 1.0f, 120.0f);
         s.lifeStartDays = std::clamp(lifeDays, 1.0f, 60.0f);
         LivingWorldBridge::GetSingleton()->SetSettings(s);
+    }
+
+    /** 4.0 living world: a story moment really started with this NPC (the success path only, never a rejection). */
+    void LivingWorldMomentDispatched(RE::StaticFunctionTag*, RE::Actor* npc, RE::BSFixedString storyType) {
+        LivingWorldBridge::GetSingleton()->OnStoryDispatched(npc ? npc->GetFormID() : 0, storyType.c_str() ? storyType.c_str() : "");
     }
 
     void RecordStoryDispatch(RE::StaticFunctionTag*,

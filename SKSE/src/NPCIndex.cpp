@@ -2793,16 +2793,11 @@ namespace IntelEngine {
 
         if (entry.type.empty()) return;
 
-        RE::FormID dispatchedActor = 0;
-        {
-            std::unique_lock lock(m_mutex);
-            dispatchedActor = ResolveStoryCandidateFormID(npcName, m_dmCandidatePool, {});
-            m_recentDispatches.push_front(std::move(entry));
-            while (static_cast<int>(m_recentDispatches.size()) > MAX_RECENT_DISPATCHES) {
-                m_recentDispatches.pop_back();
-            }
+        std::unique_lock lock(m_mutex);
+        m_recentDispatches.push_front(std::move(entry));
+        while (static_cast<int>(m_recentDispatches.size()) > MAX_RECENT_DISPATCHES) {
+            m_recentDispatches.pop_back();
         }
-        LivingWorldBridge::GetSingleton()->OnStoryDispatched(dispatchedActor, storyType);
     }
 
     void NPCIndex::MarkLastDispatchFailed(const std::string& reason) {

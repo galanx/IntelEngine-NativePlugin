@@ -349,7 +349,7 @@ class VM:
             self.effects.append((method, tuple(args)))
             return None
         if method == "LivingWorldMayDeliver": return True
-        if method == "SetLivingWorldSettings":
+        if method in ("SetLivingWorldSettings", "LivingWorldMomentDispatched"):
             self.effects.append((method, tuple(args)))
             return None
         raise ValueError(f"unmodeled external call {script}.{method}({args!r})")
