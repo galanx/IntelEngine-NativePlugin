@@ -439,6 +439,10 @@ namespace IntelEngine {
                 if (life.steps == 0 || (life.flags & (LivingWorld::kGreeted | LivingWorld::kWithPlayer | LivingWorld::kOnTask))) continue;
                 auto* actor = RE::TESForm::LookupByID<RE::Actor>(life.actor);
                 if (!actor || actor->IsDead() || !NearPlayer(actor, player, kGreetDistance) || actor->IsInCombat()) continue;
+                // Asleep they see no one: the greeting waits until they are up (else it was tried every tick all night).
+                if (auto* state = actor->AsActorState(); state && state->GetSitSleepState() == RE::SIT_SLEEP_STATE::kIsSleeping) {
+                    continue;
+                }
                 m_order = Order{};
                 m_order.kind = OrderKind::Greet;
                 m_order.actor = life.actor;
