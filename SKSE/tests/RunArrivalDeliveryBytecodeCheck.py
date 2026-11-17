@@ -343,6 +343,15 @@ class VM:
         if method in ("ListPackage", "UnregisterPackageEx"):
             self.effects.append((method, tuple(args)))
             return 1
+        # 4.0 living world: the story engine listens for seams, and the director (Classic-like here) lets the
+        # clock tick through; the pacing itself is checked by LivingWorldCheck.
+        if method == "RegisterForModEvent":
+            self.effects.append((method, tuple(args)))
+            return None
+        if method == "LivingWorldMayDeliver": return True
+        if method == "SetLivingWorldSettings":
+            self.effects.append((method, tuple(args)))
+            return None
         raise ValueError(f"unmodeled external call {script}.{method}({args!r})")
 
     def run(self, script, name, code, env):

@@ -13,6 +13,7 @@
 #include "FriendlyKey.h"
 #include "JsonKeys.h"
 #include "NPCIndex.h"
+#include "LivingWorldBridge.h"
 #include "ItemIndex.h"
 #include <random>
 #include <algorithm>
@@ -69,6 +70,8 @@ namespace IntelEngine::Papyrus {
     void NotifySocialCooldown(RE::StaticFunctionTag*, RE::Actor*, float, float);
     void NotifyStoryTypePicked(RE::StaticFunctionTag*, RE::BSFixedString);
     void RecordStoryDispatch(RE::StaticFunctionTag*, RE::BSFixedString, RE::BSFixedString, RE::BSFixedString);
+    bool LivingWorldMayDeliver(RE::StaticFunctionTag*, std::int32_t, bool);
+    void SetLivingWorldSettings(RE::StaticFunctionTag*, std::int32_t, std::int32_t, std::int32_t, std::int32_t, float, float);
     void MarkLastDispatchFailed(RE::StaticFunctionTag*, RE::BSFixedString);
     void WarmStoryTypeCountsFromCSV(RE::StaticFunctionTag*, RE::BSFixedString);
     void SetRecentGossipContext(RE::StaticFunctionTag*, RE::BSFixedString);
@@ -416,6 +419,8 @@ namespace IntelEngine::Papyrus {
         a_vm->RegisterFunction("NotifySocialCooldown", SCRIPT_NAME, NotifySocialCooldown); ++count;
         a_vm->RegisterFunction("NotifyStoryTypePicked", SCRIPT_NAME, NotifyStoryTypePicked); ++count;
         a_vm->RegisterFunction("RecordStoryDispatch", SCRIPT_NAME, RecordStoryDispatch); ++count;
+        a_vm->RegisterFunction("LivingWorldMayDeliver", SCRIPT_NAME, LivingWorldMayDeliver); ++count;
+        a_vm->RegisterFunction("SetLivingWorldSettings", SCRIPT_NAME, SetLivingWorldSettings); ++count;
         a_vm->RegisterFunction("MarkLastDispatchFailed", SCRIPT_NAME, MarkLastDispatchFailed); ++count;
         a_vm->RegisterFunction("WarmStoryTypeCountsFromCSV", SCRIPT_NAME, WarmStoryTypeCountsFromCSV); ++count;
         a_vm->RegisterFunction("SetRecentGossipContext", SCRIPT_NAME, SetRecentGossipContext); ++count;
@@ -2164,6 +2169,24 @@ namespace IntelEngine::Papyrus {
      * type and subType cleanly — single source of truth for sub-type
      * derivation lives in Papyrus, not duplicated against a cached JSON field.
      */
+    /** 4.0 living world: may a story moment land now (pacing, seams, bad moments)? */
+    bool LivingWorldMayDeliver(RE::StaticFunctionTag*, std::int32_t seam, bool urgent) {
+        return LivingWorldBridge::GetSingleton()->MayDeliver(seam, urgent);
+    }
+
+    /** 4.0 living world: the six settings, from the scripts on load and on every change. Out-of-range values clamp. */
+    void SetLivingWorldSettings(RE::StaticFunctionTag*, std::int32_t level, std::int32_t interruptions, std::int32_t questNpcs,
+                                std::int32_t pacing, float waitDays, float lifeDays) {
+        LivingWorld::Settings s;
+        s.level = static_cast<LivingWorld::WorldLevel>(std::clamp(level, 0, 2));
+        s.interruptions = static_cast<LivingWorld::Interruptions>(std::clamp(interruptions, 0, 2));
+        s.questNpcMoves = static_cast<LivingWorld::QuestNpcMoves>(std::clamp(questNpcs, 0, 2));
+        s.pacing = static_cast<LivingWorld::Pacing>(std::clamp(pacing, 0, 2));
+        s.waitOrderDays = std::clamp(waitDays, 1.0f, 120.0f);
+        s.lifeStartDays = std::clamp(lifeDays, 1.0f, 60.0f);
+        LivingWorldBridge::GetSingleton()->SetSettings(s);
+    }
+
     void RecordStoryDispatch(RE::StaticFunctionTag*,
                               RE::BSFixedString storyType,
                               RE::BSFixedString npcName,

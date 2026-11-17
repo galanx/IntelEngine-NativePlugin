@@ -5,6 +5,7 @@
  */
 
 #include "NPCIndex.h"
+#include "LivingWorldBridge.h"
 #include "Utf8Truncate.h"
 #include <algorithm>
 #include "CellAnalyzer.h"
@@ -2367,6 +2368,8 @@ namespace IntelEngine {
 
         static thread_local std::mt19937 rng(std::random_device{}());
         std::uniform_real_distribution<float> noiseDist(0.0f, RANDOM_NOISE_MAX);
+        auto* livingWorld = LivingWorldBridge::GetSingleton();
+        const bool living = !livingWorld->IsClassic();
 
         for (const auto& a : snap.candidates) {
             float activity = std::log2(a.dbScore + 1.0f);
@@ -2397,6 +2400,15 @@ namespace IntelEngine {
 
             float noise = noiseDist(rng);
             float score = activity + absenceBonus + noveltyBonus + geoBonus + fofBonus + noise;
+            if (living && a.fromMemoryDB) {
+                // 4.0: the director ranks people the player knows (bond, absence, rotation, novelty).
+                const bool met = relIt != relMap.end() && relIt->second.interactionCount > 0;
+                const float days = met ? std::max(0.f, (snap.currentDBHours - relIt->second.lastInteractionHours) / 86400.0f) : -1.f;
+                score = livingWorld->ScoreStoryCandidate(a.formId, met ? relIt->second.interactionCount : 0, days,
+                                                         geoBonus > 0.f, fofBonus > 0.f, snap.currentGameTime,
+                                                         static_cast<std::uint32_t>(snap.currentGameTime * 1440.0f)) +
+                        activity * 0.2f;
+            }
             scored.push_back({&a, score});
         }
 
@@ -2410,8 +2422,11 @@ namespace IntelEngine {
             if (s.a->fromMemoryDB) rankedPool.push_back(s);
             else                   randomPool.push_back(s);
         }
-        if (static_cast<int>(rankedPool.size()) > snap.maxCandidates) rankedPool.resize(snap.maxCandidates);
-        if (static_cast<int>(randomPool.size()) > RANDOM_ENCOUNTER_SLOTS) randomPool.resize(RANDOM_ENCOUNTER_SLOTS);
+        // 4.0: the director has already ranked who matters, so the prompt carries fewer, better candidates.
+        const int rankedLimit = living ? std::min(snap.maxCandidates, 4) : snap.maxCandidates;
+        const int randomLimit = living ? 2 : RANDOM_ENCOUNTER_SLOTS;
+        if (static_cast<int>(rankedPool.size()) > rankedLimit) rankedPool.resize(rankedLimit);
+        if (static_cast<int>(randomPool.size()) > randomLimit) randomPool.resize(randomLimit);
 
         std::vector<ScoredCandidate> finalPool = std::move(rankedPool);
         for (auto& s : randomPool) finalPool.push_back(s);
@@ -2778,11 +2793,16 @@ namespace IntelEngine {
 
         if (entry.type.empty()) return;
 
-        std::unique_lock lock(m_mutex);
-        m_recentDispatches.push_front(std::move(entry));
-        while (static_cast<int>(m_recentDispatches.size()) > MAX_RECENT_DISPATCHES) {
-            m_recentDispatches.pop_back();
+        RE::FormID dispatchedActor = 0;
+        {
+            std::unique_lock lock(m_mutex);
+            dispatchedActor = ResolveStoryCandidateFormID(npcName, m_dmCandidatePool, {});
+            m_recentDispatches.push_front(std::move(entry));
+            while (static_cast<int>(m_recentDispatches.size()) > MAX_RECENT_DISPATCHES) {
+                m_recentDispatches.pop_back();
+            }
         }
+        LivingWorldBridge::GetSingleton()->OnStoryDispatched(dispatchedActor, storyType);
     }
 
     void NPCIndex::MarkLastDispatchFailed(const std::string& reason) {
