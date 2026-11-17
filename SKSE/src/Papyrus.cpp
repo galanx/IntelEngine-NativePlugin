@@ -90,6 +90,13 @@ namespace IntelEngine::Papyrus {
     RE::BSFixedString StorylineMemory(RE::StaticFunctionTag*, std::int32_t);
     std::int32_t StorylineReward(RE::StaticFunctionTag*, std::int32_t, std::int32_t);
     std::int32_t StorylineOpenIdFor(RE::StaticFunctionTag*, RE::Actor*);
+    bool StorylineCallOff(RE::StaticFunctionTag*, std::int32_t, RE::BSFixedString);
+    RE::BSFixedString StorylineAmend(RE::StaticFunctionTag*, std::int32_t, std::int32_t, RE::Actor*, RE::BGSLocation*,
+                                     RE::TESObjectREFR*, RE::TESForm*, std::int32_t, RE::BSFixedString);
+    RE::BSFixedString StorylineReply(RE::StaticFunctionTag*, std::int32_t, RE::Actor*, RE::BSFixedString, bool);
+    std::int32_t StorylineAboutId(RE::StaticFunctionTag*, RE::Actor*);
+    RE::BSFixedString StorylineOtherMemory(RE::StaticFunctionTag*, std::int32_t);
+    std::int32_t StorylineOfferedGold(RE::StaticFunctionTag*, std::int32_t, std::int32_t);
     void LivingWorldTrack(RE::StaticFunctionTag*);
     RE::Actor* LivingWorldTakeOrder(RE::StaticFunctionTag*);
     std::int32_t LivingWorldOrderKind(RE::StaticFunctionTag*);
@@ -469,6 +476,12 @@ namespace IntelEngine::Papyrus {
         a_vm->RegisterFunction("StorylineMemory", SCRIPT_NAME, StorylineMemory); ++count;
         a_vm->RegisterFunction("StorylineReward", SCRIPT_NAME, StorylineReward); ++count;
         a_vm->RegisterFunction("StorylineOpenIdFor", SCRIPT_NAME, StorylineOpenIdFor); ++count;
+        a_vm->RegisterFunction("StorylineCallOff", SCRIPT_NAME, StorylineCallOff); ++count;
+        a_vm->RegisterFunction("StorylineAmend", SCRIPT_NAME, StorylineAmend); ++count;
+        a_vm->RegisterFunction("StorylineReply", SCRIPT_NAME, StorylineReply); ++count;
+        a_vm->RegisterFunction("StorylineAboutId", SCRIPT_NAME, StorylineAboutId); ++count;
+        a_vm->RegisterFunction("StorylineOtherMemory", SCRIPT_NAME, StorylineOtherMemory); ++count;
+        a_vm->RegisterFunction("StorylineOfferedGold", SCRIPT_NAME, StorylineOfferedGold); ++count;
         a_vm->RegisterFunction("LivingWorldTrack", SCRIPT_NAME, LivingWorldTrack); ++count;
         a_vm->RegisterFunction("LivingWorldTakeOrder", SCRIPT_NAME, LivingWorldTakeOrder); ++count;
         a_vm->RegisterFunction("LivingWorldOrderKind", SCRIPT_NAME, LivingWorldOrderKind); ++count;
@@ -2304,6 +2317,8 @@ namespace IntelEngine::Papyrus {
         if (f == "kind") return static_cast<std::int32_t>(s->kind);
         if (f == "request") return static_cast<std::int32_t>(s->request);
         if (f == "importance") return s->importance;
+        if (f == "comes") return (s->changes & Storylines::Changed::ComesAlong) ? 1 : 0;
+        if (f == "replied") return s->reply.empty() ? 0 : 1;
         return -1;
     }
 
@@ -2384,6 +2399,49 @@ namespace IntelEngine::Papyrus {
 
     std::int32_t StorylineOpenIdFor(RE::StaticFunctionTag*, RE::Actor* owner) {
         return owner ? static_cast<std::int32_t>(StorylineBridge::GetSingleton()->OpenIdFor(owner->GetFormID())) : 0;
+    }
+
+    // 4.0 branches from conversation: the one who asked changes it, the one it is about answers.
+    bool StorylineCallOff(RE::StaticFunctionTag*, std::int32_t id, RE::BSFixedString note) {
+        if (id <= 0) return false;
+        return StorylineBridge::GetSingleton()->CallOff(static_cast<std::uint32_t>(id), note.c_str() ? note.c_str() : "");
+    }
+
+    /** change: 1 more time, 2 hurry, 3 raise the reward (gold = the sum named), 4 a new person, place or item.
+     *  Returns "" when changed, else why not. */
+    RE::BSFixedString StorylineAmend(RE::StaticFunctionTag*, std::int32_t id, std::int32_t change, RE::Actor* other,
+                                     RE::BGSLocation* place, RE::TESObjectREFR* target, RE::TESForm* item, std::int32_t gold,
+                                     RE::BSFixedString note) {
+        if (id <= 0 || change < 1 || change > static_cast<int>(Storylines::Change::NewSubject)) return "unknown change";
+        Storylines::Book::Amendment a;
+        a.change = static_cast<Storylines::Change>(change);
+        a.other = other ? other->GetFormID() : 0;
+        a.place = place ? place->GetFormID() : 0;
+        a.target = target ? target->GetFormID() : 0;
+        a.item = item ? item->GetFormID() : 0;
+        a.gold = gold;
+        a.note = note.c_str() ? note.c_str() : "";
+        return StorylineBridge::GetSingleton()->Amend(static_cast<std::uint32_t>(id), a).c_str();
+    }
+
+    RE::BSFixedString StorylineReply(RE::StaticFunctionTag*, std::int32_t id, RE::Actor* speaker, RE::BSFixedString reply,
+                                     bool comesAlong) {
+        if (id <= 0 || !speaker) return "nobody";
+        return StorylineBridge::GetSingleton()
+            ->Reply(static_cast<std::uint32_t>(id), speaker->GetFormID(), reply.c_str() ? reply.c_str() : "", comesAlong)
+            .c_str();
+    }
+
+    std::int32_t StorylineAboutId(RE::StaticFunctionTag*, RE::Actor* person) {
+        return person ? static_cast<std::int32_t>(StorylineBridge::GetSingleton()->AboutId(person->GetFormID())) : 0;
+    }
+
+    RE::BSFixedString StorylineOtherMemory(RE::StaticFunctionTag*, std::int32_t id) {
+        return StorylineBridge::GetSingleton()->OtherMemoryFor(static_cast<std::uint32_t>(id)).c_str();
+    }
+
+    std::int32_t StorylineOfferedGold(RE::StaticFunctionTag*, std::int32_t id, std::int32_t playerLevel) {
+        return StorylineBridge::GetSingleton()->OfferedGold(static_cast<std::uint32_t>(id), playerLevel);
     }
 
     // ---------------------------------------------------------------- 4.0 lives of followers left behind

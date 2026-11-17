@@ -30,7 +30,7 @@ namespace IntelEngine {
         std::string Fill(std::string text, const Storylines::Storyline& s) {
             const std::pair<const char*, std::string> parts[] = {
                 {"{player}", PlayerName()}, {"{other}", NameOf(s.other)}, {"{place}", NameOf(s.place)},
-                {"{item}", NameOf(s.item)}};
+                {"{item}", NameOf(s.item)},  {"{owner}", NameOf(s.owner)}, {"{before}", NameOf(s.before)}};
             for (const auto& [key, value] : parts) {
                 for (auto at = text.find(key); at != std::string::npos; at = text.find(key, at + value.size())) {
                     text.replace(at, std::strlen(key), value.empty() ? "someone" : value);
@@ -47,6 +47,41 @@ namespace IntelEngine {
             if (days < 10.0f) return "about a week ago";
             return "some time ago";
         }
+
+        // How long is left until a deadline, in words; empty when none or past.
+        std::string Left(float days) {
+            if (days <= 0.0f) return {};
+            if (days < 0.3f) return "within a few hours";
+            if (days < 0.75f) return "within half a day";
+            if (days < 1.5f) return "within a day";
+            return "within " + std::to_string(static_cast<int>(std::lround(days))) + " days";
+        }
+
+        // What was asked, first person, without how it ended ("I asked {player} to find {other}").
+        std::string Asked(const Storylines::Storyline& s) {
+            Storylines::Storyline asked = s;
+            asked.stage = Storylines::Stage::Done;
+            asked.reply.clear();
+            asked.changes = static_cast<std::uint8_t>(asked.changes & ~Storylines::Changed::ComesAlong);
+            auto text = Storylines::OwnerMemory(asked);
+            const auto cut = text.find(", and ");
+            return cut == std::string::npos ? text : text.substr(0, cut);
+        }
+
+        // The player is right here with this NPC (same space, a few steps away).
+        bool PlayerIsWith(RE::Actor* actor) {
+            auto* player = RE::PlayerCharacter::GetSingleton();
+            if (!player || !actor || !actor->Is3DLoaded()) return false;
+            auto* cell = actor->GetParentCell();
+            auto* playerCell = player->GetParentCell();
+            if (!cell || !playerCell) return false;
+            if (cell->IsInteriorCell() || playerCell->IsInteriorCell()) {
+                if (cell != playerCell) return false;
+            } else if (actor->GetWorldspace() != player->GetWorldspace()) {
+                return false;
+            }
+            return actor->GetPosition().GetDistance(player->GetPosition()) < 1500.0f;
+        }
     }
 
     float StorylineBridge::NowDays() {
@@ -55,6 +90,11 @@ namespace IntelEngine {
     }
 
     std::uint32_t StorylineBridge::Open(Storylines::Storyline storyline, bool urgent) {
+        // The reward is fixed when it is asked (the player's level now), so what the asker says of it stays true.
+        if (storyline.kind == Storylines::Kind::Request && storyline.promised == 0) {
+            auto* player = RE::PlayerCharacter::GetSingleton();
+            storyline.promised = static_cast<std::uint32_t>(Storylines::OfferedGold(storyline, player ? player->GetLevel() : 1));
+        }
         std::scoped_lock lock(m_mutex);
         const auto refusal = m_book.Refusal(storyline.kind, storyline.request, storyline.owner, urgent);
         if (!refusal.empty()) {
@@ -164,29 +204,55 @@ namespace IntelEngine {
         if (!actor) return {};
         const auto id = actor->GetFormID();
         const float now = NowDays();
+        auto* player = RE::PlayerCharacter::GetSingleton();
+        const int level = player ? player->GetLevel() : 1;
+        const bool withPlayer = PlayerIsWith(actor);
+        namespace SL = Storylines;
         std::scoped_lock lock(m_mutex);
-        std::string out;
+        std::string mine;
+        std::string aboutMe;
         for (const auto& s : m_book.all) {
-            if (s.owner != id || s.kind != Storylines::Kind::Request) continue;
-            std::string line;
-            if (Storylines::IsOpen(s)) {
-                const auto memory = [&] {
-                    Storylines::Storyline asked = s;
-                    asked.stage = Storylines::Stage::Done;  // reuse the phrasing of the request itself
-                    auto text = Storylines::OwnerMemory(asked);
-                    const auto cut = text.find(", and ");
-                    return cut == std::string::npos ? text : text.substr(0, cut);
-                }();
-                line = Fill(memory, s) + " (" + Ago(now - s.created) + "). ";
-                line += s.stage == Storylines::Stage::ReturnTo ? Fill("{player} has done it and owes me a visit to say so.", s)
-                                                               : "It is not done yet.";
-            } else if (now - s.stageSince < 30.0f) {
-                line = Fill(Storylines::OwnerMemory(s), s) + " (" + Ago(now - s.stageSince) + ")";
+            if (s.kind != SL::Kind::Request) continue;
+            if (s.owner == id) {
+                std::string line;
+                if (SL::IsOpen(s)) {
+                    line = Fill(Asked(s), s) + " (" + Ago(now - s.created) + "). ";
+                    line += s.stage == SL::Stage::ReturnTo ? Fill("{player} has done it and owes me a visit to say so.", s)
+                                                           : "It is not done yet.";
+                    if (const auto left = s.deadline > 0.0f ? Left(s.deadline - now) : std::string(); !left.empty()) {
+                        line += (s.changes & SL::Changed::Hurried) ? " It has become urgent: I need it " + left + "."
+                                                                   : " I need it " + left + ".";
+                    }
+                    // The reward is fixed, so what the asker says of it is what is paid.
+                    line += " I offered " + std::to_string(SL::OfferedGold(s, level)) + " gold for it" +
+                            ((s.changes & SL::Changed::Raised) ? ", more than at first." : ".");
+                    if (!s.note.empty()) line += " Why I changed it: " + s.note + ".";
+                } else if (now - s.stageSince < 30.0f) {
+                    line = Fill(SL::OwnerMemory(s), s) + " (" + Ago(now - s.stageSince) + ")";
+                }
+                if (!line.empty()) mine += "- " + line + "\n";
+            } else if (s.other == id && (s.request == SL::Request::FindPerson || s.request == SL::Request::DeliverWord)) {
+                // The one it is about: what they answered, or (while the player is with them) that they may answer.
+                std::string line;
+                if (const auto memory = SL::OtherMemory(s); !memory.empty()) {
+                    if (SL::IsOpen(s) || now - s.stageSince < 30.0f) line = Fill(memory, s) + " (" + Ago(now - s.stageSince) + ")";
+                } else if (SL::IsOpen(s) && (s.stage == SL::Stage::ReturnTo || withPlayer)) {
+                    line = s.request == SL::Request::FindPerson ? "{owner} asked {player} to find me (" : "{owner} asked {player} to speak with me (";
+                    line += Ago(now - s.created) + ")";
+                    line += s.stage == SL::Stage::ReturnTo && !withPlayer ? ", and {player} did." : "; {player} is here now.";
+                    if (withPlayer) {
+                        line += " I know of it only once {player} says so. I may send {owner} an answer through {player}, or go "
+                                "along with {player} to see {owner}.";
+                    }
+                    line = Fill(line, s);
+                }
+                if (!line.empty()) aboutMe += "- " + line + "\n";
             }
-            if (!line.empty()) out += "- " + line + "\n";
         }
-        if (out.empty()) return {};
-        return "## What I asked of " + PlayerName() + "\n" + out;
+        std::string out;
+        if (!mine.empty()) out += "## What I asked of " + PlayerName() + "\n" + mine;
+        if (!aboutMe.empty()) out += "## Errands about me\n" + aboutMe;
+        return out;
     }
 
     std::string StorylineBridge::BusinessLine(RE::FormID owner) const {
@@ -237,6 +303,66 @@ namespace IntelEngine {
         return text.empty() ? text : Fill(text, *s);
     }
 
+    bool StorylineBridge::CallOff(std::uint32_t id, const std::string& note) {
+        std::scoped_lock lock(m_mutex);
+        const bool done = m_book.CallOff(id, note, NowDays());
+        logger::info("Storylines: #{} {} ({})", id, done ? "called off by the one who asked" : "could not be called off", note);
+        return done;
+    }
+
+    std::string StorylineBridge::Amend(std::uint32_t id, Storylines::Book::Amendment amendment) {
+        auto* player = RE::PlayerCharacter::GetSingleton();
+        const int level = player ? player->GetLevel() : 1;
+        std::scoped_lock lock(m_mutex);
+        if (const auto* s = m_book.Find(id)) amendment.offered = Storylines::OfferedGold(*s, level);
+        auto why = m_book.Amend(id, amendment, NowDays());
+        if (why.empty()) {
+            const auto* s = m_book.Find(id);
+            logger::info("Storylines: #{} changed ({}): until day {:.2f}, {} gold, other {:08X}, item {:08X}, target {:08X}; {}", id,
+                         static_cast<int>(amendment.change), s->deadline, Storylines::OfferedGold(*s, level), s->other, s->item,
+                         s->target, s->note);
+        } else {
+            logger::info("Storylines: #{} not changed ({}): {}", id, static_cast<int>(amendment.change), why);
+        }
+        return why;
+    }
+
+    std::string StorylineBridge::Reply(std::uint32_t id, RE::FormID speaker, const std::string& text, bool comesAlong) {
+        std::scoped_lock lock(m_mutex);
+        auto why = m_book.Reply(id, speaker, text, comesAlong, NowDays());
+        logger::info("Storylines: #{} answer from {:08X}{}: {}", id, speaker, comesAlong ? " (comes along)" : "",
+                     why.empty() ? text : "refused, " + why);
+        return why;
+    }
+
+    std::uint32_t StorylineBridge::AboutId(RE::FormID person) const {
+        std::scoped_lock lock(m_mutex);
+        return m_book.AboutId(person);
+    }
+
+    std::string StorylineBridge::AnswerPending(RE::Actor* actor) const {
+        if (!actor || !PlayerIsWith(actor)) return {};
+        std::scoped_lock lock(m_mutex);
+        const auto id = m_book.AboutId(actor->GetFormID());
+        const auto* s = id ? m_book.Find(id) : nullptr;
+        if (!s || !s->reply.empty() || (s->changes & Storylines::Changed::ComesAlong)) return {};
+        return std::to_string(id);
+    }
+
+    std::string StorylineBridge::OtherMemoryFor(std::uint32_t id) const {
+        std::scoped_lock lock(m_mutex);
+        const auto* s = m_book.Find(id);
+        if (!s) return {};
+        const auto text = Storylines::OtherMemory(*s);
+        return text.empty() ? text : Fill(text, *s);
+    }
+
+    int StorylineBridge::OfferedGold(std::uint32_t id, int playerLevel) const {
+        std::scoped_lock lock(m_mutex);
+        const auto* s = m_book.Find(id);
+        return s ? Storylines::OfferedGold(*s, playerLevel) : 0;
+    }
+
     void StorylineBridge::Save(SKSE::SerializationInterface* intfc) {
         std::vector<std::uint8_t> bytes;
         {
@@ -251,7 +377,7 @@ namespace IntelEngine {
     }
 
     void StorylineBridge::Load(SKSE::SerializationInterface* intfc, std::uint32_t version, std::uint32_t length) {
-        if (version != Storylines::kRecordVersion || length > (1u << 20)) {
+        if (version < 1 || version > Storylines::kRecordVersion || length > (1u << 20)) {
             logger::warn("Storylines: skipping a co-save record of version {} ({} bytes)", version, length);
             return;
         }
@@ -261,7 +387,7 @@ namespace IntelEngine {
             return;
         }
         Storylines::Book book;
-        if (!Storylines::Deserialize(bytes, book)) {
+        if (!Storylines::Deserialize(bytes, book, version)) {
             logger::warn("Storylines: the co-save record is damaged; starting without storylines");
             return;
         }
@@ -281,6 +407,7 @@ namespace IntelEngine {
             resolve(s.place);
             resolve(s.target);
             resolve(s.item);
+            resolve(s.before);
             return false;
         });
         std::scoped_lock lock(m_mutex);
