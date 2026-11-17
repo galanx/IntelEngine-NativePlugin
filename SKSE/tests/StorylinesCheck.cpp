@@ -3,6 +3,7 @@
 #include "Storylines.h"
 
 #include <iostream>
+#include <string>
 #include <stdexcept>
 
 using namespace IntelEngine::Storylines;
@@ -59,6 +60,7 @@ static void Meetings() {
     Require(At(book, kept, "kept").slot == 0, "a freed slot is used again");
     Require(book.Apply(kept, Event::Met, 12.0f) && At(book, kept, "kept").stage == Stage::Done, "a kept meeting is done");
     Require(OwnerMemory(At(book, kept, "kept")) == "I met {player} at {place} as we had agreed.", "and remembered");
+    Require(PublicDeed(At(book, kept, "kept")).empty(), "a meeting is private: no deed people hear of");
     const auto noShow = book.Open(Meeting(3, 300, 30.0f), 12.0f);
     Require(book.Apply(noShow, Event::NoShow, 12.5f) && At(book, noShow, "noShow").stage == Stage::Ignored,
             "the meeting system says the player never came: ignored, deadline or not");
@@ -157,8 +159,30 @@ static void SaveData() {
     Require(!Deserialize(damaged, untouched), "a damaged kind is refused");
 }
 
+static void Deeds() {
+    Storyline s;
+    s.kind = Kind::Request;
+    s.request = Request::BringItem;
+    s.owner = 1;
+    s.item = 5;
+    s.stage = Stage::Open;
+    Require(PublicDeed(s).empty(), "nothing is heard of while it is open");
+    s.stage = Stage::Done;
+    Require(PublicDeed(s) == "{owner} asked {player} to bring {them} {item}, and {player} did it.", "a deed done");
+    s.stage = Stage::Declined;
+    Require(PublicDeed(s).find("refused") != std::string::npos, "a request turned down");
+    s.stage = Stage::Ignored;
+    Require(PublicDeed(s).find("never did") != std::string::npos, "a request left undone");
+    s.request = Request::Rescue;
+    s.other = 7;
+    s.stage = Stage::Failed;
+    Require(PublicDeed(s).find("{other} is dead") != std::string::npos, "a rescue that came too late");
+    Require(PublicDeed(s).find(" I ") == std::string::npos, "third person, never the asker's own words");
+}
+
 int main() {
     try {
+        Deeds();
         Meetings();
         Requests();
         Variety();

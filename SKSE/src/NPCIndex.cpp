@@ -1099,6 +1099,12 @@ namespace IntelEngine {
             if (verbose) logger::debug("[StoryDM] Rejected '{}': disabled", displayName);
             return false;
         }
+        // 4.0: a scene holds them (a bard performing, a quest's conversation): no package moves them until it ends,
+        // so a moment sent with them stalls where the player can see it.
+        if (actor->GetCurrentScene()) {
+            if (verbose) logger::debug("[StoryDM] Rejected '{}': in a scene", displayName);
+            return false;
+        }
         if (tracker && (tracker->HasActiveTask(actor) || tracker->IsOnCooldown(actor))) {
             if (verbose) logger::debug("[StoryDM] Rejected '{}': active task or cooldown", displayName);
             return false;
@@ -1173,6 +1179,20 @@ namespace IntelEngine {
         if (!checkPolicy(npcIdx->GetPlayerHomePolicy(), cellAnalyzer->IsPlayerInOwnHome(), "player home")) return false;
 
         return true;
+    }
+
+    bool NPCIndex::IsPleaPlace(RE::Actor* player) {
+        auto* location = player ? player->GetCurrentLocation() : nullptr;
+        if (!location || location->HasKeywordString("LocTypePlayerHouse") || LivingWorldBridge::IsDungeon(location)) return false;
+        if (CellAnalyzer::GetSingleton()->IsPlayerInDangerousLocation()) return false;
+        if (location->HasKeywordString("LocTypeInn")) return true;
+        for (auto* loc = location; loc; loc = loc->parentLoc) {
+            if (loc->HasKeywordString("LocTypeCity") || loc->HasKeywordString("LocTypeTown") ||
+                loc->HasKeywordString("LocTypeSettlement")) {
+                return true;
+            }
+        }
+        return false;
     }
 
     bool NPCIndex::IsEligibleStoryCandidate(RE::Actor* actor, RE::Actor* player,
@@ -2308,11 +2328,42 @@ namespace IntelEngine {
                 locationMatesAdded, poolLocations.size());
         }
 
+        // Pass 4 (4.0): ordinary people right here with the player, in a town or an inn, for a public plea: they cry
+        // out for help in front of everyone and then turn to the player (a quest only). Not in a dungeon, a dangerous
+        // place or the player's home; never a follower, a guard or anyone a running quest holds.
+        std::unordered_set<RE::FormID> hereIds;
+        if (!LivingWorldBridge::GetSingleton()->IsClassic() && playerCell && NPCIndex::IsPleaPlace(player)) {
+            std::unordered_set<RE::FormID> stagedIds;
+            for (auto& c : staged) stagedIds.insert(c.actor->GetFormID());
+            std::vector<RE::Actor*> here;
+            ProcessUtils::ForEachLoadedActor([&](RE::Actor* actor) {
+                if (!actor || actor == player || stagedIds.count(actor->GetFormID())) return false;
+                if (actor->GetParentCell() != playerCell || !actor->Is3DLoaded()) return false;
+                if (actor->IsPlayerTeammate() || actor->IsInCombat() || actor->IsHostileToActor(player)) return false;
+                if (!PassesCommonEligibility(actor, player, tracker, false)) return false;
+                if (NPCIndex::ClassifyNPCArchetype(actor) != "CIVILIAN") return false;
+                here.push_back(actor);
+                return false;
+            });
+            static thread_local std::mt19937 hereRng(std::random_device{}());
+            std::shuffle(here.begin(), here.end(), hereRng);
+            constexpr std::size_t MAX_HERE = 2;
+            for (std::size_t i = 0; i < here.size() && i < MAX_HERE; ++i) {
+                staged.push_back({here[i], here[i]->GetFormID(), 0.f, false});
+                hereIds.insert(here[i]->GetFormID());
+                logger::info("[StoryDM Pass4] ACCEPTED-here: '{}' (a public plea)", here[i]->GetDisplayFullName());
+            }
+        }
+
         // Convert staged to value snapshots
         snap.candidates.reserve(staged.size());
         for (auto& s : staged) {
             StoryDMActorSnapshot a;
             FillStoryDMActorSnapshot(a, s.actor, s.dbFormId, s.dbScore, s.fromMemoryDB);
+            if (hereIds.count(a.formId)) {
+                a.hereWithPlayer = true;
+                a.eligibleTypes = "quest";
+            }
             snap.candidates.push_back(std::move(a));
         }
         return snap;
@@ -2426,9 +2477,11 @@ namespace IntelEngine {
         // Split: top maxCandidates ranked + up to 3 random encounters
         std::vector<ScoredCandidate> rankedPool;
         std::vector<ScoredCandidate> randomPool;
+        std::vector<ScoredCandidate> herePool;  // 4.0: people right here, for a public plea (at most 2, never trimmed)
         for (auto& s : scored) {
-            if (s.a->fromMemoryDB) rankedPool.push_back(s);
-            else                   randomPool.push_back(s);
+            if (s.a->hereWithPlayer)    herePool.push_back(s);
+            else if (s.a->fromMemoryDB) rankedPool.push_back(s);
+            else                        randomPool.push_back(s);
         }
         // 4.0: the director has already ranked who matters, so the prompt carries fewer, better candidates.
         const int rankedLimit = living ? std::min(snap.maxCandidates, 4) : snap.maxCandidates;
@@ -2438,6 +2491,7 @@ namespace IntelEngine {
 
         std::vector<ScoredCandidate> finalPool = std::move(rankedPool);
         for (auto& s : randomPool) finalPool.push_back(s);
+        for (auto& s : herePool) finalPool.push_back(s);
 
         if (finalPool.empty()) {
             logger::debug("[StoryDM async] No eligible candidates after scoring");
@@ -2655,6 +2709,9 @@ namespace IntelEngine {
             md += " [";    md += a->archetype;  md += ", ";  md += gender;  md += "] - ";  md += a->location;
             md += " (";    md += uuid;          md += ")\n";
             md += "Eligible: ";   md += a->eligibleTypes;  md += "\n";
+            if (a->hereWithPlayer) {
+                md += "Here: in the same place as the player right now; a quest from them is a public plea\n";
+            }
             md += "Hold: ";       md += a->npcHold;        md += "\n";
             // 4.0: what is already going on between them and the player, so a new beat continues it rather than
             // asking the same thing again.

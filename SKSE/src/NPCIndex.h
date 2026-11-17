@@ -184,7 +184,10 @@ namespace IntelEngine {
          * Relaxed eligibility filter for MemoryDB-ranked candidates.
          * Allows unloaded NPCs (no GetParentCell() requirement).
          * Safe checks only: dead, disabled, active task, cooldown, keyword.
-         */
+         */
+        /** 4.0: a place where someone may cry out for help in front of everyone (a town, a city, a settlement, an
+         *  inn; not a dungeon, a dangerous place or the player's home). */
+        static bool IsPleaPlace(RE::Actor* player);
         static bool IsEligibleStoryCandidateRelaxed(RE::Actor* actor, RE::Actor* player,
             SlotTracker* tracker);
 
@@ -489,6 +492,7 @@ namespace IntelEngine {
             float       posY          = 0.f;
             float       dbScore       = 0.f;   // initial MemoryDB ranking score (0 for randoms/locmates)
             bool        fromMemoryDB  = false;
+            bool        hereWithPlayer = false;  // 4.0: right here with the player: a quest only, as a public plea
         };
 
         /** Outcome of a Story DM dispatch attempt. Recorded entries start as

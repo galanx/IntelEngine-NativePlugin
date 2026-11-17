@@ -1,6 +1,10 @@
 #include "StorylineBridge.h"
 
+#include "LivingWorldBridge.h"
+#include "SkyrimNetAPI.h"
+
 #include <cmath>
+#include <thread>
 
 namespace IntelEngine {
 
@@ -73,13 +77,51 @@ namespace IntelEngine {
     }
 
     bool StorylineBridge::Apply(std::uint32_t id, Storylines::Event event) {
-        std::scoped_lock lock(m_mutex);
-        const bool changed = m_book.Apply(id, event, NowDays());
-        if (changed) {
-            logger::info("Storylines: #{} is now at stage {} (event {})", id, static_cast<int>(m_book.Find(id)->stage),
-                         static_cast<int>(event));
+        std::string deed;
+        std::string hold;
+        std::string owner;
+        {
+            std::scoped_lock lock(m_mutex);
+            const bool changed = m_book.Apply(id, event, NowDays());
+            if (!changed) return false;
+            const auto* s = m_book.Find(id);
+            logger::info("Storylines: #{} is now at stage {} (event {})", id, static_cast<int>(s->stage), static_cast<int>(event));
+            // 4.0 consequences: how a request ended is heard of in the asker's hold. People bring it up when the talk
+            // is about the player or the asker (semantic retrieval only), so it costs nothing in other prompts.
+            const auto text = Storylines::PublicDeed(*s);
+            if (!text.empty()) {
+                owner = NameOf(s->owner);
+                auto* ownerActor = s->owner ? RE::TESForm::LookupByID<RE::Actor>(s->owner) : nullptr;
+                hold = LivingWorldBridge::HoldName(ownerActor);
+                deed = Fill(text, *s);
+                for (auto at = deed.find("{owner}"); at != std::string::npos; at = deed.find("{owner}", at + owner.size())) {
+                    deed.replace(at, 7, owner.empty() ? "someone" : owner);
+                }
+                auto* base = ownerActor ? ownerActor->GetActorBase() : nullptr;
+                const std::string them = !base ? "them" : base->GetSex() == RE::SEX::kFemale ? "her" : "him";
+                for (auto at = deed.find("{them}"); at != std::string::npos; at = deed.find("{them}", at + them.size())) {
+                    deed.replace(at, 6, them);
+                }
+            }
         }
-        return changed;
+        if (!deed.empty() && !hold.empty() && SkyrimNetAPI::AddWorldKnowledge) {
+            auto escape = [](const std::string& text) {
+                std::string out;
+                for (const char c : text) {
+                    if (c == '"' || c == '\\') out += '\\';
+                    out += c;
+                }
+                return out;
+            };
+            const std::string condition = "get_intelengine_hold(actorUUID) == \"" + escape(hold) + "\" and actorName != \"" +
+                                          escape(owner) + "\"";
+            const std::string label = "IntelEngine deed: " + owner;
+            std::thread([deed, condition, label]() {
+                const int knowledge = SkyrimNetAPI::AddWorldKnowledge(deed.c_str(), condition.c_str(), false, 0.45f, label.c_str());
+                logger::info("Storylines: heard in the hold ({}): {}", knowledge, deed);
+            }).detach();
+        }
+        return true;
     }
 
     std::vector<std::uint32_t> StorylineBridge::OpenIds() const {
