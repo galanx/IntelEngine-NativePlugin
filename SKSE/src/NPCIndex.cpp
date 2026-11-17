@@ -6,6 +6,7 @@
 
 #include "NPCIndex.h"
 #include "LivingWorldBridge.h"
+#include "StorylineBridge.h"
 #include "Utf8Truncate.h"
 #include <algorithm>
 #include "CellAnalyzer.h"
@@ -2648,6 +2649,11 @@ namespace IntelEngine {
             md += " (";    md += uuid;          md += ")\n";
             md += "Eligible: ";   md += a->eligibleTypes;  md += "\n";
             md += "Hold: ";       md += a->npcHold;        md += "\n";
+            // 4.0: what is already going on between them and the player, so a new beat continues it rather than
+            // asking the same thing again.
+            if (const auto business = StorylineBridge::GetSingleton()->BusinessLine(a->formId); !business.empty()) {
+                md += "Unfinished business with the player: ";  md += business;  md += "\n";
+            }
             md += "Distance: ";   md += distStr;           md += "\n";
             md += "Knows player: ";  md += familiarityStr; md += "\n";
             md += "Last met player: ";  md += lastInteractionStr;  md += "\n";
