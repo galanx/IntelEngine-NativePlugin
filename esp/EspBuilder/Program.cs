@@ -27,7 +27,7 @@ public static class Program
         "Go to <Alias=ThreadPlace{0}>",                              // 4 a place
         "Return to <Alias=ThreadNpc{0}>",                            // 5 back to whoever asked
         "Confront <Alias=ThreadNpc{0}>",                             // 6 a foe
-        "Recover <Alias=ThreadItem{0}> for <Alias=ThreadNpc{0}>",    // 7 an item
+        "Bring <Alias=ThreadItem{0}> to <Alias=ThreadNpc{0}>",       // 7 an item
         "Wait for <Alias=ThreadNpc{0}> at <Alias=ThreadPlace{0}>",   // 8 someone coming to you
         "Escort <Alias=ThreadNpc{0}> to <Alias=ThreadPlace{0}>",     // 9 bringing someone somewhere
     };
@@ -108,9 +108,10 @@ public static class Program
             ID = id++,
             Name = name,
             Type = type,
+            // Stores Text: without it the journal shows "[...]" in place of the alias's name.
             Flags = type == QuestAlias.TypeEnum.Reference
-                ? QuestAlias.Flag.Optional | QuestAlias.Flag.AllowReuseInQuest | QuestAlias.Flag.AllowDisabled
-                : QuestAlias.Flag.Optional | QuestAlias.Flag.AllowReuseInQuest,
+                ? QuestAlias.Flag.Optional | QuestAlias.Flag.AllowReuseInQuest | QuestAlias.Flag.AllowDisabled | QuestAlias.Flag.StoresText
+                : QuestAlias.Flag.Optional | QuestAlias.Flag.AllowReuseInQuest | QuestAlias.Flag.StoresText,
         };
         quest.Aliases.Add(alias);
         return alias;

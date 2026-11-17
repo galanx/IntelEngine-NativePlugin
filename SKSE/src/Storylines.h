@@ -290,7 +290,7 @@ namespace IntelEngine::Storylines {
                 const char* what = "";
                 switch (s.request) {
                     case Request::FindPerson: what = "find {other}"; break;
-                    case Request::BringItem: what = "recover {item}"; break;
+                    case Request::BringItem: what = "bring me {item}"; break;
                     case Request::DealWithThreat: what = s.other ? "deal with {other}" : "deal with the trouble at {place}"; break;
                     case Request::EscortMe: what = "take me to {place}"; break;
                     case Request::DeliverWord: what = "speak with {other} for me"; break;

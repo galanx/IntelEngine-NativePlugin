@@ -60,9 +60,9 @@ namespace IntelEngine {
         const auto id = m_book.Open(storyline, NowDays(), urgent);
         if (id) {
             const auto* s = m_book.Find(id);
-            logger::info("Storylines: #{} opened (kind {}, request {}) for {:08X}, slot {}, until day {:.2f}", id,
-                         static_cast<int>(s->kind), static_cast<int>(s->request), s->owner, static_cast<int>(s->slot),
-                         s->deadline);
+            logger::info("Storylines: #{} opened (kind {}, request {}) for {:08X}, slot {}, until day {:.2f}; other {:08X}, place {:08X}, "
+                         "target {:08X}, item {:08X} '{}'", id, static_cast<int>(s->kind), static_cast<int>(s->request), s->owner,
+                         static_cast<int>(s->slot), s->deadline, s->other, s->place, s->target, s->item, NameOf(s->item));
         }
         return id;
     }
@@ -145,6 +145,46 @@ namespace IntelEngine {
         }
         if (out.empty()) return {};
         return "## What I asked of " + PlayerName() + "\n" + out;
+    }
+
+    std::string StorylineBridge::BusinessLine(RE::FormID owner) const {
+        const float now = NowDays();
+        std::scoped_lock lock(m_mutex);
+        const Storylines::Storyline* pick = nullptr;
+        for (const auto& s : m_book.all) {
+            if (s.owner != owner) continue;
+            if (Storylines::IsOpen(s)) {
+                pick = &s;
+                break;
+            }
+            if (Storylines::IsUnhappy(s) && !s.followedUp && (!pick || s.stageSince > pick->stageSince)) pick = &s;
+        }
+        if (!pick) return {};
+        std::string text;
+        if (Storylines::IsOpen(*pick)) {
+            Storylines::Storyline asked = *pick;
+            asked.stage = Storylines::Stage::Done;
+            text = Storylines::OwnerMemory(asked);
+            const auto cut = text.find(", and ");
+            if (cut != std::string::npos) text = text.substr(0, cut);
+            if (!text.empty()) {
+                text += pick->stage == Storylines::Stage::ReturnTo ? "; {player} has done it but not come back yet"
+                                                                 : "; still open";
+            }
+        } else {
+            text = Storylines::OwnerMemory(*pick);
+        }
+        if (text.empty()) return {};
+        // First person to third: the line is about the candidate.
+        const std::pair<const char*, const char*> swaps[] = {{"I asked ", "asked "}, {"I waited ", "waited "},
+                                                            {"I met ", "met "},     {"bring me ", "bring them "},
+                                                            {"take me ", "take them "}, {"for me", "for them"},
+                                                            {"meet me ", "meet them "}};
+        for (const auto& [from, to] : swaps) {
+            const std::string f = from, t = to;
+            for (auto at = text.find(f); at != std::string::npos; at = text.find(f, at + t.size())) text.replace(at, f.size(), t);
+        }
+        return Fill(text, *pick) + " (" + Ago(now - (Storylines::IsOpen(*pick) ? pick->created : pick->stageSince)) + ")";
     }
 
     std::string StorylineBridge::MemoryFor(std::uint32_t id) const {

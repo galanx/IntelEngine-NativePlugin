@@ -34,6 +34,10 @@ namespace IntelEngine {
         /** What this NPC asked of the player, for their bio (SkyrimNet decorator). Empty when nothing. */
         std::string DescribeFor(RE::Actor* actor) const;
 
+        /** One line for the dungeon master's candidate list: the open storyline or the latest unhappy ending not yet
+         *  followed up, in the third person. Empty when there is none. */
+        std::string BusinessLine(RE::FormID owner) const;
+
         /** The one who asked's first-person memory of how it ended, names filled in. Empty when none. */
         std::string MemoryFor(std::uint32_t id) const;
 

@@ -90,6 +90,7 @@ namespace IntelEngine::Papyrus {
     std::int32_t StorylineReward(RE::StaticFunctionTag*, std::int32_t, std::int32_t);
     std::int32_t StorylineOpenIdFor(RE::StaticFunctionTag*, RE::Actor*);
     RE::TESForm* ResolveItemByName(RE::StaticFunctionTag*, RE::BSFixedString);
+    RE::TESForm* FindItemNamedExactly(RE::StaticFunctionTag*, RE::Actor*, RE::BSFixedString);
     void MarkLastDispatchFailed(RE::StaticFunctionTag*, RE::BSFixedString);
     void WarmStoryTypeCountsFromCSV(RE::StaticFunctionTag*, RE::BSFixedString);
     void SetRecentGossipContext(RE::StaticFunctionTag*, RE::BSFixedString);
@@ -455,6 +456,7 @@ namespace IntelEngine::Papyrus {
         a_vm->RegisterFunction("StorylineReward", SCRIPT_NAME, StorylineReward); ++count;
         a_vm->RegisterFunction("StorylineOpenIdFor", SCRIPT_NAME, StorylineOpenIdFor); ++count;
         a_vm->RegisterFunction("ResolveItemByName", SCRIPT_NAME, ResolveItemByName); ++count;
+        a_vm->RegisterFunction("FindItemNamedExactly", SCRIPT_NAME, FindItemNamedExactly); ++count;
         a_vm->RegisterFunction("MarkLastDispatchFailed", SCRIPT_NAME, MarkLastDispatchFailed); ++count;
         a_vm->RegisterFunction("WarmStoryTypeCountsFromCSV", SCRIPT_NAME, WarmStoryTypeCountsFromCSV); ++count;
         a_vm->RegisterFunction("SetRecentGossipContext", SCRIPT_NAME, SetRecentGossipContext); ++count;
@@ -2312,9 +2314,45 @@ namespace IntelEngine::Papyrus {
         return s ? Storylines::RewardGold(*s, playerLevel) : 0;
     }
 
+    /** The base form of an item with exactly this name (any case), searched in every kind of item a person can
+     *  carry; the first plugin's wins. No fuzzy match: a storyline must never ask for "Vase" when "Ale" was said
+     *  (the item index has no drinks, and its fuzzy match did exactly that). */
     RE::TESForm* ResolveItemByName(RE::StaticFunctionTag*, RE::BSFixedString itemName) {
         if (!itemName.c_str() || !*itemName.c_str()) return nullptr;
-        return ItemIndex::GetSingleton()->FindByName(itemName.c_str());
+        auto* data = RE::TESDataHandler::GetSingleton();
+        if (!data) return nullptr;
+        const auto wanted = StringUtils::ToLowerStd(itemName.c_str());
+        const auto find = [&wanted](auto& forms) -> RE::TESForm* {
+            for (auto* form : forms) {
+                if (!form) continue;
+                const char* name = form->GetName();
+                if (name && *name && StringUtils::ToLowerStd(name) == wanted) return form;
+            }
+            return nullptr;
+        };
+        RE::TESForm* found = nullptr;
+        if (!found) found = find(data->GetFormArray<RE::AlchemyItem>());
+        if (!found) found = find(data->GetFormArray<RE::IngredientItem>());
+        if (!found) found = find(data->GetFormArray<RE::TESObjectMISC>());
+        if (!found) found = find(data->GetFormArray<RE::TESObjectWEAP>());
+        if (!found) found = find(data->GetFormArray<RE::TESObjectARMO>());
+        if (!found) found = find(data->GetFormArray<RE::TESObjectBOOK>());
+        if (!found) found = find(data->GetFormArray<RE::TESSoulGem>());
+        if (!found) found = find(data->GetFormArray<RE::TESAmmo>());
+        return found;
+    }
+
+    /** An item this actor carries whose name is exactly this one (any case), else None. Two mods' "Ale" both count;
+     *  "Pale Ale" does not. */
+    RE::TESForm* FindItemNamedExactly(RE::StaticFunctionTag*, RE::Actor* actor, RE::BSFixedString itemName) {
+        if (!actor || !itemName.c_str() || !*itemName.c_str()) return nullptr;
+        const auto wanted = StringUtils::ToLowerStd(itemName.c_str());
+        for (const auto& [item, data] : actor->GetInventory()) {
+            if (!item || data.first <= 0) continue;
+            const char* name = item->GetName();
+            if (name && StringUtils::ToLowerStd(name) == wanted) return item;
+        }
+        return nullptr;
     }
 
     std::int32_t StorylineOpenIdFor(RE::StaticFunctionTag*, RE::Actor* owner) {
