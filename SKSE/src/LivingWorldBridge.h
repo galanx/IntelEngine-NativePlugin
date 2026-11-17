@@ -12,6 +12,7 @@
 namespace IntelEngine {
 
     class LivingWorldBridge final : public RE::BSTEventSink<RE::TESActorLocationChangeEvent>,
+                                    public RE::BSTEventSink<RE::BGSActorCellEvent>,
                                     public RE::BSTEventSink<RE::TESSleepStopEvent> {
     public:
         static LivingWorldBridge* GetSingleton() {
@@ -43,6 +44,8 @@ namespace IntelEngine {
 
         RE::BSEventNotifyControl ProcessEvent(const RE::TESActorLocationChangeEvent* event,
                                               RE::BSTEventSource<RE::TESActorLocationChangeEvent>*) override;
+        RE::BSEventNotifyControl ProcessEvent(const RE::BGSActorCellEvent* event,
+                                              RE::BSTEventSource<RE::BGSActorCellEvent>*) override;
         RE::BSEventNotifyControl ProcessEvent(const RE::TESSleepStopEvent* event,
                                               RE::BSTEventSource<RE::TESSleepStopEvent>*) override;
 
@@ -51,13 +54,17 @@ namespace IntelEngine {
 
         LivingWorld::Life& Touch(RE::FormID actor);  // m_mutex held
         void SendSeam(LivingWorld::Seam seam);
+        void OnPlayerLocation(const RE::BGSLocation* location);
         static float NowDays();
 
         mutable std::mutex m_mutex;
         std::vector<LivingWorld::Life> m_lives;
         LivingWorld::DirectorState m_state;
         LivingWorld::Settings m_settings;
+        bool m_settingsKnown = false;
         float m_lastRoadSeamDay = -1.0e6f;
         bool m_registered = false;
+        const RE::BGSLocation* m_lastLocation = nullptr;  // m_mutex held
+        bool m_lastLocationKnown = false;                  // false after a load: the first place is no arrival
     };
 }

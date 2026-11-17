@@ -65,6 +65,10 @@ namespace IntelEngine {
         if (auto* holder = RE::ScriptEventSourceHolder::GetSingleton()) {
             holder->AddEventSink<RE::TESActorLocationChangeEvent>(this);
             holder->AddEventSink<RE::TESSleepStopEvent>(this);
+            // The cell event covers every way the player gets somewhere (doors, fast travel, carriages, coc); the
+            // location event alone did not arrive for coc in the first test. Both lead to OnPlayerLocation, which
+            // only acts when the location really changed.
+            if (auto* player = RE::PlayerCharacter::GetSingleton()) player->AsBGSActorCellEventSource()->AddEventSink(this);
             m_registered = true;
             logger::info("LivingWorld: listening for arrivals and waking up");
         }
@@ -77,7 +81,14 @@ namespace IntelEngine {
 
     void LivingWorldBridge::SetSettings(const LivingWorld::Settings& settings) {
         std::scoped_lock lock(m_mutex);
+        const bool same = m_settingsKnown && m_settings.level == settings.level &&
+                          m_settings.interruptions == settings.interruptions &&
+                          m_settings.questNpcMoves == settings.questNpcMoves && m_settings.pacing == settings.pacing &&
+                          m_settings.waitOrderDays == settings.waitOrderDays &&
+                          m_settings.lifeStartDays == settings.lifeStartDays;
         m_settings = settings;
+        m_settingsKnown = true;
+        if (same) return;
         logger::info("LivingWorld: level {}, interruptions {}, quest NPCs {}, pacing {}, wait {:.0f} days, own life after {:.0f} days",
                      static_cast<int>(settings.level), static_cast<int>(settings.interruptions),
                      static_cast<int>(settings.questNpcMoves), static_cast<int>(settings.pacing), settings.waitOrderDays,
@@ -151,6 +162,8 @@ namespace IntelEngine {
         c.big = IsBig(storyType);
         LivingWorld::Situation at;
         at.now = NowDays();
+        // Bring the budget up to now first, so the time before this moment is not credited again afterwards.
+        LivingWorld::Refill(m_state, m_settings, at.now);
         LivingWorld::Commit(m_state, life, c, at);
         logger::info("LivingWorld: moment {} with {:08X} counted (moments so far {}, budget {:.2f})", storyType, actor,
                      m_state.picks, m_state.budget);
@@ -159,6 +172,7 @@ namespace IntelEngine {
     void LivingWorldBridge::SendSeam(LivingWorld::Seam seam) {
         auto* task = SKSE::GetTaskInterface();
         if (!task) return;
+        logger::info("LivingWorld: seam {} goes to the story engine", static_cast<int>(seam));
         task->AddTask([seam]() {
             auto* source = SKSE::GetModCallbackEventSource();
             if (!source) return;
@@ -171,19 +185,42 @@ namespace IntelEngine {
         });
     }
 
-    RE::BSEventNotifyControl LivingWorldBridge::ProcessEvent(const RE::TESActorLocationChangeEvent* event,
-                                                             RE::BSTEventSource<RE::TESActorLocationChangeEvent>*) {
-        if (!event || !event->actor || !event->actor->IsPlayerRef() || IsClassic()) return RE::BSEventNotifyControl::kContinue;
-        const auto seam = LivingWorld::ClassifySeam(KindOf(event->oldLoc), KindOf(event->newLoc));
-        if (seam == LivingWorld::Seam::InDungeon) return RE::BSEventNotifyControl::kContinue;
+    void LivingWorldBridge::OnPlayerLocation(const RE::BGSLocation* location) {
+        if (IsClassic()) return;
+        const RE::BGSLocation* from = nullptr;
+        {
+            std::scoped_lock lock(m_mutex);
+            if (m_lastLocationKnown && location == m_lastLocation) return;
+            const bool firstAfterLoad = !m_lastLocationKnown;
+            from = m_lastLocation;
+            m_lastLocation = location;
+            m_lastLocationKnown = true;
+            if (firstAfterLoad) return;  // where a save loads is no arrival
+        }
+        const auto seam = LivingWorld::ClassifySeam(KindOf(from), KindOf(location));
+        logger::info("LivingWorld: the player went from '{}' to '{}' (seam {})", from ? from->GetFullName() : "the wilds",
+                     location ? location->GetFullName() : "the wilds", static_cast<int>(seam));
+        if (seam == LivingWorld::Seam::InDungeon) return;
         if (seam == LivingWorld::Seam::OnRoad) {
             // Wandering between named wilderness places: a look at most every two game hours.
             const float now = NowDays();
             std::scoped_lock lock(m_mutex);
-            if (now - m_lastRoadSeamDay < 2.0f / 24.0f) return RE::BSEventNotifyControl::kContinue;
+            if (now - m_lastRoadSeamDay < 2.0f / 24.0f) return;
             m_lastRoadSeamDay = now;
         }
         SendSeam(seam);
+    }
+
+    RE::BSEventNotifyControl LivingWorldBridge::ProcessEvent(const RE::TESActorLocationChangeEvent* event,
+                                                             RE::BSTEventSource<RE::TESActorLocationChangeEvent>*) {
+        if (event && event->actor && event->actor->IsPlayerRef()) OnPlayerLocation(event->newLoc);
+        return RE::BSEventNotifyControl::kContinue;
+    }
+
+    RE::BSEventNotifyControl LivingWorldBridge::ProcessEvent(const RE::BGSActorCellEvent* event,
+                                                             RE::BSTEventSource<RE::BGSActorCellEvent>*) {
+        if (!event || event->flags.get() != RE::BGSActorCellEvent::CellFlag::kEnter) return RE::BSEventNotifyControl::kContinue;
+        if (auto* player = RE::PlayerCharacter::GetSingleton()) OnPlayerLocation(player->GetCurrentLocation());
         return RE::BSEventNotifyControl::kContinue;
     }
 
@@ -253,5 +290,7 @@ namespace IntelEngine {
         m_lives.clear();
         m_state = LivingWorld::DirectorState{};
         m_lastRoadSeamDay = -1.0e6f;
+        m_lastLocation = nullptr;
+        m_lastLocationKnown = false;
     }
 }

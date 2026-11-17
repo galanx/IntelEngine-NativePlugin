@@ -87,6 +87,17 @@ static void PacingRules() {
     Situation dungeon{Seam::InDungeon, 31.0f, false};
     Require(!MayDeliverNow(d, s, dungeon, false, false, 1), "deep in a dungeon only urgent things come");
     Require(MayDeliverNow(d, s, dungeon, true, false, 1), "help can still arrive");
+    // The bridge refills up to the moment before counting it, so the cap applies at the moment and the time
+    // before it is not credited a second time afterwards (1.9 banked, a moment half a day later: 2 - 1, then +0.5).
+    DirectorState banked;
+    banked.budget = 1.9f;
+    banked.budgetDay = 10.0f;
+    Life someone = Person(30, 0.5f, 0.0f);
+    Candidate moment{&someone};
+    Refill(banked, s, 10.5f);
+    Commit(banked, someone, moment, {Seam::EnteredInn, 10.5f, false});
+    Refill(banked, s, 11.0f);
+    Require(banked.budget > 1.49f && banked.budget < 1.51f, "refilled up to the moment, then counted, then refilled again");
     Situation scene{Seam::EnteredInn, 31.0f, true};
     Require(!MayDeliverNow(d, s, scene, false, false, 1), "Only urgent: a bad moment holds ordinary things back");
     Require(MayDeliverNow(d, s, scene, true, false, 1), "Only urgent: urgent things interrupt");
