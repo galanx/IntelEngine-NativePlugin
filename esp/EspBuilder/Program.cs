@@ -37,6 +37,7 @@ public static class Program
         if (args.Length >= 2 && args[0] == "info") return Info(args[1]);
         if (args.Length >= 3 && args[0] == "build") return Build(args[1], args[2]);
         if (args.Length >= 3 && args[0] == "copy") return Copy(args[1], args[2]);
+        if (args.Length >= 3 && args[0] == "package") return DumpPackage(args[1], args[2]);
         Console.Error.WriteLine("usage: info <esp> | build <esp in> <output folder>");
         return 2;
     }
@@ -100,6 +101,28 @@ public static class Program
         SkyrimMod.CreateFromBinary(input, SkyrimRelease.SkyrimSE).WriteToBinary(output);
         return 0;
     }
+
+    // The structure of one package, to copy it right: template, flags, data inputs and their targets.
+    static int DumpPackage(string path, string editorId)
+    {
+        using var mod = SkyrimMod.CreateFromBinaryOverlay(path, SkyrimRelease.SkyrimSE);
+        var package = mod.Packages.First(p => p.EditorID == editorId);
+        Console.WriteLine($"{package.EditorID}: flags={package.Flags} type={package.Type} template={package.PackageTemplate.FormKey} " +
+                          $"interrupt={package.InterruptOverride} preferredSpeed={package.PreferredSpeed}");
+        foreach (var kv in package.Data)
+        {
+            var value = kv.Value;
+            Console.WriteLine($"   data {kv.Key}: {value.GetType().Name} {DescribeData(value)}");
+        }
+        Console.WriteLine($"   procedure tree: {package.ProcedureTree.Count} branches");
+        foreach (var branch in package.ProcedureTree)
+            Console.WriteLine($"     branch {branch.BranchType} procedure={branch.ProcedureType} flags={branch.Flags} inputs=" +
+                              string.Join(",", branch.DataInputIndices));
+        return 0;
+    }
+
+    static string DescribeData(IAPackageDataGetter value) =>
+        string.Join(" ", (value.ToString() ?? "").Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries).Select(l => l.Trim()));
 
     static QuestAlias AddAlias(Quest quest, ref uint id, string name, QuestAlias.TypeEnum type)
     {
