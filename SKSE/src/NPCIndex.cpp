@@ -1120,6 +1120,13 @@ namespace IntelEngine {
             return false;
         }
 
+        // 4.0: the target of an objective the player has open never moves; at "NPCs of running quests may move:
+        // Never" nobody in a running quest is offered (at "only for something important" the dispatch checks the kind).
+        if (!LivingWorldBridge::GetSingleton()->MayOfferForStory(actor)) {
+            if (verbose) logger::debug("[StoryDM] Rejected '{}': held by a running quest", displayName);
+            return false;
+        }
+
         RefreshFactionBlocklist();
         if (IsInBlockedFaction(actor)) {
             if (verbose) logger::debug("[StoryDM] Rejected '{}': blocked faction", displayName);
@@ -2653,6 +2660,15 @@ namespace IntelEngine {
             // asking the same thing again.
             if (const auto business = StorylineBridge::GetSingleton()->BusinessLine(a->formId); !business.empty()) {
                 md += "Unfinished business with the player: ";  md += business;  md += "\n";
+            }
+            // Where their own life stands since the player left them: a moment must start from there.
+            if (const auto life = LivingWorldBridge::GetSingleton()->DirectorLifeLine(a->formId); !life.empty()) {
+                md += "Their own life lately: ";  md += life;  md += "\n";
+            }
+            if (auto* tied = RE::TESForm::LookupByID<RE::Actor>(a->formId)) {
+                if (const auto line = LivingWorldBridge::GetSingleton()->QuestTieLine(tied); !line.empty()) {
+                    md += "Quest: ";  md += line;  md += "\n";
+                }
             }
             md += "Distance: ";   md += distStr;           md += "\n";
             md += "Knows player: ";  md += familiarityStr; md += "\n";

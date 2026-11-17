@@ -390,6 +390,18 @@ namespace IntelEngine {
                             return id ? std::to_string(id) : std::string();
                         });
                     logger::info("{} SkyrimNet decorator: get_intelengine_open_storyline", openRegistered ? "Registered" : "Failed to register");
+                    // A former follower's own life since the player left them (prompt submodule 0203_intel_life).
+                    const bool lifeRegistered = SkyrimNetAPI::RegisterDecorator(
+                        "get_intelengine_life",
+                        "Returns what this NPC has done with their life since the player left them, first person; empty when nothing.",
+                        [](RE::Actor* actor) -> std::string { return LivingWorldBridge::GetSingleton()->OwnLifeLine(actor); });
+                    logger::info("{} SkyrimNet decorator: get_intelengine_life", lifeRegistered ? "Registered" : "Failed to register");
+                    // The hold an NPC is in: who hears a rumor of a former follower (world-knowledge conditions).
+                    const bool holdRegistered = SkyrimNetAPI::RegisterDecorator(
+                        "get_intelengine_hold",
+                        "Returns the name of the hold this NPC is in, empty when none.",
+                        [](RE::Actor* actor) -> std::string { return LivingWorldBridge::HoldName(actor); });
+                    logger::info("{} SkyrimNet decorator: get_intelengine_hold", holdRegistered ? "Registered" : "Failed to register");
                 }
 
                 // Register quest decorator with SkyrimNet (soft dependency — skipped if API unavailable)

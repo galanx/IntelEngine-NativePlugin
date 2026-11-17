@@ -3,6 +3,7 @@
 #include "LivingWorld.h"
 
 #include <iostream>
+#include <string>
 #include <stdexcept>
 #include <vector>
 
@@ -172,11 +173,113 @@ static void Seams() {
     Require(ClassifySeam(home, home) != Seam::CameHome, "moving between rooms at home is not coming home");
 }
 
+static void Lives() {
+    const std::vector<PlaceOption> inns{{100, 1}, {101, 2}}, dungeons{{200, 1}, {201, 2}}, towns{{300, 1}};
+    Life lydia = Person(1, 0.9f, 0.0f, kWasFollower);
+    lydia.parkedSince = 0.0f;
+    int working = 0, adventuring = 0, travelling = 0, home = 0;
+    for (std::uint32_t seed = 0; seed < 400; ++seed) {
+        const auto step = NextStep(lydia, 1, inns, dungeons, towns, {}, 10.0f, seed);
+        Require(step.until >= 11.0f && step.until <= 20.0f, "a step lasts days");
+        if (step.activity == Activity::Working) {
+            ++working;
+            Require(step.place == 100, "work at an inn of her own hold");
+        } else if (step.activity == Activity::Adventuring) {
+            ++adventuring;
+            Require(step.place == 200, "an adventure at a dungeon of her hold");
+        } else if (step.activity == Activity::Travelling) {
+            ++travelling;
+            Require(step.place == 300, "a trip to a real town");
+        } else {
+            ++home;
+            Require(step.place == 0, "home is her own home");
+        }
+    }
+    Require(working > adventuring && adventuring > travelling && travelling > home && home > 0, "work most, home least");
+    const auto elsewhere = NextStep(lydia, 7, inns, dungeons, towns, {}, 10.0f, 0);
+    Require(elsewhere.activity == Activity::Home || elsewhere.place != 0, "a hold without places of a kind uses any");
+
+    lydia.activity = Activity::Working;
+    lydia.place = 100;
+    for (std::uint32_t seed = 0; seed < 400; ++seed) {
+        const auto step = NextStep(lydia, 1, inns, dungeons, towns, {}, 10.0f, seed);
+        Require(step.activity != Activity::Working || step.place != 100, "moving on is never to the same inn");
+    }
+    lydia.activity = Activity::Adventuring;
+    lydia.place = 200;
+    for (std::uint32_t seed = 0; seed < 400; ++seed) {
+        Require(NextStep(lydia, 1, inns, dungeons, towns, {}, 10.0f, seed).activity != Activity::Adventuring,
+                "back from an adventure: never straight into another");
+    }
+    const auto nowhere = NextStep(lydia, 1, {}, {}, {}, {}, 10.0f, 3);
+    Require(nowhere.activity == Activity::Home && nowhere.place == 0, "no places in the load order: home");
+
+    Life uthgerd = Person(2, 0.5f, 0.0f, kWasFollower);
+    uthgerd.parkedSince = 0.0f;
+    uthgerd.activity = Activity::Working;
+    lydia.activity = Activity::Home;
+    lydia.place = 0;
+    const std::vector<Life> others{uthgerd, lydia};
+    int together = 0;
+    for (std::uint32_t seed = 0; seed < 400; ++seed) {
+        const auto step = NextStep(lydia, 1, inns, dungeons, towns, others, 10.0f, seed);
+        if (step.companion != 0) {
+            Require(step.activity == Activity::Adventuring && step.companion == 2, "only an adventure takes a companion, never herself");
+            ++together;
+        }
+    }
+    Require(together > 0, "now and then someone free goes along");
+    for (const std::uint16_t busyFlag : {static_cast<std::uint16_t>(kWithPlayer), static_cast<std::uint16_t>(kQuestBound),
+                                         static_cast<std::uint16_t>(kKeepsShop), static_cast<std::uint16_t>(kQuestTarget)}) {
+        Life busy = uthgerd;
+        busy.flags |= busyFlag;
+        const std::vector<Life> list{busy};
+        for (std::uint32_t seed = 0; seed < 200; ++seed) {
+            Require(NextStep(lydia, 1, inns, dungeons, towns, list, 10.0f, seed).companion == 0,
+                    "nobody bound elsewhere goes along");
+        }
+    }
+
+    Require(std::string(StepMemory(Activity::Working, true, false)).find("{parked}") != std::string::npos,
+            "the first step remembers where they parted");
+    for (const auto activity : {Activity::Working, Activity::Adventuring, Activity::Travelling, Activity::Home}) {
+        Require(std::string(StepMemory(activity, true, false)).starts_with("After {player} and I parted ways at {parked}, "),
+                "every first step remembers where they parted");
+        Require(std::string(StepMemory(activity, false, false)).find("{parked}") == std::string::npos,
+                "later steps are the step alone");
+    }
+    Require(std::string(StepRumor(Activity::Home, false)).empty(), "going home is no rumor");
+    Require(Ago(0.3f) == "today" && Ago(1.5f) == "a day ago" && Ago(5.2f) == "5 days ago" && Ago(20.0f) == "about 3 weeks ago" &&
+                Ago(90.0f) == "about 3 months ago",
+            "how long ago, in words");
+
+    Life life = Person(3, 0.8f, 0.0f, kWasFollower);
+    Require(std::string(OwnLifeLine(life)).empty(), "never left behind: nothing to tell");
+    life.flags |= kWithPlayer;
+    Require(std::string(OwnLifeLine(life)).empty(), "following: nothing to tell");
+    life.flags |= kWaitOrder;
+    life.parkedSince = 2.0f;
+    Require(std::string(OwnLifeLine(life)).find("waiting for {player}") != std::string::npos, "told to wait: they know it");
+    life.flags = kWasFollower;
+    Require(std::string(OwnLifeLine(life)).empty(), "left behind but no step yet: vanilla, nothing to tell");
+    life.steps = 1;
+    life.activity = Activity::Adventuring;
+    life.companion = 2;
+    Require(std::string(OwnLifeLine(life)).find("with {companion}") != std::string::npos, "an adventure names who came");
+    Require(std::string(DirectorLifeLine(life)).find("{player}") != std::string::npos &&
+                std::string(DirectorLifeLine(life)).find("I ") == std::string::npos,
+            "the director's line is third person");
+    Require(OwnLife(life) && !OwnLife(Person(4, 0.1f, 0.0f)), "a life of their own");
+}
+
 static void SaveData() {
     std::vector<Life> lives{Person(1, 0.9f, 10.0f, kWasFollower | kWaitOrder), Person(2, 0.1f, 3.0f)};
     lives[0].activity = Activity::Adventuring;
     lives[0].companion = 2;
     lives[0].parkedSince = 5.0f;
+    lives[0].rumor = 4242;
+    lives[0].steps = 3;
+    lives[0].stepAt = 8.5f;
     DirectorState d;
     d.picks = 7;
     d.lastActor = 2;
@@ -185,7 +288,8 @@ static void SaveData() {
     DirectorState dBack;
     Require(Deserialize(bytes, back, dBack), "round trip");
     Require(back.size() == 2 && back[0].activity == Activity::Adventuring && back[0].companion == 2 &&
-                back[0].parkedSince == 5.0f && back[1].bond == 0.1f && dBack.picks == 7 && dBack.lastActor == 2,
+                back[0].parkedSince == 5.0f && back[0].rumor == 4242 && back[0].steps == 3 && back[0].stepAt == 8.5f &&
+                back[1].bond == 0.1f && dBack.picks == 7 && dBack.lastActor == 2,
             "everything comes back");
     std::vector<Life> untouched{Person(9, 0.5f, 1.0f)};
     DirectorState dUntouched;
@@ -214,6 +318,7 @@ int main() {
         Picking();
         Deliveries();
         Seams();
+        Lives();
         SaveData();
     } catch (const std::exception& e) {
         std::cerr << "LivingWorldCheck FAILED: " << e.what() << "\n";

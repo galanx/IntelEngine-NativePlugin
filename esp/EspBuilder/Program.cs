@@ -14,6 +14,8 @@ namespace IntelEngine.EspBuilder;
 public static class Program
 {
     public const string ThreadQuest = "IntelEngine_Threads";
+    public const string LivesQuest = "IntelEngine_Lives";
+    public const string LifeSandbox = "IntelEngine_LifeSandbox";
     public const int Slots = 6;
 
     // One phrasing per objective of a slot; slot i uses objectives i*10 + k. The script shows the one that fits.
@@ -38,6 +40,7 @@ public static class Program
         if (args.Length >= 3 && args[0] == "build") return Build(args[1], args[2]);
         if (args.Length >= 3 && args[0] == "copy") return Copy(args[1], args[2]);
         if (args.Length >= 3 && args[0] == "package") return DumpPackage(args[1], args[2]);
+        if (args.Length >= 2 && args[0] == "reflect") return Reflect(args[1]);
         Console.Error.WriteLine("usage: info <esp> | build <esp in> <output folder>");
         return 2;
     }
@@ -88,9 +91,82 @@ public static class Program
             ObjectFormat = 2,
             Scripts = { new ScriptEntry { Name = ThreadQuest } },
         };
+        var lifeSandbox = AddLifeSandbox(mod);
+        var lives = AddLivesQuest(mod, lifeSandbox);
         mod.WriteToBinary(output);
         Console.WriteLine($"{ThreadQuest} [{quest.FormKey.ID:X6}]: {quest.Aliases.Count} aliases, {quest.Objectives.Count} objectives -> {output}");
+        Console.WriteLine($"{LifeSandbox} [{lifeSandbox.FormKey.ID:X6}], {LivesQuest} [{lives.FormKey.ID:X6}]");
         return 0;
+    }
+
+    // The package of a former follower's own life: a sandbox around where they are (an inn, a dungeon's entrance, a
+    // town) at a walk. It holds only while they are not the player's teammate, so the moment they rejoin, the follower
+    // framework's packages run again, before the scripts have even taken this one off. "Near self" needs no linked
+    // reference, so it is safe while they are in a cell that is not loaded (a sandbox around a reference in an
+    // unloaded cell crashes the engine).
+    static Package AddLifeSandbox(SkyrimMod mod)
+    {
+        var source = mod.Packages.First(p => p.EditorID == "IntelEngine_SandboxPackage");
+        var package = mod.Packages.FirstOrDefault(p => p.EditorID == LifeSandbox);
+        if (package == null) package = mod.Packages.DuplicateInAsNewRecord(source);
+        else package.DeepCopyIn(source);
+        package.EditorID = LifeSandbox;
+        package.PreferredSpeed = Package.Speed.Walk;
+        var location = package.Data.Values.OfType<PackageDataLocation>().First();
+        location.Location = new LocationTargetRadius
+        {
+            Target = new LocationFallback { Type = LocationTargetRadius.LocationType.NearSelf },
+            Radius = 1000,
+        };
+        package.Conditions.Clear();
+        package.Conditions.Add(new ConditionFloat
+        {
+            CompareOperator = CompareOperator.EqualTo,
+            ComparisonValue = 0,
+            Data = new GetPlayerTeammateConditionData(),
+        });
+        return package;
+    }
+
+    // A quest of its own for the lives script (IntelEngine_Lives.psc), so its update loop is not shared with another
+    // script's: nothing in the journal.
+    static Quest AddLivesQuest(SkyrimMod mod, Package lifeSandbox)
+    {
+        var quest = mod.Quests.FirstOrDefault(q => q.EditorID == LivesQuest);
+        if (quest == null)
+        {
+            quest = mod.Quests.AddNew();
+            quest.EditorID = LivesQuest;
+        }
+        quest.Name = null;
+        quest.Type = Quest.TypeEnum.None;
+        quest.Priority = 10;
+        quest.Flags = Quest.Flag.StartGameEnabled;
+        quest.Aliases.Clear();
+        quest.Objectives.Clear();
+        quest.Stages.Clear();
+        quest.VirtualMachineAdapter = new QuestAdapter
+        {
+            Version = 5,
+            ObjectFormat = 2,
+            Scripts =
+            {
+                new ScriptEntry
+                {
+                    Name = LivesQuest,
+                    Properties =
+                    {
+                        new ScriptObjectProperty
+                        {
+                            Name = "LifeSandbox",
+                            Flags = ScriptProperty.Flag.Edited,
+                            Object = new FormLink<ISkyrimMajorRecordGetter>(lifeSandbox.FormKey),
+                        },
+                    },
+                },
+            },
+        };
+        return quest;
     }
 
     // Read and write the plugin unchanged: shows that rewriting through Mutagen keeps the existing records as they are.
@@ -121,7 +197,23 @@ public static class Program
         return 0;
     }
 
-    static string DescribeData(IAPackageDataGetter value) =>
+    static string DescribeData(IAPackageDataGetter value) => value switch
+    {
+        IPackageDataLocationGetter l => $"{l.Name} target={Target(l.Location.Target)} radius={l.Location.Radius}",
+        IPackageDataBoolGetter b => $"{b.Name}={b.Data}",
+        IPackageDataFloatGetter f => $"{f.Name}={f.Data}",
+        _ => Flatten(value),
+    };
+
+    static string Target(IALocationTargetGetter target) => target switch
+    {
+        ILocationFallbackGetter f => $"fallback {f.Type}",
+        ILocationKeywordGetter k => $"keyword {k.Link.FormKey}",
+        ILocationTargetGetter t => $"reference {t.Link.FormKey}",
+        _ => target.GetType().Name,
+    };
+
+    static string Flatten(IAPackageDataGetter value) =>
         string.Join(" ", (value.ToString() ?? "").Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries).Select(l => l.Trim()));
 
     static QuestAlias AddAlias(Quest quest, ref uint id, string name, QuestAlias.TypeEnum type)
@@ -138,6 +230,22 @@ public static class Program
         };
         quest.Aliases.Add(alias);
         return alias;
+    }
+
+    // The members of a Mutagen type (and the values of its enums), to write the builder against the real API.
+    static int Reflect(string typeName)
+    {
+        if (typeName.StartsWith("~"))
+        {
+            foreach (var t in typeof(Quest).Assembly.GetTypes().Where(t => t.Name.Contains(typeName[1..])).Take(20)) Console.WriteLine(t.FullName);
+            return 0;
+        }
+        var type = typeof(Quest).Assembly.GetTypes().FirstOrDefault(t => t.Name == typeName || t.FullName == typeName);
+        if (type == null) { Console.Error.WriteLine("no such type"); return 1; }
+        if (type.IsEnum) { Console.WriteLine(string.Join(", ", Enum.GetNames(type))); return 0; }
+        foreach (var p in type.GetProperties()) Console.WriteLine($"{p.PropertyType.FullName} {p.Name}");
+        foreach (var n in type.GetNestedTypes()) Console.WriteLine($"nested {n.FullName}" + (n.IsEnum ? ": " + string.Join(", ", Enum.GetNames(n)) : ""));
+        return 0;
     }
 
     static int Info(string path)

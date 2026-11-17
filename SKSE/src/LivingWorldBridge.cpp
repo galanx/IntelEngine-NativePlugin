@@ -26,12 +26,7 @@ namespace IntelEngine {
             if (!location) return kind;
             // Only the place itself counts as a dungeon or an inn; a town is found through the parents too, so the
             // Bannered Mare is in a town, and a dungeon inside a hold is not a town.
-            kind.dungeon = location->HasKeywordString("LocTypeDungeon") || location->HasKeywordString("LocTypeCave") ||
-                           location->HasKeywordString("LocTypeDraugrCrypt") || location->HasKeywordString("LocTypeDwarvenAutomatons") ||
-                           location->HasKeywordString("LocTypeBanditCamp") || location->HasKeywordString("LocTypeVampireLair") ||
-                           location->HasKeywordString("LocTypeWarlockLair") || location->HasKeywordString("LocTypeFalmerHive") ||
-                           location->HasKeywordString("LocTypeAnimalDen") || location->HasKeywordString("LocTypeHagravenNest") ||
-                           location->HasKeywordString("LocTypeForswornCamp") || location->HasKeywordString("LocTypeDragonLair");
+            kind.dungeon = LivingWorldBridge::IsDungeon(location);
             kind.inn = location->HasKeywordString("LocTypeInn");
             kind.playerHouse = location->HasKeywordString("LocTypePlayerHouse");
             kind.town = !kind.dungeon && LocationHas(location, {"LocTypeCity", "LocTypeTown", "LocTypeSettlement"});
@@ -95,6 +90,44 @@ namespace IntelEngine {
                      static_cast<int>(settings.level), static_cast<int>(settings.interruptions),
                      static_cast<int>(settings.questNpcMoves), static_cast<int>(settings.pacing), settings.waitOrderDays,
                      settings.lifeStartDays);
+    }
+
+    bool LivingWorldBridge::IsDungeon(const RE::BGSLocation* location) {
+        if (!location) return false;
+        for (const auto editorID : {"LocTypeDungeon"sv, "LocTypeCave"sv, "LocTypeDraugrCrypt"sv, "LocTypeDwarvenAutomatons"sv,
+                                    "LocTypeBanditCamp"sv, "LocTypeVampireLair"sv, "LocTypeWarlockLair"sv, "LocTypeFalmerHive"sv,
+                                    "LocTypeAnimalDen"sv, "LocTypeHagravenNest"sv, "LocTypeForswornCamp"sv, "LocTypeDragonLair"sv}) {
+            if (location->HasKeywordString(editorID)) return true;
+        }
+        return false;
+    }
+
+    bool LivingWorldBridge::IsBadMoment() { return BadMoment(); }
+
+    bool LivingWorldBridge::MayOfferForStory(RE::Actor* actor) const {
+        const auto settings = GetSettings();
+        if (settings.level == LivingWorld::WorldLevel::Classic || !actor) return true;
+        const int tie = QuestTie(actor);
+        if (tie == 2) return false;
+        return !(tie == 1 && settings.questNpcMoves == LivingWorld::QuestNpcMoves::Never);
+    }
+
+    bool LivingWorldBridge::MayMoveForStory(RE::Actor* actor, const std::string& storyType) const {
+        const auto settings = GetSettings();
+        if (settings.level == LivingWorld::WorldLevel::Classic || !actor || storyType == "message") return true;
+        const int tie = QuestTie(actor);
+        if (tie == 2) return false;
+        if (tie == 0 || settings.questNpcMoves == LivingWorld::QuestNpcMoves::Freely) return true;
+        if (settings.questNpcMoves == LivingWorld::QuestNpcMoves::Never) return false;
+        return storyType == "quest";
+    }
+
+    std::string LivingWorldBridge::QuestTieLine(RE::Actor* actor) const {
+        const auto settings = GetSettings();
+        if (settings.level == LivingWorld::WorldLevel::Classic || settings.questNpcMoves != LivingWorld::QuestNpcMoves::ImportantOnly) {
+            return {};
+        }
+        return QuestTie(actor) == 1 ? "takes part in a running quest: pick them only to bring a quest (or to send a message)" : "";
     }
 
     float LivingWorldBridge::NowDays() {
@@ -167,6 +200,8 @@ namespace IntelEngine {
         // Bring the budget up to now first, so the time before this moment is not credited again afterwards.
         LivingWorld::Refill(m_state, m_settings, at.now);
         LivingWorld::Commit(m_state, life, c, at);
+        // A story took them up: the package of their own life comes off, or the story and it would pull apart.
+        if (LivingWorld::OwnLife(life)) life.flags |= LivingWorld::kNeedsRelease;
         StorylineBridge::GetSingleton()->MarkFollowedUp(actor);
         logger::info("LivingWorld: moment {} with {:08X} counted (moments so far {}, budget {:.2f})", storyType, actor,
                      m_state.picks, m_state.budget);
@@ -285,6 +320,9 @@ namespace IntelEngine {
         std::scoped_lock lock(m_mutex);
         m_lives = std::move(lives);
         m_state = state;
+        m_order = Order{};
+        m_loadedAt = std::chrono::steady_clock::now();
+        m_reconciled = false;
         logger::info("LivingWorld: loaded {} lives, {} moments so far", m_lives.size(), m_state.picks);
     }
 
@@ -295,5 +333,8 @@ namespace IntelEngine {
         m_lastRoadSeamDay = -1.0e6f;
         m_lastLocation = nullptr;
         m_lastLocationKnown = false;
+        m_order = Order{};
+        m_loadedAt = std::chrono::steady_clock::now();
+        m_reconciled = false;
     }
 }

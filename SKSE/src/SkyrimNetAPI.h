@@ -125,6 +125,22 @@ namespace IntelEngine::SkyrimNetAPI {
      *  Non-empty searchQuery enables semantic search. Returns "[]" on error or if SkyrimNet older than v9. */
     inline std::string (*GetWorldKnowledgeForActor)(uint32_t formId, int maxResults, const char* searchQuery) = nullptr;
 
+    // ---- Memories and world knowledge, writing (4.0 living world) ----
+
+    /** Store a memory of the actor's own (embedded for recall). memoryType: EXPERIENCE, RELATIONSHIP, KNOWLEDGE,
+     *  LOCATION, SKILL, TRAUMA or JOY. Returns its id, 0 on error or while SkyrimNet refuses writes (no save's
+     *  database open, the timeline check after a load still pending). */
+    inline int (*AddMemory)(uint32_t formId, const char* content, float importance, const char* memoryType,
+        const char* emotion, const char* location, const char* tagsJSON, const char* relatedActorsJSON) = nullptr;
+
+    /** Add a world knowledge entry (v7+): retrieved for NPCs whose Inja condition holds; with alwaysInject false
+     *  only when the conversation is about it. Returns its id, 0 on error. */
+    inline int (*AddWorldKnowledge)(const char* content, const char* conditionExpr, bool alwaysInject, float importance,
+        const char* displayName) = nullptr;
+
+    /** Remove a world knowledge entry by id (v7+). */
+    inline bool (*RemoveWorldKnowledge)(int memoryId) = nullptr;
+
 
     inline bool (*SendCustomPromptToLLM)(const char*, const char*, const char*,
         std::function<void(const char*, int)>) = nullptr;
@@ -234,6 +250,11 @@ namespace IntelEngine::SkyrimNetAPI {
             GetProcAddress(hDLL, "PublicGetWorldKnowledge"));
         GetWorldKnowledgeForActor = reinterpret_cast<std::string(*)(uint32_t, int, const char*)>(
             GetProcAddress(hDLL, "PublicGetWorldKnowledgeForActor"));
+        AddMemory = reinterpret_cast<decltype(AddMemory)>(GetProcAddress(hDLL, "PublicAddMemory"));
+        AddWorldKnowledge = reinterpret_cast<decltype(AddWorldKnowledge)>(GetProcAddress(hDLL, "PublicAddWorldKnowledge"));
+        RemoveWorldKnowledge = reinterpret_cast<decltype(RemoveWorldKnowledge)>(GetProcAddress(hDLL, "PublicRemoveWorldKnowledge"));
+        logger::info("SkyrimNet write API: AddMemory={}, AddWorldKnowledge={}, RemoveWorldKnowledge={}", AddMemory != nullptr,
+                     AddWorldKnowledge != nullptr, RemoveWorldKnowledge != nullptr);
         SendCustomPromptToLLM = reinterpret_cast<decltype(SendCustomPromptToLLM)>(
             GetProcAddress(hDLL, "PublicSendCustomPromptToLLM"));
         GetPackageApiVersion = reinterpret_cast<uint32_t(*)()>(
