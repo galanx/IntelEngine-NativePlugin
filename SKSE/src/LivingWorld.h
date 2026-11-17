@@ -162,6 +162,25 @@ namespace IntelEngine::LivingWorld {
         Visit,           // they come to find the player
     };
 
+    // What kind of place the player left or entered (from the location's keywords and its parents').
+    struct PlaceKind {
+        bool dungeon = false;
+        bool inn = false;
+        bool town = false;
+        bool playerHouse = false;
+    };
+
+    // Which seam a change of location is. Entering a dungeon or wandering between wilderness places is not a
+    // seam for an ordinary moment (InDungeon / OnRoad); the caller decides whether OnRoad is worth a look.
+    inline Seam ClassifySeam(const PlaceKind& from, const PlaceKind& to) {
+        if (to.playerHouse && !from.playerHouse) return Seam::CameHome;
+        if (to.inn && !from.inn) return Seam::EnteredInn;
+        if (from.dungeon && !to.dungeon) return Seam::LeftDungeon;
+        if (to.dungeon) return Seam::InDungeon;
+        if (to.town && !from.town) return Seam::ArrivedInTown;
+        return Seam::OnRoad;
+    }
+
     struct DirectorState {
         float budget = 1.0f;             // moments available; refilled by the pacing, at most 2
         float budgetDay = 0.0f;          // game day of the last refill

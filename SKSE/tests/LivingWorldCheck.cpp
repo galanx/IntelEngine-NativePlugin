@@ -149,6 +149,18 @@ static void Deliveries() {
     Require(ChooseDelivery(c, {Seam::InCombat, 100.0f, false}) == Delivery::None, "nothing ordinary in a fight");
 }
 
+static void Seams() {
+    const PlaceKind wild{}, dungeon{true, false, false, false}, inn{false, true, true, false}, town{false, false, true, false},
+        home{false, false, true, true};
+    Require(ClassifySeam(wild, town) == Seam::ArrivedInTown, "arriving in town");
+    Require(ClassifySeam(town, inn) == Seam::EnteredInn, "walking into the inn");
+    Require(ClassifySeam(inn, town) == Seam::OnRoad, "stepping out of the inn is no new arrival");
+    Require(ClassifySeam(dungeon, wild) == Seam::LeftDungeon, "out of the dungeon");
+    Require(ClassifySeam(wild, dungeon) == Seam::InDungeon, "into the dungeon");
+    Require(ClassifySeam(town, home) == Seam::CameHome, "coming home");
+    Require(ClassifySeam(home, home) != Seam::CameHome, "moving between rooms at home is not coming home");
+}
+
 static void SaveData() {
     std::vector<Life> lives{Person(1, 0.9f, 10.0f, kWasFollower | kWaitOrder), Person(2, 0.1f, 3.0f)};
     lives[0].activity = Activity::Adventuring;
@@ -190,6 +202,7 @@ int main() {
         PacingRules();
         Picking();
         Deliveries();
+        Seams();
         SaveData();
     } catch (const std::exception& e) {
         std::cerr << "LivingWorldCheck FAILED: " << e.what() << "\n";

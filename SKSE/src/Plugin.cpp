@@ -21,6 +21,7 @@
 #include "SkyrimNetAPI.h"
 #include "DialogueTracker.h"
 #include "SpeechTracker.h"
+#include "LivingWorldBridge.h"
 #include "QuestStateTracker.h"
 #include "StringUtils.h"
 #include "AsyncDispatch.h"
@@ -96,6 +97,9 @@ namespace IntelEngine {
 
         // Persist slot tracker state (task recovery without StorageUtil on load)
         SlotTracker::GetSingleton()->Save(a_intfc);
+
+        // 4.0 living world: the record of known NPCs and the director's pacing
+        LivingWorldBridge::GetSingleton()->Save(a_intfc);
     }
 
     void LoadCallback(SKSE::SerializationInterface* a_intfc) {
@@ -120,6 +124,8 @@ namespace IntelEngine {
                 }
             } else if (type == 'IETK') {
                 SlotTracker::GetSingleton()->Load(a_intfc);
+            } else if (type == LivingWorld::kRecordType) {
+                LivingWorldBridge::GetSingleton()->Load(a_intfc, version, length);
             }
         }
     }
@@ -140,6 +146,7 @@ namespace IntelEngine {
         // Previously this was in kPostLoadGame, but that ran AFTER LoadCallback
         // and wiped the co-save data we just loaded.
         tracker->ClearAll();
+        LivingWorldBridge::GetSingleton()->Revert();
         ProximityMonitor::GetSingleton()->DisarmAll();
         logger::info("RevertCallback: Save ID and SlotTracker cleared (gen={})",
             tracker->loadGeneration.load(std::memory_order_relaxed));
@@ -358,6 +365,7 @@ namespace IntelEngine {
                 MemoryDB::GetSingleton()->InitializeAPI();
                 DialogueTracker::GetSingleton()->Initialize();
                 SpeechTracker::GetSingleton()->Register();
+                LivingWorldBridge::GetSingleton()->Register();
                 PoliticalEngineBridge::GetSingleton()->onLoaded = [] { Papyrus::PollAndSyncPE(); };
                 PoliticalEngineBridge::GetSingleton()->Initialize();
 
