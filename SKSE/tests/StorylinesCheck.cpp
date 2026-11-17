@@ -59,6 +59,14 @@ static void Meetings() {
     Require(At(book, kept, "kept").slot == 0, "a freed slot is used again");
     Require(book.Apply(kept, Event::Met, 12.0f) && At(book, kept, "kept").stage == Stage::Done, "a kept meeting is done");
     Require(OwnerMemory(At(book, kept, "kept")) == "I met {player} at {place} as we had agreed.", "and remembered");
+    const auto noShow = book.Open(Meeting(3, 300, 30.0f), 12.0f);
+    Require(book.Apply(noShow, Event::NoShow, 12.5f) && At(book, noShow, "noShow").stage == Stage::Ignored,
+            "the meeting system says the player never came: ignored, deadline or not");
+    const auto fell = book.Open(Meeting(4, 400, 30.0f), 12.0f);
+    Require(book.Apply(fell, Event::FellThrough, 12.5f) && At(book, fell, "fell").stage == Stage::Failed &&
+                OwnerMemory(At(book, fell, "fell")).empty(), "it fell through on their side: failed, nothing on the player");
+    const auto req = book.Open(Ask(5, Request::FindPerson), 12.0f);
+    Require(!book.Apply(req, Event::NoShow, 12.5f), "a no-show means nothing to a request");
 }
 
 static void Requests() {
@@ -104,13 +112,17 @@ static void Variety() {
     Require(book.Refusal(Kind::Request, Request::BringItem, 3, false).empty(), "another kind of request is fine");
     Require(book.Open(Meeting(3, 1, 9.0f), 1.0f) != 0, "a meeting in between");
     Require(book.Open(Ask(4, Request::Rescue), 1.0f) != 0, "then a request again");
+    for (int i = 0; i < 3; ++i) book.Open(Meeting(40 + i, 1, 9.0f), 1.0f);  // fills up; meetings never hit the variety rule
+    Require(book.OpenCount() == 6, "meetings are not refused for variety");
+    Require(book.Open(Meeting(50, 1, 9.0f), 1.0f) == 0, "no seventh");
+    book = Book{};
     Storyline visit;
     visit.kind = Kind::Visit;
     visit.owner = 5;
     const auto v = book.Open(visit, 1.0f);
     Require(v != 0 && At(book, v, "v").slot == 0xFF && ObjectiveFor(At(book, v, "v")) == Objective::None, "a visit takes no slot");
-    Require(book.Open(Meeting(6, 1, 9.0f), 1.0f) != 0, "six open");
-    Require(book.OpenCount() == 6 && book.Open(Meeting(7, 1, 9.0f), 1.0f) == 0, "no seventh");
+    for (int i = 0; i < 5; ++i) book.Open(Meeting(60 + i, 1, 9.0f), 1.0f);
+    Require(book.OpenCount() == 6 && book.Open(Meeting(70, 1, 9.0f), 1.0f) == 0, "six open, no seventh");
     std::array<bool, kSlots> used{};
     for (const auto& s : book.all) {
         if (s.slot != 0xFF) {

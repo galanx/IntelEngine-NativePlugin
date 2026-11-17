@@ -349,6 +349,8 @@ class VM:
             self.effects.append((method, tuple(args)))
             return None
         if method == "LivingWorldMayDeliver": return True
+        # 4.0 storylines: the modeled game has no storyline quest (GetQuest finds nothing), so no hook runs.
+        if method == "GetQuest": return None
         if method in ("SetLivingWorldSettings", "LivingWorldMomentDispatched"):
             self.effects.append((method, tuple(args)))
             return None
