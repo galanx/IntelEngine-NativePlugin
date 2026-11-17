@@ -260,11 +260,24 @@ namespace IntelEngine {
         });
     }
 
+    void LivingWorldBridge::OnGameLoaded(bool newGame) {
+        auto* player = RE::PlayerCharacter::GetSingleton();
+        const RE::BGSLocation* here = player ? player->GetCurrentLocation() : nullptr;
+        std::scoped_lock lock(m_mutex);
+        m_loading = false;
+        // A new game has no place yet (the intro sets it): the first place it gets is no arrival, as before.
+        if (newGame) return;
+        m_lastLocation = here;
+        m_lastLocationKnown = true;
+        logger::info("LivingWorld: the game begins in '{}' (no arrival)", here ? here->GetFullName() : "the wilds");
+    }
+
     void LivingWorldBridge::OnPlayerLocation(const RE::BGSLocation* location) {
         if (IsClassic()) return;
         const RE::BGSLocation* from = nullptr;
         {
             std::scoped_lock lock(m_mutex);
+            if (m_loading) return;  // OnGameLoaded takes the place the save loaded into
             if (m_lastLocationKnown && location == m_lastLocation) return;
             const bool firstAfterLoad = !m_lastLocationKnown;
             from = m_lastLocation;
@@ -370,6 +383,7 @@ namespace IntelEngine {
         m_lastRoadSeamDay = -1.0e6f;
         m_lastLocation = nullptr;
         m_lastLocationKnown = false;
+        m_loading = true;
         m_order = Order{};
         m_loadedAt = std::chrono::steady_clock::now();
         m_reconciled = false;
