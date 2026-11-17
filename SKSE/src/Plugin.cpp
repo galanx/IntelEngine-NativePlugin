@@ -22,6 +22,7 @@
 #include "DialogueTracker.h"
 #include "SpeechTracker.h"
 #include "LivingWorldBridge.h"
+#include "StorylineBridge.h"
 #include "QuestStateTracker.h"
 #include "StringUtils.h"
 #include "AsyncDispatch.h"
@@ -100,6 +101,7 @@ namespace IntelEngine {
 
         // 4.0 living world: the record of known NPCs and the director's pacing
         LivingWorldBridge::GetSingleton()->Save(a_intfc);
+        StorylineBridge::GetSingleton()->Save(a_intfc);
     }
 
     void LoadCallback(SKSE::SerializationInterface* a_intfc) {
@@ -126,6 +128,8 @@ namespace IntelEngine {
                 SlotTracker::GetSingleton()->Load(a_intfc);
             } else if (type == LivingWorld::kRecordType) {
                 LivingWorldBridge::GetSingleton()->Load(a_intfc, version, length);
+            } else if (type == Storylines::kRecordType) {
+                StorylineBridge::GetSingleton()->Load(a_intfc, version, length);
             }
         }
     }
@@ -147,6 +151,7 @@ namespace IntelEngine {
         // and wiped the co-save data we just loaded.
         tracker->ClearAll();
         LivingWorldBridge::GetSingleton()->Revert();
+        StorylineBridge::GetSingleton()->Revert();
         ProximityMonitor::GetSingleton()->DisarmAll();
         logger::info("RevertCallback: Save ID and SlotTracker cleared (gen={})",
             tracker->loadGeneration.load(std::memory_order_relaxed));
@@ -368,6 +373,24 @@ namespace IntelEngine {
                 LivingWorldBridge::GetSingleton()->Register();
                 PoliticalEngineBridge::GetSingleton()->onLoaded = [] { Papyrus::PollAndSyncPE(); };
                 PoliticalEngineBridge::GetSingleton()->Initialize();
+
+                // 4.0: what an NPC asked of the player, for their bio (prompt submodule 0202_intel_storylines)
+                if (SkyrimNetAPI::RegisterDecorator) {
+                    const bool registered = SkyrimNetAPI::RegisterDecorator(
+                        "get_intelengine_storylines",
+                        "Returns what this NPC asked of the player through IntelEngine and how it went.",
+                        [](RE::Actor* actor) -> std::string { return StorylineBridge::GetSingleton()->DescribeFor(actor); });
+                    logger::info("{} SkyrimNet decorator: get_intelengine_storylines", registered ? "Registered" : "Failed to register");
+                    // Whether this NPC has a request of the player open: the storyline actions' eligibility (is_empty).
+                    const bool openRegistered = SkyrimNetAPI::RegisterDecorator(
+                        "get_intelengine_open_storyline",
+                        "Returns the id of the request this NPC has open with the player, empty when none.",
+                        [](RE::Actor* actor) -> std::string {
+                            const auto id = actor ? StorylineBridge::GetSingleton()->OpenIdFor(actor->GetFormID()) : 0;
+                            return id ? std::to_string(id) : std::string();
+                        });
+                    logger::info("{} SkyrimNet decorator: get_intelengine_open_storyline", openRegistered ? "Registered" : "Failed to register");
+                }
 
                 // Register quest decorator with SkyrimNet (soft dependency — skipped if API unavailable)
                 if (SkyrimNetAPI::RegisterDecorator) {

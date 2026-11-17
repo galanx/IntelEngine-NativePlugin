@@ -157,6 +157,7 @@ set(SOURCES
     src/DialogueTracker.cpp
     src/SpeechTracker.cpp
     src/LivingWorldBridge.cpp
+    src/StorylineBridge.cpp
     src/SettingsBridge.cpp
     src/AsyncDispatch.cpp
     src/PoliticalEngineBridge.cpp

@@ -1,5 +1,7 @@
 #include "LivingWorldBridge.h"
 
+#include "StorylineBridge.h"
+
 #include <algorithm>
 #include <cmath>
 #include <initializer_list>
@@ -141,7 +143,7 @@ namespace IntelEngine {
         LivingWorld::Candidate c;
         c.life = &life;
         c.onRoute = sameHold ? 0.7f : 0.0f;
-        c.unresolved = false;  // open business arrives with the storylines of phase 1
+        c.unresolved = StorylineBridge::GetSingleton()->Unresolved(actor);
         LivingWorld::Situation at;
         at.now = nowDays;
         float score = LivingWorld::Score(c, m_state, at, seed);
@@ -165,6 +167,7 @@ namespace IntelEngine {
         // Bring the budget up to now first, so the time before this moment is not credited again afterwards.
         LivingWorld::Refill(m_state, m_settings, at.now);
         LivingWorld::Commit(m_state, life, c, at);
+        StorylineBridge::GetSingleton()->MarkFollowedUp(actor);
         logger::info("LivingWorld: moment {} with {:08X} counted (moments so far {}, budget {:.2f})", storyType, actor,
                      m_state.picks, m_state.budget);
     }

@@ -67,6 +67,8 @@ namespace IntelEngine::Storylines {
         TimeRanOut = 4,   // the deadline passed
         SomeoneDied = 5,  // the person it was about died
         Talked = 6,       // the player spoke with the one it was about (a visit, word delivered)
+        NoShow = 7,       // the meeting system: the player never came
+        FellThrough = 8,  // the meeting system: the one who asked never got there
     };
 
     struct Storyline {
@@ -148,13 +150,15 @@ namespace IntelEngine::Storylines {
             return static_cast<std::uint8_t>(static_cast<int>(kind) * 16 + static_cast<int>(request));
         }
 
-        // Why a new storyline may not open (empty = it may).
+        // Why a new storyline may not open (empty = it may). The variety rule is for what the director starts on its
+        // own: a meeting, or a request an NPC has just made in conversation (urgent = true), is what was said and must
+        // be recorded, or the journal would contradict the dialogue.
         std::string Refusal(Kind kind, Request request, std::uint32_t owner, bool urgent) const {
             if (owner == 0) return "nobody to open it for";
             if (OpenCount() >= kMaxOpen) return "six storylines are open already";
             if (OpenFor(owner)) return "this person has an open storyline already";
             const auto key = Key(kind, request);
-            if (!urgent && opened >= 2 && kind != Kind::Visit && lastKeys[0] == key && lastKeys[1] == key) {
+            if (!urgent && opened >= 2 && kind == Kind::Request && lastKeys[0] == key && lastKeys[1] == key) {
                 return "the same kind three times running";
             }
             return {};
@@ -221,6 +225,12 @@ namespace IntelEngine::Storylines {
                 case Event::SomeoneDied:
                     s->stage = Stage::Failed;
                     break;
+                case Event::NoShow:
+                    if (s->kind == Kind::Meeting) s->stage = Stage::Ignored;
+                    break;
+                case Event::FellThrough:
+                    if (s->kind == Kind::Meeting) s->stage = Stage::Failed;
+                    break;
             }
             if (s->stage == before) return false;
             s->stageSince = now;
@@ -269,6 +279,9 @@ namespace IntelEngine::Storylines {
     inline std::string OwnerMemory(const Storyline& s) {
         switch (s.kind) {
             case Kind::Meeting:
+                // Meetings made by the meeting system are remembered by its own bio module (0199); these are for
+                // the rest. A meeting that fell through on the asker's side is not the player's doing: nothing here.
+                if (s.stage == Stage::Failed) return {};
                 if (s.stage == Stage::Done) return "I met {player} at {place} as we had agreed.";
                 if (s.stage == Stage::Ignored) return "I waited at {place} for {player}, who never came.";
                 if (s.stage == Stage::Declined) return "I asked {player} to meet me at {place}, and {player} said no.";

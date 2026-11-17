@@ -14,6 +14,7 @@
 #include "JsonKeys.h"
 #include "NPCIndex.h"
 #include "LivingWorldBridge.h"
+#include "StorylineBridge.h"
 #include "ItemIndex.h"
 #include <random>
 #include <algorithm>
@@ -73,6 +74,22 @@ namespace IntelEngine::Papyrus {
     bool LivingWorldMayDeliver(RE::StaticFunctionTag*, std::int32_t, bool);
     void SetLivingWorldSettings(RE::StaticFunctionTag*, std::int32_t, std::int32_t, std::int32_t, std::int32_t, float, float);
     void LivingWorldMomentDispatched(RE::StaticFunctionTag*, RE::Actor*, RE::BSFixedString);
+    std::int32_t StorylineOpen(RE::StaticFunctionTag*, std::int32_t, std::int32_t, RE::Actor*, RE::Actor*, RE::BGSLocation*,
+                               RE::TESObjectREFR*, RE::TESForm*, float, std::int32_t, bool);
+    RE::BSFixedString StorylineRefusal(RE::StaticFunctionTag*, std::int32_t, std::int32_t, RE::Actor*);
+    bool StorylineEvent(RE::StaticFunctionTag*, std::int32_t, std::int32_t);
+    std::vector<std::int32_t> StorylineOpenIds(RE::StaticFunctionTag*);
+    std::vector<std::int32_t> StorylineOverdue(RE::StaticFunctionTag*);
+    std::int32_t StorylineField(RE::StaticFunctionTag*, std::int32_t, RE::BSFixedString);
+    RE::Actor* StorylineOwner(RE::StaticFunctionTag*, std::int32_t);
+    RE::Actor* StorylineOther(RE::StaticFunctionTag*, std::int32_t);
+    RE::BGSLocation* StorylinePlace(RE::StaticFunctionTag*, std::int32_t);
+    RE::TESObjectREFR* StorylineTarget(RE::StaticFunctionTag*, std::int32_t);
+    RE::TESForm* StorylineItem(RE::StaticFunctionTag*, std::int32_t);
+    RE::BSFixedString StorylineMemory(RE::StaticFunctionTag*, std::int32_t);
+    std::int32_t StorylineReward(RE::StaticFunctionTag*, std::int32_t, std::int32_t);
+    std::int32_t StorylineOpenIdFor(RE::StaticFunctionTag*, RE::Actor*);
+    RE::TESForm* ResolveItemByName(RE::StaticFunctionTag*, RE::BSFixedString);
     void MarkLastDispatchFailed(RE::StaticFunctionTag*, RE::BSFixedString);
     void WarmStoryTypeCountsFromCSV(RE::StaticFunctionTag*, RE::BSFixedString);
     void SetRecentGossipContext(RE::StaticFunctionTag*, RE::BSFixedString);
@@ -423,6 +440,21 @@ namespace IntelEngine::Papyrus {
         a_vm->RegisterFunction("LivingWorldMayDeliver", SCRIPT_NAME, LivingWorldMayDeliver); ++count;
         a_vm->RegisterFunction("SetLivingWorldSettings", SCRIPT_NAME, SetLivingWorldSettings); ++count;
         a_vm->RegisterFunction("LivingWorldMomentDispatched", SCRIPT_NAME, LivingWorldMomentDispatched); ++count;
+        a_vm->RegisterFunction("StorylineOpen", SCRIPT_NAME, StorylineOpen); ++count;
+        a_vm->RegisterFunction("StorylineRefusal", SCRIPT_NAME, StorylineRefusal); ++count;
+        a_vm->RegisterFunction("StorylineEvent", SCRIPT_NAME, StorylineEvent); ++count;
+        a_vm->RegisterFunction("StorylineOpenIds", SCRIPT_NAME, StorylineOpenIds); ++count;
+        a_vm->RegisterFunction("StorylineOverdue", SCRIPT_NAME, StorylineOverdue); ++count;
+        a_vm->RegisterFunction("StorylineField", SCRIPT_NAME, StorylineField); ++count;
+        a_vm->RegisterFunction("StorylineOwner", SCRIPT_NAME, StorylineOwner); ++count;
+        a_vm->RegisterFunction("StorylineOther", SCRIPT_NAME, StorylineOther); ++count;
+        a_vm->RegisterFunction("StorylinePlace", SCRIPT_NAME, StorylinePlace); ++count;
+        a_vm->RegisterFunction("StorylineTarget", SCRIPT_NAME, StorylineTarget); ++count;
+        a_vm->RegisterFunction("StorylineItem", SCRIPT_NAME, StorylineItem); ++count;
+        a_vm->RegisterFunction("StorylineMemory", SCRIPT_NAME, StorylineMemory); ++count;
+        a_vm->RegisterFunction("StorylineReward", SCRIPT_NAME, StorylineReward); ++count;
+        a_vm->RegisterFunction("StorylineOpenIdFor", SCRIPT_NAME, StorylineOpenIdFor); ++count;
+        a_vm->RegisterFunction("ResolveItemByName", SCRIPT_NAME, ResolveItemByName); ++count;
         a_vm->RegisterFunction("MarkLastDispatchFailed", SCRIPT_NAME, MarkLastDispatchFailed); ++count;
         a_vm->RegisterFunction("WarmStoryTypeCountsFromCSV", SCRIPT_NAME, WarmStoryTypeCountsFromCSV); ++count;
         a_vm->RegisterFunction("SetRecentGossipContext", SCRIPT_NAME, SetRecentGossipContext); ++count;
@@ -2187,6 +2219,106 @@ namespace IntelEngine::Papyrus {
         s.waitOrderDays = std::clamp(waitDays, 1.0f, 120.0f);
         s.lifeStartDays = std::clamp(lifeDays, 1.0f, 60.0f);
         LivingWorldBridge::GetSingleton()->SetSettings(s);
+    }
+
+    // ---------------------------------------------------------------- 4.0 storylines (StorylineBridge)
+
+    std::int32_t StorylineOpen(RE::StaticFunctionTag*, std::int32_t kind, std::int32_t request, RE::Actor* owner,
+                               RE::Actor* other, RE::BGSLocation* place, RE::TESObjectREFR* target, RE::TESForm* item,
+                               float days, std::int32_t importance, bool urgent) {
+        if (!owner || kind < 1 || kind > 3 || request < 0 || request > static_cast<int>(Storylines::Request::Rescue)) return 0;
+        Storylines::Storyline s;
+        s.kind = static_cast<Storylines::Kind>(kind);
+        s.request = static_cast<Storylines::Request>(request);
+        s.owner = owner->GetFormID();
+        s.other = other ? other->GetFormID() : 0;
+        s.place = place ? place->GetFormID() : 0;
+        s.target = target ? target->GetFormID() : 0;
+        s.item = item ? item->GetFormID() : 0;
+        s.importance = static_cast<std::uint8_t>(std::clamp(importance, 1, 3));
+        auto* calendar = RE::Calendar::GetSingleton();
+        s.deadline = days > 0.0f && calendar ? calendar->GetCurrentGameTime() + days : 0.0f;
+        return static_cast<std::int32_t>(StorylineBridge::GetSingleton()->Open(s, urgent));
+    }
+
+    RE::BSFixedString StorylineRefusal(RE::StaticFunctionTag*, std::int32_t kind, std::int32_t request, RE::Actor* owner) {
+        if (kind < 1 || kind > 3 || request < 0 || request > static_cast<int>(Storylines::Request::Rescue)) return "unknown kind";
+        return StorylineBridge::GetSingleton()->Refusal(static_cast<Storylines::Kind>(kind),
+                                                         static_cast<Storylines::Request>(request),
+                                                         owner ? owner->GetFormID() : 0, true).c_str();  // asked in conversation
+    }
+
+    bool StorylineEvent(RE::StaticFunctionTag*, std::int32_t id, std::int32_t event) {
+        if (id <= 0 || event < 1 || event > static_cast<int>(Storylines::Event::FellThrough)) return false;
+        return StorylineBridge::GetSingleton()->Apply(static_cast<std::uint32_t>(id), static_cast<Storylines::Event>(event));
+    }
+
+    std::vector<std::int32_t> StorylineOpenIds(RE::StaticFunctionTag*) {
+        const auto ids = StorylineBridge::GetSingleton()->OpenIds();
+        return {ids.begin(), ids.end()};
+    }
+
+    std::vector<std::int32_t> StorylineOverdue(RE::StaticFunctionTag*) {
+        const auto ids = StorylineBridge::GetSingleton()->Overdue();
+        return {ids.begin(), ids.end()};
+    }
+
+    /** One number of a storyline: "slot" (255 none), "objective" (255 none), "stage", "kind", "request",
+     *  "importance". -1 when there is no such storyline. */
+    std::int32_t StorylineField(RE::StaticFunctionTag*, std::int32_t id, RE::BSFixedString field) {
+        const auto s = StorylineBridge::GetSingleton()->Get(static_cast<std::uint32_t>(id));
+        if (!s) return -1;
+        const std::string_view f = field.c_str() ? field.c_str() : "";
+        if (f == "slot") return s->slot;
+        if (f == "objective") return static_cast<std::int32_t>(Storylines::ObjectiveFor(*s));
+        if (f == "stage") return static_cast<std::int32_t>(s->stage);
+        if (f == "kind") return static_cast<std::int32_t>(s->kind);
+        if (f == "request") return static_cast<std::int32_t>(s->request);
+        if (f == "importance") return s->importance;
+        return -1;
+    }
+
+    RE::Actor* StorylineOwner(RE::StaticFunctionTag*, std::int32_t id) {
+        const auto s = StorylineBridge::GetSingleton()->Get(static_cast<std::uint32_t>(id));
+        return s ? RE::TESForm::LookupByID<RE::Actor>(s->owner) : nullptr;
+    }
+
+    RE::Actor* StorylineOther(RE::StaticFunctionTag*, std::int32_t id) {
+        const auto s = StorylineBridge::GetSingleton()->Get(static_cast<std::uint32_t>(id));
+        return s && s->other ? RE::TESForm::LookupByID<RE::Actor>(s->other) : nullptr;
+    }
+
+    RE::BGSLocation* StorylinePlace(RE::StaticFunctionTag*, std::int32_t id) {
+        const auto s = StorylineBridge::GetSingleton()->Get(static_cast<std::uint32_t>(id));
+        return s && s->place ? RE::TESForm::LookupByID<RE::BGSLocation>(s->place) : nullptr;
+    }
+
+    RE::TESObjectREFR* StorylineTarget(RE::StaticFunctionTag*, std::int32_t id) {
+        const auto s = StorylineBridge::GetSingleton()->Get(static_cast<std::uint32_t>(id));
+        return s && s->target ? RE::TESForm::LookupByID<RE::TESObjectREFR>(s->target) : nullptr;
+    }
+
+    RE::TESForm* StorylineItem(RE::StaticFunctionTag*, std::int32_t id) {
+        const auto s = StorylineBridge::GetSingleton()->Get(static_cast<std::uint32_t>(id));
+        return s && s->item ? RE::TESForm::LookupByID(s->item) : nullptr;
+    }
+
+    RE::BSFixedString StorylineMemory(RE::StaticFunctionTag*, std::int32_t id) {
+        return StorylineBridge::GetSingleton()->MemoryFor(static_cast<std::uint32_t>(id)).c_str();
+    }
+
+    std::int32_t StorylineReward(RE::StaticFunctionTag*, std::int32_t id, std::int32_t playerLevel) {
+        const auto s = StorylineBridge::GetSingleton()->Get(static_cast<std::uint32_t>(id));
+        return s ? Storylines::RewardGold(*s, playerLevel) : 0;
+    }
+
+    RE::TESForm* ResolveItemByName(RE::StaticFunctionTag*, RE::BSFixedString itemName) {
+        if (!itemName.c_str() || !*itemName.c_str()) return nullptr;
+        return ItemIndex::GetSingleton()->FindByName(itemName.c_str());
+    }
+
+    std::int32_t StorylineOpenIdFor(RE::StaticFunctionTag*, RE::Actor* owner) {
+        return owner ? static_cast<std::int32_t>(StorylineBridge::GetSingleton()->OpenIdFor(owner->GetFormID())) : 0;
     }
 
     /** 4.0 living world: a story moment really started with this NPC (the success path only, never a rejection). */
