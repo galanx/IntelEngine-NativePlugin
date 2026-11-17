@@ -153,15 +153,25 @@ namespace IntelEngine {
                 }
                 if (!quest->IsRunning()) continue;
                 // The target of an objective shown in the journal, of any quest (a favour too): never moved.
+                bool inJournal = false;
                 for (auto* objective : quest->objectives) {
-                    if (!objective || objective->state.get() != RE::QUEST_OBJECTIVE_STATE::kDisplayed || !objective->targets) continue;
+                    if (!objective) continue;
+                    const auto state = objective->state.get();
+                    if (state == RE::QUEST_OBJECTIVE_STATE::kDisplayed || state == RE::QUEST_OBJECTIVE_STATE::kCompletedDisplayed ||
+                        state == RE::QUEST_OBJECTIVE_STATE::kFailedDisplayed) {
+                        inJournal = true;
+                    }
+                    if (state != RE::QUEST_OBJECTIVE_STATE::kDisplayed || !objective->targets) continue;
                     for (std::uint32_t i = 0; i < objective->numTargets; ++i) {
                         auto* target = objective->targets[i];
                         if (target && target->alias == instance->alias->aliasID) t.journal = true;
                     }
                 }
+                // Only a quest the player is on (it shows in the journal) holds its people. Many quests run from the
+                // start of a game with their people in aliases long before the player hears of them ("In My Time of
+                // Need" holds Saadia); counting those kept them from every visit, which 3.8 never did.
                 const auto type = quest->GetType();
-                if (type != RE::QUEST_DATA::Type::kNone && type != RE::QUEST_DATA::Type::kMiscellaneous) t.quest = true;
+                if (inJournal && type != RE::QUEST_DATA::Type::kNone && type != RE::QUEST_DATA::Type::kMiscellaneous) t.quest = true;
             }
             return t;
         }

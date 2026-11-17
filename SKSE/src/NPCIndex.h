@@ -180,14 +180,15 @@ namespace IntelEngine {
         static bool IsEligibleStoryCandidate(RE::Actor* actor, RE::Actor* player,
             RE::TESObjectCELL* playerCell, SlotTracker* tracker);
 
+        /** 4.0: a place where someone may cry out for help in front of everyone (a town, a city, a settlement, an
+         *  inn; not a dungeon, a dangerous place or the player's home). */
+        static bool IsPleaPlace(RE::Actor* player);
+
         /**
          * Relaxed eligibility filter for MemoryDB-ranked candidates.
          * Allows unloaded NPCs (no GetParentCell() requirement).
          * Safe checks only: dead, disabled, active task, cooldown, keyword.
-         */
-        /** 4.0: a place where someone may cry out for help in front of everyone (a town, a city, a settlement, an
-         *  inn; not a dungeon, a dangerous place or the player's home). */
-        static bool IsPleaPlace(RE::Actor* player);
+         */
         static bool IsEligibleStoryCandidateRelaxed(RE::Actor* actor, RE::Actor* player,
             SlotTracker* tracker);
 
