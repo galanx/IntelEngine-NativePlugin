@@ -442,6 +442,7 @@ namespace IntelEngine {
                 PoliticalEngineBridge::GetSingleton()->MarkDirty(true);
                 SlotTracker::GetSingleton()->ClearAll();
                 ProximityMonitor::GetSingleton()->DisarmAll();
+                LivingWorldBridge::GetSingleton()->OnGameLoaded(true);
                 NPCIndex::GetSingleton()->RefreshIndex();
                 MemoryDB::GetSingleton()->ClearCaches();
                 // Initialize per-save political DB (new save ID generated)
@@ -460,6 +461,7 @@ namespace IntelEngine {
                 // Game loaded — SlotTracker already populated from co-save (LoadCallback).
                 // ClearAll moved to RevertCallback to avoid wiping co-save data.
                 logger::info("Game loaded - refreshing indexes, clearing MemoryDB caches");
+                LivingWorldBridge::GetSingleton()->OnGameLoaded(false);
                 PoliticalEngineBridge::GetSingleton()->MarkDirty(true);
                 AsyncDispatch::Submit([] { Papyrus::PollAndSyncPE(); });  // no-op unless PE data is already ready; PE's own "loaded" event covers the other order
                 NPCIndex::GetSingleton()->RefreshIndex();

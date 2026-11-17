@@ -31,6 +31,11 @@ namespace IntelEngine {
         void SetSettings(const LivingWorld::Settings& settings);
         bool IsClassic() const { return GetSettings().level == LivingWorld::WorldLevel::Classic; }
 
+        /** kPostLoadGame and kNewGame: the place the game is in now is where it begins, no arrival. Until then
+         *  (from Revert on) the player's location events are not arrivals: while a save loads the player is first
+         *  in no place at all, and the real place then counted as arriving there (2026-11-18). */
+        void OnGameLoaded(bool newGame);
+
         /** May a story moment land now? Seam ids are LivingWorld::Seam values; 0 is the old timer. */
         bool MayDeliver(int seam, bool urgent);
 
@@ -148,6 +153,7 @@ namespace IntelEngine {
         bool m_registered = false;
         const RE::BGSLocation* m_lastLocation = nullptr;  // m_mutex held
         bool m_lastLocationKnown = false;                  // false after a load: the first place is no arrival
+        bool m_loading = false;                            // from Revert until OnGameLoaded: no arrivals
 
         bool m_catalogued = false;
         std::vector<Spot> m_inns, m_dungeons, m_towns;
