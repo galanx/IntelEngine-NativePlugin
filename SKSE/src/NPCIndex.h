@@ -562,6 +562,22 @@ namespace IntelEngine {
          * so this function does only engine-touch work. Returns empty candidates
          * if player is in a blocked location.
          */
+        /** A candidate after scoring (points into the snapshot it was ranked from). */
+        struct RankedCandidate {
+            const StoryDMActorSnapshot* a = nullptr;
+            float score = 0.f;
+        };
+
+        /** Score and trim a snapshot's candidates (and remember them for resolving the answer's name). Worker thread. */
+        std::vector<RankedCandidate> RankStoryDMCandidates(const StoryDMTickSnapshot& snap);
+
+        /** How often a story type was picked this session (the staged director prefers the fresher kind). */
+        int StoryTypePickCount(const std::string& storyType) const;
+
+        /** The dungeon master's context for exactly these candidates, JSON-escaped. Worker thread. */
+        std::string RenderDungeonMasterContext(const StoryDMTickSnapshot& snap, std::vector<RankedCandidate> pool,
+                                               const std::unordered_set<std::string>& excludedTypes);
+
         StoryDMTickSnapshot BuildStoryDMTickSnapshot(int maxCandidates, float absenceDays,
                                                      const StoryDMPhaseAPrefetch& prefetch);
 
