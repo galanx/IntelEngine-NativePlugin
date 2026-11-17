@@ -151,6 +151,12 @@ namespace IntelEngine::SkyrimNetAPI {
     inline bool (*SendCustomPromptToLLM)(const char*, const char*, const char*,
         std::function<void(const char*, int)>) = nullptr;
 
+    /** A typed question to SkyrimNet's decision model (template under prompts/decisions/). The callback gets
+     *  (answer, resultJson, success) once, on SkyrimNet's thread pool; error "no_decisions_route" when the player has no
+     *  decision provider (then nothing was sent). In SkyrimNet 1.1.1 and later; nullptr before. */
+    inline bool (*SendCustomDecisionToLLM)(const char* templateName, const char* contextJson, int maxProbabilities,
+        std::function<void(const char*, const char*, int)>) = nullptr;
+
     /** Version of SkyrimNet's AI-package contract (ListPackage, HoldPackages, UnregisterPackageEx and the
      *  SkyrimNet_OnPackage* ModEvents on the Papyrus side). Resolved by name whatever GetVersion returns;
      *  nullptr on a SkyrimNet that predates it, and then those Papyrus natives must not be called. */
@@ -265,6 +271,9 @@ namespace IntelEngine::SkyrimNetAPI {
                      AddWorldKnowledge != nullptr, RemoveWorldKnowledge != nullptr);
         SendCustomPromptToLLM = reinterpret_cast<decltype(SendCustomPromptToLLM)>(
             GetProcAddress(hDLL, "PublicSendCustomPromptToLLM"));
+        SendCustomDecisionToLLM = reinterpret_cast<decltype(SendCustomDecisionToLLM)>(
+            GetProcAddress(hDLL, "PublicSendCustomDecisionToLLM"));
+        logger::info("SkyrimNet decisions API: {}", SendCustomDecisionToLLM != nullptr);
         GetPackageApiVersion = reinterpret_cast<uint32_t(*)()>(
             GetProcAddress(hDLL, "PublicGetPackageApiVersion"));
         logger::info("SkyrimNet package API: {}", GetPackageApiVersion ? GetPackageApiVersion() : 0u);

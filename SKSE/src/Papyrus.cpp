@@ -15,6 +15,7 @@
 #include "NPCIndex.h"
 #include "LivingWorldBridge.h"
 #include "ItemNames.h"
+#include "StoryDirector.h"
 #include "StorylineBridge.h"
 #include "PlaceTargets.h"
 #include "ItemIndex.h"
@@ -2784,7 +2785,9 @@ namespace IntelEngine::Papyrus {
         const std::string& dmContext,
         const std::unordered_set<std::string>& excludedSet,
         bool playerAtInn,
-        float currentGameTime) {
+        float currentGameTime,
+        const std::string& decidedNpc = "",
+        const std::string& decidedType = "") {
 
         static const char* allTypes[] = {
             "seek_player", "informant", "road_encounter",
@@ -2806,6 +2809,9 @@ namespace IntelEngine::Papyrus {
 
         std::string json = "{";
         json += "\"candidatePool\":\"" + dmContext + "\",";
+        // 4.0 staged director: who acts and the kind of moment, already decided ("" = the dungeon master chooses)
+        json += "\"decided_npc\":\"" + MemoryDB::EscapeJsonString(decidedNpc) + "\",";
+        json += "\"decided_type\":\"" + MemoryDB::EscapeJsonString(decidedType) + "\",";
 
         // Per-type show flags: "1" if allowed, "0" if excluded.
         // MUST always include ALL keys with non-empty values. Inja's variable
@@ -2982,6 +2988,26 @@ namespace IntelEngine::Papyrus {
                                        questEditorId = std::move(questEditorId),
                                        scriptName = std::move(scriptName),
                                        functionName = std::move(functionName)]() mutable {
+                    // 4.0: at the living-world levels each candidate is judged on their own first (StoryDirector);
+                    // the dungeon master then writes the one moment chosen. Classic keeps the single prompt below.
+                    if (StoryDirector::ShouldRun()) {
+                        auto build = [playerAtInn, currentGameTime](const std::string& md, const std::unordered_set<std::string>& ex,
+                                                                    const std::string& npc, const std::string& type) {
+                            return BuildStoryDMRequestJsonCore(md, ex, playerAtInn, currentGameTime, npc, type);
+                        };
+                        auto deliver = [questEditorId, scriptName, functionName](std::string requestJson) {
+                            auto* t2 = SKSE::GetTaskInterface();
+                            if (!t2) {
+                                logger::error("Staged director: TaskInterface unavailable, callback dropped");
+                                return;
+                            }
+                            t2->AddTask([questEditorId, scriptName, functionName, requestJson = std::move(requestJson)]() {
+                                AsyncDispatch::ExecuteQuestFunctionString(questEditorId, scriptName, functionName, requestJson);
+                            });
+                        };
+                        StoryDirector::Run(std::move(snap), std::move(excludedSet), std::move(build), std::move(deliver));
+                        return;
+                    }
                     std::string md = NPCIndex::GetSingleton()->BuildDungeonMasterContextFromSnapshot(snap, excludedSet);
                     std::string requestJson;
                     if (!md.empty()) {

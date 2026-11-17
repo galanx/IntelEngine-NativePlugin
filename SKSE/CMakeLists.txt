@@ -160,6 +160,7 @@ set(SOURCES
     src/LivingWorldLives.cpp
     src/PlaceTargets.cpp
     src/StorylineBridge.cpp
+    src/StoryDirector.cpp
     src/SettingsBridge.cpp
     src/AsyncDispatch.cpp
     src/PoliticalEngineBridge.cpp
@@ -211,6 +212,8 @@ add_executable(PlaceNamesCheck EXCLUDE_FROM_ALL tests/PlaceNamesCheck.cpp)
 target_include_directories(PlaceNamesCheck PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 add_executable(ItemNamesCheck EXCLUDE_FROM_ALL tests/ItemNamesCheck.cpp)
 target_include_directories(ItemNamesCheck PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+add_executable(StoryDirectorCheck EXCLUDE_FROM_ALL tests/StoryDirectorCheck.cpp)
+target_include_directories(StoryDirectorCheck PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 add_executable(StoryCandidateResolutionCheck EXCLUDE_FROM_ALL tests/StoryCandidateResolutionCheck.cpp)
 target_include_directories(StoryCandidateResolutionCheck PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 add_executable(FactionLeaderNameMatchCheck EXCLUDE_FROM_ALL tests/FactionLeaderNameMatchCheck.cpp)

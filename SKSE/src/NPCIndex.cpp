@@ -2376,7 +2376,13 @@ namespace IntelEngine {
     std::string NPCIndex::BuildDungeonMasterContextFromSnapshot(
         const StoryDMTickSnapshot& snap,
         const std::unordered_set<std::string>& excludedTypes) {
-        if (snap.candidates.empty()) return "";
+        auto pool = RankStoryDMCandidates(snap);
+        if (pool.empty()) return "";
+        return RenderDungeonMasterContext(snap, std::move(pool), excludedTypes);
+    }
+
+    std::vector<NPCIndex::RankedCandidate> NPCIndex::RankStoryDMCandidates(const StoryDMTickSnapshot& snap) {
+        if (snap.candidates.empty()) return {};
 
         auto* memDB = MemoryDB::GetSingleton();
 
@@ -2418,10 +2424,7 @@ namespace IntelEngine {
         }
 
         // Score
-        struct ScoredCandidate {
-            const StoryDMActorSnapshot* a;
-            float score;
-        };
+        using ScoredCandidate = RankedCandidate;
         std::vector<ScoredCandidate> scored;
         scored.reserve(snap.candidates.size());
 
@@ -2483,9 +2486,10 @@ namespace IntelEngine {
             else if (s.a->fromMemoryDB) rankedPool.push_back(s);
             else                        randomPool.push_back(s);
         }
-        // 4.0: the director has already ranked who matters, so the prompt carries fewer, better candidates.
-        const int rankedLimit = living ? std::min(snap.maxCandidates, 4) : snap.maxCandidates;
-        const int randomLimit = living ? 2 : RANDOM_ENCOUNTER_SLOTS;
+        // As many as 3.8 offered: at the living-world levels the staged director (StoryDirector) asks about each
+        // candidate on their own, so nobody is cut to save prompt space.
+        const int rankedLimit = snap.maxCandidates;
+        const int randomLimit = RANDOM_ENCOUNTER_SLOTS;
         if (static_cast<int>(rankedPool.size()) > rankedLimit) rankedPool.resize(rankedLimit);
         if (static_cast<int>(randomPool.size()) > randomLimit) randomPool.resize(randomLimit);
 
@@ -2495,7 +2499,7 @@ namespace IntelEngine {
 
         if (finalPool.empty()) {
             logger::debug("[StoryDM async] No eligible candidates after scoring");
-            return "";
+            return {};
         }
 
         // Update DM candidate pool for response resolution
@@ -2505,6 +2509,19 @@ namespace IntelEngine {
             for (const auto& s : finalPool) {
                 m_dmCandidatePool.emplace(s.a->nameLower, s.a->formId);
             }
+        }
+        return finalPool;
+    }
+
+    std::string NPCIndex::RenderDungeonMasterContext(const StoryDMTickSnapshot& snap, std::vector<RankedCandidate> finalPool,
+                                                     const std::unordered_set<std::string>& excludedTypes) {
+        if (finalPool.empty()) return "";
+        auto* memDB = MemoryDB::GetSingleton();
+        std::unordered_map<std::string, PlayerRelationship> relMap;
+        std::unordered_map<RE::FormID, PlayerRelationship> relMapById;
+        for (const auto& rel : memDB->GetPlayerRelationshipData()) {
+            relMap[StringUtils::ToLowerStd(rel.name)] = rel;
+            if (rel.formId > 0) relMapById[rel.formId] = rel;
         }
 
         // --- Build markdown ---
@@ -2975,6 +2992,12 @@ namespace IntelEngine {
 
         std::unique_lock lock(m_mutex);
         m_recentGossipContext = result;
+    }
+
+    int NPCIndex::StoryTypePickCount(const std::string& storyType) const {
+        std::shared_lock lock(m_mutex);
+        const auto it = m_storyTypeCounts.find(storyType);
+        return it == m_storyTypeCounts.end() ? 0 : it->second;
     }
 
     std::string NPCIndex::GetStoryTypeCountsMarkdown(
