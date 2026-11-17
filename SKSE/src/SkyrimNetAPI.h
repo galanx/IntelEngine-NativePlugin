@@ -141,6 +141,12 @@ namespace IntelEngine::SkyrimNetAPI {
     /** Remove a world knowledge entry by id (v7+). */
     inline bool (*RemoveWorldKnowledge)(int memoryId) = nullptr;
 
+    // ---- Named places (v13) ----
+
+    /** Every named place ("" = all sources) as a JSON array of {id, key, name, source, space, ownerLocation, x, y,
+     *  z, radius}; space is the runtime FormID of the interior cell, or of the worldspace outdoors. */
+    inline std::string (*ListPlaces)(const char* sourceFilter) = nullptr;
+
 
     inline bool (*SendCustomPromptToLLM)(const char*, const char*, const char*,
         std::function<void(const char*, int)>) = nullptr;
@@ -253,6 +259,8 @@ namespace IntelEngine::SkyrimNetAPI {
         AddMemory = reinterpret_cast<decltype(AddMemory)>(GetProcAddress(hDLL, "PublicAddMemory"));
         AddWorldKnowledge = reinterpret_cast<decltype(AddWorldKnowledge)>(GetProcAddress(hDLL, "PublicAddWorldKnowledge"));
         RemoveWorldKnowledge = reinterpret_cast<decltype(RemoveWorldKnowledge)>(GetProcAddress(hDLL, "PublicRemoveWorldKnowledge"));
+        ListPlaces = reinterpret_cast<decltype(ListPlaces)>(GetProcAddress(hDLL, "PublicListPlaces"));
+        logger::info("SkyrimNet named places: {}", ListPlaces != nullptr);
         logger::info("SkyrimNet write API: AddMemory={}, AddWorldKnowledge={}, RemoveWorldKnowledge={}", AddMemory != nullptr,
                      AddWorldKnowledge != nullptr, RemoveWorldKnowledge != nullptr);
         SendCustomPromptToLLM = reinterpret_cast<decltype(SendCustomPromptToLLM)>(

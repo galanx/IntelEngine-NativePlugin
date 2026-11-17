@@ -158,6 +158,7 @@ set(SOURCES
     src/SpeechTracker.cpp
     src/LivingWorldBridge.cpp
     src/LivingWorldLives.cpp
+    src/PlaceTargets.cpp
     src/StorylineBridge.cpp
     src/SettingsBridge.cpp
     src/AsyncDispatch.cpp
@@ -206,6 +207,8 @@ add_executable(StorylinesCheck EXCLUDE_FROM_ALL tests/StorylinesCheck.cpp)
 target_include_directories(StorylinesCheck PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 add_executable(LivingWorldCheck EXCLUDE_FROM_ALL tests/LivingWorldCheck.cpp)
 target_include_directories(LivingWorldCheck PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+add_executable(PlaceNamesCheck EXCLUDE_FROM_ALL tests/PlaceNamesCheck.cpp)
+target_include_directories(PlaceNamesCheck PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 add_executable(StoryCandidateResolutionCheck EXCLUDE_FROM_ALL tests/StoryCandidateResolutionCheck.cpp)
 target_include_directories(StoryCandidateResolutionCheck PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 add_executable(FactionLeaderNameMatchCheck EXCLUDE_FROM_ALL tests/FactionLeaderNameMatchCheck.cpp)
