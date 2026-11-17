@@ -207,26 +207,72 @@ namespace IntelEngine::NaturalTime {
             return relativeHour(2.0f);
         }
 
-        // "N hour(s)" — check from high to low; token bounds avoid "3 hour" inside "13 hours"
-        struct HourPattern {
-            const char* text;
-            float hours;
-        };
-        static const HourPattern hourPatterns[] = {
-            {"12 hour", 12.0f}, {"11 hour", 11.0f}, {"10 hour", 10.0f},
-            {"9 hour", 9.0f},   {"8 hour", 8.0f},   {"7 hour", 7.0f},
-            {"6 hour", 6.0f},   {"5 hour", 5.0f},   {"4 hour", 4.0f},
-            {"3 hour", 3.0f},   {"2 hour", 2.0f},
-        };
-        for (const auto& hp : hourPatterns) {
-            if (findBounded(hp.text)) {
-                return relativeHour(hp.hours);
+        // "N hours" / "N minutes", N in digits ("2 hours", "24 hours", "10 minutes") or spelled out ("two hours",
+        // "an hour", "forty-five minutes"); "in" and "from now" around it change nothing. Only digits up to 12 and
+        // "an/one hour" were read before, and an unread time becomes the evening default: "in two hours" at dawn
+        // made a meeting at 6 PM (2026-11-18). "at 13 hours" is a clock time, not a count: left to the readers below.
+        auto countBefore = [&](const char* unit) -> int {
+            struct CountWord {
+                const char* text;
+                int count;
+            };
+            static const CountWord countWords[] = {
+                {"forty-five", 45}, {"forty five", 45}, {"twenty-four", 24}, {"twenty four", 24},
+                {"fifty", 50},      {"forty", 40},      {"thirty", 30},      {"twenty", 20},
+                {"fifteen", 15},    {"twelve", 12},     {"eleven", 11},      {"ten", 10},
+                {"nine", 9},        {"eight", 8},       {"seven", 7},        {"six", 6},
+                {"five", 5},        {"four", 4},        {"three", 3},        {"two", 2},
+                {"one", 1},         {"an", 1},          {"a", 1},
+            };
+            const size_t unitLen = std::strlen(unit);
+            size_t pos = 0;
+            while ((pos = input.find(unit, pos)) != std::string::npos) {
+                const size_t at = pos;
+                pos += unitLen;
+                const char before = (at > 0) ? input[at - 1] : ' ';
+                size_t unitEnd = at + unitLen;
+                if (unitEnd < input.size() && input[unitEnd] == 's') ++unitEnd;
+                const char after = (unitEnd < input.size()) ? input[unitEnd] : ' ';
+                if (isTokenChar(static_cast<unsigned char>(before)) || isTokenChar(static_cast<unsigned char>(after))) {
+                    continue;
+                }
+                size_t countEnd = at;
+                while (countEnd > 0 && input[countEnd - 1] == ' ') --countEnd;
+                int count = 0;
+                size_t countStart = countEnd;
+                while (countStart > 0 && std::isdigit(static_cast<unsigned char>(input[countStart - 1]))) --countStart;
+                if (countStart < countEnd) {
+                    if (countEnd - countStart > 3) continue;
+                    count = std::stoi(input.substr(countStart, countEnd - countStart));
+                } else {
+                    for (const auto& cw : countWords) {
+                        const size_t len = std::strlen(cw.text);
+                        if (countEnd < len || input.compare(countEnd - len, len, cw.text) != 0) continue;
+                        const size_t start = countEnd - len;
+                        if (start > 0 && isTokenChar(static_cast<unsigned char>(input[start - 1]))) continue;
+                        count = cw.count;
+                        countStart = start;
+                        break;
+                    }
+                }
+                if (count <= 0) continue;
+                size_t wordEnd = countStart;
+                while (wordEnd > 0 && input[wordEnd - 1] == ' ') --wordEnd;
+                if (wordEnd >= 2 && input.compare(wordEnd - 2, 2, "at") == 0 &&
+                    (wordEnd == 2 || !isTokenChar(static_cast<unsigned char>(input[wordEnd - 3])))) {
+                    continue;  // "at 13 hours": a clock time
+                }
+                return count;
             }
+            return 0;
+        };
+        if (const int hours = countBefore("hour"); hours > 0) {
+            if (currentHour < 0.0f) return -1.0f;
+            // A day or more ahead keeps its days (hour + 24 * N, as the day offsets above).
+            return hours >= 24 ? currentHour + static_cast<float>(hours) + dayOffset : relativeHour(static_cast<float>(hours));
         }
-
-        // "1 hour" / "an hour" / "one hour" — after multi-digit patterns
-        if (findBounded("1 hour") || findBounded("an hour") || findBounded("one hour")) {
-            return relativeHour(1.0f);
+        if (const int minutes = countBefore("minute"); minutes > 0) {
+            return relativeHour(static_cast<float>(minutes) / 60.0f);
         }
 
         // Normalize a.m. / p.m. variants so "10 a.m." and "10 am" share one path
