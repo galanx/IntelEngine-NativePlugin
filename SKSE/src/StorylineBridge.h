@@ -46,6 +46,8 @@ namespace IntelEngine {
         /** Empty = changed; otherwise why not. The gold offered now is filled in here. */
         std::string Amend(std::uint32_t id, Storylines::Book::Amendment amendment);
         std::string Reply(std::uint32_t id, RE::FormID speaker, const std::string& text, bool comesAlong);
+        /** Why it was asked, in the asker's words (recorded when they ask). */
+        bool SetAbout(std::uint32_t id, const std::string& text);
         /** The open request this person is the one to find or to speak with, 0 = none. */
         std::uint32_t AboutId(RE::FormID person) const;
         /** The id of a request this NPC may answer through the player now (the player is with them, no answer

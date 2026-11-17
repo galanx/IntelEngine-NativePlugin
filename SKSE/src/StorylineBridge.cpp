@@ -1,5 +1,6 @@
 #include "StorylineBridge.h"
 
+#include "ItemNames.h"
 #include "LivingWorldBridge.h"
 #include "SkyrimNetAPI.h"
 
@@ -30,7 +31,8 @@ namespace IntelEngine {
         std::string Fill(std::string text, const Storylines::Storyline& s) {
             const std::pair<const char*, std::string> parts[] = {
                 {"{player}", PlayerName()}, {"{other}", NameOf(s.other)}, {"{place}", NameOf(s.place)},
-                {"{item}", NameOf(s.item)},  {"{owner}", NameOf(s.owner)}, {"{before}", NameOf(s.before)}};
+                {"{item}", ItemNames::Display(NameOf(s.item))},  {"{owner}", NameOf(s.owner)},
+                {"{before}", ItemNames::Display(NameOf(s.before))}};
             for (const auto& [key, value] : parts) {
                 for (auto at = text.find(key); at != std::string::npos; at = text.find(key, at + value.size())) {
                     text.replace(at, std::strlen(key), value.empty() ? "someone" : value);
@@ -64,7 +66,7 @@ namespace IntelEngine {
             asked.reply.clear();
             asked.changes = static_cast<std::uint8_t>(asked.changes & ~Storylines::Changed::ComesAlong);
             auto text = Storylines::OwnerMemory(asked);
-            const auto cut = text.find(", and ");
+            const auto cut = text.find(", and {player} did it.");   // not ", and ": a reason may contain one
             return cut == std::string::npos ? text : text.substr(0, cut);
         }
 
@@ -211,11 +213,14 @@ namespace IntelEngine {
         std::scoped_lock lock(m_mutex);
         std::string mine;
         std::string aboutMe;
+        bool openMine = false;     // an open request of theirs: what they say may change it
+        bool mayAnswer = false;    // a request about them they may answer now
         for (const auto& s : m_book.all) {
             if (s.kind != SL::Kind::Request) continue;
             if (s.owner == id) {
                 std::string line;
                 if (SL::IsOpen(s)) {
+                    openMine = true;
                     line = Fill(Asked(s), s) + " (" + Ago(now - s.created) + "). ";
                     line += s.stage == SL::Stage::ReturnTo ? Fill("{player} has done it and owes me a visit to say so.", s)
                                                            : "It is not done yet.";
@@ -241,6 +246,7 @@ namespace IntelEngine {
                     line += Ago(now - s.created) + ")";
                     line += s.stage == SL::Stage::ReturnTo && !withPlayer ? ", and {player} did." : "; {player} is here now.";
                     if (withPlayer) {
+                        mayAnswer = true;
                         line += " I know of it only once {player} says so. I may send {owner} an answer through {player}, or go "
                                 "along with {player} to see {owner}.";
                     }
@@ -249,9 +255,23 @@ namespace IntelEngine {
                 if (!line.empty()) aboutMe += "- " + line + "\n";
             }
         }
+        // Words alone change nothing in the journal or the reward: a change said aloud is also chosen as an action
+        // (seen 2026-11-17: Hulda said "The job's off" and chose none, so the journal still asked for the mead).
         std::string out;
-        if (!mine.empty()) out += "## What I asked of " + PlayerName() + "\n" + mine;
-        if (!aboutMe.empty()) out += "## Errands about me\n" + aboutMe;
+        if (!mine.empty()) {
+            out += "## What I asked of " + PlayerName() + "\n" + mine;
+            if (openMine) {
+                out += "When I change it in what I say (I no longer need it, give more time, need it sooner, offer more gold, or "
+                       "want something else), I choose the Communication action in that same reply, or nothing changes.\n";
+            }
+        }
+        if (!aboutMe.empty()) {
+            out += "## Errands about me\n" + aboutMe;
+            if (mayAnswer) {
+                out += "When I give an answer to take back (\"Tell her ...\") or say I will go along, I choose the Communication "
+                       "action in that same reply, or nothing is passed on.\n";
+            }
+        }
         return out;
     }
 
@@ -272,15 +292,20 @@ namespace IntelEngine {
         if (Storylines::IsOpen(*pick)) {
             Storylines::Storyline asked = *pick;
             asked.stage = Storylines::Stage::Done;
+            asked.reply.clear();
+            asked.about.clear();  // the asker's own words: this line is in the third person
+            asked.changes = static_cast<std::uint8_t>(asked.changes & ~Storylines::Changed::ComesAlong);
             text = Storylines::OwnerMemory(asked);
-            const auto cut = text.find(", and ");
+            const auto cut = text.find(", and {player} did it.");
             if (cut != std::string::npos) text = text.substr(0, cut);
             if (!text.empty()) {
                 text += pick->stage == Storylines::Stage::ReturnTo ? "; {player} has done it but not come back yet"
                                                                  : "; still open";
             }
         } else {
-            text = Storylines::OwnerMemory(*pick);
+            Storylines::Storyline ended = *pick;
+            ended.about.clear();  // the asker's own words: this line is in the third person
+            text = Storylines::OwnerMemory(ended);
         }
         if (text.empty()) return {};
         // First person to third: the line is about the candidate.
@@ -331,8 +356,15 @@ namespace IntelEngine {
         std::scoped_lock lock(m_mutex);
         auto why = m_book.Reply(id, speaker, text, comesAlong, NowDays());
         logger::info("Storylines: #{} answer from {:08X}{}: {}", id, speaker, comesAlong ? " (comes along)" : "",
-                     why.empty() ? text : "refused, " + why);
+                     !why.empty() ? "refused, " + why : Storylines::detail::Clean(text, Storylines::kMaxReply).empty() ? "(no words)" : text);
         return why;
+    }
+
+    bool StorylineBridge::SetAbout(std::uint32_t id, const std::string& text) {
+        std::scoped_lock lock(m_mutex);
+        const bool done = m_book.SetAbout(id, text);
+        if (done) logger::info("Storylines: #{} is about: {}", id, m_book.Find(id)->about);
+        return done;
     }
 
     std::uint32_t StorylineBridge::AboutId(RE::FormID person) const {
