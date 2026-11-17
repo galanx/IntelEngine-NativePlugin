@@ -310,6 +310,29 @@ namespace IntelEngine::Storylines {
         return {};
     }
 
+    // What the people of the asker's hold heard of how it ended (a SkyrimNet world-knowledge entry, past tense so it
+    // stays true): {owner}, {them} (her or him), {player}, {other}, {item}, {place} are filled in. Requests only; a
+    // meeting is private.
+    inline std::string PublicDeed(const Storyline& s) {
+        if (s.kind != Kind::Request) return {};
+        const char* what = "";
+        switch (s.request) {
+            case Request::FindPerson: what = "find {other}"; break;
+            case Request::BringItem: what = "bring {them} {item}"; break;
+            case Request::DealWithThreat: what = s.other ? "deal with {other}" : "deal with the trouble at {place}"; break;
+            case Request::EscortMe: what = "take {them} to {place}"; break;
+            case Request::DeliverWord: what = "speak with {other} for {them}"; break;
+            case Request::Rescue: what = "free {other}"; break;
+            default: what = "help {them}"; break;
+        }
+        const std::string w = what;
+        if (s.stage == Stage::Done) return "{owner} asked {player} to " + w + ", and {player} did it.";
+        if (s.stage == Stage::Declined) return "{owner} asked {player} to " + w + ", and {player} refused.";
+        if (s.stage == Stage::Ignored) return "{owner} asked {player} to " + w + ", and {player} never did.";
+        if (s.stage == Stage::Failed) return "{owner} asked {player} to " + w + ", and it ended badly: {other} is dead.";
+        return {};
+    }
+
     // Gold for a request done, by importance and the player's level.
     inline int RewardGold(const Storyline& s, int playerLevel) {
         if (s.kind != Kind::Request || s.stage != Stage::Done) return 0;

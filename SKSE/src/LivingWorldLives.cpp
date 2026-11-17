@@ -352,6 +352,7 @@ namespace IntelEngine {
             if (close) life.lastMet = now;
             set(LivingWorld::kSeenRecently, now - life.lastMet < 0.25f);
             set(LivingWorld::kOnTask, ties.errand);
+            set(LivingWorld::kInScene, actor->GetCurrentScene() != nullptr);
             set(LivingWorld::kQuestTarget, ties.journal);
             set(LivingWorld::kQuestBound, ties.quest);
             set(LivingWorld::kKeepsShop, ties.home || actor->GetVendorFaction() != nullptr);
