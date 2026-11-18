@@ -106,6 +106,8 @@ namespace IntelEngine::Papyrus {
     bool StorylineSetAbout(RE::StaticFunctionTag*, std::int32_t, RE::BSFixedString);
     RE::BSFixedString StorylineText(RE::StaticFunctionTag*, std::int32_t, RE::BSFixedString);
     void LivingWorldTrack(RE::StaticFunctionTag*);
+    RE::BSFixedString LivingWorldDebugAdventure(RE::StaticFunctionTag*, RE::Actor*);
+    void LivingWorldMarkGreeted(RE::StaticFunctionTag*, RE::Actor*);
     RE::Actor* LivingWorldTakeOrder(RE::StaticFunctionTag*);
     std::vector<RE::Actor*> LivingWorldKeepers(RE::StaticFunctionTag*, std::int32_t);
     std::int32_t LivingWorldOrderKind(RE::StaticFunctionTag*);
@@ -495,6 +497,8 @@ namespace IntelEngine::Papyrus {
         a_vm->RegisterFunction("StorylineSetAbout", SCRIPT_NAME, StorylineSetAbout); ++count;
         a_vm->RegisterFunction("StorylineText", SCRIPT_NAME, StorylineText); ++count;
         a_vm->RegisterFunction("LivingWorldTrack", SCRIPT_NAME, LivingWorldTrack); ++count;
+        a_vm->RegisterFunction("LivingWorldDebugAdventure", SCRIPT_NAME, LivingWorldDebugAdventure); ++count;
+        a_vm->RegisterFunction("LivingWorldMarkGreeted", SCRIPT_NAME, LivingWorldMarkGreeted); ++count;
         a_vm->RegisterFunction("LivingWorldTakeOrder", SCRIPT_NAME, LivingWorldTakeOrder); ++count;
         a_vm->RegisterFunction("LivingWorldKeepers", SCRIPT_NAME, LivingWorldKeepers); ++count;
         a_vm->RegisterFunction("LivingWorldOrderKind", SCRIPT_NAME, LivingWorldOrderKind); ++count;
@@ -1816,8 +1820,33 @@ namespace IntelEngine::Papyrus {
         return RE::BSFixedString(NPCIndex::GetNPCHoldName(actor).c_str());
     }
 
+    namespace {
+        // The game's own record of an acquaintance: the player has talked to them in its dialogue at least once, or
+        // their relationship rank with the player is anything but the neutral 0 (friend, ally, lover, rival, foe).
+        // SkyrimNet's history alone made old acquaintances strangers: anyone met in vanilla quests, or before
+        // SkyrimNet was installed ("I don't know you, stranger" from someone the player knows, the user, 2026-11-18).
+        bool GameSaysTheyMet(RE::Actor* actor, RE::PlayerCharacter* player) {
+            if (!actor || !player) return false;
+            RE::ConditionCheckParams params(actor, player);
+            RE::TESConditionItem talked;
+            talked.data.functionData.function = RE::FUNCTION_DATA::FunctionID::kGetTalkedToPC;
+            talked.data.comparisonValue.f = 1.0f;
+            talked.data.flags.opCode = RE::CONDITION_ITEM_DATA::OpCode::kEqualTo;
+            talked.data.object = RE::CONDITIONITEMOBJECT::kSelf;
+            if (talked(params)) return true;
+            RE::TESConditionItem rank;
+            rank.data.functionData.function = RE::FUNCTION_DATA::FunctionID::kGetRelationshipRank;
+            rank.data.functionData.params[0] = player;
+            rank.data.comparisonValue.f = 0.0f;
+            rank.data.flags.opCode = RE::CONDITION_ITEM_DATA::OpCode::kNotEqualTo;
+            rank.data.object = RE::CONDITIONITEMOBJECT::kSelf;
+            return rank(params);
+        }
+    }
+
     bool NPCKnowsPlayer(RE::StaticFunctionTag*, RE::Actor* actor) {
         if (!actor) return false;
+        if (GameSaysTheyMet(actor, RE::PlayerCharacter::GetSingleton())) return true;
         auto* memDB = MemoryDB::GetSingleton();
         if (!memDB) return false;
         RE::FormID formId = actor->GetFormID();
@@ -2558,6 +2587,12 @@ namespace IntelEngine::Papyrus {
     // ---------------------------------------------------------------- 4.0 lives of followers left behind
 
     void LivingWorldTrack(RE::StaticFunctionTag*) { LivingWorldBridge::GetSingleton()->Track(); }
+    void LivingWorldMarkGreeted(RE::StaticFunctionTag*, RE::Actor* actor) {
+        if (actor) LivingWorldBridge::GetSingleton()->MarkGreeted(actor->GetFormID());
+    }
+    RE::BSFixedString LivingWorldDebugAdventure(RE::StaticFunctionTag*, RE::Actor* actor) {
+        return RE::BSFixedString(LivingWorldBridge::GetSingleton()->DebugAdventure(actor).c_str());
+    }
     RE::Actor* LivingWorldTakeOrder(RE::StaticFunctionTag*) { return LivingWorldBridge::GetSingleton()->TakeOrder(); }
     std::vector<RE::Actor*> LivingWorldKeepers(RE::StaticFunctionTag*, std::int32_t limit) {
         return LivingWorldBridge::GetSingleton()->Keepers(static_cast<std::size_t>(std::clamp(limit, 0, 32)));

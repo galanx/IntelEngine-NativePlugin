@@ -411,6 +411,17 @@ namespace IntelEngine {
                         "Returns the id of the venture this NPC may ask the player along on now, empty when none.",
                         [](RE::Actor* actor) -> std::string { return QuestBridge::GetSingleton()->InviteFor(actor); });
                     logger::info("{} SkyrimNet decorator: get_intelengine_venture_invite", inviteRegistered ? "Registered" : "Failed to register");
+                    // Whether a venture's meeting with the player is going on for this NPC (planned, not yet taken on):
+                    // the travel action is not offered to them meanwhile, the meeting moves them. Mid-meeting, Jenassa's
+                    // own model sent her into Embershard on a trip of her own and the venture was lost (2026-11-18).
+                    const bool meetingRegistered = SkyrimNetAPI::RegisterDecorator(
+                        "get_intelengine_in_venture",
+                        "Returns the id of the venture meeting this NPC is in with the player now, empty when none.",
+                        [](RE::Actor* actor) -> std::string {
+                            const auto id = actor ? QuestBridge::GetSingleton()->VentureOf(actor->GetFormID()) : 0u;
+                            return id ? std::to_string(id) : std::string();
+                        });
+                    logger::info("{} SkyrimNet decorator: get_intelengine_in_venture", meetingRegistered ? "Registered" : "Failed to register");
                     // A former follower's own life since the player left them (prompt submodule 0203_intel_life).
                     const bool lifeRegistered = SkyrimNetAPI::RegisterDecorator(
                         "get_intelengine_life",

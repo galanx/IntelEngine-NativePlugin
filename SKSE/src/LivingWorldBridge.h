@@ -67,6 +67,14 @@ namespace IntelEngine {
          *  the player's tasks, and plan at most one change. Only at the Lives level do lives begin; below it the
          *  ones under way are ended. */
         void Track();
+        /** Test hook: the next order sends this former follower adventuring at the dungeon of the catalogue nearest to
+         *  the player that the player cannot see (the meeting at a dungeon is tested from it). The name of the place,
+         *  "" when there is no life for them or no such dungeon. */
+        std::string DebugAdventure(RE::Actor* actor);
+        /** They have just been with the player (a venture's meeting or its end): their own life does not greet the
+         *  player again for this step. Jenassa, met at Embershard a minute before, "caught sight of" the player once
+         *  more when the venture ended (2026-11-18). */
+        void MarkGreeted(RE::FormID actor);
         /** The actor of the next change, or none (the order stays out until OrderDone). */
         RE::Actor* TakeOrder();
         OrderKind CurrentOrderKind() const;

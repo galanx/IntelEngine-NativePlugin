@@ -3,6 +3,7 @@
 
 #include "ProcessUtils.h"
 #include "SkyrimNetAPI.h"
+#include "SpeechTracker.h"
 
 #include <nlohmann/json.hpp>
 
@@ -506,7 +507,12 @@ namespace IntelEngine {
                 m_order = Order{};
                 m_order.kind = OrderKind::Greet;
                 m_order.actor = life.actor;
-                m_order.narration = Fill("{name} catches sight of {player}.", life, player->GetDisplayFullName());
+                // Already talking (SkyrimNet's GameMaster or the player started it): that is their greeting, and a
+                // "catches sight of" in the middle of it would start them over. The greeting order still runs, so a
+                // meeting at a dungeon begins (2026-11-18: the GameMaster had Jenassa talk before IntelEngine greeted).
+                if (const float spoke = SpeechTracker::GetSingleton()->SecondsSinceSpeechEnded(life.actor); spoke < 0.0f || spoke > 30.0f) {
+                    m_order.narration = Fill("{name} catches sight of {player}.", life, player->GetDisplayFullName());
+                }
                 m_orderAt = std::chrono::steady_clock::now();
                 return true;
             }
@@ -604,6 +610,46 @@ namespace IntelEngine {
             return true;
         }
         return false;
+    }
+
+    void LivingWorldBridge::MarkGreeted(RE::FormID actor) {
+        std::scoped_lock lock(m_mutex);
+        for (auto& life : m_lives) {
+            if (life.actor == actor) life.flags |= LivingWorld::kGreeted;
+        }
+    }
+
+    std::string LivingWorldBridge::DebugAdventure(RE::Actor* actor) {
+        auto* player = RE::PlayerCharacter::GetSingleton();
+        if (!actor || !player) return {};
+        std::scoped_lock lock(m_mutex);
+        const bool known = std::any_of(m_lives.begin(), m_lives.end(), [actor](const Life& l) { return l.actor == actor->GetFormID(); });
+        if (!known || m_order.kind != OrderKind::None) return {};
+        const Spot* best = nullptr;
+        float bestDistance = 0.0f;
+        for (const auto& spot : m_dungeons) {
+            auto* ref = RE::TESForm::LookupByID<RE::TESObjectREFR>(spot.ref);
+            if (!ref || PlayerCouldSee(ref, player) || ref->GetWorldspace() != player->GetWorldspace()) continue;
+            const float d = ref->GetPosition().GetDistance(player->GetPosition());
+            if (!best || d < bestDistance) {
+                best = &spot;
+                bestDistance = d;
+            }
+        }
+        if (!best) return {};
+        Order order;
+        order.kind = OrderKind::Move;
+        order.actor = actor->GetFormID();
+        order.spot = *best;
+        order.step.activity = Activity::Adventuring;
+        order.step.place = best->location;
+        order.step.until = NowDays() + 2.0f;
+        m_order = order;
+        m_orderAt = std::chrono::steady_clock::now();
+        auto* location = RE::TESForm::LookupByID<RE::BGSLocation>(best->location);
+        const std::string name = location && location->GetFullName() ? location->GetFullName() : "a dungeon";
+        logger::info("LivingWorld: test: {} is sent adventuring at {} ({:.0f} units from the player, marker {:08X})", actor->GetDisplayFullName(), name, bestDistance, best->ref);
+        return name;
     }
 
     RE::Actor* LivingWorldBridge::TakeOrder() {
