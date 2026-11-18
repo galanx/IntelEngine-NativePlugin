@@ -10,6 +10,8 @@
 #include "SpeechTracker.h"
 #include "StorylineBridge.h"
 
+#include <nlohmann/json.hpp>
+
 #include <atomic>
 #include <chrono>
 #include <optional>
@@ -692,10 +694,59 @@ namespace IntelEngine {
     }
 
     std::vector<std::uint32_t> QuestBridge::Lapse() {
-        std::scoped_lock lock(m_mutex);
-        auto ids = m_book.Lapse(NowDays());
-        for (const auto id : ids) logger::info("Quests: #{} lapsed: its offer never came", id);
+        bool reconcile = false;
+        std::vector<std::uint32_t> ids;
+        {
+            std::scoped_lock lock(m_mutex);
+            ids = m_book.Lapse(NowDays());
+            for (const auto id : ids) logger::info("Quests: #{} lapsed: its offer never came", id);
+            if (!m_reconciled && std::chrono::steady_clock::now() - m_loadedAt > std::chrono::seconds(20)) {
+                m_reconciled = true;
+                reconcile = true;
+            }
+        }
+        if (reconcile) Reconcile();
         return ids;
+    }
+
+    void QuestBridge::Reconcile() {
+        // What the hold heard of a quest this save's record does not have (an open quest's rumor, or the deed of one
+        // that ended after this save was made, in a timeline the player left by loading): withdrawn, or people tell
+        // of what never happened here (the same as the story arcs, 2026-11-18). A deed names its quest by id and the
+        // time it began; deeds written before that label (no '#') cannot be told apart and stay.
+        if (!SkyrimNetAPI::GetWorldKnowledge || !SkyrimNetAPI::RemoveWorldKnowledge) return;
+        std::unordered_set<int> openRumors;
+        std::unordered_set<std::string> deeds;
+        {
+            std::scoped_lock lock(m_mutex);
+            for (const auto& q : m_book.all) {
+                if (q.rumor > 0) openRumors.insert(q.rumor);
+                if (q.phase == Q::Phase::Ended && q.ending != Q::Ending::Lapsed) {
+                    deeds.insert("#" + std::to_string(q.id) + "@" + std::to_string(static_cast<long long>(q.created * 10000.0f)) + ":");
+                }
+            }
+        }
+        std::thread([openRumors, deeds]() {
+            const std::string json = SkyrimNetAPI::GetWorldKnowledge(100000);
+            auto entries = nlohmann::json::parse(json, nullptr, false);
+            if (!entries.is_array()) return;
+            int withdrawn = 0;
+            for (const auto& entry : entries) {
+                const auto label = entry.value("display_name", std::string());
+                const int id = entry.value("id", 0);
+                if (id <= 0) continue;
+                bool stale = false;
+                if (label.starts_with(kRumorLabel)) {
+                    stale = !openRumors.contains(id);
+                } else if (label.starts_with("IntelEngine deed #")) {
+                    const auto mark = label.substr(std::string_view("IntelEngine deed ").size());
+                    const auto colon = mark.find(':');
+                    stale = colon == std::string::npos || !deeds.contains(mark.substr(0, colon + 1));
+                }
+                if (stale && SkyrimNetAPI::RemoveWorldKnowledge(id)) ++withdrawn;
+            }
+            logger::info("Quests: {} rumor(s) and deed(s) of other timelines withdrawn", withdrawn);
+        }).detach();
     }
 
     std::vector<std::uint32_t> QuestBridge::OpenIds() const {
@@ -1099,8 +1150,9 @@ namespace IntelEngine {
         const std::string giverName = NameOf(who);
         const std::string place = PlaceName(q.place);
         const auto id = q.id;
+        const auto created = static_cast<long long>(q.created * 10000.0f);
         logger::info("Quests: #{} ended ({}): {}", id, static_cast<int>(q.ending), memory);
-        std::thread([openRumor, memory, deed, who, holdName, giverName, place, id, companion, companionMemory]() {
+        std::thread([openRumor, memory, deed, who, holdName, giverName, place, id, companion, companionMemory, created]() {
             if (openRumor > 0 && SkyrimNetAPI::RemoveWorldKnowledge) SkyrimNetAPI::RemoveWorldKnowledge(openRumor);
             if (companion && !companionMemory.empty() && SkyrimNetAPI::AddMemory) {
                 SkyrimNetAPI::AddMemory(companion, companionMemory.c_str(), 0.6f, "EXPERIENCE", "", place.c_str(), "[\"intelengine_quest\"]", "[]");
@@ -1111,7 +1163,7 @@ namespace IntelEngine {
             }
             if (!deed.empty() && !holdName.empty() && SkyrimNetAPI::AddWorldKnowledge) {
                 const std::string condition = "get_intelengine_hold(actorUUID) == \"" + Escape(holdName) + "\" and actorName != \"" + Escape(giverName) + "\"";
-                const std::string label = "IntelEngine deed: " + giverName;
+                const std::string label = "IntelEngine deed #" + std::to_string(id) + "@" + std::to_string(created) + ": " + giverName;
                 const int k = SkyrimNetAPI::AddWorldKnowledge(deed.c_str(), condition.c_str(), false, 0.45f, label.c_str());
                 logger::info("Quests: #{} deed heard in the hold ({}): {}", id, k, deed);
             }
@@ -1166,6 +1218,8 @@ namespace IntelEngine {
         std::scoped_lock lock(m_mutex);
         m_book = std::move(book);
         g_seen.clear();
+        m_reconciled = false;
+        m_loadedAt = std::chrono::steady_clock::now();
         logger::info("Quests: loaded {} ({} open)", m_book.all.size(), m_book.Count(Q::Phase::Open));
     }
 
@@ -1173,6 +1227,8 @@ namespace IntelEngine {
         std::scoped_lock lock(m_mutex);
         m_book = Q::Book{};
         g_seen.clear();
+        m_reconciled = false;   // a save without quests still gets its look
+        m_loadedAt = std::chrono::steady_clock::now();
     }
 
     // ------------------------------------------------------------------ natives (script IntelEngine)

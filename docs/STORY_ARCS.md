@@ -14,6 +14,15 @@ that might come up from a player's perspective", "no mistakes".
 This document is the plan of record. Research behind it: `docs/research/PACING.md` (story directors, mysteries,
 procedural drama; sources cited there) and the crime and engine findings in section 9.
 
+## Status (2026-11-18)
+
+Built and played in game (Whiterun, test profile): the engine (`SKSE/src/Arcs.h`, `ArcBridge.*`,
+`IntelEngine_Arcs.psc`, journal quests IntelEngine_Arc0..3), the three first patterns (thief, feud, murder) through
+their branches, the engine's own pacing (a town's story when the player lingers, a day apart, rest for askers),
+the director's quest moments trying an arc first, and rumor reconciliation after loads (arcs, quests, lives).
+Not yet: more patterns (romance, politics, debts, longer ventures), visits at the player's home, the tension meter
+beyond the simple cadence, the battle bounty fix, a run on the full profile and the Albanian profiles.
+
 ## 1. Principles
 
 1. **Truth first.** Code decides what happens and makes it true in the game (people, items, bodies, places) before
