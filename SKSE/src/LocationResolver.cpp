@@ -1940,8 +1940,10 @@ namespace IntelEngine {
         constexpr float kPlaceHalfHeight = 200.0f;
         RE::TESObjectREFR* bestRef = nullptr;
         float bestDistance = radius;
+        // Persistent refs only: travel holds the target as a linked ref, and a temporary ref is freed when its
+        // cell unloads (2026-11-17-run1: CTD in the travel package after the player left the cell).
         const auto consider = [&](RE::TESObjectREFR* ref) -> RE::BSContainer::ForEachResult {
-            if (ref && !ref->IsDisabled() && !ref->IsDeleted() && !ref->As<RE::Actor>()) {
+            if (ref && ref->IsPersistent() && !ref->IsDisabled() && !ref->IsDeleted() && !ref->As<RE::Actor>()) {
                 const auto pos = ref->GetPosition();
                 const float dz = pos.z - center.z;
                 const float distance = pos.GetDistance(center);
