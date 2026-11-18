@@ -204,6 +204,7 @@ static void Murder() {
             const auto c = Advance(a, accuse, 1.4f);
             if (named == RCulprit && proof) {
                 Require(a.ending == Ending::Done && c.effect == Effect::Jail && c.effectRole == RCulprit, "the killer named with proof");
+                Require(c.effect2 == Effect::PayGold && c.effect2Role == RAsker, "the killer named: the asker pays the reward");
             } else if (named == RCulprit) {
                 Require(a.phase == Phase::Open && a.node == 2 && (a.flags & Flag::NoProof), "no proof: find it");
                 Require(c.log == 3031, "no proof: the journal says proof is wanted");

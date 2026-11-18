@@ -46,6 +46,7 @@ public static class Program
         if (args.Length >= 3 && args[0] == "findcell") return FindCell(args[1], args[2]);
         if (args.Length >= 3 && args[0] == "findloc") return FindLoc(args[1], args[2]);
         if (args.Length >= 3 && args[0] == "questdump") return QuestDump(args[1], args[2]);
+        if (args.Length >= 3 && args[0] == "finditem") return FindItem(args[1], args[2]);
         Console.Error.WriteLine("usage: info <esp> | build <esp in> <output folder>");
         return 2;
     }
@@ -577,6 +578,17 @@ public static class Program
         foreach (var kw in mod.Keywords)
             if ((kw.EditorID ?? "").Contains("Brawl", StringComparison.OrdinalIgnoreCase) || (kw.EditorID ?? "").Contains("Intimidate", StringComparison.OrdinalIgnoreCase))
                 Console.WriteLine($"   kw {kw.FormKey.ID:X8} {kw.EditorID}");
+        return 0;
+    }
+
+    // Weapons and misc items by editor ID part (test help: the props of the arcs).
+    static int FindItem(string path, string part)
+    {
+        using var mod = SkyrimMod.CreateFromBinaryOverlay(path, SkyrimRelease.SkyrimSE);
+        foreach (var w in mod.Weapons)
+            if ((w.EditorID ?? "").Contains(part, StringComparison.OrdinalIgnoreCase)) Console.WriteLine($"WEAP {w.FormKey.ID:X8} {w.EditorID} '{w.Name?.String}'");
+        foreach (var m in mod.MiscItems)
+            if ((m.EditorID ?? "").Contains(part, StringComparison.OrdinalIgnoreCase)) Console.WriteLine($"MISC {m.FormKey.ID:X8} {m.EditorID} '{m.Name?.String}' value={m.Value}");
         return 0;
     }
 

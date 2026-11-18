@@ -32,6 +32,7 @@ namespace IntelEngine {
         constexpr int kStays = 0;      // the asker, a witness, a rival: they only talk
         constexpr int kJailable = 1;   // a culprit: may be taken by the guard for a few days
         constexpr int kBrawler = 2;    // a rival: may end up in a fistfight with the player
+        constexpr int kKillable = 3;   // a murder's victim: never anyone the world or a quest needs
 
         // Skyrim.esm factions whose people are never a culprit or a victim (the jarl, the steward, a merchant, an
         // innkeeper, a bard: the town needs them where they are) or whom the player may have travelled with.
@@ -260,6 +261,15 @@ namespace IntelEngine {
             if (!name || !*name) continue;
             RE::FormID home = 0;
             RE::BGSLocation* where = nullptr;
+            RE::FormID placedIn = 0;
+            {
+                RE::NiPoint3 pos, rot;
+                RE::TESForm* worldOrCell = nullptr;
+                actor->GetEditorLocation2(pos, rot, worldOrCell, nullptr);
+                if (auto* cell = worldOrCell ? worldOrCell->As<RE::TESObjectCELL>() : nullptr; cell && cell->IsInteriorCell()) {
+                    placedIn = cell->GetFormID();
+                }
+            }
             if (const auto bed = bedHome.find(base->GetFormID()); bed != bedHome.end()) {
                 auto* cell = RE::TESForm::LookupByID<RE::TESObjectCELL>(bed->second);
                 home = bed->second;
@@ -280,7 +290,7 @@ namespace IntelEngine {
             if (!where) where = actor->GetEditorLocation1();
             auto* town = TownOf(where);
             if (!town) continue;
-            folk.push_back({id, base->GetFormID(), home, town->GetFormID()});
+            folk.push_back({id, base->GetFormID(), home, town->GetFormID(), home != 0 && home == placedIn});
             ++perTown[town->GetFormID()];
         }
         // Who the quests of the journal name (forced references and unique actors): a culprit is never one of them while
@@ -336,7 +346,7 @@ namespace IntelEngine {
         if (Involves(actor->GetFormID())) return why = "in another arc", false;
         if (QuestBridge::GetSingleton()->Involves(actor->GetFormID())) return why = "in a quest of IntelEngine", false;
         if (LivingWorldBridge::GetSingleton()->HasOwnLife(actor->GetFormID())) return why = "a former follower with a life of their own", false;
-        if (auto held = HeldBy(actor, need == kJailable); !held.empty()) return why = "held by " + held, false;
+        if (auto held = HeldBy(actor, need == kJailable || need == kKillable); !held.empty()) return why = "held by " + held, false;
         if (need == kBrawler) {
             // Nobody old, no guard, no jarl or steward gets into a fistfight over a town quarrel.
             auto* race = actor->GetRace();
@@ -347,7 +357,11 @@ namespace IntelEngine {
                 if (InFaction(actor, job)) return why = "the jarl's court", false;
             }
         }
-        if (need == kJailable) {
+        if (need == kKillable) {
+            // Only out of sight: they are taken home and killed where nobody, the player least of all, can see it.
+            if (actor->Is3DLoaded()) return why = "where the player could see", false;
+        }
+        if (need == kJailable || need == kKillable) {
             if (actor->IsEssential() || actor->IsProtected()) return why = "essential", false;
             if (actor->IsGuard() || actor->GetVendorFaction()) return why = "a guard or a merchant", false;
             for (const auto job : {kJobJarl, kJobSteward, kJobMerchant, kJobInnkeeper, kBard, kPotentialFollower}) {
@@ -364,7 +378,7 @@ namespace IntelEngine {
                 }
             }
             auto* crime = actor->GetCrimeFaction();
-            if (!crime || !crime->crimeData.factionJailMarker) return why = "no jail in their hold", false;
+            if (need == kJailable && (!crime || !crime->crimeData.factionJailMarker)) return why = "no jail in their hold", false;
         }
         return true;
     }
@@ -387,12 +401,15 @@ namespace IntelEngine {
         });
         // How they stand with the asker (the game's relationships): rivals and foes first; friends, family and lovers
         // never steal from them or quarrel with them.
+        bool close = false;   // standing scored for someone close to the asker (a murder's victim), else for a foe
         const auto standing = [&](const Folk* f) {
             auto* npc = RE::TESForm::LookupByID<RE::TESNPC>(f->base);
             auto* rel = (npc && askerBase) ? RE::BGSRelationship::GetRelationship(askerBase, npc) : nullptr;
             if (!rel) return 0;
             using L = RE::BGSRelationship::RELATIONSHIP_LEVEL;
             const auto level = rel->level.get();
+            const bool dear = level == L::kLover || level == L::kAlly || level == L::kConfidant || level == L::kFriend;
+            if (close) return dear ? 3 : 0;
             if (level == L::kLover || level == L::kAlly || level == L::kConfidant) return -100;
             if (level == L::kFriend) return -1;
             if (level == L::kRival || level == L::kFoe || level == L::kEnemy || level == L::kArchnemesis) return 3;
@@ -405,6 +422,7 @@ namespace IntelEngine {
             for (const auto* f : others) {
                 if (f->home && std::find(notHomes.begin(), notHomes.end(), f->home) != notHomes.end()) continue;
                 if (needsHome && !f->home) continue;
+                if (need == kKillable && !f->placedHome) continue;   // found dead at home: the game must know it as theirs
                 bool cast = false;
                 for (const auto who : a.cast) cast = cast || who == f->ref;
                 if (cast) continue;
@@ -439,6 +457,36 @@ namespace IntelEngine {
                 a.propName[0] = ShortName(asker->GetDisplayFullName()) + "'s " + ItemNames::Display(NameOf(a.propBase[0]));
                 return true;
             }
+            case A::Pattern::Murder: {
+                close = true;
+                const Folk* victim = pick(kKillable, {me->home}, true, true);
+                close = false;
+                if (!victim) return why = "nobody in town could be the victim", false;
+                a.cast[A::RVictim] = victim->ref;
+                a.scene = victim->home;
+                const Folk* culprit = pick(kJailable, {me->home, victim->home}, false, true);
+                if (!culprit) return why = "nobody in town could be the killer", false;
+                a.cast[A::RCulprit] = culprit->ref;
+                const Folk* witness = pick(kStays, {me->home, victim->home, culprit->home}, false, false);
+                if (!witness) return why = "nobody in town could have seen it", false;
+                a.cast[A::RWitness] = witness->ref;
+                const Folk* second = pick(kStays, {me->home, victim->home, culprit->home, witness->home}, false, false);
+                if (!second) return why = "too few people in town to suspect", false;
+                a.cast[A::RSuspect2] = second->ref;
+                const Folk* third = pick(kStays, {me->home, victim->home, culprit->home, witness->home, second->home}, false, false);
+                if (!third) return why = "too few people in town to suspect", false;
+                a.cast[A::RSuspect3] = third->ref;
+                // The weapon, hidden at the killer's home; and a gem of the victim's, still in the killer's pocket.
+                auto* data = RE::TESDataHandler::GetSingleton();
+                auto* dagger = data ? data->LookupForm(0x1397E, "Skyrim.esm") : nullptr;
+                auto* ruby = data ? data->LookupForm(0x63B42, "Skyrim.esm") : nullptr;
+                if (!dagger || !ruby) return why = "no dagger or gem in the load order", false;
+                a.propBase[0] = dagger->GetFormID();
+                a.propName[0] = "Bloodied " + ItemNames::Display(NameOf(a.propBase[0]));
+                a.propBase[1] = ruby->GetFormID();
+                a.propName[1] = ShortName(NameOf(a.cast[A::RVictim])) + "'s " + ItemNames::Display(NameOf(a.propBase[1]));
+                return true;
+            }
             case A::Pattern::Feud: {
                 const Folk* rival = pick(kBrawler, {me->home}, true, false);
                 if (!rival) return why = "nobody in town to be at odds with", false;
@@ -469,7 +517,7 @@ namespace IntelEngine {
             tries.push_back(static_cast<A::Pattern>(pattern));
         } else {
             // Whichever fits, never the kind that ran last.
-            for (const auto p : {A::Pattern::Thief, A::Pattern::Feud}) {
+            for (const auto p : {A::Pattern::Thief, A::Pattern::Feud, A::Pattern::Murder}) {
                 if (p != last) tries.push_back(p);
             }
         }
@@ -509,7 +557,38 @@ namespace IntelEngine {
         std::scoped_lock lock(m_mutex);
         const bool ok = m_book.Accept(id, NowDays());
         logger::info("Arcs: #{} {}", id, ok ? "taken on" : "could not be taken on");
+        if (const auto* a = ok ? m_book.Find(id) : nullptr) Spread(*a);
         return ok;
+    }
+
+    void ArcBridge::Spread(const A::Arc& a) {
+        // A murder is known in the hold the moment it is open: everyone may speak of it (the witness and the suspects
+        // know more, from their own lines).
+        const std::string rumor = Fill(A::Rumor(a), a);
+        if (!rumor.empty()) Tell(a.id, rumor, 0, a.cast[A::RAsker], a.place);
+    }
+
+    void ArcBridge::Tell(std::uint32_t id, const std::string& rumor, int replace, RE::FormID askerId, RE::FormID placeId) {
+        auto* town = RE::TESForm::LookupByID<RE::BGSLocation>(placeId);
+        auto* hold = HoldOf(town);
+        const std::string holdName = hold && hold->GetFullName() ? hold->GetFullName() : "";
+        const std::string askerName = NameOf(askerId);
+        ++m_writing;
+        std::thread([this, id, rumor, replace, holdName, askerName]() {
+            if (replace > 0 && SkyrimNetAPI::RemoveWorldKnowledge) SkyrimNetAPI::RemoveWorldKnowledge(replace);
+            int k = 0;
+            if (!rumor.empty() && !holdName.empty() && SkyrimNetAPI::AddWorldKnowledge) {
+                const std::string condition = "get_intelengine_hold(actorUUID) == \"" + Escape(holdName) + "\" and actorName != \"" + Escape(askerName) + "\"";
+                const std::string label = std::string(kRumorLabel) + std::to_string(id);
+                k = SkyrimNetAPI::AddWorldKnowledge(rumor.c_str(), condition.c_str(), false, 0.45f, label.c_str());
+                logger::info("Arcs: #{} heard in the hold ({}): {}", id, k, rumor);
+            }
+            {
+                std::scoped_lock lock(m_mutex);
+                if (auto* arc = m_book.Find(id)) arc->rumor = k > 0 ? k : 0;
+            }
+            --m_writing;
+        }).detach();
     }
 
     bool ArcBridge::Decline(std::uint32_t id) {
@@ -525,6 +604,10 @@ namespace IntelEngine {
         {
             std::scoped_lock lock(m_mutex);
             ids = m_book.Lapse(NowDays());
+            // A murder never brought to the player still happened: the town hears of it.
+            for (const auto id : ids) {
+                if (const auto* a = m_book.Find(id); a && a->pattern == A::Pattern::Murder) Ended(*a);
+            }
             if (!m_reconciled && m_writing.load() == 0 && std::chrono::steady_clock::now() - m_loadedAt > std::chrono::seconds(20)) {
                 m_reconciled = true;
                 reconcile = true;
@@ -644,8 +727,8 @@ namespace IntelEngine {
             f.handed[p] = (pending.handed & (1u << p)) != 0;
         }
         if (a->scene) {
-            auto* scene = RE::TESForm::LookupByID<RE::TESObjectREFR>(a->scene);
-            f.atScene = scene && scene->Is3DLoaded() && scene->GetParentCell() == player->GetParentCell();
+            auto* here = player->GetParentCell();
+            f.atScene = here && here->GetFormID() == a->scene;   // the victim's home
         }
         f.answer = pending.answer;
         f.brawl = pending.brawl;
@@ -809,6 +892,21 @@ namespace IntelEngine {
         }
     }
 
+    RE::Actor* ArcBridge::StageVictim(std::uint32_t id) {
+        RE::Actor* victim = nullptr;
+        {
+            std::scoped_lock lock(m_mutex);
+            const auto* a = m_book.Find(id);
+            if (!a || a->pattern != A::Pattern::Murder || !A::IsLive(*a)) return nullptr;
+            victim = RE::TESForm::LookupByID<RE::Actor>(a->cast[A::RVictim]);
+        }
+        // Never in the player's sight: taken home (where the game placed them) while out of every loaded cell.
+        if (!victim || victim->IsDead() || victim->Is3DLoaded()) return nullptr;
+        victim->MoveToEditorLocation();
+        logger::info("Arcs: #{} {} is home, to be found there", id, NameOf(victim->GetFormID()));
+        return victim;
+    }
+
     bool ArcBridge::Brawl(std::uint32_t id, int result) {
         std::scoped_lock lock(m_mutex);
         const auto* a = m_book.Find(id);
@@ -892,6 +990,14 @@ namespace IntelEngine {
             const auto pending = m_pending.find(id);
             return pending != m_pending.end() && pending->second.plantAt ? RE::TESForm::LookupByID(pending->second.plantAt) : nullptr;
         }
+        if (name == "jail" || name == "jailout") {
+            // The hold's jail (where the player is put) and where the hold lets prisoners out. Asked for when the story
+            // has just ended too (a killer named with proof): "no jail for Nazeem" when it was open-only (2026-11-18).
+            auto* culprit = RE::TESForm::LookupByID<RE::Actor>(a->cast[A::RCulprit]);
+            auto* crime = culprit ? culprit->GetCrimeFaction() : nullptr;
+            if (!crime) return nullptr;
+            return name == "jail" ? crime->crimeData.factionJailMarker : crime->crimeData.factionWaitMarker;
+        }
         if (a->node >= def.nodes.size() || !A::IsOpen(*a)) return nullptr;
         const auto& n = def.nodes[a->node];
         if (name == "who") return actor(n.who);
@@ -907,13 +1013,6 @@ namespace IntelEngine {
                 if (at && !at->As<RE::Actor>()) return at;
             }
             return actor(n.marker);
-        }
-        if (name == "jail" || name == "jailout") {
-            // The hold's jail (where the player is put) and where the hold lets prisoners out.
-            auto* culprit = RE::TESForm::LookupByID<RE::Actor>(a->cast[A::RCulprit]);
-            auto* crime = culprit ? culprit->GetCrimeFaction() : nullptr;
-            if (!crime) return nullptr;
-            return name == "jail" ? crime->crimeData.factionJailMarker : crime->crimeData.factionWaitMarker;
         }
         return nullptr;
     }
@@ -1059,33 +1158,18 @@ namespace IntelEngine {
             if (!memory.empty()) notes.push_back({a.cast[r], Fill(memory, a)});
         }
         const std::string rumor = Fill(A::Rumor(a), a);
-        auto* asker = RE::TESForm::LookupByID<RE::Actor>(a.cast[A::RAsker]);
-        auto* town = RE::TESForm::LookupByID<RE::BGSLocation>(a.place);
-        auto* hold = HoldOf(town);
-        const std::string holdName = hold && hold->GetFullName() ? hold->GetFullName() : "";
-        const std::string askerName = asker ? NameOf(a.cast[A::RAsker]) : std::string();
         const std::string place = PlaceName(a.place);
         const auto id = a.id;
         logger::info("Arcs: #{} ended ({}){}", id, static_cast<int>(a.ending), rumor.empty() ? std::string() : ": " + rumor);
-        ++m_writing;
-        std::thread([this, notes, rumor, holdName, askerName, place, id]() {
+        std::thread([notes, place, id]() {
             for (const auto& note : notes) {
                 if (!SkyrimNetAPI::AddMemory) break;
                 const int m = SkyrimNetAPI::AddMemory(note.who, note.text.c_str(), 0.7f, "EXPERIENCE", "", place.c_str(), "[\"intelengine_arc\"]", "[]");
                 logger::info("Arcs: #{} memory {} for {:08X}: {}", id, m, note.who, note.text);
             }
-            if (!rumor.empty() && !holdName.empty() && SkyrimNetAPI::AddWorldKnowledge) {
-                const std::string condition = "get_intelengine_hold(actorUUID) == \"" + Escape(holdName) + "\" and actorName != \"" + Escape(askerName) + "\"";
-                const std::string label = std::string(kRumorLabel) + std::to_string(id);
-                const int k = SkyrimNetAPI::AddWorldKnowledge(rumor.c_str(), condition.c_str(), false, 0.45f, label.c_str());
-                logger::info("Arcs: #{} heard in the hold ({})", id, k);
-                if (k > 0) {
-                    std::scoped_lock lock(m_mutex);
-                    if (auto* arc = m_book.Find(id)) arc->rumor = k;
-                }
-            }
-            --m_writing;
         }).detach();
+        // What the hold hears now replaces what it heard while the story was open (a murder's "found dead").
+        if (!rumor.empty() || a.rumor > 0) Tell(id, rumor, a.rumor, a.cast[A::RAsker], a.place);
     }
 
     void ArcBridge::Reconcile() {
@@ -1212,6 +1296,7 @@ namespace IntelEngine {
         bool ArcAnswer(RE::StaticFunctionTag*, std::int32_t id, std::int32_t option) { return ArcBridge::GetSingleton()->Answer(U(id), option); }
         bool ArcHandOver(RE::StaticFunctionTag*, std::int32_t id) { return ArcBridge::GetSingleton()->HandOver(U(id)); }
         bool ArcBrawl(RE::StaticFunctionTag*, std::int32_t id, std::int32_t result) { return ArcBridge::GetSingleton()->Brawl(U(id), result); }
+        RE::Actor* ArcStageVictim(RE::StaticFunctionTag*, std::int32_t id) { return ArcBridge::GetSingleton()->StageVictim(U(id)); }
         void ArcPlanted(RE::StaticFunctionTag*, std::int32_t id, std::int32_t prop, RE::TESObjectREFR* at) {
             ArcBridge::GetSingleton()->Planted(U(id), prop, at);
         }
@@ -1234,6 +1319,7 @@ namespace IntelEngine {
         a_vm->RegisterFunction("ArcAnswer", script, ArcAnswer); ++count;
         a_vm->RegisterFunction("ArcHandOver", script, ArcHandOver); ++count;
         a_vm->RegisterFunction("ArcBrawl", script, ArcBrawl); ++count;
+        a_vm->RegisterFunction("ArcStageVictim", script, ArcStageVictim); ++count;
         a_vm->RegisterFunction("ArcPlanted", script, ArcPlanted); ++count;
         a_vm->RegisterFunction("ArcField", script, ArcField); ++count;
         a_vm->RegisterFunction("ArcForm", script, ArcForm); ++count;
