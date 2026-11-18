@@ -112,6 +112,8 @@ class VM:
         self.properties.update({"NPCTickIntervalHours": 1.5, "MONITOR_INTERVAL": 5.0, "IDLE_POLL_INTERVAL": 30.0})
         # Core's own bookkeeping variables (3.8): pending tick, last sweep, open popup request.
         self.properties.update({"_tickDueRealTime": 0.0, "_lastSweepGameTime": 0.0, "_mlRequest": ""})
+        # 3.8.2: when the quest's one game-time timer is due (RequestGameTimeTick).
+        self.properties.update({"_gameTickDue": 0.0})
         # Slots picked for a task that is being set up (ClaimFreeAgentSlot); None until the first pick, as in a save
         # from before the variable existed.
         self.properties.update({"_slotClaimedAt": None, "SLOT_CLAIM_SECONDS": 30.0})
@@ -1486,6 +1488,53 @@ def run_slot_claim_checks(files, history):
     print("actual PEX IsDuplicateTask: leftover task fields without a slot do not block the same request")
 
 
+def run_game_time_tick_checks(files, history, others):
+    """Every script of the quest shares one game-time timer, and the last registration wins. Until 3.8.2 the story
+    engine registered it again on every monitoring tick, so it was pushed back for as long as anything ran and
+    replaced the schedule's and the battle's timers. Core.RequestGameTimeTick now only moves the timer when the
+    request is sooner than what is pending."""
+    class TickVM(VM):
+        now = 100.0
+
+        def external(self, method, args, script):
+            if method == "GetCurrentGameTime": return self.now
+            return super().external(method, args, script)
+
+    def registered(vm):
+        return [event[1] for event in vm.effects if event[0] == "RegisterForSingleUpdateGameTime"]
+
+    vm = TickVM(files, history)
+    vm.invoke("IntelEngine_Core", "RequestGameTimeTick", (3.0,))
+    require(registered(vm) == [(3.0,)], f"the first request did not set the timer: {registered(vm)!r}")
+    # A request for later, and the same request again a moment on: the pending timer stays where it is.
+    vm.invoke("IntelEngine_Core", "RequestGameTimeTick", (6.0,))
+    vm.now += 1.0 / 24.0
+    vm.invoke("IntelEngine_Core", "RequestGameTimeTick", (3.0,))
+    require(registered(vm) == [(3.0,)], f"a later request moved a timer that was due sooner: {registered(vm)!r}")
+    # A sooner one moves it.
+    vm.invoke("IntelEngine_Core", "RequestGameTimeTick", (0.5,))
+    require(registered(vm) == [(3.0,), (0.5,)], f"a sooner request did not move the timer: {registered(vm)!r}")
+    # Once the due time has passed (the timer went off, or was lost), the next request sets it again.
+    vm.now += 1.0
+    vm.invoke("IntelEngine_Core", "RequestGameTimeTick", (3.0,))
+    require(registered(vm) == [(3.0,), (0.5,), (3.0,)], f"no timer was set after the pending one had passed: {registered(vm)!r}")
+    # A save from before the variable existed starts at zero: the first request sets the timer.
+    vm = TickVM(files, history)
+    vm.properties["_gameTickDue"] = 0.0
+    vm.invoke("IntelEngine_Core", "RequestGameTimeTick", (1.0,))
+    require(registered(vm) == [(1.0,)], "a save without a pending time did not get its timer")
+    # Nobody but Core touches the game-time timer any more: no direct registration and no switching it off.
+    scripts = dict(others, IntelEngine_StoryEngine=files[2], IntelEngine_NPCTasks=files[0], IntelEngine_Politics=files[3])
+    for script, functions in scripts.items():
+        for name, (_params, code, _locals) in functions.items():
+            direct = [op for op, args in code if op == "callmethod" and args[0][1] in ("RegisterForSingleUpdateGameTime", "UnregisterForUpdateGameTime")]
+            require(not direct, f"{script}.{name} still sets or clears the game-time timer itself")
+    asked = sum(1 for functions in scripts.values() for _params, code, _locals in functions.values()
+                for op, args in code if op == "callmethod" and args[0][1] == "RequestGameTimeTick")
+    require(asked >= 6, f"expected the schedule, the story engine and the battle script to ask Core for the timer, found {asked} calls")
+    print("actual PEX RequestGameTimeTick: a later request leaves a sooner timer alone, a sooner one moves it, it is set again once due has passed; only Core registers")
+
+
 def run_linger_teammate_checks(files, history):
     class LingerVM(VM):
         teammate = False
@@ -2080,6 +2129,8 @@ def main():
     run_bard_release_checks(files, history)
     run_review_note_checks(files, history)
     run_slot_claim_checks(files, history)
+    run_game_time_tick_checks(files, history, {"IntelEngine_Schedule": disassemble("IntelEngine_Schedule.pex"),
+                                               "IntelEngine_Battle": disassemble("IntelEngine_Battle.pex")})
     run_linger_teammate_checks(files, history)
     run_social_range_checks(files, history)
 
