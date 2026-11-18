@@ -653,7 +653,10 @@ namespace IntelEngine::Arcs {
                     if (!open) return {};
                     out = why + " I asked {player} to settle it one way or another, for {gold} gold, paid once it is settled. "
                                 "It is not settled yet, and I have paid nothing yet.";
-                    if (a.flags & Flag::Fists) out += " {player} means to settle it with fists against {rival}; it is not done yet.";
+                    if (a.flags & Flag::Fists) {
+                        out += " {player} means to settle it with fists against {rival}, fighting for me; I do not fight {rival} myself. "
+                               "It is not done yet.";
+                    }
                     if (a.flags & Flag::Peace) out += " {player} is trying to talk {rival} into making peace; it is not done yet.";
                     if (a.flags & Flag::Refused) out += " {rival} would not be talked round so far.";
                     return out;
@@ -662,7 +665,10 @@ namespace IntelEngine::Arcs {
                     if (!open && !planned) return {};
                     out = std::string(FeudGrievance(a.seed).rival) + " {asker} and I are at odds, and I will not be the one to back down.";
                     if (open) out += " {player} has taken it on, for {asker}. If {player} asks for my side of it, I give it.";
-                    if (a.flags & Flag::Fists) out += " {player} wants to settle it with fists; if {player} challenges me, I accept.";
+                    if (a.flags & Flag::Fists) {
+                        out += " {player} wants to settle it with fists, fighting me for {asker}; I will not back down from it. "
+                               "The fight is between {player} and me; {asker} does not fight me.";
+                    }
                     if (a.flags & Flag::Refused) out += " {player} tried to talk me round, and I would not have it.";
                     return out;
                 }

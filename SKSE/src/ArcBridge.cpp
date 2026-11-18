@@ -170,6 +170,8 @@ namespace IntelEngine {
             return std::string(name);
         }
 
+        std::atomic<RE::FormID> g_forcedCast{0};
+
         RE::TESQuest* JournalQuest(std::uint8_t slot) {
             if (slot >= A::kSlots) return nullptr;
             const std::string editorId = "IntelEngine_Arc" + std::to_string(slot);
@@ -421,9 +423,21 @@ namespace IntelEngine {
             if (level == L::kRival || level == L::kFoe || level == L::kEnemy || level == L::kArchnemesis) return 3;
             return 0;
         };
+        // Test hook (ArcDebugCast): the next arc's thief, rival or killer is this person when they may be cast at all.
+        RE::FormID forcedFirst = g_forcedCast.exchange(0);
         const auto pick = [&](int need, std::initializer_list<RE::FormID> notHomes, bool byStanding, bool needsHome) -> const Folk* {
             const Folk* best = nullptr;
             int bestScore = -1000;
+            if (forcedFirst) {
+                const auto chosen = forcedFirst;
+                forcedFirst = 0;
+                for (const auto* f : others) {
+                    if (f->ref != chosen) continue;
+                    std::string reason;
+                    if (Usable(RE::TESForm::LookupByID<RE::Actor>(f->ref), need, reason)) return f;
+                    logger::info("Arcs: the chosen {} cannot be cast: {}", NameOf(f->ref), reason);
+                }
+            }
             std::string reasons;
             for (const auto* f : others) {
                 if (f->home && std::find(notHomes.begin(), notHomes.end(), f->home) != notHomes.end()) continue;
@@ -432,9 +446,13 @@ namespace IntelEngine {
                 bool cast = false;
                 for (const auto who : a.cast) cast = cast || who == f->ref;
                 if (cast) continue;
-                const int score = byStanding ? standing(f) : 0;
-                if (score <= -100 || score <= bestScore) {
-                    if (score <= -100) reasons += NameOf(f->ref) + " (close to " + NameOf(me->ref) + "), ";
+                // People the game gives relationships to (family, friends, rivals) are its real townsfolk; a
+                // placeholder such as the temple's "Sickly Farmer" (a patient in bed who answers nobody) has none.
+                auto* fNpc = RE::TESForm::LookupByID<RE::TESNPC>(f->base);
+                const int known = fNpc && fNpc->relationships && !fNpc->relationships->empty() ? 4 : 0;
+                const int score = (byStanding ? standing(f) : 0) + known;
+                if (score <= -90 || score <= bestScore) {
+                    if (score <= -90) reasons += NameOf(f->ref) + " (close to " + NameOf(me->ref) + "), ";
                     continue;
                 }
                 auto* actor = RE::TESForm::LookupByID<RE::Actor>(f->ref);
@@ -811,13 +829,17 @@ namespace IntelEngine {
         auto& pending = m_pending[id];
         A::Facts f;
         std::array<RE::Actor*, A::kRoles> actors{};
+        const bool scene = RealSeconds() < pending.sceneUntil;
         for (std::size_t r = 1; r < A::kRoles; ++r) {
             if (!a->cast[r]) continue;
             auto* actor = RE::TESForm::LookupByID<RE::Actor>(a->cast[r]);
             actors[r] = actor;
             f.dead[r] = !actor || actor->IsDead() || actor->IsDeleted();
             f.with[r] = actor && PlayerIsWith(actor, kWithDistance);
-            f.spoke[r] = f.with[r] && SpokeWithPlayer(a->cast[r]);
+            if (f.with[r]) {
+                const float since = SpeechTracker::GetSingleton()->SecondsSinceSpeechEnded(a->cast[r]);
+                f.spoke[r] = SpokeWithPlayer(a->cast[r]) || (scene && since >= 0.0f && since <= kSpokeSeconds);
+            }
         }
         for (std::size_t p = 0; p < A::kProps; ++p) {
             f.has[p] = a->propBase[p] && FindStamped(player, a->propBase[p], a->propName[p]).object != nullptr;
@@ -1004,6 +1026,13 @@ namespace IntelEngine {
         return victim;
     }
 
+    void ArcBridge::Scene(std::uint32_t id, float seconds) {
+        std::scoped_lock lock(m_mutex);
+        if (!m_book.Find(id)) return;
+        m_pending[id].sceneUntil = RealSeconds() + std::clamp(seconds, 0.0f, 300.0f);
+        logger::info("Arcs: #{} a scene in front of the player for {:.0f} s", id, seconds);
+    }
+
     bool ArcBridge::Brawl(std::uint32_t id, int result) {
         std::scoped_lock lock(m_mutex);
         const auto* a = m_book.Find(id);
@@ -1171,6 +1200,7 @@ namespace IntelEngine {
             return Fill(n.options[i], *a);
         }
         if (name == "fight") return Fill("Settle it with {rival} here and now, with your fists?", *a);
+        if (name == "grievance") return a->pattern == A::Pattern::Feud ? Fill(A::FeudGrievance(a->seed).heard, *a) : std::string();
         if (name == "question") {
             switch (n.objective) {
                 case A::Objective::Confront: return Fill("{culprit} stole {item0}. What will you do with {culprit}?", *a);
@@ -1395,6 +1425,7 @@ namespace IntelEngine {
         bool ArcHandOver(RE::StaticFunctionTag*, std::int32_t id) { return ArcBridge::GetSingleton()->HandOver(U(id)); }
         bool ArcBrawl(RE::StaticFunctionTag*, std::int32_t id, std::int32_t result) { return ArcBridge::GetSingleton()->Brawl(U(id), result); }
         RE::Actor* ArcStageVictim(RE::StaticFunctionTag*, std::int32_t id) { return ArcBridge::GetSingleton()->StageVictim(U(id)); }
+        void ArcScene(RE::StaticFunctionTag*, std::int32_t id, float seconds) { ArcBridge::GetSingleton()->Scene(U(id), seconds); }
         void ArcPlanted(RE::StaticFunctionTag*, std::int32_t id, std::int32_t prop, RE::TESObjectREFR* at) {
             ArcBridge::GetSingleton()->Planted(U(id), prop, at);
         }
@@ -1404,6 +1435,7 @@ namespace IntelEngine {
             return RE::BSFixedString(ArcBridge::GetSingleton()->Text(U(id), S(name)).c_str());
         }
         void ArcApplyTitles(RE::StaticFunctionTag*) { ArcBridge::GetSingleton()->ApplyTitles(); }
+        void ArcDebugCast(RE::StaticFunctionTag*, RE::Actor* actor) { g_forcedCast.store(actor ? actor->GetFormID() : 0); }
     }
 
     void ArcBridge::Register(RE::BSScript::IVirtualMachine* a_vm, int& count) {
@@ -1419,10 +1451,12 @@ namespace IntelEngine {
         a_vm->RegisterFunction("ArcHandOver", script, ArcHandOver); ++count;
         a_vm->RegisterFunction("ArcBrawl", script, ArcBrawl); ++count;
         a_vm->RegisterFunction("ArcStageVictim", script, ArcStageVictim); ++count;
+        a_vm->RegisterFunction("ArcScene", script, ArcScene); ++count;
         a_vm->RegisterFunction("ArcPlanted", script, ArcPlanted); ++count;
         a_vm->RegisterFunction("ArcField", script, ArcField); ++count;
         a_vm->RegisterFunction("ArcForm", script, ArcForm); ++count;
         a_vm->RegisterFunction("ArcText", script, ArcText); ++count;
         a_vm->RegisterFunction("ArcApplyTitles", script, ArcApplyTitles); ++count;
+        a_vm->RegisterFunction("ArcDebugCast", script, ArcDebugCast); ++count;
     }
 }
