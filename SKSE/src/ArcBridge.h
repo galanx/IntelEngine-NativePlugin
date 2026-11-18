@@ -46,6 +46,8 @@ namespace IntelEngine {
         bool Answer(std::uint32_t id, int option);
         /** The prop of the current hand-over goes from the player to who the node gives it to. */
         bool HandOver(std::uint32_t id);
+        /** How the brawl of a Brawl node ended: 1 the player won, -1 lost (or it turned into a real fight). */
+        bool Brawl(std::uint32_t id, int result);
         /** Gold that reached the player from this actor (the inventory event): counted toward an open arc's reward. */
         void GoldToPlayer(RE::FormID from, std::int32_t count);
         /** At data load: the inventory event that sees gold reach the player. */
@@ -86,6 +88,8 @@ namespace IntelEngine {
             std::uint8_t handed = 0;
             int brawl = 0;
             std::uint16_t log = 0;
+            int effect2 = 0;
+            int effect2Role = 0;
             RE::FormID plantAt = 0;
             int plantProp = -1;
             bool plantFloor = false;

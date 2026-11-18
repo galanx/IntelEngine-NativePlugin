@@ -90,7 +90,9 @@ namespace IntelEngine::Arcs {
         Won = 8,      // the brawl was won
         Lost = 9,     // the brawl was lost
         Handed = 10,  // prop `prop` was handed to `role` (the hand-over popup, offered on this node too)
+        Persuaded = 11,  // the first answer, and the player's Speech is enough to carry it (kPersuadeSpeech)
     };
+    constexpr int kPersuadeSpeech = 35;
 
     constexpr std::uint8_t kNoNode = 0xFF;
 
@@ -107,6 +109,8 @@ namespace IntelEngine::Arcs {
         std::uint16_t log = 0;       // the journal stage this branch writes (else the node's logStage)
         bool skip = false;           // the node's own fact did not happen (a shortcut): its objective is taken away,
                                      // not completed, and it writes no line of its own
+        Effect effect2 = Effect::None;  // a second piece of work (the asker pays the reward after the player paid)
+        Role effect2Role = RNone;
     };
 
     // The journal phrasings of an arc's journal quest (esp/EspBuilder ArcPhrasings, same order).
@@ -152,6 +156,7 @@ namespace IntelEngine::Arcs {
         constexpr std::uint32_t NoProof = 1u << 7;        // the player named the right killer without proof
         constexpr std::uint32_t Apology = 1u << 8;        // peace through the asker's apology
         constexpr std::uint32_t BoughtOff = 1u << 9;      // peace bought with the player's gold
+        constexpr std::uint32_t Refused = 1u << 10;       // the rival would not be talked round
     }
 
     struct PatternDef {
@@ -191,9 +196,11 @@ namespace IntelEngine::Arcs {
              {{{If::Won, RNone, 0, 0, kNoNode, Ending::Done, Effect::PayGold, RAsker, 0},
                {If::Lost, RNone, 0, 0, kNoNode, Ending::Failed, Effect::None, RNone, 0}}}},
             {Kind::Choose, RRival, 0, Objective::MakePeace, RRival, 0, 0.0f,
-             {"Bring {rival} {asker}'s apology", "Pay {rival} {gold} gold to let it go", nullptr}, {},
-             {{{If::Option0, RNone, 0, 0, kNoNode, Ending::Settled, Effect::None, RNone, Flag::Apology},
-               {If::Option1, RNone, 0, 0, kNoNode, Ending::Settled, Effect::PlayerPays, RRival, Flag::BoughtOff}}}},
+             {"Talk {rival} round (Speech)", "Pay {rival} {gold} gold to let it go", nullptr}, {},
+             {{{If::Persuaded, RNone, 0, 0, kNoNode, Ending::Settled, Effect::PayGold, RAsker, Flag::Apology},
+               {If::Option0, RNone, 0, 0, 3, Ending::None, Effect::None, RNone, Flag::Refused, 2023},
+               {If::Option1, RNone, 0, 0, kNoNode, Ending::Settled, Effect::PlayerPays, RRival, Flag::BoughtOff, 0, false,
+                Effect::PayGold, RAsker}}}},
         };
         // Murder in town. 0 see the scene -> 1 question the witness -> 2 find proof -> 3 name the killer.
         static constexpr Node murder[] = {
@@ -242,6 +249,7 @@ namespace IntelEngine::Arcs {
         std::array<bool, kProps> handed{}; // the prop went to the one the node gives it to
         bool atScene = false;              // the player is where `who` lives or died
         int answer = -1;                   // the popup's answer (shown index), -1 = none yet
+        int speech = 0;                    // the player's Speech skill
         int brawl = 0;                     // 1 won, -1 lost, 0 none yet
     };
 
@@ -286,7 +294,10 @@ namespace IntelEngine::Arcs {
         Ending ending = Ending::None;
         std::uint16_t log = 0;   // the journal stage to set for the step done (0 = none)
         std::uint8_t skipped = kNoNode;   // a node left by a shortcut: its objective is taken away
-        bool any() const { return !done.empty() || skipped != kNoNode || ending != Ending::None || effect != Effect::None; }
+        Effect effect2 = Effect::None;
+        Role effect2Role = RNone;
+        bool stayed = false;     // a branch back to the same step fired (its line is written, nothing completes)
+        bool any() const { return !done.empty() || stayed || skipped != kNoNode || ending != Ending::None || effect != Effect::None; }
     };
 
     // The role a shown answer names (accusations), RNone when the answer names nobody.
@@ -320,6 +331,7 @@ namespace IntelEngine::Arcs {
             case If::Won: return f.brawl > 0;
             case If::Lost: return f.brawl < 0;
             case If::Handed: return f.handed[e.prop];
+            case If::Persuaded: return f.answer == 0 && f.speech >= kPersuadeSpeech;
         }
         return false;
     }
@@ -347,11 +359,17 @@ namespace IntelEngine::Arcs {
             if (e.when == If{} || !EdgeHolds(a, n, e, f)) continue;
             a.visited |= 1u << a.node;
             a.flags |= e.setFlags;
+            // A branch back to the same step (the rival would not be talked round) leaves it neither done nor
+            // skipped: the player is still on it.
+            const bool stays = e.next == a.node && e.ending == Ending::None;
             if (e.skip) c.skipped = a.node;
-            else c.done.push_back(a.node);
+            else if (!stays) c.done.push_back(a.node);
+            c.stayed = stays;
             c.effect = e.effect;
             c.effectRole = e.effectRole;
             c.log = e.log ? e.log : n.logStage;
+            c.effect2 = e.effect2;
+            c.effect2Role = e.effect2Role;
             a.deadline += n.extendDays;
             if (n.kind == Kind::Choose) a.accused = AnswerRole(a, n, f.answer);
             a.since = now;
@@ -525,6 +543,30 @@ namespace IntelEngine::Arcs {
         return r;
     }
 
+    // What a feud is about, told from each side (the same quarrel, each sure of their own right), chosen by the seed.
+    struct Grievance {
+        const char* asker;   // the asker's side, first person
+        const char* rival;   // the rival's side, first person
+        const char* heard;   // what the town says of it
+    };
+    inline const Grievance& FeudGrievance(std::uint32_t seed) {
+        static constexpr Grievance list[] = {
+            {"{rival} borrowed two hundred gold from me last harvest and swears it was paid back. It was not.",
+             "{asker} says I still owe two hundred gold. I paid every coin back long ago, and {asker} knows it.",
+             "{asker} and {rival} fell out over two hundred gold {rival} borrowed"},
+            {"{rival} has been telling everyone at the inn that I cheat my customers.",
+             "I told people at the inn what everyone whispers anyway: that {asker} cheats their customers. I will not take it back.",
+             "{rival} has been telling the inn that {asker} cheats people"},
+            {"{rival} insulted my family in front of half the town, and has never once said sorry.",
+             "I said something about {asker}'s family in front of the town. It was the truth, and I will not apologise for the truth.",
+             "{rival} insulted {asker}'s family in public"},
+            {"{rival} cheated me at dice and laughed about it all over town.",
+             "{asker} lost to me at dice, fair and square, and cannot stand losing.",
+             "{asker} says {rival} cheated at dice"},
+        };
+        return list[seed % std::size(list)];
+    }
+
     inline std::uint32_t RewardGold(Pattern p, int playerLevel) {
         const int base = p == Pattern::Murder ? 300 : p == Pattern::Thief ? 150 : 100;
         const int level = std::clamp(playerLevel, 1, 60);
@@ -546,7 +588,8 @@ namespace IntelEngine::Arcs {
             case Pattern::Thief:
                 return "{asker} comes to {player} upset: someone broke into {asker}'s home and stole a {thing0}, and {asker} needs someone to find the thief";
             case Pattern::Feud:
-                return "{asker} comes to {player}, fed up with {rival}, and wants someone to settle the bad blood between them";
+                return std::string("{asker} comes to {player}, fed up with {rival}: ") + FeudGrievance(a.seed).asker +
+                       " {asker} wants someone to settle the bad blood between them";
             case Pattern::Murder:
                 return "{asker} comes to {player} grim-faced: {victim} was found dead, and {asker} wants someone to find out who killed them";
             default: return {};
@@ -555,7 +598,9 @@ namespace IntelEngine::Arcs {
     inline std::string OfferPrompt(const Arc& a) {
         switch (a.pattern) {
             case Pattern::Thief: return "Someone stole {item0}. {asker} asks you to find the thief and bring it back. Reward: {gold} gold.";
-            case Pattern::Feud: return "{asker} asks you to settle the bad blood with {rival}, one way or another. Reward: {gold} gold.";
+            case Pattern::Feud:
+                return std::string("Bad blood: ") + FeudGrievance(a.seed).heard +
+                       ". {asker} asks you to settle it with {rival}, one way or another. Reward: {gold} gold.";
             case Pattern::Murder: return "{asker} asks you to find out who killed {victim}, and name them with proof. Reward: {gold} gold.";
             default: return {};
         }
@@ -603,18 +648,22 @@ namespace IntelEngine::Arcs {
                 return {};
             case Pattern::Feud:
                 if (r == RAsker) {
-                    if (planned) return "{rival} and I are at odds, and I have had enough of it. I am going to ask {player} to settle it, for {gold} gold.";
+                    const std::string why = FeudGrievance(a.seed).asker;
+                    if (planned) return why + " I have had enough of it. I am going to ask {player} to settle it, for {gold} gold.";
                     if (!open) return {};
-                    out = "{rival} and I are at odds, and I asked {player} to settle it one way or another, for {gold} gold. I have paid nothing yet.";
+                    out = why + " I asked {player} to settle it one way or another, for {gold} gold, paid once it is settled. "
+                                "It is not settled yet, and I have paid nothing yet.";
                     if (a.flags & Flag::Fists) out += " {player} means to settle it with fists against {rival}; it is not done yet.";
                     if (a.flags & Flag::Peace) out += " {player} is trying to talk {rival} into making peace; it is not done yet.";
+                    if (a.flags & Flag::Refused) out += " {rival} would not be talked round so far.";
                     return out;
                 }
                 if (r == RRival) {
                     if (!open && !planned) return {};
-                    out = "{asker} and I are at odds, and I will not be the one to back down.";
+                    out = std::string(FeudGrievance(a.seed).rival) + " {asker} and I are at odds, and I will not be the one to back down.";
                     if (open) out += " {player} has taken it on, for {asker}. If {player} asks for my side of it, I give it.";
                     if (a.flags & Flag::Fists) out += " {player} wants to settle it with fists; if {player} challenges me, I accept.";
+                    if (a.flags & Flag::Refused) out += " {player} tried to talk me round, and I would not have it.";
                     return out;
                 }
                 return {};
@@ -669,7 +718,11 @@ namespace IntelEngine::Arcs {
                 if (r == RAsker) {
                     if (a.ending == Ending::Done) return "{player} settled my quarrel with {rival} with fists, and won. I paid {player} {gold} gold.";
                     if (a.ending == Ending::Failed) return "{player} took on {rival} in a brawl for me, and lost.";
-                    if (a.ending == Ending::Settled) return "{player} made peace between {rival} and me.";
+                    if (a.ending == Ending::Settled) {
+                        return (a.flags & Flag::BoughtOff)
+                                   ? "{player} made peace between {rival} and me, paying {rival} off out of their own pocket. I paid {player} {gold} gold."
+                                   : "{player} talked {rival} round and made peace between us. I paid {player} {gold} gold.";
+                    }
                     if (a.ending == Ending::StayedOut) return "I asked {player} to settle my quarrel with {rival}; {player} chose to stay out of it.";
                 }
                 if (r == RRival) {
@@ -677,7 +730,7 @@ namespace IntelEngine::Arcs {
                     if (a.ending == Ending::Failed) return "{player} challenged me over my quarrel with {asker}, and I won the brawl.";
                     if (a.ending == Ending::Settled) {
                         return (a.flags & Flag::BoughtOff) ? "{player} paid me to let my quarrel with {asker} go, and I did."
-                                                           : "{player} brought me {asker}'s apology, and I let our quarrel go.";
+                                                           : "{player} talked me round, and I let my quarrel with {asker} go.";
                     }
                 }
                 return {};
@@ -707,7 +760,7 @@ namespace IntelEngine::Arcs {
             case Pattern::Feud:
                 if (a.ending == Ending::Done) return "{player} beat {rival} in a brawl over {rival}'s quarrel with {asker}.";
                 if (a.ending == Ending::Failed) return "{rival} beat {player} in a brawl over {rival}'s quarrel with {asker}.";
-                if (a.ending == Ending::Settled) return "{asker} and {rival} have made peace.";
+                if (a.ending == Ending::Settled) return std::string(FeudGrievance(a.seed).heard) + "; they have made peace since.";
                 return {};
             case Pattern::Murder:
                 if (a.ending == Ending::Done) return "{culprit} killed {victim}; {player} proved it, and {culprit} was taken by the guard.";

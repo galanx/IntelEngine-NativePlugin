@@ -31,6 +31,7 @@ namespace IntelEngine {
         // What a role must be free of (Usable).
         constexpr int kStays = 0;      // the asker, a witness, a rival: they only talk
         constexpr int kJailable = 1;   // a culprit: may be taken by the guard for a few days
+        constexpr int kBrawler = 2;    // a rival: may end up in a fistfight with the player
 
         // Skyrim.esm factions whose people are never a culprit or a victim (the jarl, the steward, a merchant, an
         // innkeeper, a bard: the town needs them where they are) or whom the player may have travelled with.
@@ -336,6 +337,16 @@ namespace IntelEngine {
         if (QuestBridge::GetSingleton()->Involves(actor->GetFormID())) return why = "in a quest of IntelEngine", false;
         if (LivingWorldBridge::GetSingleton()->HasOwnLife(actor->GetFormID())) return why = "a former follower with a life of their own", false;
         if (auto held = HeldBy(actor, need == kJailable); !held.empty()) return why = "held by " + held, false;
+        if (need == kBrawler) {
+            // Nobody old, no guard, no jarl or steward gets into a fistfight over a town quarrel.
+            auto* race = actor->GetRace();
+            const auto raceId = race ? race->GetFormID() : 0u;
+            if (raceId == 0x00067CD8 || raceId == 0x000A82BA) return why = "too old to brawl", false;
+            if (actor->IsGuard()) return why = "a guard", false;
+            for (const auto job : {kJobJarl, kJobSteward}) {
+                if (InFaction(actor, job)) return why = "the jarl's court", false;
+            }
+        }
         if (need == kJailable) {
             if (actor->IsEssential() || actor->IsProtected()) return why = "essential", false;
             if (actor->IsGuard() || actor->GetVendorFaction()) return why = "a guard or a merchant", false;
@@ -429,7 +440,7 @@ namespace IntelEngine {
                 return true;
             }
             case A::Pattern::Feud: {
-                const Folk* rival = pick(kStays, {me->home}, true, false);
+                const Folk* rival = pick(kBrawler, {me->home}, true, false);
                 if (!rival) return why = "nobody in town to be at odds with", false;
                 a.cast[A::RRival] = rival->ref;
                 return true;
@@ -638,6 +649,7 @@ namespace IntelEngine {
         }
         f.answer = pending.answer;
         f.brawl = pending.brawl;
+        f.speech = static_cast<int>(player->AsActorValueOwner()->GetActorValue(RE::ActorValue::kSpeech));
         // The prop is with the one it goes to, however it got there: the popup, or their own TakeItem action in talk
         // ("give it here": SeverActions moved Ysolda's ring out of the player's pack, and the hand-over never came,
         // 2026-11-18), or a gift through the game's own menus.
@@ -658,9 +670,18 @@ namespace IntelEngine {
             bits |= (static_cast<std::int32_t>(change.effect) & 0xF) << 16;
             bits |= (static_cast<std::int32_t>(change.effectRole) & 0xF) << 20;
             if (change.skipped != A::kNoNode) bits |= ((static_cast<std::int32_t>(change.skipped) + 1) & 0xF) << 27;
+            if (change.stayed) bits |= 1 << 15;   // stayed on the step: a line to write, nothing done
             pending.log = change.log;
+            pending.effect2 = static_cast<int>(change.effect2);
+            pending.effect2Role = static_cast<int>(change.effect2Role);
             pending.handed = 0;
             pending.brawl = 0;
+            // A new step asks afresh: the hold after an answer was the step's before (Ulfberth's peace popup waited two
+            // minutes after Ysolda's decision, 2026-11-18).
+            pending.chooseHold = -1.0f;
+            pending.giveHold = -1.0f;
+            // Still on the same step (refused): not asked again at once.
+            if (change.stayed) pending.chooseHold = RealSeconds() + kHoldSeconds;
             logger::info("Arcs: #{} nodes done {:#x}, now at node {}{}{}", id, bits & 0xFF, static_cast<int>(a->node),
                          change.effect != A::Effect::None ? ", effect " + std::to_string(static_cast<int>(change.effect)) : std::string(),
                          change.ending != A::Ending::None ? ", ended " + std::to_string(static_cast<int>(change.ending)) : std::string());
@@ -693,7 +714,8 @@ namespace IntelEngine {
         if (a->node < def.nodes.size()) {
             const auto& n = def.nodes[a->node];
             const float real = RealSeconds();
-            if (n.kind == A::Kind::Choose && n.who && f.spoke[n.who] && !f.dead[n.who] && real >= pending.chooseHold) {
+            if ((n.kind == A::Kind::Choose || n.kind == A::Kind::Brawl) && n.who && f.spoke[n.who] && !f.dead[n.who] &&
+                real >= pending.chooseHold) {
                 pending.chooseHold = real + 30.0f;   // the popup is up; Answer sets the real hold
                 bits |= 1 << 25;
             }
@@ -787,6 +809,15 @@ namespace IntelEngine {
         }
     }
 
+    bool ArcBridge::Brawl(std::uint32_t id, int result) {
+        std::scoped_lock lock(m_mutex);
+        const auto* a = m_book.Find(id);
+        if (!a || !A::IsOpen(*a) || result == 0) return false;
+        m_pending[id].brawl = result > 0 ? 1 : -1;
+        logger::info("Arcs: #{} brawl {}", id, result > 0 ? "won" : "lost");
+        return true;
+    }
+
     void ArcBridge::Planted(std::uint32_t id, int prop, RE::TESObjectREFR* at) {
         std::scoped_lock lock(m_mutex);
         auto* a = m_book.Find(id);
@@ -817,6 +848,8 @@ namespace IntelEngine {
         if (name == "openstage") return A::OpenStage(a->pattern);
         if (name == "endstage") return A::EndStage(a->pattern, a->ending);
         if (name == "log") return pending != m_pending.end() ? pending->second.log : 0;
+        if (name == "effect2") return pending != m_pending.end() ? pending->second.effect2 : 0;
+        if (name == "effect2role") return pending != m_pending.end() ? pending->second.effect2Role : 0;
         if (name == "plantprop") return pending != m_pending.end() ? pending->second.plantProp : -1;
         if (name == "plantfloor") return pending != m_pending.end() && pending->second.plantFloor ? 1 : 0;
         if (name == "kind") return a->node < def.nodes.size() && A::IsOpen(*a) ? static_cast<int>(def.nodes[a->node].kind) : 0;
@@ -941,6 +974,7 @@ namespace IntelEngine {
             }
             return Fill(n.options[i], *a);
         }
+        if (name == "fight") return Fill("Settle it with {rival} here and now, with your fists?", *a);
         if (name == "question") {
             switch (n.objective) {
                 case A::Objective::Confront: return Fill("{culprit} stole {item0}. What will you do with {culprit}?", *a);
@@ -1177,6 +1211,7 @@ namespace IntelEngine {
         std::int32_t ArcAdvance(RE::StaticFunctionTag*, std::int32_t id) { return ArcBridge::GetSingleton()->Advance(U(id)); }
         bool ArcAnswer(RE::StaticFunctionTag*, std::int32_t id, std::int32_t option) { return ArcBridge::GetSingleton()->Answer(U(id), option); }
         bool ArcHandOver(RE::StaticFunctionTag*, std::int32_t id) { return ArcBridge::GetSingleton()->HandOver(U(id)); }
+        bool ArcBrawl(RE::StaticFunctionTag*, std::int32_t id, std::int32_t result) { return ArcBridge::GetSingleton()->Brawl(U(id), result); }
         void ArcPlanted(RE::StaticFunctionTag*, std::int32_t id, std::int32_t prop, RE::TESObjectREFR* at) {
             ArcBridge::GetSingleton()->Planted(U(id), prop, at);
         }
@@ -1198,6 +1233,7 @@ namespace IntelEngine {
         a_vm->RegisterFunction("ArcAdvance", script, ArcAdvance); ++count;
         a_vm->RegisterFunction("ArcAnswer", script, ArcAnswer); ++count;
         a_vm->RegisterFunction("ArcHandOver", script, ArcHandOver); ++count;
+        a_vm->RegisterFunction("ArcBrawl", script, ArcBrawl); ++count;
         a_vm->RegisterFunction("ArcPlanted", script, ArcPlanted); ++count;
         a_vm->RegisterFunction("ArcField", script, ArcField); ++count;
         a_vm->RegisterFunction("ArcForm", script, ArcForm); ++count;
