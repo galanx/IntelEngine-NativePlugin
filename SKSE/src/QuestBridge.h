@@ -6,6 +6,7 @@
 
 #include "Quests.h"
 
+#include <chrono>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -124,6 +125,10 @@ namespace IntelEngine {
         std::vector<RE::FormID> m_keepsakes;
         std::vector<RE::FormID> m_followerTypes;   // references of the follower types of the load order (ventures)
         bool m_catalogued = false;
+        // After a load: what the hold heard of quests this save does not have is withdrawn once (Reconcile).
+        void Reconcile();
+        bool m_reconciled = true;
+        std::chrono::steady_clock::time_point m_loadedAt{};
         float m_handOverOfferedAt = -1.0f;   // real seconds (the popup at most once a minute)
     };
 
