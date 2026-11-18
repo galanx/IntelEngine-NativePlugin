@@ -45,6 +45,7 @@ public static class Program
         if (args.Length >= 3 && args[0] == "findref") return FindRef(args[1], args[2]);
         if (args.Length >= 3 && args[0] == "findcell") return FindCell(args[1], args[2]);
         if (args.Length >= 3 && args[0] == "findloc") return FindLoc(args[1], args[2]);
+        if (args.Length >= 3 && args[0] == "questdump") return QuestDump(args[1], args[2]);
         Console.Error.WriteLine("usage: info <esp> | build <esp in> <output folder>");
         return 2;
     }
@@ -158,11 +159,12 @@ public static class Program
         (2010, "I heard <Alias.ShortName=Rival>'s side of it.", null),
         (2021, "I told <Alias.ShortName=Asker> I would settle it with my fists against <Alias.ShortName=Rival>.", null),
         (2022, "I told <Alias.ShortName=Asker> I would try to make peace between them.", null),
+        (2023, "<Alias.ShortName=Rival> would not be talked round.", null),
         (2090, "I beat <Alias.ShortName=Rival> in a brawl, and the quarrel is settled.", QuestLogEntry.Flag.CompleteQuest),
         (2091, "<Alias.ShortName=Rival> beat me in the brawl.", QuestLogEntry.Flag.FailQuest),
         (2093, "I never settled it, and <Alias.ShortName=Asker> stopped waiting.", QuestLogEntry.Flag.FailQuest),
         (2094, "<Alias=Asker> is dead.", QuestLogEntry.Flag.FailQuest),
-        (2098, "<Alias.ShortName=Asker> and <Alias.ShortName=Rival> have made peace.", QuestLogEntry.Flag.CompleteQuest),
+        (2098, "<Alias.ShortName=Asker> and <Alias.ShortName=Rival> have made peace, and <Alias.ShortName=Asker> paid me.", QuestLogEntry.Flag.CompleteQuest),
         (2099, "I chose to stay out of their quarrel.", QuestLogEntry.Flag.CompleteQuest),
         (3000, "<Alias=Victim> was found dead at home in <Alias=Place>. <Alias=Asker> asked me to find the killer and name them with proof.", null),
         (3010, "I have seen where <Alias.ShortName=Victim> died.", null),
@@ -552,6 +554,29 @@ public static class Program
                                   string.Join(",", (loc.Keywords ?? new List<IFormLinkGetter<IKeywordGetter>>()).Select(k => k.FormKey.ID.ToString("X8"))));
         foreach (var kw in mod.Keywords)
             if ((kw.EditorID ?? "").StartsWith("LocType")) Console.WriteLine($"kw {kw.FormKey.ID:X8} {kw.EditorID}");
+        return 0;
+    }
+
+    // One quest's aliases, stages and the story manager nodes and keywords that start it (test help: vanilla brawls).
+    static int QuestDump(string path, string editorId)
+    {
+        using var mod = SkyrimMod.CreateFromBinaryOverlay(path, SkyrimRelease.SkyrimSE);
+        var quest = mod.Quests.FirstOrDefault(q => q.EditorID == editorId);
+        if (quest == null) { Console.WriteLine("no such quest"); return 1; }
+        Console.WriteLine($"{quest.FormKey.ID:X8} {quest.EditorID} flags={quest.Flags} type={quest.Type} event={quest.Event}");
+        foreach (var alias in quest.Aliases)
+            Console.WriteLine($"   alias {alias.ID} {alias.Name} flags={alias.Flags} forced={alias.ForcedReference.FormKey.ID:X8} unique={alias.UniqueActor.FormKey.ID:X8} " +
+                              $"fromEvent={alias.FindMatchingRefFromEvent?.FromEvent} data={alias.FindMatchingRefFromEvent?.EventData?.Length}");
+        foreach (var stage in quest.Stages)
+            Console.WriteLine($"   stage {stage.Index} " + string.Concat(stage.LogEntries.Select(l => $"'{l.Entry?.String}'")));
+        foreach (var node in mod.StoryManagerQuestNodes)
+            if (node.Quests.Any(q => q.Quest.FormKey == quest.FormKey))
+                Console.WriteLine($"   SM quest node {node.FormKey.ID:X8} {node.EditorID} parent={node.Parent.FormKey.ID:X8}");
+        foreach (var ev in mod.StoryManagerEventNodes)
+            Console.WriteLine($"   SM event node {ev.FormKey.ID:X8} {ev.EditorID} type={ev.Type}");
+        foreach (var kw in mod.Keywords)
+            if ((kw.EditorID ?? "").Contains("Brawl", StringComparison.OrdinalIgnoreCase) || (kw.EditorID ?? "").Contains("Intimidate", StringComparison.OrdinalIgnoreCase))
+                Console.WriteLine($"   kw {kw.FormKey.ID:X8} {kw.EditorID}");
         return 0;
     }
 

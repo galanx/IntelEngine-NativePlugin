@@ -152,9 +152,19 @@ static void Feud() {
             Require(a.node == 3 && (a.flags & Flag::Peace), "peace: the talk with the rival");
             Facts p;
             p.answer = branch == 2 ? 0 : 1;
+            if (branch == 2) {
+                // Talking round needs the Speech for it: without, the rival refuses and the step stays.
+                Facts weak = p;
+                weak.speech = kPersuadeSpeech - 1;
+                const auto no = Advance(a, weak, 1.35f);
+                Require(a.phase == Phase::Open && a.node == 3 && (a.flags & Flag::Refused) && no.log == 2023,
+                        "not persuasive enough: refused, still to make peace");
+                p.speech = kPersuadeSpeech;
+            }
             const auto c = Advance(a, p, 1.4f);
             Require(a.ending == Ending::Settled, "peace made");
             Require((c.effect == Effect::PlayerPays) == (branch == 3), "bought off: the player pays");
+            Require((branch == 2 ? c.effect : c.effect2) == Effect::PayGold, "peace made: the asker pays the reward");
         } else {
             Require(a.ending == Ending::StayedOut, "stayed out");
         }
