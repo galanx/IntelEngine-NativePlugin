@@ -965,6 +965,29 @@ namespace IntelEngine {
         return {};
     }
 
+    bool QuestBridge::StopCasualFollow(RE::Actor* npc) {
+        auto* data = RE::TESDataHandler::GetSingleton();
+        auto* vm = RE::BSScript::Internal::VirtualMachine::GetSingleton();
+        if (!npc || !data || !vm || !data->LookupModByName("SeverActions.esp")) return false;
+        // SeverActions_ActivelyFollowing (rank -1 is what leaving the faction leaves behind).
+        auto* following = data->LookupForm<RE::TESFaction>(0xF0809, "SeverActions.esp");
+        if (!following || npc->GetFactionRank(following, false) < 0) return false;
+        // A companion of the roster is the player's follower, not a casual one: never ended here.
+        auto* currentFollower = RE::TESForm::LookupByID<RE::TESFaction>(0x0005C84E);
+        if (npc->IsPlayerTeammate() || (currentFollower && npc->GetFactionRank(currentFollower, false) >= 0)) return false;
+        auto* quest = data->LookupForm<RE::TESQuest>(0xD62, "SeverActions.esp");
+        auto* policy = vm->GetObjectHandlePolicy1();
+        if (!quest || !policy) return false;
+        const auto handle = policy->GetHandleForObject(RE::FormType::Quest, quest);
+        RE::BSTSmartPointer<RE::BSScript::Object> object;
+        if (handle == policy->EmptyHandle() || !vm->FindBoundObject(handle, "SeverActions_Follow", object) || !object) return false;
+        RE::BSTSmartPointer<RE::BSScript::IStackCallbackFunctor> none;
+        auto* args = RE::MakeFunctionArguments(static_cast<RE::Actor*>(npc));
+        if (!vm->DispatchMethodCall1(object, "StopFollowing", args, none)) return false;
+        logger::info("{}: SeverActions' casual follow of the player ended", npc->GetDisplayFullName());
+        return true;
+    }
+
     void QuestBridge::DropCompanion(std::uint32_t id) {
         std::scoped_lock lock(m_mutex);
         auto* q = m_book.Find(id);
@@ -1208,6 +1231,7 @@ namespace IntelEngine {
             RE::BSFixedString QuestFollower(RE::StaticFunctionTag*, RE::Actor* npc, bool join) {
                 return RE::BSFixedString(QuestBridge::Follower(npc, join).c_str());
             }
+            bool StopCasualFollow(RE::StaticFunctionTag*, RE::Actor* actor) { return QuestBridge::StopCasualFollow(actor); }
             bool QuestInvolves(RE::StaticFunctionTag*, RE::Actor* actor) {
                 return actor && QuestBridge::GetSingleton()->Involves(actor->GetFormID());
             }
@@ -1243,6 +1267,7 @@ namespace IntelEngine {
             a_vm->RegisterFunction("QuestDebugForceCompanion", script, QuestDebugForceCompanion); ++count;
             a_vm->RegisterFunction("QuestDropCompanion", script, QuestDropCompanion); ++count;
             a_vm->RegisterFunction("QuestInvolves", script, QuestInvolves); ++count;
+            a_vm->RegisterFunction("StopCasualFollow", script, StopCasualFollow); ++count;
             a_vm->RegisterFunction("QuestFollower", script, QuestFollower); ++count;
         }
     }
