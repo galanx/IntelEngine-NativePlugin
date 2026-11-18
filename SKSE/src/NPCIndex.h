@@ -20,6 +20,8 @@
 #include "NPCTickResult.h"
 
 #include <deque>
+#include <functional>
+#include <memory>
 #include <unordered_map>
 #include <unordered_set>
 #include <shared_mutex>
@@ -465,6 +467,11 @@ namespace IntelEngine {
          */
         NPCTickSnapshot BuildNPCTickSnapshot(int maxPairs);
 
+        /** The same snapshot spread over frames, at most about half a millisecond of each: all in one frame it took
+         *  about 2 ms on a small load order, every NPC tick. Call on the game's thread; done runs there with the
+         *  finished snapshot, and not at all when a save was loaded in between. */
+        void BuildNPCTickSnapshotSpread(int maxPairs, std::function<void(NPCTickSnapshot)> done);
+
         /**
          * Phase B — worker thread. Build markdown context from the snapshot.
          * Performs SQL queries (GetSociallyActiveFormIDs, GetFormattedMemories) and
@@ -581,6 +588,17 @@ namespace IntelEngine {
         StoryDMTickSnapshot BuildStoryDMTickSnapshot(int maxCandidates, float absenceDays,
                                                      const StoryDMPhaseAPrefetch& prefetch);
 
+        /** The same snapshot spread over frames (4.0), for the director's rounds: the player and the people known are
+         *  taken in one frame, everyone loaded is then checked a slice per frame, at most about half a millisecond of
+         *  each, and the candidates are chosen in a last frame. All in one frame it cost 2.5 ms on a small load order
+         *  and grows with the people loaded. Call on the game's thread; done runs there with the finished snapshot,
+         *  and not at all when a save was loaded in between. */
+        void BuildStoryDMTickSnapshotSpread(int maxCandidates, float absenceDays, StoryDMPhaseAPrefetch prefetch,
+                                            std::function<void(StoryDMTickSnapshot)> done);
+
+        /** The state of a snapshot being taken (BuildStoryDMTickSnapshot does every step at once). */
+        struct StoryDMScan;
+
         /**
          * Phase B — worker thread. Score candidates, sort, trim, build markdown.
          * All per-candidate SQL queries run here (memories, dialogue, events, related,
@@ -627,6 +645,18 @@ namespace IntelEngine {
         static float GetStoryCooldownHours();
 
     private:
+        // The steps of a story DM snapshot (StoryDMScan): the player and the people known; a slice of everyone
+        // loaded, until the time given is spent (true when all were checked); the choice and the candidates' profiles.
+        bool BeginStoryDMScan(StoryDMScan& scan);
+        bool StepStoryDMScan(StoryDMScan& scan, double budgetMs);
+        void FinishStoryDMScan(StoryDMScan& scan);
+        // The NPC tick's snapshot: the player's part (false: no player or cell), and one loaded person (true: they
+        // may take part in a scene, filled into out).
+        bool BeginNPCTickSnapshot(NPCTickSnapshot& snap);
+        bool ConsiderForNPCTick(RE::Actor* actor, RE::Actor* player, float storyCooldownHours, NPCTickActorSnapshot& out);
+        // The next slice of a spread snapshot, handed to the game's thread a frame later.
+        static void NextStoryDMSlice(std::shared_ptr<StoryDMScan> scan);
+
         NPCIndex() = default;
         ~NPCIndex() = default;
         NPCIndex(const NPCIndex&) = delete;

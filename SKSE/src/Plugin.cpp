@@ -371,6 +371,8 @@ namespace IntelEngine {
                 DialogueTracker::GetSingleton()->Initialize();
                 SpeechTracker::GetSingleton()->Register();
                 LivingWorldBridge::GetSingleton()->Register();
+                LivingWorldBridge::GetSingleton()->CatalogPlaces();   // at the main menu, not in a frame of play
+                Papyrus::BuildItemBook();                             // the same
                 PoliticalEngineBridge::GetSingleton()->onLoaded = [] { Papyrus::PollAndSyncPE(); };
                 PoliticalEngineBridge::GetSingleton()->Initialize();
 
@@ -565,12 +567,19 @@ SKSEPluginLoad(const SKSE::LoadInterface* skse) {
 
         // NOTE: spdlog uses fopen() which expects ANSI, not UTF-8. Use path->string() here
         // (ANSI) so fopen can open the file. PathToUtf8 would produce UTF-8 that fopen misinterprets.
+        // Logging must never cost the game a frame. Every line used to be written and flushed to disk at once, on
+        // whatever thread logged it, the game's own included: a director round alone logs some forty lines. Lines
+        // now go into a queue that spdlog's own thread writes out; a full queue drops the oldest rather than make the
+        // game wait. Warnings and errors are flushed straight away, the rest within a second.
+        spdlog::init_thread_pool(8192, 1);
         auto sink = std::make_shared<spdlog::sinks::basic_file_sink_mt>(path->string(), true);
-        auto log = std::make_shared<spdlog::logger>("global log", std::move(sink));
+        auto log = std::make_shared<spdlog::async_logger>("global log", std::move(sink), spdlog::thread_pool(),
+                                                          spdlog::async_overflow_policy::overrun_oldest);
         log->set_level(spdlog::level::info);
-        log->flush_on(spdlog::level::info);
+        log->flush_on(spdlog::level::warn);
         spdlog::set_default_logger(std::move(log));
         spdlog::set_pattern("[%Y-%m-%d %H:%M:%S.%e] [%l] %v");
+        spdlog::flush_every(std::chrono::seconds(1));
     } catch (const std::exception& e) {
         // spdlog failed - write diagnostic file since logging isn't available
         try {

@@ -6,6 +6,7 @@
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
+#include <chrono>
 #include <cstring>
 #include <format>
 #include <string_view>
@@ -26,6 +27,27 @@ namespace IntelEngine {
     namespace {
         using LivingWorld::Activity;
         using LivingWorld::Life;
+
+        // Work that runs inside the game's frame (Track is called from the scripts) says how long it took once that
+        // is long enough to notice, so a hitch on a big load order shows in the log instead of being guessed at.
+        struct FrameCost {
+            const char* what;
+            double noticeMs;
+            std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
+            ~FrameCost() {
+                const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+                if (ms >= noticeMs) logger::info("LivingWorld: {} took {:.1f} ms of the game's frame", what, ms);
+                // And how long it takes as a rule: the slowest of every 30, now and then.
+                static int runs = 0;
+                static double slowest = 0.0;
+                slowest = std::max(slowest, ms);
+                if (++runs >= 30) {
+                    logger::info("LivingWorld: {}: at most {:.2f} ms of the game's frame in the last {} runs", what, slowest, runs);
+                    runs = 0;
+                    slowest = 0.0;
+                }
+            }
+        };
 
         constexpr std::string_view kRumorLabel = "IntelEngine life: ";
         constexpr float kGreetDistance = 1200.0f;
@@ -233,10 +255,14 @@ namespace IntelEngine {
         m_catalogued = true;
         auto* data = RE::TESDataHandler::GetSingleton();
         if (!data) return;
+        const auto started = std::chrono::steady_clock::now();
         std::vector<Spot> inns, dungeons, towns;
         std::unordered_set<RE::FormID> seen;
+        std::size_t cells = 0;
+        std::size_t locations = 0;
         for (auto* cell : data->interiorCells) {
             if (!cell) continue;
+            ++cells;
             auto* location = cell->GetLocation();
             if (!location || seen.contains(location->GetFormID())) continue;
             if (!location->HasKeywordString("LocTypeInn") || location->HasKeywordString("LocTypePlayerHouse")) continue;
@@ -255,6 +281,7 @@ namespace IntelEngine {
         }
         for (auto* location : data->GetFormArray<RE::BGSLocation>()) {
             if (!location) continue;
+            ++locations;
             const char* name = location->GetFullName();
             if (!name || !*name || location->HasKeywordString("LocTypePlayerHouse")) continue;
             auto marker = std::as_const(location->worldLocMarker).get();
@@ -269,11 +296,18 @@ namespace IntelEngine {
             spot.ref = marker->GetFormID();
             (dungeon ? dungeons : towns).push_back(spot);
         }
-        logger::info("LivingWorld: places for lives: {} inns, {} dungeons, {} towns", inns.size(), dungeons.size(), towns.size());
+        const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
+        logger::info("LivingWorld: places for lives: {} inns, {} dungeons, {} towns ({} interior cells and {} locations "
+                     "looked at once, {:.1f} ms of the game's frame)",
+                     inns.size(), dungeons.size(), towns.size(), cells, locations, ms);
         std::scoped_lock lock(m_mutex);
         m_inns = std::move(inns);
         m_dungeons = std::move(dungeons);
         m_towns = std::move(towns);
+    }
+
+    void LivingWorldBridge::CatalogPlaces() {
+        if (!m_catalogued) BuildCatalogue();
     }
 
     const LivingWorldBridge::Spot* LivingWorldBridge::FindSpot(RE::FormID location) const {
@@ -291,6 +325,7 @@ namespace IntelEngine {
         auto* player = RE::PlayerCharacter::GetSingleton();
         if (!player || !player->Is3DLoaded()) return;
         if (!m_catalogued) BuildCatalogue();
+        FrameCost cost{"a look at who follows and who lives their own life", 2.0};
 
         // Every loaded actor, all four process tiers: someone just moved in from an unloaded cell is not "high" yet.
         std::vector<RE::Actor*> serving;
