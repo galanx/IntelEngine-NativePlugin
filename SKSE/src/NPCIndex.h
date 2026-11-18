@@ -104,6 +104,14 @@ namespace IntelEngine {
          */
         size_t GetNPCCount() const { std::shared_lock lock(m_mutex); return m_allNames.size(); }
         std::vector<std::string> GetKnownNames() const { std::shared_lock lock(m_mutex); return m_allDisplayNames; }
+        /** Every actor reference the director knows by name (the persistent ones, loaded or not). */
+        std::vector<RE::FormID> DirectorActorIds() const {
+            std::shared_lock lock(m_mutex);
+            std::vector<RE::FormID> ids;
+            ids.reserve(m_directorActorNames.size());
+            for (const auto& [id, name] : m_directorActorNames) ids.push_back(id);
+            return ids;
+        }
         size_t GetLoadedCount() const { return m_npcIndex.size(); }
 
         /**

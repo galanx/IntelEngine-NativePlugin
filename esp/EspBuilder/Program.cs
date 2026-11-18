@@ -43,6 +43,8 @@ public static class Program
         if (args.Length >= 3 && args[0] == "package") return DumpPackage(args[1], args[2]);
         if (args.Length >= 2 && args[0] == "reflect") return Reflect(args[1]);
         if (args.Length >= 3 && args[0] == "findref") return FindRef(args[1], args[2]);
+        if (args.Length >= 3 && args[0] == "findcell") return FindCell(args[1], args[2]);
+        if (args.Length >= 3 && args[0] == "findloc") return FindLoc(args[1], args[2]);
         Console.Error.WriteLine("usage: info <esp> | build <esp in> <output folder>");
         return 2;
     }
@@ -98,12 +100,150 @@ public static class Program
         var keeper = AddQuestKeeper(mod);
         var journal = new List<Quest>();
         for (int slot = 0; slot < QuestSlots; ++slot) journal.Add(AddJournalQuest(mod, slot));
+        var arcKeeper = AddArcKeeper(mod);
+        var arcs = new List<Quest>();
+        for (int slot = 0; slot < ArcSlots; ++slot) arcs.Add(AddArcJournalQuest(mod, slot));
         mod.WriteToBinary(output);
         Console.WriteLine($"{ThreadQuest} [{quest.FormKey.ID:X6}]: {quest.Aliases.Count} aliases, {quest.Objectives.Count} objectives -> {output}");
         Console.WriteLine($"{LifeSandbox} [{lifeSandbox.FormKey.ID:X6}], {LivesQuest} [{lives.FormKey.ID:X6}]");
         Console.WriteLine($"{QuestKeeper} [{keeper.FormKey.ID:X6}], journal quests " +
                           string.Join(", ", journal.Select(q => $"{q.EditorID} [{q.FormKey.ID:X6}]")));
+        Console.WriteLine($"{ArcKeeper} [{arcKeeper.FormKey.ID:X6}], arc journal quests " +
+                          string.Join(", ", arcs.Select(q => $"{q.EditorID} [{q.FormKey.ID:X6}]")));
         return 0;
+    }
+
+    // ------------------------------------------------------------------ story arcs (docs/STORY_ARCS.md)
+
+    public const string ArcKeeper = "IntelEngine_ArcKeeper";
+    public const string JournalArc = "IntelEngine_Arc";
+    public const int ArcSlots = 4;   // Arcs.h kSlots
+
+    // The aliases of an arc's journal quest, in the order IntelEngine_Arcs.psc names them (ALIAS_*). Actors may be dead
+    // (a victim, a culprit the player killed): the journal still names them.
+    static readonly string[] ArcActorAliases = { "Asker", "Culprit", "Witness", "Rival", "Victim", "Suspect2", "Suspect3" };
+
+    // The objective phrasings, in the order of Arcs.h Objective. Every marker points at the Marker alias.
+    public static readonly string[] ArcPhrasings =
+    {
+        "Ask <Alias=Witness> about the theft",                   // 0 AskWitness
+        "Find <Alias.ShortName=Asker>'s <Alias=Item0>",          // 1 FindStolen
+        "Confront <Alias=Culprit>",                              // 2 Confront
+        "Return the <Alias=Item0> to <Alias=Asker>",             // 3 Return
+        "Hear <Alias=Rival>'s side",                             // 4 HearRival
+        "Tell <Alias=Asker> how to settle it with <Alias=Rival>",// 5 DecideFeud
+        "Beat <Alias=Rival> in a brawl",                         // 6 BeatRival
+        "Make peace with <Alias=Rival>",                         // 7 MakePeace
+        "See where <Alias=Victim> died",                         // 8 SeeScene
+        "Question <Alias=Witness>",                              // 9 Question
+        "Find proof of who killed <Alias=Victim>",               // 10 FindProof
+        "Name the killer to <Alias=Asker>",                      // 11 NameKiller
+    };
+
+    // The journal's log (Arcs.h: OpenStage = pattern * 1000, a node's or a branch's log stage, EndStage = open + 90 +
+    // (ending - 10)). An ending's entry completes or fails the quest.
+    static readonly (ushort Stage, string Text, QuestLogEntry.Flag? Flag)[] ArcLog =
+    {
+        (1000, "<Alias=Asker> came to me: someone broke into <Alias.ShortName=Asker>'s home in <Alias=Place> and stole the <Alias=Item0>. <Alias.ShortName=Asker> wants it back.", null),
+        (1010, "<Alias=Witness> saw <Alias=Culprit> slip out of <Alias.ShortName=Asker>'s home that night with something under one arm.", null),
+        (1020, "I found <Alias.ShortName=Asker>'s <Alias=Item0> among <Alias.ShortName=Culprit>'s things.", null),
+        (1031, "I handed <Alias=Culprit> over to the guard.", null),
+        (1032, "I let <Alias=Culprit> go.", null),
+        (1033, "<Alias=Culprit> is dead.", null),
+        (1090, "I brought the <Alias=Item0> back to <Alias.ShortName=Asker>.", QuestLogEntry.Flag.CompleteQuest),
+        (1093, "I never brought the <Alias=Item0> back, and <Alias.ShortName=Asker> has given up on it.", QuestLogEntry.Flag.FailQuest),
+        (1094, "<Alias=Asker> is dead.", QuestLogEntry.Flag.FailQuest),
+        (1096, "I kept <Alias.ShortName=Asker>'s <Alias=Item0> for myself.", QuestLogEntry.Flag.FailQuest),
+        (2000, "<Alias=Asker> and <Alias=Rival> are at odds, and <Alias.ShortName=Asker> asked me to settle it, one way or another.", null),
+        (2010, "I heard <Alias.ShortName=Rival>'s side of it.", null),
+        (2021, "I told <Alias.ShortName=Asker> I would settle it with my fists against <Alias.ShortName=Rival>.", null),
+        (2022, "I told <Alias.ShortName=Asker> I would try to make peace between them.", null),
+        (2090, "I beat <Alias.ShortName=Rival> in a brawl, and the quarrel is settled.", QuestLogEntry.Flag.CompleteQuest),
+        (2091, "<Alias.ShortName=Rival> beat me in the brawl.", QuestLogEntry.Flag.FailQuest),
+        (2093, "I never settled it, and <Alias.ShortName=Asker> stopped waiting.", QuestLogEntry.Flag.FailQuest),
+        (2094, "<Alias=Asker> is dead.", QuestLogEntry.Flag.FailQuest),
+        (2098, "<Alias.ShortName=Asker> and <Alias.ShortName=Rival> have made peace.", QuestLogEntry.Flag.CompleteQuest),
+        (2099, "I chose to stay out of their quarrel.", QuestLogEntry.Flag.CompleteQuest),
+        (3000, "<Alias=Victim> was found dead at home in <Alias=Place>. <Alias=Asker> asked me to find the killer and name them with proof.", null),
+        (3010, "I have seen where <Alias.ShortName=Victim> died.", null),
+        (3020, "<Alias=Witness> saw <Alias=Culprit> near <Alias.ShortName=Victim>'s house that night, hurrying away.", null),
+        (3030, "I found something that points to the killer.", null),
+        (3031, "<Alias.ShortName=Asker> will not take anyone's guilt on my word alone. I need proof.", null),
+        (3090, "I proved that <Alias=Culprit> killed <Alias.ShortName=Victim>, and the guard took <Alias.ShortName=Culprit>.", QuestLogEntry.Flag.CompleteQuest),
+        (3093, "<Alias.ShortName=Victim>'s killer was never found.", QuestLogEntry.Flag.FailQuest),
+        (3094, "<Alias=Asker> is dead.", QuestLogEntry.Flag.FailQuest),
+        (3095, "I named the wrong person. <Alias.ShortName=Victim>'s killer is still free.", QuestLogEntry.Flag.FailQuest),
+    };
+
+    // A journal quest per arc slot: a side quest whose title the DLL sets (ArcBridge), with no script of its own;
+    // IntelEngine_Arcs.psc on the keeper drives its aliases, objectives and stages.
+    static Quest AddArcJournalQuest(SkyrimMod mod, int slot)
+    {
+        var editorId = $"{JournalArc}{slot}";
+        var quest = mod.Quests.FirstOrDefault(q => q.EditorID == editorId);
+        if (quest == null)
+        {
+            quest = mod.Quests.AddNew();
+            quest.EditorID = editorId;
+        }
+        quest.Name = "A Story";
+        quest.Type = Quest.TypeEnum.SideQuest;
+        quest.Priority = 50;
+        quest.Flags = Quest.Flag.AllowRepeatedStages;
+        quest.Aliases.Clear();
+        quest.Objectives.Clear();
+        quest.Stages.Clear();
+        uint nextAlias = 0;
+        foreach (var name in ArcActorAliases)
+        {
+            var actor = AddAlias(quest, ref nextAlias, name, QuestAlias.TypeEnum.Reference);
+            actor.Flags |= QuestAlias.Flag.AllowDead;
+        }
+        AddAlias(quest, ref nextAlias, "Item0", QuestAlias.TypeEnum.Reference);
+        AddAlias(quest, ref nextAlias, "Item1", QuestAlias.TypeEnum.Reference);
+        var marker = AddAlias(quest, ref nextAlias, "Marker", QuestAlias.TypeEnum.Reference);
+        marker.Flags |= QuestAlias.Flag.AllowDead;
+        AddAlias(quest, ref nextAlias, "Place", QuestAlias.TypeEnum.Location);
+        for (int k = 0; k < ArcPhrasings.Length; ++k)
+        {
+            var objective = new QuestObjective { Index = (ushort)k, DisplayText = ArcPhrasings[k] };
+            objective.Targets.Add(new QuestObjectiveTarget { AliasID = (int)marker.ID });
+            quest.Objectives.Add(objective);
+        }
+        foreach (var (stage, text, flag) in ArcLog)
+        {
+            // Flags always set: without them the entry has no QSDT header and the game shows no log text.
+            var entry = new QuestLogEntry { Entry = text, Flags = flag ?? (QuestLogEntry.Flag)0 };
+            quest.Stages.Add(new QuestStage { Index = stage, LogEntries = { entry } });
+        }
+        quest.VirtualMachineAdapter = null;
+        return quest;
+    }
+
+    // The keeper of the arcs: a quest of its own for IntelEngine_Arcs.psc (its watch and update loop), nothing in the
+    // journal.
+    static Quest AddArcKeeper(SkyrimMod mod)
+    {
+        var quest = mod.Quests.FirstOrDefault(q => q.EditorID == ArcKeeper);
+        if (quest == null)
+        {
+            quest = mod.Quests.AddNew();
+            quest.EditorID = ArcKeeper;
+        }
+        quest.Name = null;
+        quest.Type = Quest.TypeEnum.None;
+        quest.Priority = 10;
+        quest.Flags = Quest.Flag.StartGameEnabled;
+        quest.Aliases.Clear();
+        quest.Objectives.Clear();
+        quest.Stages.Clear();
+        quest.VirtualMachineAdapter = new QuestAdapter
+        {
+            Version = 5,
+            ObjectFormat = 2,
+            Scripts = { new ScriptEntry { Name = "IntelEngine_Arcs" } },
+        };
+        return quest;
     }
 
     // ------------------------------------------------------------------ quests (docs/QUESTS.md)
@@ -388,6 +528,30 @@ public static class Program
         Console.WriteLine($"{bases.Count} bases: " + string.Join(", ", bases.Select(b => b.ID.ToString("X8"))));
         foreach (var cell in mod.EnumerateMajorRecords<IPlacedNpcGetter>())
             if (bases.Contains(cell.Base.FormKey)) Console.WriteLine($"{cell.FormKey.ID:X8} base {cell.Base.FormKey.ID:X8}");
+        return 0;
+    }
+
+    // Interior cells by editor ID part (test help: the cell the console's coc wants, and its persistent references).
+    static int FindCell(string path, string part)
+    {
+        using var mod = SkyrimMod.CreateFromBinaryOverlay(path, SkyrimRelease.SkyrimSE);
+        foreach (var cell in mod.EnumerateMajorRecords<ICellGetter>())
+            if ((cell.EditorID ?? "").Contains(part, StringComparison.OrdinalIgnoreCase))
+                Console.WriteLine($"{cell.FormKey.ID:X8} {cell.EditorID} '{cell.Name?.String}' persistent={cell.Persistent.Count}" +
+                                  string.Concat(cell.Persistent.Take(6).Select(r => $" {r.FormKey.ID:X8}")));
+        return 0;
+    }
+
+    // Locations by editor ID part, with their keywords' form ids and parent (test help).
+    static int FindLoc(string path, string part)
+    {
+        using var mod = SkyrimMod.CreateFromBinaryOverlay(path, SkyrimRelease.SkyrimSE);
+        foreach (var loc in mod.Locations)
+            if ((loc.EditorID ?? "").Contains(part, StringComparison.OrdinalIgnoreCase))
+                Console.WriteLine($"{loc.FormKey.ID:X8} {loc.EditorID} parent={loc.ParentLocation.FormKey.ID:X8} keywords=" +
+                                  string.Join(",", (loc.Keywords ?? new List<IFormLinkGetter<IKeywordGetter>>()).Select(k => k.FormKey.ID.ToString("X8"))));
+        foreach (var kw in mod.Keywords)
+            if ((kw.EditorID ?? "").StartsWith("LocType")) Console.WriteLine($"kw {kw.FormKey.ID:X8} {kw.EditorID}");
         return 0;
     }
 

@@ -92,6 +92,11 @@ namespace IntelEngine {
         std::string LinesFor(RE::Actor* actor) const;
         /** One line for the dungeon master's candidate list, empty when none. */
         std::string BusinessLine(RE::FormID actor) const;
+        /** The plain jewellery of the load order (story arcs steal it too). */
+        std::vector<RE::FormID> Keepsakes() const {
+            std::scoped_lock lock(m_mutex);
+            return m_keepsakes;
+        }
 
         void Save(SKSE::SerializationInterface* intfc);
         void Load(SKSE::SerializationInterface* intfc, std::uint32_t version, std::uint32_t length);

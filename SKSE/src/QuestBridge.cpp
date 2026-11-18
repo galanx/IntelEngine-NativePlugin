@@ -1,5 +1,6 @@
 #include "QuestBridge.h"
 
+#include "ArcBridge.h"
 #include "CellAnalyzer.h"
 #include "ItemNames.h"
 #include "LivingWorldBridge.h"
@@ -1233,7 +1234,10 @@ namespace IntelEngine {
             }
             bool StopCasualFollow(RE::StaticFunctionTag*, RE::Actor* actor) { return QuestBridge::StopCasualFollow(actor); }
             bool QuestInvolves(RE::StaticFunctionTag*, RE::Actor* actor) {
-                return actor && QuestBridge::GetSingleton()->Involves(actor->GetFormID());
+                // A story arc's people too (ArcBridge): the social events, the storylines' pleas and the lives leave
+                // them be while their story runs.
+                return actor && (QuestBridge::GetSingleton()->Involves(actor->GetFormID()) ||
+                                 ArcBridge::GetSingleton()->Involves(actor->GetFormID()));
             }
             void QuestDropCompanion(RE::StaticFunctionTag*, std::int32_t id) {
                 QuestBridge::GetSingleton()->DropCompanion(static_cast<std::uint32_t>(id));

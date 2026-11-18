@@ -1342,6 +1342,14 @@ namespace IntelEngine {
         return out;
     }
 
+    std::vector<std::pair<RE::FormID, RE::FormID>> LocationResolver::HomeCells() const {
+        std::shared_lock lock(m_mutex);
+        std::vector<std::pair<RE::FormID, RE::FormID>> out;
+        out.reserve(m_npcHomeIndex.size());
+        for (const auto& [base, home] : m_npcHomeIndex) out.emplace_back(base, home.cellFormId);
+        return out;
+    }
+
     RE::TESObjectREFR* LocationResolver::GetDungeonBossAnchor(const std::string& locationName) {
         if (locationName.empty()) return nullptr;
 
