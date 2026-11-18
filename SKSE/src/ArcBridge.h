@@ -46,6 +46,9 @@ namespace IntelEngine {
         bool Answer(std::uint32_t id, int option);
         /** The prop of the current hand-over goes from the player to who the node gives it to. */
         bool HandOver(std::uint32_t id);
+        /** A murder's victim, unseen, taken home to be killed there by the script (Kill credits the killer): the victim,
+         *  or None when they are in sight, already dead, or this is no murder. */
+        RE::Actor* StageVictim(std::uint32_t id);
         /** How the brawl of a Brawl node ended: 1 the player won, -1 lost (or it turned into a real fight). */
         bool Brawl(std::uint32_t id, int result);
         /** Gold that reached the player from this actor (the inventory event): counted toward an open arc's reward. */
@@ -81,6 +84,7 @@ namespace IntelEngine {
             RE::FormID base = 0;
             RE::FormID home = 0;   // the interior cell of their bed
             RE::FormID town = 0;   // the town (location) that home is in
+            bool placedHome = false;   // the game's data puts them in that home (MoveToEditorLocation takes them there)
         };
         // What one look learned that the record does not keep (the popups' answers, where a prop goes now).
         struct Pending {
@@ -105,6 +109,8 @@ namespace IntelEngine {
         bool Cast(Arcs::Arc& a, RE::Actor* asker, std::string& why) const;
         bool IsHomeOf(RE::TESObjectCELL* cell, const Arcs::Arc& a, Arcs::Role role) const;
         void Ended(const Arcs::Arc& a);   // memories, the rumor in the hold (lock held)
+        void Spread(const Arcs::Arc& a);  // what the hold hears while it is open (lock held)
+        void Tell(std::uint32_t id, const std::string& rumor, int replace, RE::FormID asker, RE::FormID place);
 
         void Reconcile();   // withdraws rumors of arcs this save does not know (lock not held)
 

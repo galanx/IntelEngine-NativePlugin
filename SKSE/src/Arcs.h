@@ -217,7 +217,7 @@ namespace IntelEngine::Arcs {
                {If::Has, RNone, 1, 0, 3, Ending::None, Effect::None, RNone, 0}}}},
             {Kind::Choose, RAsker, 0, Objective::NameKiller, RAsker, 0, 0.0f,
              {"Accuse {pick0}", "Accuse {pick1}", "Accuse {pick2}"}, {RCulprit, RSuspect2, RSuspect3},
-             {{{If::Picked, RCulprit, 0, 0b011, kNoNode, Ending::Done, Effect::Jail, RCulprit, 0},
+             {{{If::Picked, RCulprit, 0, 0b011, kNoNode, Ending::Done, Effect::Jail, RCulprit, 0, 0, false, Effect::PayGold, RAsker},
                {If::Picked, RCulprit, 0, 0, 2, Ending::None, Effect::None, RNone, Flag::NoProof, 3031},
                {If::Picked, RSuspect2, 0, 0, kNoNode, Ending::WrongAccused, Effect::Shame, RSuspect2, 0},
                {If::Picked, RSuspect3, 0, 0, kNoNode, Ending::WrongAccused, Effect::Shame, RSuspect3, 0}}}},
@@ -737,7 +737,10 @@ namespace IntelEngine::Arcs {
             case Pattern::Murder:
                 if (r == RAsker) {
                     if (a.ending == Ending::Done) return "{player} found out that {culprit} killed {victim}, and proved it. {culprit} was taken by the guard. I paid {player} {gold} gold.";
-                    if (a.ending == Ending::WrongAccused) return "{player} named {accused} as {victim}'s killer, and was wrong. The killer is still free.";
+                    if (a.ending == Ending::WrongAccused) {
+                        return "{player} named {accused} as {victim}'s killer, but nothing {player} showed me points to {accused}. I do not "
+                               "believe it, and whoever killed {victim} is still free.";
+                    }
                     if (a.ending == Ending::Ignored) return "I asked {player} to find {victim}'s killer, and nothing came of it.";
                 }
                 if (r == RCulprit && a.ending == Ending::Done) return "I killed {victim}; {player} found me out, and the guard took me.";
@@ -763,6 +766,7 @@ namespace IntelEngine::Arcs {
                 if (a.ending == Ending::Settled) return std::string(FeudGrievance(a.seed).heard) + "; they have made peace since.";
                 return {};
             case Pattern::Murder:
+                if (a.ending == Ending::Declined || a.ending == Ending::Lapsed) return "{victim} was found dead at home, killed by someone nobody has named.";
                 if (a.ending == Ending::Done) return "{culprit} killed {victim}; {player} proved it, and {culprit} was taken by the guard.";
                 if (a.ending == Ending::WrongAccused) return "{player} accused {accused} of killing {victim}; the killer has not been found.";
                 if (a.ending == Ending::Ignored) return "Whoever killed {victim} has never been found.";
