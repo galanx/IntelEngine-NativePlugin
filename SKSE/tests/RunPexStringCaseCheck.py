@@ -5,7 +5,9 @@ holds "generation" makes the lightning controller's lookup of "Generation" miss,
 (galanx/IntelEngine-GamePlugin#35). Quoted Papyrus strings are safe; bare identifiers (variables, parameters,
 properties) are what land here.
 
-Usage: python -X utf8 SKSE/tests/RunPexStringCaseCheck.py <Scripts dir with .pex files>
+Usage: python -X utf8 SKSE/tests/RunPexStringCaseCheck.py <dir>
+
+<dir> is searched recursively: a Scripts folder, or a whole MO2 mods folder to find which mod is at fault.
 """
 import struct
 import sys
@@ -40,12 +42,18 @@ def main() -> int:
         return 2
     wanted = {n.lower(): n for n in ENGINE_NAMES}
     bad = 0
-    files = sorted(Path(sys.argv[1]).glob("*.pex"))
+    root = Path(sys.argv[1])
+    files = sorted(root.rglob("*.pex"))
     for f in files:
-        for s in strings(f.read_bytes()):
+        try:
+            table = strings(f.read_bytes())
+        except (ValueError, struct.error) as e:
+            print(f"SKIP {f.relative_to(root)}: {e}")
+            continue
+        for s in table:
             right = wanted.get(s.lower())
             if right and s != right:
-                print(f"FAIL {f.name}: '{s}' (the engine looks up '{right}')")
+                print(f"FAIL {f.relative_to(root)}: '{s}' (the engine looks up '{right}')")
                 bad += 1
     print(f"{len(files)} .pex checked, {bad} wrong-case engine names")
     return 1 if bad or not files else 0
