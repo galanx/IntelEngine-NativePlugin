@@ -26,6 +26,12 @@ namespace IntelEngine {
         constexpr float kTalkSeconds = 60.0f;      // and the player said something to someone this long ago
         constexpr float kMemoryDays = 30.0f;       // an ended arc stays in its people's bios this long
         constexpr float kHoldSeconds = 120.0f;     // "not now": the popup waits this long before it asks again
+        constexpr float kAskerRestDays = 7.0f;     // who asked does not ask again before this (arcs and quests alike)
+        // Pacing (docs/research/PACING.md): a town's story when the player has lingered in that town a while, never
+        // sooner than a day after the last one began, one coming at a time; tried at most every couple of hours.
+        constexpr float kTownLingerHours = 2.0f;
+        constexpr float kArcGapDays = 1.0f;
+        constexpr float kPaceRetryDays = 2.0f / 24.0f;
         constexpr std::string_view kRumorLabel = "IntelEngine arc: ";
 
         // What a role must be free of (Usable).
@@ -498,11 +504,35 @@ namespace IntelEngine {
         }
     }
 
-    std::uint32_t ArcBridge::PlanFor(RE::Actor* asker, int pattern) {
+    bool ArcBridge::AskedWithin(RE::FormID actor, float days) const {
+        const float now = NowDays();
+        std::scoped_lock lock(m_mutex);
+        for (const auto& a : m_book.all) {
+            if (a.cast[A::RAsker] == actor && a.phase == A::Phase::Ended && a.ending != A::Ending::Lapsed && now - a.since < days) return true;
+        }
+        return false;
+    }
+
+    std::uint32_t ArcBridge::PlanFor(RE::Actor* asker, int pattern, bool hereOnly) {
         auto* player = RE::PlayerCharacter::GetSingleton();
         if (!asker || !player) return 0;
         const float now = NowDays();
         std::string why;
+        if (hereOnly) {
+            // A town's story comes to a player who is in that town (a stolen ring is no reason to cross Skyrim).
+            const Folk* me = FolkOf(asker->GetFormID());
+            auto* cell = player->GetParentCell();
+            auto* here = TownOf(cell && cell->GetLocation() ? cell->GetLocation() : player->GetCurrentLocation());
+            if (!me || !here || here->GetFormID() != me->town) {
+                logger::info("Arcs: no arc for {}: the player is not in their town", asker->GetDisplayFullName());
+                return 0;
+            }
+            // Someone who just asked (and was helped, refused or let down) does not come back with another story soon.
+            if (AskedWithin(asker->GetFormID(), kAskerRestDays)) {
+                logger::info("Arcs: no arc for {}: they asked the player for something lately", asker->GetDisplayFullName());
+                return 0;
+            }
+        }
         if (!Usable(asker, kStays, why)) {
             logger::info("Arcs: no arc for {}: {}", asker->GetDisplayFullName(), why);
             return 0;
@@ -598,6 +628,13 @@ namespace IntelEngine {
         return true;
     }
 
+    bool ArcBridge::Drop(std::uint32_t id) {
+        std::scoped_lock lock(m_mutex);
+        const bool ok = m_book.EndPlanned(id, A::Ending::Lapsed, NowDays());
+        if (ok) logger::info("Arcs: #{} dropped before it was offered", id);
+        return ok;
+    }
+
     std::vector<std::uint32_t> ArcBridge::Lapse() {
         bool reconcile = false;
         std::vector<std::uint32_t> ids;
@@ -614,7 +651,67 @@ namespace IntelEngine {
             }
         }
         if (reconcile) Reconcile();
+        Pace();
         return ids;
+    }
+
+    void ArcBridge::Pace() {
+        auto* player = RE::PlayerCharacter::GetSingleton();
+        if (!player || !m_catalogued) return;
+        const float now = NowDays();
+        auto* cell = player->GetParentCell();
+        auto* town = TownOf(cell && cell->GetLocation() ? cell->GetLocation() : player->GetCurrentLocation());
+        const RE::FormID townId = town ? town->GetFormID() : 0;
+        if (townId != m_paceTown || now < m_paceSince) {
+            m_paceTown = townId;
+            m_paceSince = now;
+            return;
+        }
+        if (!townId || (now - m_paceSince) * 24.0f < kTownLingerHours) return;
+        if (m_paceTried >= 0.0f && now >= m_paceTried && now - m_paceTried < kPaceRetryDays) return;
+        if (LivingWorldBridge::GetSingleton()->IsBadMoment() || player->IsInCombat()) return;
+        {
+            std::scoped_lock lock(m_mutex);
+            if (m_book.Count(A::Phase::Planned) > 0 || m_book.Count(A::Phase::Open) >= A::kMaxOpen) return;
+            float last = -1.0f;
+            for (const auto& a : m_book.all) {
+                if (a.ending != A::Ending::Lapsed) last = std::max(last, a.created);
+            }
+            if (last >= 0.0f && now >= last && now - last < kArcGapDays) return;
+        }
+        m_paceTried = now;
+        // Who in this town might come: anyone with a home here, in an order of the hour.
+        std::vector<const Folk*> folk;
+        for (const auto& f : m_folk) {
+            if (f.town == townId && f.home) folk.push_back(&f);
+        }
+        const auto seed = A::detail::Mix(townId, static_cast<std::uint32_t>(now * 24.0f));
+        std::sort(folk.begin(), folk.end(), [seed](const Folk* x, const Folk* y) {
+            return A::detail::Mix(seed, x->ref) < A::detail::Mix(seed, y->ref);
+        });
+        int tries = 0;
+        const auto started = std::chrono::steady_clock::now();
+        const auto spent = [&] { return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count(); };
+        for (const auto* f : folk) {
+            if (++tries > 6) break;
+            auto* asker = RE::TESForm::LookupByID<RE::Actor>(f->ref);
+            if (!asker || asker->IsDead() || asker->IsDisabled()) continue;
+            const auto id = PlanFor(asker, 0, true);
+            if (!id) continue;
+            logger::info("Arcs: #{} begins in {} after {:.1f} hours there: {} comes to the player ({:.2f} ms)", id, PlaceName(townId),
+                         (now - m_paceSince) * 24.0f, NameOf(f->ref), spent());
+            m_paceSince = now;
+            if (auto* source = SKSE::GetModCallbackEventSource()) {
+                SKSE::ModCallbackEvent event{};
+                event.eventName = "IntelEngine_ArcOffer";
+                event.strArg = "";
+                event.numArg = static_cast<float>(id);
+                event.sender = asker;
+                source->SendEvent(&event);
+            }
+            return;
+        }
+        logger::info("Arcs: nobody in {} has a story for the player now ({:.2f} ms)", PlaceName(townId), spent());
     }
 
     std::vector<std::uint32_t> ArcBridge::OpenIds() const {
@@ -1290,6 +1387,7 @@ namespace IntelEngine {
             return ok;
         }
         bool ArcDecline(RE::StaticFunctionTag*, std::int32_t id) { return ArcBridge::GetSingleton()->Decline(U(id)); }
+        bool ArcDrop(RE::StaticFunctionTag*, std::int32_t id) { return ArcBridge::GetSingleton()->Drop(U(id)); }
         std::vector<std::int32_t> ArcLapse(RE::StaticFunctionTag*) { return ToInts(ArcBridge::GetSingleton()->Lapse()); }
         std::vector<std::int32_t> ArcOpenIds(RE::StaticFunctionTag*) { return ToInts(ArcBridge::GetSingleton()->OpenIds()); }
         std::int32_t ArcAdvance(RE::StaticFunctionTag*, std::int32_t id) { return ArcBridge::GetSingleton()->Advance(U(id)); }
@@ -1313,6 +1411,7 @@ namespace IntelEngine {
         a_vm->RegisterFunction("ArcPlan", script, ArcPlan); ++count;
         a_vm->RegisterFunction("ArcAccept", script, ArcAccept); ++count;
         a_vm->RegisterFunction("ArcDecline", script, ArcDecline); ++count;
+        a_vm->RegisterFunction("ArcDrop", script, ArcDrop); ++count;
         a_vm->RegisterFunction("ArcLapse", script, ArcLapse); ++count;
         a_vm->RegisterFunction("ArcOpenIds", script, ArcOpenIds); ++count;
         a_vm->RegisterFunction("ArcAdvance", script, ArcAdvance); ++count;

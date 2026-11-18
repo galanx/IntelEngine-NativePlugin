@@ -4,6 +4,7 @@
 #include "LivingWorldBridge.h"
 #include "MemoryDB.h"
 #include "QuestBridge.h"
+#include "ArcBridge.h"
 #include "SkyrimNetAPI.h"
 #include "StoryDirectorPick.h"
 
@@ -254,20 +255,32 @@ namespace IntelEngine::StoryDirector {
                 auto planned = std::make_shared<std::promise<std::uint32_t>>();
                 auto future = planned->get_future();
                 const RE::FormID giverId = chosen.formId;
+                auto arc = std::make_shared<std::atomic<bool>>(false);
                 if (auto* task = SKSE::GetTaskInterface()) {
-                    task->AddTask([planned, giverId, venture]() {
+                    task->AddTask([planned, giverId, venture, arc]() {
                         auto* giver = RE::TESForm::LookupByID<RE::Actor>(giverId);
+                        // Story arcs first (docs/STORY_ARCS.md): a thief, a feud or a murder among the people of the
+                        // town the player is in; else a quest as before.
+                        if (!venture) {
+                            if (const auto id = ArcBridge::GetSingleton()->PlanFor(giver, 0, true); id != 0) {
+                                arc->store(true);
+                                planned->set_value(id);
+                                return;
+                            }
+                        }
                         planned->set_value(venture ? QuestBridge::GetSingleton()->PlanVenture(giver)
                                                    : QuestBridge::GetSingleton()->PlanFor(giver));
                     });
                     if (future.wait_for(std::chrono::seconds(5)) == std::future_status::ready) {
                         if (const auto id = future.get(); id != 0) {
-                            logger::info("[Director] {} acts: quest #{} planned by the engine; the offer goes out", chosen.name, id);
-                            task->AddTask([id, giverId]() {
+                            const bool isArc = arc->load();
+                            logger::info("[Director] {} acts: {} #{} planned by the engine; the offer goes out", chosen.name,
+                                         isArc ? "story arc" : "quest", id);
+                            task->AddTask([id, giverId, isArc]() {
                                 auto* source = SKSE::GetModCallbackEventSource();
                                 if (!source) return;
                                 SKSE::ModCallbackEvent event{};
-                                event.eventName = "IntelEngine_QuestOffer";
+                                event.eventName = isArc ? "IntelEngine_ArcOffer" : "IntelEngine_QuestOffer";
                                 event.strArg = "";
                                 event.numArg = static_cast<float>(id);
                                 event.sender = RE::TESForm::LookupByID(giverId);

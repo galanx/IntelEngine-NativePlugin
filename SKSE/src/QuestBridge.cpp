@@ -300,6 +300,12 @@ namespace IntelEngine {
                 return 0;
             }
         }
+        // An arc they asked about lately rests them too (Amren came with a bandit to kill right after the player refused
+        // to look for his circlet, 2026-11-18). ArcBridge takes its own lock: QuestBridge's is held, never the other way.
+        if (ArcBridge::GetSingleton()->AskedWithin(giverId, kGiverRestDays) || ArcBridge::GetSingleton()->Involves(giverId)) {
+            logger::info("Quests: no quest for {}: a story of theirs is on or just ended", giver->GetDisplayFullName());
+            return 0;
+        }
         std::vector<Q::PlaceOption> options;
         options.reserve(m_places.size());
         for (const auto& p : m_places) {
