@@ -4,6 +4,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <unordered_map>
@@ -61,8 +62,11 @@ namespace IntelEngine {
         bool Brawl(std::uint32_t id, int result);
         /** Gold that reached the player from this actor (the inventory event): counted toward an open arc's reward. */
         void GoldToPlayer(RE::FormID from, std::int32_t count);
-        /** At data load: the inventory event that sees gold reach the player. */
+        /** At data load: the inventory event that sees gold reach the player, and the quest stages that say the
+         *  player is busy with a quest. */
         void Listen();
+        /** A quest of the journal moved on: no town story for a while. */
+        void QuestMovedOn(RE::TESQuest* quest);
         /** The script put prop `prop` at this reference (a container, or the floor beside it). */
         void Planted(std::uint32_t id, int prop, RE::TESObjectREFR* at);
 
@@ -76,8 +80,25 @@ namespace IntelEngine {
         std::uint32_t ArcOf(RE::FormID actor) const;
         /** What this NPC knows of the arcs they are in, first person lines ("- ..."), for their bio. */
         std::string LinesFor(RE::Actor* actor) const;
-        /** Every journal quest of an arc gets its title (on accepting, and after every load). */
+        /** Every journal quest of an arc gets its title (on accepting, and after every load); a tale's also its step
+         *  goals as objective texts and its story so far and closing line on the two holders of its slot. */
         void ApplyTitles() const;
+        /** The two hidden references whose names a tale's journal log shows (story so far, the ending): the script
+         *  makes them per slot and tells them again after every load. */
+        void SetHolders(std::uint8_t slot, RE::TESObjectREFR* tale, RE::TESObjectREFR* close);
+
+        // ---- tales (TaleAuthor.cpp): stories the dungeon master writes for a town's people (docs/STORY_ARCS.md 0)
+
+        /** Asks the dungeon master for a tale with this asker (main thread). False when none can be asked for now (one
+         *  at a time, no model, nobody to cast); the answer plans the arc and sends IntelEngine_ArcOffer, or falls back
+         *  to a pattern. */
+        bool RequestTale(RE::Actor* asker);
+        /** Plans a compiled tale (main thread). 0 = refused. */
+        std::uint32_t PlanTale(Arcs::Arc a);
+        /** The judge's reading of a talk (any thread): which prepared outcome it was, -1 none yet. */
+        void Judged(std::uint32_t id, std::uint8_t node, int turn);
+        /** Whether a tale is being written now. */
+        bool Writing() const { return m_taleBusy.load(); }
 
         void Save(SKSE::SerializationInterface* intfc);
         void Load(SKSE::SerializationInterface* intfc, std::uint32_t version, std::uint32_t length);
@@ -102,6 +123,7 @@ namespace IntelEngine {
             std::uint16_t log = 0;
             int effect2 = 0;
             int effect2Role = 0;
+            int bondWith = 0;
             RE::FormID plantAt = 0;
             int plantProp = -1;
             bool plantFloor = false;
@@ -110,13 +132,34 @@ namespace IntelEngine {
             float sceneUntil = -1.0f;    // real seconds: a scene among the cast in front of the player
             RE::FormID checkedCell = 0;  // the interior last looked at for the culprit's home, and what it was
             bool homeHere = false;
+            std::uint8_t homeOf = 0;     // a tale: whose home that interior is (role), 0 = nobody's of the cast
+            // A tale's talk: the judge reads the conversation once it goes quiet.
+            std::uint8_t node = 0xFF;    // the step these belong to (a new step starts them afresh)
+            int turn = -1;               // the judge's answer, -1 = none yet
+            bool talked = false;         // the player and the step's person talked since the last reading
+            bool judging = false;        // a reading is on its way
+            int nones = 0;               // readings that found no outcome yet
+            float judgedAt = -1.0f;      // real seconds of the last reading
+            float visitAt = -1.0f;       // game days: the step's person was last sent to the player
         };
+        void TaleTalk(std::uint32_t id, const Arcs::Arc& a, Pending& pending, const Arcs::Facts& f);   // lock held
+        void SendTale(std::shared_ptr<void> request, int attempt, std::string fix, std::string previous);   // any thread
+        void TaleWritten(std::shared_ptr<void> request, int attempt, const std::string& text);              // main thread
+        void SendOffer(std::uint32_t id, RE::Actor* asker);
+        void SendJudge(std::uint32_t id, std::uint8_t node, RE::FormID who, std::string goal, std::array<std::string, 3> turns,
+                       bool force);
+        std::atomic<bool> m_taleBusy{false};
+        std::atomic<float> m_questBusyUntil{-1.0f};   // real seconds: a quest moved on lately
+        std::array<std::array<RE::FormID, 2>, Arcs::kSlots> m_holders{};
 
         std::string Fill(std::string text, const Arcs::Arc& a) const;
         const Folk* FolkOf(RE::FormID ref) const;
         bool Usable(RE::Actor* actor, int need, std::string& why) const;
         bool Cast(Arcs::Arc& a, RE::Actor* asker, std::string& why) const;
         bool IsHomeOf(RE::TESObjectCELL* cell, const Arcs::Arc& a, Arcs::Role role) const;
+        /** Which of these roles (bit per role) has their home in this interior: the cheap checks first, then one pass
+         *  over the cell's beds for all of them at once. 0 = none. */
+        std::uint8_t HomeOfCast(RE::TESObjectCELL* cell, const Arcs::Arc& a, std::uint32_t roles) const;
         void Ended(const Arcs::Arc& a);   // memories, the rumor in the hold (lock held)
         void Spread(const Arcs::Arc& a);  // what the hold hears while it is open (lock held)
         void Tell(std::uint32_t id, const std::string& rumor, int replace, RE::FormID asker, RE::FormID place);

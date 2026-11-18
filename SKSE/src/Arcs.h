@@ -27,8 +27,11 @@ namespace IntelEngine::Arcs {
         Thief = 1,   // crime: something dear to the asker was stolen by someone of the town; a witness saw them
         Feud = 2,    // drama: two people of a town at odds; settle it with fists, make peace, or stay out of it
         Murder = 3,  // mystery: someone of the town found dead; a witness, suspects with alibis, proof in a home
+        Tale = 4,    // composed by the dungeon master (Tales.h): its own graph, people, words and endings
     };
-    constexpr std::uint8_t kPatterns = 3;
+    constexpr std::uint8_t kPatterns = 4;
+    constexpr std::size_t kMaxTaleNodes = 12;        // a tale's steps (journal objectives kTaleObjective..+11)
+    constexpr std::uint8_t kTaleObjective = 20;      // the first of the generic objectives whose text the DLL sets
 
     // Who is who (indices into Arc::cast; 0 is never used).
     enum Role : std::uint8_t {
@@ -51,6 +54,8 @@ namespace IntelEngine::Arcs {
         Choose = 4,  // the player answers a popup at `who`
         Brawl = 5,   // a brawl with `who`, won or lost
         Reach = 6,   // the player is where `who` lives (or died)
+        Visit = 7,   // `who` comes to the player (the engine sends them), and they talk
+        Wait = 8,    // time passes: `waitHours` game hours on this step
     };
 
     enum class Phase : std::uint8_t { Planned = 0, Open = 1, Ended = 2 };
@@ -67,6 +72,7 @@ namespace IntelEngine::Arcs {
         Lapsed = 17,        // never offered: nobody remembers anything
         Settled = 18,       // a feud made up without blows
         StayedOut = 19,     // the player chose to stay out of it
+        Lost = 20,          // a tale: someone a step needed is dead, and the matter ends there
     };
 
     // Game work the bridge carries out when an edge fires.
@@ -76,8 +82,12 @@ namespace IntelEngine::Arcs {
         Jail = 2,        // the role is taken by the guard (away for a while, off-screen)
         Shame = 3,       // the role was wrongly accused: the town hears it
         StartBrawl = 4,  // a brawl between the player and the role begins
-        PlayerPays = 5,  // the player pays the reward amount to the role (a feud bought off)
+        PlayerPays = 5,  // the player pays the reward amount to the role (a feud bought off); a tale's price if it has one
+        Leave = 6,       // the role leaves town for a while (off-screen, once unseen), then comes home
+        Befriend = 7,    // the role and `bondWith` become friends (the game's relationship rank)
+        Estrange = 8,    // the role and `bondWith` become rivals
     };
+    constexpr std::uint8_t kEffects = 8;
 
     enum class If : std::uint8_t {
         Done = 1,     // the node's own fact holds
@@ -90,7 +100,11 @@ namespace IntelEngine::Arcs {
         Won = 8,      // the brawl was won
         Lost = 9,     // the brawl was lost
         Handed = 10,  // prop `prop` was handed to `role` (the hand-over popup, offered on this node too)
-        Persuaded = 11,  // the first answer, and the player's Speech is enough to carry it (kPersuadeSpeech)
+        Persuaded = 11,  // the answer `prop` (the first by default), and the player's Speech is enough to carry it
+        Said0 = 12,      // a talk's prepared outcome 0, 1, 2: what the conversation turned out to be (the judge's call)
+        Said1 = 13,
+        Said2 = 14,
+        Waited = 15,     // `hours` game hours passed on this step
     };
     constexpr int kPersuadeSpeech = 35;
 
@@ -111,6 +125,9 @@ namespace IntelEngine::Arcs {
                                      // not completed, and it writes no line of its own
         Effect effect2 = Effect::None;  // a second piece of work (the asker pays the reward after the player paid)
         Role effect2Role = RNone;
+        std::string line;            // a tale's journal line for this branch (first person, past tense)
+        float hours = 0.0f;          // Waited: how long
+        Role bondWith = RNone;       // Befriend, Estrange: with whom
     };
 
     // The journal phrasings of an arc's journal quest (esp/EspBuilder ArcPhrasings, same order).
@@ -138,9 +155,14 @@ namespace IntelEngine::Arcs {
         Role marker = RNone;           // where the journal marker points (RNone: none)
         std::uint16_t logStage = 0;    // the journal stage set when the node is done (its log entry), 0 = none
         float extendDays = 0.0f;       // added to the deadline when the node is left
-        std::array<const char*, 3> options{};  // Choose: the answers (with {placeholders}); nullptr = none
+        std::array<std::string, 3> options{};  // Choose: the answers (with {placeholders}); empty = none
         std::array<Role, 3> optionRoles{};     // Choose: the role an answer names (accusations), RNone = none
-        std::array<Edge, 5> edges{};           // looked at in order; the first that holds fires
+        std::array<Edge, 6> edges{};           // looked at in order; the first that holds fires
+        // A tale's own words (patterns keep theirs in the esp and in the bridge).
+        std::string goal;                      // the journal objective
+        std::string question;                  // Choose: the popup's question
+        std::array<std::string, 3> turns{};    // Talk: what each prepared outcome would be (for the judge)
+        float waitHours = 0.0f;                // Wait: how long
     };
 
     // ------------------------------------------------------------------ the patterns
@@ -168,14 +190,14 @@ namespace IntelEngine::Arcs {
 
     inline const PatternDef& Def(Pattern p) {
         // The thief among us. 0 ask the witness -> 1 find the thing -> 2 confront the thief -> 3 return it.
-        static constexpr Node thief[] = {
+        static const Node thief[] = {
             {Kind::Talk, RWitness, 0, Objective::AskWitness, RWitness, 1010, 0.0f, {}, {},
              {{{If::Has, RNone, 0, 0, 2, Ending::None, Effect::None, RNone, 0, 1020, true},
                {If::Done, RNone, 0, 0, 1, Ending::None, Effect::None, RNone, Flag::WitnessHeard}}}},
             {Kind::Have, RNone, 0, Objective::FindStolen, RCulprit, 1020, 0.0f, {}, {},
              {{{If::Done, RNone, 0, 0, 2, Ending::None, Effect::None, RNone, 0}}}},
             {Kind::Choose, RCulprit, 0, Objective::Confront, RCulprit, 0, 0.0f,
-             {"Hand {culprit} over to the guard", "Let {culprit} go", nullptr}, {},
+             {"Hand {culprit} over to the guard", "Let {culprit} go", ""}, {},
              {{{If::Dead, RCulprit, 0, 0, 3, Ending::None, Effect::None, RNone, 0, 1033, true},
                {If::Option0, RNone, 0, 0, 3, Ending::None, Effect::Jail, RCulprit, Flag::Reported, 1031},
                {If::Option1, RNone, 0, 0, 3, Ending::None, Effect::None, RNone, Flag::Spared, 1032},
@@ -184,7 +206,7 @@ namespace IntelEngine::Arcs {
              {{{If::Done, RNone, 0, 0, kNoNode, Ending::Done, Effect::PayGold, RAsker, 0}}}},
         };
         // A feud. 0 hear the rival -> 1 decide (fists, peace, stay out) -> 2 the brawl | 3 peace talk.
-        static constexpr Node feud[] = {
+        static const Node feud[] = {
             {Kind::Talk, RRival, 0, Objective::HearRival, RRival, 2010, 0.0f, {}, {},
              {{{If::Done, RNone, 0, 0, 1, Ending::None, Effect::None, RNone, Flag::HeardRival}}}},
             {Kind::Choose, RAsker, 0, Objective::DecideFeud, RAsker, 0, 0.0f,
@@ -196,14 +218,14 @@ namespace IntelEngine::Arcs {
              {{{If::Won, RNone, 0, 0, kNoNode, Ending::Done, Effect::PayGold, RAsker, 0},
                {If::Lost, RNone, 0, 0, kNoNode, Ending::Failed, Effect::None, RNone, 0}}}},
             {Kind::Choose, RRival, 0, Objective::MakePeace, RRival, 0, 0.0f,
-             {"Talk {rival} round (Speech)", "Pay {rival} {gold} gold to let it go", nullptr}, {},
+             {"Talk {rival} round (Speech)", "Pay {rival} {gold} gold to let it go", ""}, {},
              {{{If::Persuaded, RNone, 0, 0, kNoNode, Ending::Settled, Effect::PayGold, RAsker, Flag::Apology},
                {If::Option0, RNone, 0, 0, 3, Ending::None, Effect::None, RNone, Flag::Refused, 2023},
                {If::Option1, RNone, 0, 0, kNoNode, Ending::Settled, Effect::PlayerPays, RRival, Flag::BoughtOff, 0, false,
                 Effect::PayGold, RAsker}}}},
         };
         // Murder in town. 0 see the scene -> 1 question the witness -> 2 find proof -> 3 name the killer.
-        static constexpr Node murder[] = {
+        static const Node murder[] = {
             {Kind::Reach, RVictim, 0, Objective::SeeScene, RVictim, 3010, 0.0f, {}, {},
              {{{If::Has, RNone, 0, 0, 3, Ending::None, Effect::None, RNone, 0, 3030, true},
                {If::Has, RNone, 1, 0, 3, Ending::None, Effect::None, RNone, 0, 3030, true},
@@ -232,10 +254,28 @@ namespace IntelEngine::Arcs {
         return i < std::size(defs) ? defs[i] : defs[0];
     }
 
-    constexpr std::uint16_t OpenStage(Pattern p) { return static_cast<std::uint16_t>(static_cast<int>(p) * 1000); }
+    // A tale's journal has three stages of its own: 10 the story so far, 90 a good end (completes), 91 a bad one (fails).
+    constexpr std::uint16_t kTaleOpenStage = 10;
+    constexpr std::uint16_t kTaleGoodStage = 90;
+    constexpr std::uint16_t kTaleBadStage = 91;
+    inline bool GoodEnding(Ending e) { return e == Ending::Done || e == Ending::Settled || e == Ending::StayedOut; }
+    constexpr std::uint16_t OpenStage(Pattern p) {
+        return p == Pattern::Tale ? kTaleOpenStage : static_cast<std::uint16_t>(static_cast<int>(p) * 1000);
+    }
     inline std::uint16_t EndStage(Pattern p, Ending e) {
         if (e == Ending::None || e == Ending::Declined || e == Ending::Lapsed) return 0;  // never reached the journal
+        if (p == Pattern::Tale) return GoodEnding(e) ? kTaleGoodStage : kTaleBadStage;
         return static_cast<std::uint16_t>(OpenStage(p) + 90 + (static_cast<int>(e) - 10));
+    }
+    // Which of a tale's three written endings an ending is: 0 the good one, 1 the bad one, 2 the other; -1 none of
+    // them (time ran out, the asker died: the engine's own words).
+    inline int TaleEndIndex(Ending e) {
+        switch (e) {
+            case Ending::Done: return 0;
+            case Ending::Failed: return 1;
+            case Ending::StayedOut: return 2;
+            default: return -1;
+        }
     }
 
     // ------------------------------------------------------------------ the record
@@ -251,9 +291,21 @@ namespace IntelEngine::Arcs {
         int answer = -1;                   // the popup's answer (shown index), -1 = none yet
         int speech = 0;                    // the player's Speech skill
         int brawl = 0;                     // 1 won, -1 lost, 0 none yet
+        int turn = -1;                     // a talk's outcome as the judge read the conversation, -1 = none yet
+        float hoursHere = 0.0f;            // game hours on this step (Advance fills it in)
     };
 
     constexpr std::size_t kMaxText = 200;
+    constexpr std::size_t kMaxLong = 2400;   // a tale's longer texts: a person's truth, the story so far
+
+    // How a tale ends, in its author's words: the journal's closing line, what the town hears (may be empty: a private
+    // matter), what each person remembers (first person), and whether the asker pays the reward.
+    struct TaleEnd {
+        std::string journal;
+        std::string rumor;
+        std::array<std::string, kRoles> memory{};
+        bool pay = false;
+    };
 
     struct Arc {
         std::uint32_t id = 0;
@@ -281,9 +333,31 @@ namespace IntelEngine::Arcs {
         float since = 0.0f;
         float deadline = 0.0f;
         std::string title;
+        // ---- a tale's own (Pattern::Tale; empty for the patterns)
+        std::vector<Node> graph;                       // its steps
+        std::string genre;                             // crime, romance, drama... (the ledger's variety)
+        std::string premise;                           // the hidden truth, in a sentence or two
+        std::string offerWords;                        // what drives the asker to come (narration)
+        std::string offerAsk;                          // the popup's offer, one sentence
+        std::string opening;                           // the journal's first line (first person)
+        std::array<std::string, kRoles> roleName{};    // what the author calls each person's part ("the lender")
+        std::array<std::string, kRoles> truth{};       // each person's own truth, first person
+        std::array<std::string, kRoles> heard{};       // what each person was there for, as it happened
+        std::array<std::uint8_t, kProps> propHome{};   // the person (role) in whose home a prop is hidden, 0 = none
+        std::array<std::uint8_t, kProps> propPocket{}; // the person who carries it, 0 = none
+        std::array<TaleEnd, 3> ends{};                 // good, bad, other
+        std::string story;                             // the story so far (the journal's log), first person
+        std::uint32_t price = 0;                       // what the player pays when an answer costs gold, 0 = the reward
+        float days = 0.0f;                             // how long it stands once taken on (0 = the pattern's)
     };
 
     inline bool IsOpen(const Arc& a) { return a.phase == Phase::Open; }
+
+    // The steps of an arc: a tale's own graph, else its pattern's table.
+    inline std::span<const Node> NodesOf(const Arc& a) {
+        if (!a.graph.empty()) return a.graph;
+        return Def(a.pattern).nodes;
+    }
     inline bool IsLive(const Arc& a) { return a.phase != Phase::Ended; }
 
     // What changed in one look: nodes done, the effect to carry out, and how it ended.
@@ -297,6 +371,8 @@ namespace IntelEngine::Arcs {
         Effect effect2 = Effect::None;
         Role effect2Role = RNone;
         bool stayed = false;     // a branch back to the same step fired (its line is written, nothing completes)
+        Role bondWith = RNone;   // Befriend, Estrange: with whom
+        std::string line;        // a tale's journal line for the branch taken
         bool any() const { return !done.empty() || stayed || skipped != kNoNode || ending != Ending::None || effect != Effect::None; }
     };
 
@@ -318,6 +394,8 @@ namespace IntelEngine::Arcs {
                     case Kind::Have: return f.has[n.prop];
                     case Kind::Give: return f.handed[n.prop];
                     case Kind::Reach: return f.atScene;
+                    case Kind::Visit: return f.with[n.who] && f.spoke[n.who];
+                    case Kind::Wait: return f.hoursHere >= n.waitHours;
                     default: return false;
                 }
             case If::Option0: return f.answer == 0;
@@ -331,7 +409,11 @@ namespace IntelEngine::Arcs {
             case If::Won: return f.brawl > 0;
             case If::Lost: return f.brawl < 0;
             case If::Handed: return f.handed[e.prop];
-            case If::Persuaded: return f.answer == 0 && f.speech >= kPersuadeSpeech;
+            case If::Persuaded: return f.answer == static_cast<int>(e.prop) && f.speech >= kPersuadeSpeech;
+            case If::Said0: return f.turn == 0;
+            case If::Said1: return f.turn == 1;
+            case If::Said2: return f.turn == 2;
+            case If::Waited: return f.hoursHere >= e.hours;
         }
         return false;
     }
@@ -339,11 +421,48 @@ namespace IntelEngine::Arcs {
     // Moves an open arc on from the facts: the asker's death first, then the current node's edges in order (the first
     // that holds fires), then the deadline. One node a look: an arc never jumps several steps on one tick, so every
     // step done is seen in the journal.
-    inline Change Advance(Arc& a, const Facts& f, float now) {
+    // What the person of a tale's step saw happen there, for their own lines ({player} is filled in later).
+    inline std::string Witnessed(const Node& n, const Edge& e, const Facts& f) {
+        switch (e.when) {
+            case If::Said0: case If::Said1: case If::Said2: {
+                const auto k = static_cast<std::size_t>(static_cast<int>(e.when) - static_cast<int>(If::Said0));
+                return n.turns[k].empty() ? std::string() : "When {player} talked with me about it: " + n.turns[k] + ".";
+            }
+            case If::Option0: case If::Option1: case If::Option2: case If::Persuaded: {
+                const int k = e.when == If::Persuaded ? static_cast<int>(e.prop) : static_cast<int>(e.when) - static_cast<int>(If::Option0);
+                if (k < 0 || k > 2 || n.options[static_cast<std::size_t>(k)].empty()) return {};
+                return "{player} decided, in front of me: \"" + n.options[static_cast<std::size_t>(k)] + "\"" +
+                       (e.when == If::Persuaded ? " and talked me round." : ".");
+            }
+            case If::Won: return "{player} beat me in a brawl over it.";
+            case If::Lost: return "I beat {player} in a brawl over it.";
+            case If::Handed: case If::Done:
+                if (n.kind == Kind::Give) return "{player} brought it and gave it to me.";
+                if (n.kind == Kind::Visit) return "I went to {player} about it, and we talked.";
+                return {};
+            default: (void)f; return {};
+        }
+    }
+
+    // Keeps the end of a growing text within `limit` (the newest lines matter most).
+    inline void Append(std::string& text, const std::string& line, std::size_t limit = kMaxLong) {
+        if (line.empty()) return;
+        if (!text.empty()) text += ' ';
+        text += line;
+        if (text.size() > limit) {
+            auto cut = text.size() - limit;
+            const auto space = text.find(' ', cut);
+            text.erase(0, space == std::string::npos ? cut : space + 1);
+        }
+    }
+
+    inline Change Advance(Arc& a, const Facts& facts, float now) {
         Change c;
         if (a.phase != Phase::Open) return c;
-        const auto& def = Def(a.pattern);
-        if (a.node >= def.nodes.size()) return c;
+        const auto nodes = NodesOf(a);
+        if (a.node >= nodes.size()) return c;
+        Facts f = facts;
+        f.hoursHere = std::max(0.0f, (now - a.since) * 24.0f);
         auto end = [&](Ending e) {
             a.phase = Phase::Ended;
             a.ending = e;
@@ -354,7 +473,7 @@ namespace IntelEngine::Arcs {
             end(Ending::AskerDied);
             return c;
         }
-        const Node& n = def.nodes[a.node];
+        const Node& n = nodes[a.node];
         for (const auto& e : n.edges) {
             if (e.when == If{} || !EdgeHolds(a, n, e, f)) continue;
             a.visited |= 1u << a.node;
@@ -370,12 +489,22 @@ namespace IntelEngine::Arcs {
             c.log = e.log ? e.log : n.logStage;
             c.effect2 = e.effect2;
             c.effect2Role = e.effect2Role;
+            c.bondWith = e.bondWith;
+            if (!e.line.empty()) {
+                // The tale's journal (the player's own words).
+                c.line = e.line;
+                Append(a.story, e.line);
+            }
+            if (a.pattern == Pattern::Tale && n.who != RNone) {
+                // What the person of this step saw of it, in words true for them (never the player's journal).
+                Append(a.heard[n.who], Witnessed(n, e, f), kMaxLong / 2);
+            }
             a.deadline += n.extendDays;
             if (n.kind == Kind::Choose) a.accused = AnswerRole(a, n, f.answer);
             a.since = now;
             if (e.ending != Ending::None) {
                 end(e.ending);
-            } else if (e.next != kNoNode && e.next < def.nodes.size()) {
+            } else if (e.next != kNoNode && e.next < nodes.size()) {
                 a.node = e.next;
             }
             return c;
@@ -436,7 +565,8 @@ namespace IntelEngine::Arcs {
             for (const auto who : a.cast) {
                 if (who && LiveFor(who)) return "someone of the cast has a part in another arc";
             }
-            if (a.pattern == lastPattern) return "the same kind of story ran last";
+            // A tale is a new story every time (the ledger keeps its genres apart); a pattern never runs twice in a row.
+            if (a.pattern == lastPattern && a.pattern != Pattern::Tale) return "the same kind of story ran last";
             return {};
         }
 
@@ -478,7 +608,7 @@ namespace IntelEngine::Arcs {
             a->phase = Phase::Open;
             a->opened = now;
             a->since = now;
-            a->deadline = now + Def(a->pattern).days;
+            a->deadline = now + (a->days > 0.0f ? a->days : Def(a->pattern).days);
             return true;
         }
 
@@ -573,6 +703,54 @@ namespace IntelEngine::Arcs {
         return static_cast<std::uint32_t>(base + level * 5);
     }
 
+    // ---- a tale's words (its author's, kept in the record)
+
+    inline std::string TaleRoleLines(const Arc& a, Role r) {
+        const bool open = a.phase == Phase::Open;
+        const bool planned = a.phase == Phase::Planned;
+        if (!open && !planned) return {};
+        std::string out = a.truth[r];
+        if (r == RAsker) {
+            if (planned) {
+                Append(out, "I am going to ask {player} for help: " + a.offerAsk + " I will pay {gold} gold for it.");
+                return out;
+            }
+            Append(out, "I asked {player} for help: " + a.offerAsk + " For {gold} gold, paid once it is done, not before. It is not done yet.");
+            Append(out, a.paid ? "I have already paid {player} {paid} gold of it." : "I have paid nothing yet.");
+        }
+        if (open && !a.heard[r].empty()) Append(out, "What has happened with it so far, as I saw it: " + a.heard[r]);
+        return out;
+    }
+
+    inline std::string TaleEndMemory(const Arc& a, Role r) {
+        const int k = TaleEndIndex(a.ending);
+        if (k >= 0) {
+            const auto& m = a.ends[static_cast<std::size_t>(k)].memory[r];
+            if (!m.empty()) return m;
+        }
+        if (r != RAsker) return {};
+        if (a.ending == Ending::Ignored) return "I asked {player} for help: " + a.offerAsk + " {player} never saw it through.";
+        if (a.ending == Ending::Declined) return "I asked {player} for help: " + a.offerAsk + " {player} refused.";
+        if (a.ending == Ending::Lost) return "I asked {player} for help: " + a.offerAsk + " It came to nothing in the end: someone it hung on died.";
+        return {};
+    }
+
+    inline std::string TaleRumor(const Arc& a) {
+        if (a.phase != Phase::Ended) return {};
+        const int k = TaleEndIndex(a.ending);
+        return k >= 0 ? a.ends[static_cast<std::size_t>(k)].rumor : std::string();
+    }
+
+    // The journal's closing line of a tale that ended.
+    inline std::string TaleClosing(const Arc& a) {
+        const int k = TaleEndIndex(a.ending);
+        if (k >= 0 && !a.ends[static_cast<std::size_t>(k)].journal.empty()) return a.ends[static_cast<std::size_t>(k)].journal;
+        if (a.ending == Ending::AskerDied) return "{asker} is dead.";
+        if (a.ending == Ending::Ignored) return "I never saw it through, and {asker} has stopped waiting.";
+        if (a.ending == Ending::Lost) return "There is nothing more to be done about it now.";
+        return "It is over.";
+    }
+
     inline std::string DefaultTitle(Pattern p) {
         switch (p) {
             case Pattern::Thief: return "A Thief Among Us";
@@ -584,6 +762,7 @@ namespace IntelEngine::Arcs {
 
     // The offer's narration (what drives the asker to speak) and the popup.
     inline std::string OfferNarration(const Arc& a) {
+        if (a.pattern == Pattern::Tale) return a.offerWords;
         switch (a.pattern) {
             case Pattern::Thief:
                 return "{asker} comes to {player} upset: someone broke into {asker}'s home and stole a {thing0}, and {asker} needs someone to find the thief";
@@ -596,6 +775,7 @@ namespace IntelEngine::Arcs {
         }
     }
     inline std::string OfferPrompt(const Arc& a) {
+        if (a.pattern == Pattern::Tale) return a.offerAsk + " Reward: {gold} gold.";
         switch (a.pattern) {
             case Pattern::Thief: return "Someone stole {item0}. {asker} asks you to find the thief and bring it back. Reward: {gold} gold.";
             case Pattern::Feud:
@@ -608,6 +788,7 @@ namespace IntelEngine::Arcs {
 
     // What each role knows now, first person, for their prompt (the truth and what is not yet true). Empty = nothing.
     inline std::string RoleLines(const Arc& a, Role r) {
+        if (a.pattern == Pattern::Tale) return TaleRoleLines(a, r);
         const bool open = a.phase == Phase::Open;
         const bool planned = a.phase == Phase::Planned;
         std::string out;
@@ -705,6 +886,7 @@ namespace IntelEngine::Arcs {
 
     // The memory each role keeps of how it ended, first person. Empty = nothing.
     inline std::string EndMemory(const Arc& a, Role r) {
+        if (a.pattern == Pattern::Tale) return TaleEndMemory(a, r);
         switch (a.pattern) {
             case Pattern::Thief:
                 if (r == RAsker) {
@@ -759,6 +941,7 @@ namespace IntelEngine::Arcs {
 
     // What the town heard (past tense, stays true). Empty = nothing.
     inline std::string Rumor(const Arc& a) {
+        if (a.pattern == Pattern::Tale) return TaleRumor(a);
         if (a.phase == Phase::Open && a.pattern == Pattern::Murder) return "{victim} was found dead at home, killed by someone.";
         if (a.phase != Phase::Ended) return {};
         switch (a.pattern) {
@@ -792,7 +975,7 @@ namespace IntelEngine::Arcs {
     // ------------------------------------------------------------------ save data (co-save record 'IEAR')
 
     constexpr std::uint32_t kRecordType = 'IEAR';
-    constexpr std::uint32_t kRecordVersion = 1;
+    constexpr std::uint32_t kRecordVersion = 2;   // 2: tales (their graphs and words); 1 still loads
 
     namespace detail {
         template <class T>
@@ -807,16 +990,111 @@ namespace IntelEngine::Arcs {
             at += sizeof(T);
             return true;
         }
-        inline void PutText(std::vector<std::uint8_t>& out, const std::string& text) {
-            const auto size = static_cast<std::uint16_t>(std::min(text.size(), kMaxText));
+        // At most `limit` bytes, never cutting a UTF-8 character in two.
+        inline std::size_t Fit(const std::string& text, std::size_t limit) {
+            if (text.size() <= limit) return text.size();
+            std::size_t n = limit;
+            while (n > 0 && (static_cast<unsigned char>(text[n]) & 0xC0) == 0x80) --n;
+            return n;
+        }
+        inline void PutText(std::vector<std::uint8_t>& out, const std::string& text, std::size_t limit = kMaxText) {
+            const auto size = static_cast<std::uint16_t>(Fit(text, limit));
             Put(out, size);
             out.insert(out.end(), text.begin(), text.begin() + size);
         }
-        inline bool GetText(std::span<const std::uint8_t> in, std::size_t& at, std::string& text) {
+        inline bool GetText(std::span<const std::uint8_t> in, std::size_t& at, std::string& text, std::size_t limit = kMaxText) {
             std::uint16_t size = 0;
-            if (!Get(in, at, size) || size > kMaxText || in.size() - at < size) return false;
+            if (!Get(in, at, size) || size > limit || in.size() - at < size) return false;
             text.assign(reinterpret_cast<const char*>(in.data() + at), size);
             at += size;
+            return true;
+        }
+        inline void PutLong(std::vector<std::uint8_t>& out, const std::string& text) { PutText(out, text, kMaxLong); }
+        inline bool GetLong(std::span<const std::uint8_t> in, std::size_t& at, std::string& text) { return GetText(in, at, text, kMaxLong); }
+
+        inline void PutNode(std::vector<std::uint8_t>& out, const Node& n) {
+            Put(out, static_cast<std::uint8_t>(n.kind));
+            Put(out, static_cast<std::uint8_t>(n.who));
+            Put(out, n.prop);
+            Put(out, n.objective);
+            Put(out, static_cast<std::uint8_t>(n.marker));
+            Put(out, n.logStage);
+            Put(out, n.extendDays);
+            for (const auto& o : n.options) PutText(out, o);
+            for (const auto r : n.optionRoles) Put(out, static_cast<std::uint8_t>(r));
+            PutText(out, n.goal);
+            PutText(out, n.question);
+            for (const auto& turn : n.turns) PutText(out, turn);
+            Put(out, n.waitHours);
+            std::uint8_t edges = 0;
+            for (const auto& e : n.edges) edges = static_cast<std::uint8_t>(edges + (e.when != If{} ? 1 : 0));
+            Put(out, edges);
+            for (const auto& e : n.edges) {
+                if (e.when == If{}) continue;
+                Put(out, static_cast<std::uint8_t>(e.when));
+                Put(out, static_cast<std::uint8_t>(e.role));
+                Put(out, e.prop);
+                Put(out, e.needProps);
+                Put(out, e.next);
+                Put(out, static_cast<std::uint8_t>(e.ending));
+                Put(out, static_cast<std::uint8_t>(e.effect));
+                Put(out, static_cast<std::uint8_t>(e.effectRole));
+                Put(out, e.setFlags);
+                Put(out, e.log);
+                Put(out, static_cast<std::uint8_t>(e.skip ? 1 : 0));
+                Put(out, static_cast<std::uint8_t>(e.effect2));
+                Put(out, static_cast<std::uint8_t>(e.effect2Role));
+                PutText(out, e.line);
+                Put(out, e.hours);
+                Put(out, static_cast<std::uint8_t>(e.bondWith));
+            }
+        }
+
+        inline bool ValidEnding(std::uint8_t v) { return v == 0 || (v >= 10 && v <= 20); }
+
+        inline bool GetNode(std::span<const std::uint8_t> in, std::size_t& at, Node& n) {
+            std::uint8_t kind = 0, who = 0, marker = 0, edges = 0;
+            if (!Get(in, at, kind) || !Get(in, at, who) || !Get(in, at, n.prop) || !Get(in, at, n.objective) || !Get(in, at, marker) ||
+                !Get(in, at, n.logStage) || !Get(in, at, n.extendDays)) {
+                return false;
+            }
+            if (kind < 1 || kind > static_cast<std::uint8_t>(Kind::Wait) || who >= kRoles || marker >= kRoles || n.prop >= kProps) return false;
+            n.kind = static_cast<Kind>(kind);
+            n.who = static_cast<Role>(who);
+            n.marker = static_cast<Role>(marker);
+            for (auto& o : n.options) if (!GetText(in, at, o)) return false;
+            for (auto& r : n.optionRoles) {
+                std::uint8_t v = 0;
+                if (!Get(in, at, v) || v >= kRoles) return false;
+                r = static_cast<Role>(v);
+            }
+            if (!GetText(in, at, n.goal) || !GetText(in, at, n.question)) return false;
+            for (auto& turn : n.turns) if (!GetText(in, at, turn)) return false;
+            if (!Get(in, at, n.waitHours) || !Get(in, at, edges) || edges > n.edges.size() || !std::isfinite(n.waitHours)) return false;
+            for (std::uint8_t i = 0; i < edges; ++i) {
+                auto& e = n.edges[i];
+                std::uint8_t when = 0, role = 0, ending = 0, effect = 0, effectRole = 0, skip = 0, effect2 = 0, effect2Role = 0, bondWith = 0;
+                if (!Get(in, at, when) || !Get(in, at, role) || !Get(in, at, e.prop) || !Get(in, at, e.needProps) || !Get(in, at, e.next) ||
+                    !Get(in, at, ending) || !Get(in, at, effect) || !Get(in, at, effectRole) || !Get(in, at, e.setFlags) ||
+                    !Get(in, at, e.log) || !Get(in, at, skip) || !Get(in, at, effect2) || !Get(in, at, effect2Role) ||
+                    !GetText(in, at, e.line) || !Get(in, at, e.hours) || !Get(in, at, bondWith)) {
+                    return false;
+                }
+                if (when < 1 || when > static_cast<std::uint8_t>(If::Waited) || role >= kRoles || effectRole >= kRoles ||
+                    effect2Role >= kRoles || bondWith >= kRoles || effect > kEffects || effect2 > kEffects || !ValidEnding(ending) ||
+                    e.prop >= kProps || !std::isfinite(e.hours)) {
+                    return false;
+                }
+                e.when = static_cast<If>(when);
+                e.role = static_cast<Role>(role);
+                e.ending = static_cast<Ending>(ending);
+                e.effect = static_cast<Effect>(effect);
+                e.effectRole = static_cast<Role>(effectRole);
+                e.skip = skip != 0;
+                e.effect2 = static_cast<Effect>(effect2);
+                e.effect2Role = static_cast<Role>(effect2Role);
+                e.bondWith = static_cast<Role>(bondWith);
+            }
             return true;
         }
     }
@@ -857,13 +1135,40 @@ namespace IntelEngine::Arcs {
             detail::Put(out, a.since);
             detail::Put(out, a.deadline);
             detail::PutText(out, a.title);
+            // ---- version 2: a tale's own
+            const auto nodes = static_cast<std::uint8_t>(std::min(a.graph.size(), kMaxTaleNodes));
+            detail::Put(out, nodes);
+            for (std::uint8_t n = 0; n < nodes; ++n) detail::PutNode(out, a.graph[n]);
+            detail::PutText(out, a.genre);
+            detail::PutLong(out, a.premise);
+            detail::PutLong(out, a.offerWords);
+            detail::PutText(out, a.offerAsk);
+            detail::PutLong(out, a.opening);
+            for (std::size_t r = 0; r < kRoles; ++r) {
+                detail::PutText(out, a.roleName[r]);
+                detail::PutLong(out, a.truth[r]);
+                detail::PutLong(out, a.heard[r]);
+            }
+            for (std::size_t p = 0; p < kProps; ++p) {
+                detail::Put(out, a.propHome[p]);
+                detail::Put(out, a.propPocket[p]);
+            }
+            for (const auto& end : a.ends) {
+                detail::PutLong(out, end.journal);
+                detail::PutLong(out, end.rumor);
+                for (const auto& m : end.memory) detail::PutLong(out, m);
+                detail::Put(out, static_cast<std::uint8_t>(end.pay ? 1 : 0));
+            }
+            detail::PutLong(out, a.story);
+            detail::Put(out, a.price);
+            detail::Put(out, a.days);
         }
         return out;
     }
 
-    // All or nothing.
+    // All or nothing. Version 1 records (before tales) load as they were.
     inline bool Deserialize(std::span<const std::uint8_t> in, Book& book, std::uint32_t version = kRecordVersion) {
-        if (version != 1) return false;
+        if (version != 1 && version != 2) return false;
         std::size_t at = 0;
         Book read;
         std::uint8_t lastPattern = 0;
@@ -896,11 +1201,46 @@ namespace IntelEngine::Arcs {
                 !detail::GetText(in, at, a.title)) {
                 return false;
             }
-            const bool endingOk = ending == 0 || (ending >= 10 && ending <= 19);
-            if (pattern < 1 || pattern > kPatterns || phase > 2 || !endingOk || accused >= kRoles ||
-                (a.slot != 0xFF && a.slot >= kSlots) || a.node >= Def(static_cast<Pattern>(pattern)).nodes.size() ||
-                !std::isfinite(a.deadline)) {
+            if (version >= 2) {
+                std::uint8_t nodes = 0;
+                if (!detail::Get(in, at, nodes) || nodes > kMaxTaleNodes) return false;
+                a.graph.resize(nodes);
+                for (auto& n : a.graph) if (!detail::GetNode(in, at, n)) return false;
+                if (!detail::GetText(in, at, a.genre) || !detail::GetLong(in, at, a.premise) || !detail::GetLong(in, at, a.offerWords) ||
+                    !detail::GetText(in, at, a.offerAsk) || !detail::GetLong(in, at, a.opening)) {
+                    return false;
+                }
+                for (std::size_t r = 0; r < kRoles; ++r) {
+                    if (!detail::GetText(in, at, a.roleName[r]) || !detail::GetLong(in, at, a.truth[r]) || !detail::GetLong(in, at, a.heard[r])) return false;
+                }
+                for (std::size_t p = 0; p < kProps; ++p) {
+                    if (!detail::Get(in, at, a.propHome[p]) || !detail::Get(in, at, a.propPocket[p]) || a.propHome[p] >= kRoles ||
+                        a.propPocket[p] >= kRoles) {
+                        return false;
+                    }
+                }
+                for (auto& end : a.ends) {
+                    std::uint8_t pay = 0;
+                    if (!detail::GetLong(in, at, end.journal) || !detail::GetLong(in, at, end.rumor)) return false;
+                    for (auto& m : end.memory) if (!detail::GetLong(in, at, m)) return false;
+                    if (!detail::Get(in, at, pay)) return false;
+                    end.pay = pay != 0;
+                }
+                if (!detail::GetLong(in, at, a.story) || !detail::Get(in, at, a.price) || !detail::Get(in, at, a.days) || !std::isfinite(a.days)) {
+                    return false;
+                }
+            }
+            const bool tale = pattern == static_cast<std::uint8_t>(Pattern::Tale);
+            const bool known = pattern >= 1 && pattern <= kPatterns;
+            const std::size_t steps = tale ? a.graph.size() : Def(known ? static_cast<Pattern>(pattern) : Pattern::None).nodes.size();
+            if (!known || phase > 2 || !detail::ValidEnding(ending) || accused >= kRoles || (a.slot != 0xFF && a.slot >= kSlots) ||
+                a.node >= steps || (tale && a.graph.empty()) || !std::isfinite(a.deadline)) {
                 return false;
+            }
+            for (const auto& n : a.graph) {
+                for (const auto& e : n.edges) {
+                    if (e.when != If{} && e.next != kNoNode && e.next >= a.graph.size()) return false;
+                }
             }
             a.pattern = static_cast<Pattern>(pattern);
             a.phase = static_cast<Phase>(phase);

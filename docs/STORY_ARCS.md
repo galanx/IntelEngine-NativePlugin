@@ -23,6 +23,47 @@ the director's quest moments trying an arc first, and rumor reconciliation after
 Not yet: more patterns (romance, politics, debts, longer ventures), visits at the player's home, the tension meter
 beyond the simple cadence, the battle bounty fix, a run on the full profile and the Albanian profiles.
 
+## 0. Tales: stories the dungeon master composes (2026-11-19)
+
+The user, 2026-11-18 night, after playing the three patterns: "the stories are too shallow and risk getting too
+repetitive", "Hulda doesnt fit to a brawl", "we use different types to combine a full story", "it should never
+contradict main quests. If someone is an enemy with someone else due to the main story, that should also reflect",
+"pace events right, so that the player doesn't get interrupted while doing main quests", "Everything should feel ...
+like it belongs to the role of the chosen story candidates", "based on how the dialogue flows, they should adapt to
+different branching so the dungeon master can predict possible outcomes and prepare quest nodes in advance", "I don't
+want a 'bad blood' quest, or a murder mystery quest repeated dozens of times", "procedurally engineering stories
+logic, where the possibilities are almost infinite".
+
+So a story is no longer one of three fixed patterns. It is a **tale**: a graph of steps the dungeon master writes for
+the real people of a town, from a library of step kinds the engine can carry out and check. The three patterns stay
+as the fallback when no model answers.
+
+1. **Who may be in it** (code). The townsfolk of the player's town, each with what the game says about them: job and
+   class, temperament (the game's morality, confidence and aggression), whether they can fight with fists, be taken
+   by the guard, have a home of their own, and their ties to each other and to the player (the game's relationship
+   ranks, so canon rivalries and families show). Nobody a quest of the journal still needs, no children, no
+   followers, nobody in another story.
+2. **What it may use** (code). Step kinds: talk (the conversation decides which way it turns), find (a stamped item
+   hidden in someone's home or pocket), give (hand it to someone), choose (a decision popup), brawl (only with
+   someone who would), go (to someone's home), visit (someone comes to the player), wait (time passes, a day to pay
+   up). Effects: pay, the player pays, taken by the guard, leaves town for a while, two people become friends or
+   rivals. Endings: good, bad, and a third the author names.
+3. **The author** (the model, one call). Given the town, its people, the player's current quests (never to be
+   contradicted or touched), the stories already told (never repeated), and a genre to lean toward, it writes the
+   tale as data: title, the hidden truth, each person's own truth (first person: what they know, want, hide, say),
+   the props, the offer, the steps with every branch, and the endings (journal line, what the town hears, what each
+   person remembers). Several branches per step: the outcomes are prepared before the player gets there.
+4. **The check** (code). Every name, step, branch, item and effect is checked against what the engine can do and
+   against each person's fit (no brawl with an innkeeper, nobody jailed who cannot be); every path must reach an
+   ending; texts have limits. A tale that fails is sent back once with the reasons; then the fallback patterns.
+5. **Talk that turns the story** (the model, small calls). When the player has talked with the step's person and the
+   talk goes quiet, a small decision call reads that conversation and names which prepared outcome it was (or none
+   yet). Popups stay for the player's own decisions; the dialogue never has to pick an action.
+6. **The journal** shows the tale's own words: the title, each step's goal as its objective (texts set by the DLL),
+   the story so far and the ending as log text (two holder aliases whose names the DLL writes).
+7. **Pacing**: a tale is offered only to a player idling in a town, never within a while of a main, faction or DLC
+   quest moving on, never in a bad moment; a day between tales; the ledger keeps the last tales so nothing repeats.
+
 ## 1. Principles
 
 1. **Truth first.** Code decides what happens and makes it true in the game (people, items, bodies, places) before

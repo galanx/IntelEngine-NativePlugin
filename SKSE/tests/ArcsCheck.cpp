@@ -267,7 +267,7 @@ static void SaveData() {
     Book untouched = back;
     Require(!Deserialize(bad, untouched), "a short record is refused");
     Require(untouched.all.size() == back.all.size(), "a refused record leaves the book as it was");
-    Require(!Deserialize(bytes, untouched, 2), "an unknown version is refused");
+    Require(!Deserialize(bytes, untouched, 3), "an unknown version is refused");
 }
 
 static void Words() {

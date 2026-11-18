@@ -105,6 +105,7 @@ public static class Program
         var arcKeeper = AddArcKeeper(mod);
         var arcs = new List<Quest>();
         for (int slot = 0; slot < ArcSlots; ++slot) arcs.Add(AddArcJournalQuest(mod, slot));
+        var holders = AddTaleHolders(mod);
         mod.WriteToBinary(output);
         Console.WriteLine($"{ThreadQuest} [{quest.FormKey.ID:X6}]: {quest.Aliases.Count} aliases, {quest.Objectives.Count} objectives -> {output}");
         Console.WriteLine($"{LifeSandbox} [{lifeSandbox.FormKey.ID:X6}], {LivesQuest} [{lives.FormKey.ID:X6}]");
@@ -112,6 +113,7 @@ public static class Program
                           string.Join(", ", journal.Select(q => $"{q.EditorID} [{q.FormKey.ID:X6}]")));
         Console.WriteLine($"{ArcKeeper} [{arcKeeper.FormKey.ID:X6}], arc journal quests " +
                           string.Join(", ", arcs.Select(q => $"{q.EditorID} [{q.FormKey.ID:X6}]")));
+        Console.WriteLine("tale holders " + string.Join(", ", holders.Select(m => $"{m.EditorID} [{m.FormKey.ID:X6}]")));
         return 0;
     }
 
@@ -176,7 +178,16 @@ public static class Program
         (3093, "<Alias.ShortName=Victim>'s killer was never found.", QuestLogEntry.Flag.FailQuest),
         (3094, "<Alias=Asker> is dead.", QuestLogEntry.Flag.FailQuest),
         (3095, "I named the wrong person. <Alias.ShortName=Victim>'s killer is still free.", QuestLogEntry.Flag.FailQuest),
+        // A tale's (Arcs.h kTale*Stage): the story so far and its ending, written by the DLL as the names of the
+        // slot's two holder items (IntelEngine_TaleText<slot>, IntelEngine_TaleClose<slot>).
+        (10, "<Alias=Tale>", null),
+        (90, "<Alias=Close>", QuestLogEntry.Flag.CompleteQuest),
+        (91, "<Alias=Close>", QuestLogEntry.Flag.FailQuest),
     };
+
+    // A tale's steps are objectives kTaleObjective.. (Arcs.h) whose text the DLL sets at runtime.
+    public const int TaleObjective = 20;
+    public const int TaleSteps = 12;   // Arcs.h kMaxTaleNodes
 
     // A journal quest per arc slot: a side quest whose title the DLL sets (ArcBridge), with no script of its own;
     // IntelEngine_Arcs.psc on the keeper drives its aliases, objectives and stages.
@@ -207,9 +218,17 @@ public static class Program
         var marker = AddAlias(quest, ref nextAlias, "Marker", QuestAlias.TypeEnum.Reference);
         marker.Flags |= QuestAlias.Flag.AllowDead;
         AddAlias(quest, ref nextAlias, "Place", QuestAlias.TypeEnum.Location);
+        AddAlias(quest, ref nextAlias, "Tale", QuestAlias.TypeEnum.Reference);    // 11: the story so far
+        AddAlias(quest, ref nextAlias, "Close", QuestAlias.TypeEnum.Reference);   // 12: how it ended
         for (int k = 0; k < ArcPhrasings.Length; ++k)
         {
             var objective = new QuestObjective { Index = (ushort)k, DisplayText = ArcPhrasings[k] };
+            objective.Targets.Add(new QuestObjectiveTarget { AliasID = (int)marker.ID });
+            quest.Objectives.Add(objective);
+        }
+        for (int k = 0; k < TaleSteps; ++k)
+        {
+            var objective = new QuestObjective { Index = (ushort)(TaleObjective + k), DisplayText = "A step of the story" };
             objective.Targets.Add(new QuestObjectiveTarget { AliasID = (int)marker.ID });
             quest.Objectives.Add(objective);
         }
@@ -221,6 +240,31 @@ public static class Program
         }
         quest.VirtualMachineAdapter = null;
         return quest;
+    }
+
+    // The items whose names a tale's journal log shows (the DLL renames them): per slot the story so far, then the
+    // ending. Never placed where anyone could see them: the script makes disabled references of them under the world.
+    static List<MiscItem> AddTaleHolders(SkyrimMod mod)
+    {
+        var list = new List<MiscItem>();
+        foreach (var kind in new[] { "TaleText", "TaleClose" })
+        {
+            for (int slot = 0; slot < ArcSlots; ++slot)
+            {
+                var editorId = $"IntelEngine_{kind}{slot}";
+                var item = mod.MiscItems.FirstOrDefault(m => m.EditorID == editorId);
+                if (item == null)
+                {
+                    item = mod.MiscItems.AddNew();
+                    item.EditorID = editorId;
+                }
+                item.Name = kind == "TaleText" ? "The story so far" : "How it ended";
+                item.Value = 0;
+                item.Weight = 0;
+                list.Add(item);
+            }
+        }
+        return list;
     }
 
     // The keeper of the arcs: a quest of its own for IntelEngine_Arcs.psc (its watch and update loop), nothing in the
