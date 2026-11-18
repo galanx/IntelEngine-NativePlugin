@@ -12,6 +12,9 @@
 #include <mutex>
 #include <unordered_map>
 #include <atomic>
+#include <chrono>
+#include <deque>
+#include <string>
 #include <vector>
 
 namespace IntelEngine {
@@ -49,6 +52,17 @@ namespace IntelEngine {
         /** Get all tracked FormIDs and their counts (for saving to StorageUtil). */
         std::vector<std::pair<RE::FormID, int>> GetAllCounts() const;
 
+        /** A line said lately: who said it, to whom (0 = nobody named: the player's typed and spoken lines), what. */
+        struct Line {
+            std::chrono::steady_clock::time_point at;
+            RE::FormID speaker = 0;
+            RE::FormID target = 0;
+            std::string text;
+        };
+        /** The lines of a conversation between the player and this NPC in the last `seconds`: theirs to anyone, the
+         *  player's (whose lines name nobody). Oldest first, at most `max`. */
+        std::vector<Line> ConversationWith(RE::FormID npc, float seconds, std::size_t max) const;
+
     private:
         DialogueTracker() = default;
         ~DialogueTracker() = default;
@@ -56,8 +70,10 @@ namespace IntelEngine {
         DialogueTracker& operator=(const DialogueTracker&) = delete;
 
         void OnDialogueEvent(const char* json);
+        void Record(const char* json, bool player);
 
         mutable std::mutex mutex_;
+        std::deque<Line> lines_;   // the last lines said around the player (story tales read their talks here)
         std::unordered_map<RE::FormID, int> lineCounts_;
         std::atomic<int> threshold_{20};
         std::atomic<bool> enabled_{false};

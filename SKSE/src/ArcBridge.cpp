@@ -688,6 +688,9 @@ namespace IntelEngine {
         if (!townId || (now - m_paceSince) * 24.0f < kTownLingerHours) return;
         if (m_paceTried >= 0.0f && now >= m_paceTried && now - m_paceTried < kPaceRetryDays) return;
         if (LivingWorldBridge::GetSingleton()->IsBadMoment() || player->IsInCombat()) return;
+        // The player is busy with a quest of the journal (a stage of it moved on lately): no story cuts in.
+        if (const float busy = m_questBusyUntil.load(); RealSeconds() < busy) return;
+        if (m_taleBusy.load()) return;   // a tale is being written
         {
             std::scoped_lock lock(m_mutex);
             if (m_book.Count(A::Phase::Planned) > 0 || m_book.Count(A::Phase::Open) >= A::kMaxOpen) return;
@@ -714,6 +717,14 @@ namespace IntelEngine {
             if (++tries > 6) break;
             auto* asker = RE::TESForm::LookupByID<RE::Actor>(f->ref);
             if (!asker || asker->IsDead() || asker->IsDisabled()) continue;
+            if (AskedWithin(asker->GetFormID(), kAskerRestDays)) continue;
+            // A tale the dungeon master writes for them, when a model can be asked; its answer brings the offer.
+            if (RequestTale(asker)) {
+                logger::info("Arcs: a tale is being written in {} after {:.1f} hours there, with {} ({:.2f} ms)", PlaceName(townId),
+                             (now - m_paceSince) * 24.0f, NameOf(f->ref), spent());
+                m_paceSince = now;
+                return;
+            }
             const auto id = PlanFor(asker, 0, true);
             if (!id) continue;
             logger::info("Arcs: #{} begins in {} after {:.1f} hours there: {} comes to the player ({:.2f} ms)", id, PlaceName(townId),
@@ -755,6 +766,32 @@ namespace IntelEngine {
             return RE::BSContainer::ForEachResult::kContinue;
         });
         return bed;
+    }
+
+    std::uint8_t ArcBridge::HomeOfCast(RE::TESObjectCELL* cell, const A::Arc& a, std::uint32_t roles) const {
+        if (!cell || !cell->IsInteriorCell()) return 0;
+        std::array<RE::Actor*, A::kRoles> actors{};
+        for (std::size_t r = 1; r < A::kRoles; ++r) {
+            if (!(roles & (1u << r)) || !a.cast[r]) continue;
+            if (const Folk* f = FolkOf(a.cast[r]); f && f->home == cell->GetFormID()) return static_cast<std::uint8_t>(r);
+            actors[r] = RE::TESForm::LookupByID<RE::Actor>(a.cast[r]);
+            if (actors[r] && OwnedBy(cell->GetOwner(), actors[r])) return static_cast<std::uint8_t>(r);
+        }
+        // A bed of theirs is here (the player is in the cell, so its references are loaded): where they sleep is home.
+        std::uint8_t found = 0;
+        cell->ForEachReference([&](RE::TESObjectREFR* ref) {
+            if (!ref || ref->IsDisabled()) return RE::BSContainer::ForEachResult::kContinue;
+            auto* owner = ref->GetOwner();
+            if (!owner) return RE::BSContainer::ForEachResult::kContinue;
+            for (std::size_t r = 1; r < A::kRoles; ++r) {
+                if (actors[r] && OwnedBy(owner, actors[r]) && CellAnalyzer::GetSingleton()->IsBedFurniture(ref)) {
+                    found = static_cast<std::uint8_t>(r);
+                    return RE::BSContainer::ForEachResult::kStop;
+                }
+            }
+            return RE::BSContainer::ForEachResult::kContinue;
+        });
+        return found;
     }
 
     namespace {
@@ -845,29 +882,60 @@ namespace IntelEngine {
             f.has[p] = a->propBase[p] && FindStamped(player, a->propBase[p], a->propName[p]).object != nullptr;
             f.handed[p] = (pending.handed & (1u << p)) != 0;
         }
+        const auto nodes = A::NodesOf(*a);
+        // A new step: what was read or held for the one before is gone.
+        if (pending.node != a->node) {
+            pending.node = a->node;
+            pending.turn = -1;
+            pending.talked = false;
+            pending.judging = false;
+            pending.nones = 0;
+            pending.visitAt = -1.0f;
+        }
+        auto* cell = player->GetParentCell();
+        const bool tale = a->pattern == A::Pattern::Tale;
+        // Whose home of the cast this interior is, looked at once per cell the player enters (a scan of its beds).
+        if (cell && cell->GetFormID() != pending.checkedCell) {
+            pending.checkedCell = cell->GetFormID();
+            pending.homeOf = 0;
+            pending.homeHere = false;
+            if (cell->IsInteriorCell()) {
+                std::uint32_t wanted = 0;
+                for (std::size_t r = 1; r < A::kRoles; ++r) {
+                    const bool want = tale ? (r != A::RAsker || (a->node < nodes.size() && nodes[a->node].who == r)) : r == A::RCulprit;
+                    if (a->cast[r] && want) wanted |= 1u << r;
+                }
+                pending.homeOf = wanted ? HomeOfCast(cell, *a, wanted) : 0;
+                pending.homeHere = !tale && pending.homeOf == A::RCulprit;
+            }
+        }
         if (a->scene) {
-            auto* here = player->GetParentCell();
-            f.atScene = here && here->GetFormID() == a->scene;   // the victim's home
+            f.atScene = cell && cell->GetFormID() == a->scene;   // the victim's home
+        } else if (tale && a->node < nodes.size() && nodes[a->node].kind == A::Kind::Reach) {
+            f.atScene = pending.homeOf != 0 && pending.homeOf == nodes[a->node].who;   // the step's person's home
         }
         f.answer = pending.answer;
+        f.turn = pending.turn;
         f.brawl = pending.brawl;
         f.speech = static_cast<int>(player->AsActorValueOwner()->GetActorValue(RE::ActorValue::kSpeech));
         // The prop is with the one it goes to, however it got there: the popup, or their own TakeItem action in talk
         // ("give it here": SeverActions moved Ysolda's ring out of the player's pack, and the hand-over never came,
         // 2026-11-18), or a gift through the game's own menus.
-        if (a->node < A::Def(a->pattern).nodes.size()) {
+        if (a->node < nodes.size()) {
             A::Role to = A::RNone;
             std::uint8_t prop = 0;
-            if (HandOverOf(A::Def(a->pattern).nodes[a->node], to, prop) && !f.has[prop] && actors[to] &&
+            if (HandOverOf(nodes[a->node], to, prop) && !f.has[prop] && actors[to] &&
                 FindStamped(actors[to], a->propBase[prop], a->propName[prop]).object) {
                 f.handed[prop] = true;
             }
         }
+        if (tale) TaleTalk(id, *a, pending, f);
         const auto change = A::Advance(*a, f, now);
         pending.answer = -1;
         std::int32_t bits = 0;
         if (change.any()) {
-            for (const auto node : change.done) bits |= 1 << node;
+            // The step done, plus one (one step a look at most): bits 0-4.
+            if (!change.done.empty()) bits |= (static_cast<std::int32_t>(change.done.front()) + 1) & 0x1F;
             bits |= static_cast<std::int32_t>(change.ending) << 8;
             bits |= (static_cast<std::int32_t>(change.effect) & 0xF) << 16;
             bits |= (static_cast<std::int32_t>(change.effectRole) & 0xF) << 20;
@@ -876,6 +944,7 @@ namespace IntelEngine {
             pending.log = change.log;
             pending.effect2 = static_cast<int>(change.effect2);
             pending.effect2Role = static_cast<int>(change.effect2Role);
+            pending.bondWith = static_cast<int>(change.bondWith);
             pending.handed = 0;
             pending.brawl = 0;
             // A new step asks afresh: the hold after an answer was the step's before (Ulfberth's peace popup waited two
@@ -884,7 +953,7 @@ namespace IntelEngine {
             pending.giveHold = -1.0f;
             // Still on the same step (refused): not asked again at once.
             if (change.stayed) pending.chooseHold = RealSeconds() + kHoldSeconds;
-            logger::info("Arcs: #{} nodes done {:#x}, now at node {}{}{}", id, bits & 0xFF, static_cast<int>(a->node),
+            logger::info("Arcs: #{} step done {}, now at step {}{}{}", id, (bits & 0x1F) - 1, static_cast<int>(a->node),
                          change.effect != A::Effect::None ? ", effect " + std::to_string(static_cast<int>(change.effect)) : std::string(),
                          change.ending != A::Ending::None ? ", ended " + std::to_string(static_cast<int>(change.ending)) : std::string());
             if (change.ending != A::Ending::None) {
@@ -892,29 +961,30 @@ namespace IntelEngine {
                 return bits;
             }
         }
-        // A prop hidden in the culprit's home goes there once the player is in it (its references are loaded only
-        // then); nothing is put anywhere before the arc is taken on.
-        const auto& def = A::Def(a->pattern);
-        auto* cell = player->GetParentCell();
+        // A prop hidden in someone's home goes there once the player is in it (its references are loaded only then);
+        // nothing is put anywhere before the arc is taken on. The patterns hide their first prop with the culprit.
         const bool homeProp = a->pattern == A::Pattern::Thief || a->pattern == A::Pattern::Murder;
-        // Whether this interior is the culprit's home is looked at once per cell the player enters (a scan of its beds).
-        if (cell && cell->GetFormID() != pending.checkedCell) {
-            pending.checkedCell = cell->GetFormID();
-            pending.homeHere = homeProp && a->propBase[0] && !a->propAt[0] && IsHomeOf(cell, *a, A::RCulprit);
+        for (std::size_t p = 0; p < A::kProps && pending.plantProp < 0 && pending.homeOf; ++p) {
+            const std::uint8_t hider = tale ? a->propHome[p] : (homeProp && p == 0 ? static_cast<std::uint8_t>(A::RCulprit) : 0);
+            if (!hider || hider != pending.homeOf || !a->propBase[p] || a->propAt[p]) continue;
+            const auto spot = HidingSpot(cell, actors[hider]);
+            if (!spot.ref) continue;
+            pending.plantAt = spot.ref->GetFormID();
+            pending.plantProp = static_cast<int>(p);
+            pending.plantFloor = spot.floor;
+            bits |= 1 << 24;
+            logger::info("Arcs: #{} '{}' goes {} {:08X} in {}'s home", id, a->propName[p], spot.floor ? "beside" : "into",
+                         spot.ref->GetFormID(), NameOf(a->cast[hider]));
         }
-        if (homeProp && a->propBase[0] && !a->propAt[0] && pending.plantProp < 0 && pending.homeHere) {
-            const auto spot = HidingSpot(cell, actors[A::RCulprit]);
-            if (spot.ref) {
-                pending.plantAt = spot.ref->GetFormID();
-                pending.plantProp = 0;
-                pending.plantFloor = spot.floor;
-                bits |= 1 << 24;
-                logger::info("Arcs: #{} '{}' goes {} {:08X} in {}'s home", id, a->propName[0], spot.floor ? "beside" : "into",
-                             spot.ref->GetFormID(), NameOf(a->cast[A::RCulprit]));
+        if (a->node < nodes.size()) {
+            const auto& n = nodes[a->node];
+            // A visit: the step's person is sent to the player (again after a couple of game hours if they could not
+            // come); when they are already here the script has them speak up.
+            if (n.kind == A::Kind::Visit && n.who && !f.dead[n.who] && !(f.with[n.who] && f.spoke[n.who]) &&
+                (pending.visitAt < 0.0f || now - pending.visitAt > 2.0f / 24.0f || now < pending.visitAt)) {
+                pending.visitAt = now;
+                bits |= 1 << 5;
             }
-        }
-        if (a->node < def.nodes.size()) {
-            const auto& n = def.nodes[a->node];
             const float real = RealSeconds();
             if ((n.kind == A::Kind::Choose || n.kind == A::Kind::Brawl) && n.who && f.spoke[n.who] && !f.dead[n.who] &&
                 real >= pending.chooseHold) {
@@ -952,10 +1022,10 @@ namespace IntelEngine {
         std::scoped_lock lock(m_mutex);
         const auto* a = m_book.Find(id);
         if (!a || !A::IsOpen(*a) || !player) return false;
-        const auto& def = A::Def(a->pattern);
+        const auto nodes = A::NodesOf(*a);
         A::Role role = A::RNone;
         std::uint8_t prop = 0;
-        if (a->node >= def.nodes.size() || !HandOverOf(def.nodes[a->node], role, prop)) return false;
+        if (a->node >= nodes.size() || !HandOverOf(nodes[a->node], role, prop)) return false;
         auto* to = RE::TESForm::LookupByID<RE::Actor>(a->cast[role]);
         if (!to || to->IsDead()) return false;
         const auto found = FindStamped(player, a->propBase[prop], a->propName[prop]);
@@ -1001,12 +1071,45 @@ namespace IntelEngine {
         };
     }
 
+    namespace {
+        // A quest of the journal moving on (the main quest, a faction's, a Daedric prince's, the DLCs', a side quest):
+        // the player is in the middle of it, and no town story cuts in for a while (the user, 2026-11-18: "the
+        // player doesn't get interrupted while doing main quests").
+        constexpr float kQuestBusySeconds = 15.0f * 60.0f;
+        class QuestStageSink : public RE::BSTEventSink<RE::TESQuestStageEvent> {
+        public:
+            RE::BSEventNotifyControl ProcessEvent(const RE::TESQuestStageEvent* e, RE::BSTEventSource<RE::TESQuestStageEvent>*) override {
+                if (!e) return RE::BSEventNotifyControl::kContinue;
+                auto* quest = RE::TESForm::LookupByID<RE::TESQuest>(e->formID);
+                if (!quest) return RE::BSEventNotifyControl::kContinue;
+                const auto type = quest->GetType();
+                if (type == RE::QUEST_DATA::Type::kNone || type == RE::QUEST_DATA::Type::kMiscellaneous) return RE::BSEventNotifyControl::kContinue;
+                const char* id = quest->GetFormEditorID();
+                if (id && std::string_view(id).starts_with("IntelEngine")) return RE::BSEventNotifyControl::kContinue;
+                ArcBridge::GetSingleton()->QuestMovedOn(quest);
+                return RE::BSEventNotifyControl::kContinue;
+            }
+        };
+    }
+
+    void ArcBridge::QuestMovedOn(RE::TESQuest* quest) {
+        const float until = RealSeconds() + kQuestBusySeconds;
+        if (until - m_questBusyUntil.load() > 60.0f) {
+            const char* name = quest ? quest->GetFullName() : nullptr;
+            logger::info("Arcs: the player is on a quest ({}); no town story for {:.0f} minutes", name && *name ? name : "a quest",
+                         kQuestBusySeconds / 60.0f);
+        }
+        m_questBusyUntil.store(until);
+    }
+
     void ArcBridge::Listen() {
         static GoldSink sink;
+        static QuestStageSink stages;
         static bool listening = false;
         if (listening) return;
         if (auto* events = RE::ScriptEventSourceHolder::GetSingleton()) {
             events->AddEventSink<RE::TESContainerChangedEvent>(&sink);
+            events->AddEventSink<RE::TESQuestStageEvent>(&stages);
             listening = true;
         }
     }
@@ -1059,13 +1162,16 @@ namespace IntelEngine {
         std::scoped_lock lock(m_mutex);
         const auto* a = m_book.Find(id);
         if (!a) return -1;
-        const auto& def = A::Def(a->pattern);
+        const auto nodes = A::NodesOf(*a);
         const auto pending = m_pending.find(id);
         if (name == "phase") return static_cast<int>(a->phase);
+        if (name == "tale") return a->pattern == A::Pattern::Tale ? 1 : 0;
+        if (name == "price") return static_cast<int>(a->price ? a->price : a->gold);
+        if (name == "bondwith") return pending != m_pending.end() ? pending->second.bondWith : 0;
         if (name == "pattern") return static_cast<int>(a->pattern);
         if (name == "slot") return a->slot == 0xFF ? -1 : a->slot;
         if (name == "node") return a->node;
-        if (name == "nodes") return static_cast<int>(def.nodes.size());
+        if (name == "nodes") return static_cast<int>(nodes.size());
         if (name == "gold") return static_cast<int>(a->gold);
         if (name == "paid") return static_cast<int>(a->paid);
         if (name == "ending") return static_cast<int>(a->ending);
@@ -1076,18 +1182,18 @@ namespace IntelEngine {
         if (name == "effect2role") return pending != m_pending.end() ? pending->second.effect2Role : 0;
         if (name == "plantprop") return pending != m_pending.end() ? pending->second.plantProp : -1;
         if (name == "plantfloor") return pending != m_pending.end() && pending->second.plantFloor ? 1 : 0;
-        if (name == "kind") return a->node < def.nodes.size() && A::IsOpen(*a) ? static_cast<int>(def.nodes[a->node].kind) : 0;
+        if (name == "kind") return a->node < nodes.size() && A::IsOpen(*a) ? static_cast<int>(nodes[a->node].kind) : 0;
         if (name == "objective") {
-            return a->node < def.nodes.size() && A::IsOpen(*a) ? def.nodes[a->node].objective : -1;
+            return a->node < nodes.size() && A::IsOpen(*a) ? nodes[a->node].objective : -1;
         }
         if (name.starts_with("objective")) {
             const auto n = static_cast<std::size_t>(std::atoi(name.c_str() + 9));
-            return n < def.nodes.size() ? def.nodes[n].objective : -1;
+            return n < nodes.size() ? nodes[n].objective : -1;
         }
         if (name == "options") {
-            if (a->node >= def.nodes.size()) return 0;
+            if (a->node >= nodes.size()) return 0;
             int count = 0;
-            for (const auto* o : def.nodes[a->node].options) count += o ? 1 : 0;
+            for (const auto& o : nodes[a->node].options) count += o.empty() ? 0 : 1;
             return count;
         }
         return -1;
@@ -1097,7 +1203,7 @@ namespace IntelEngine {
         std::scoped_lock lock(m_mutex);
         const auto* a = m_book.Find(id);
         if (!a) return nullptr;
-        const auto& def = A::Def(a->pattern);
+        const auto nodes = A::NodesOf(*a);
         const auto actor = [&](std::size_t r) -> RE::TESForm* { return r < A::kRoles && a->cast[r] ? RE::TESForm::LookupByID(a->cast[r]) : nullptr; };
         if (name == "asker") return actor(A::RAsker);
         if (name == "culprit") return actor(A::RCulprit);
@@ -1108,6 +1214,13 @@ namespace IntelEngine {
         if (name == "suspect3") return actor(A::RSuspect3);
         if (name.starts_with("role")) return actor(static_cast<std::size_t>(std::atoi(name.c_str() + 4)));
         if (name == "place") return a->place ? RE::TESForm::LookupByID(a->place) : nullptr;
+        if (name.starts_with("pocket")) {
+            // Who carries a prop from the start: a tale's pocket, the murder's gem with the killer.
+            const auto p = static_cast<std::size_t>(std::atoi(name.c_str() + 6));
+            if (p >= A::kProps || !a->propBase[p]) return nullptr;
+            if (a->pattern == A::Pattern::Tale) return a->propPocket[p] ? actor(a->propPocket[p]) : nullptr;
+            return a->pattern == A::Pattern::Murder && p == 1 ? actor(A::RCulprit) : nullptr;
+        }
         if (name.starts_with("prop")) {
             const auto p = static_cast<std::size_t>(std::atoi(name.c_str() + 4));
             return p < A::kProps && a->propBase[p] ? RE::TESForm::LookupByID(a->propBase[p]) : nullptr;
@@ -1124,8 +1237,8 @@ namespace IntelEngine {
             if (!crime) return nullptr;
             return name == "jail" ? crime->crimeData.factionJailMarker : crime->crimeData.factionWaitMarker;
         }
-        if (a->node >= def.nodes.size() || !A::IsOpen(*a)) return nullptr;
-        const auto& n = def.nodes[a->node];
+        if (a->node >= nodes.size() || !A::IsOpen(*a)) return nullptr;
+        const auto& n = nodes[a->node];
         if (name == "who") return actor(n.who);
         if (name == "giveto") {
             A::Role to = A::RNone;
@@ -1150,6 +1263,11 @@ namespace IntelEngine {
         };
         for (const auto& [key, role] : roles) {
             if (text.find(key) != std::string::npos) text = A::Fill(std::move(text), key, NameOf(a.cast[role]));
+        }
+        // A tale's lines name its people by role number where the engine wrote them ("{2} is dead.").
+        for (std::size_t r = 1; r < A::kRoles; ++r) {
+            const std::string key = "{" + std::to_string(r) + "}";
+            if (text.find(key) != std::string::npos) text = A::Fill(std::move(text), key, NameOf(a.cast[r]));
         }
         for (std::size_t i = 0; i < 3; ++i) {
             const std::string key = "{pick" + std::to_string(i) + "}";
@@ -1181,20 +1299,29 @@ namespace IntelEngine {
             const auto p = static_cast<std::size_t>(std::atoi(name.c_str() + 4));
             return p < A::kProps ? a->propName[p] : std::string();
         }
-        const auto& def = A::Def(a->pattern);
-        if (a->node >= def.nodes.size()) return {};
-        const auto& n = def.nodes[a->node];
+        if (name == "story") return Fill(a->story, *a);
+        if (name == "closing") return a->phase == A::Phase::Ended ? Fill(A::TaleClosing(*a), *a) : std::string();
+        const auto nodes = A::NodesOf(*a);
+        if (a->node >= nodes.size()) return {};
+        const auto& n = nodes[a->node];
         if (name == "who") return NameOf(a->cast[n.who]);
+        if (name == "goal") return Fill(n.goal, *a);
+        if (name == "visitwords") {
+            // What brings the step's person to the player: the step itself, in their part of the story.
+            return Fill("{" + std::to_string(static_cast<int>(n.who)) + "} seeks {player} out, about the matter of \"" + a->title +
+                            "\": " + n.goal, *a);
+        }
         if (name.starts_with("option")) {
             const auto i = static_cast<std::size_t>(std::atoi(name.c_str() + 6));
-            if (i >= 3 || !n.options[i]) return {};
+            if (i >= 3 || n.options[i].empty()) return {};
             // An answer that costs the player gold is not offered when they do not have it.
             for (const auto& e : n.edges) {
                 const bool thisAnswer = e.when == static_cast<A::If>(static_cast<int>(A::If::Option0) + static_cast<int>(i));
                 if (thisAnswer && e.effect == A::Effect::PlayerPays) {
                     auto* player = RE::PlayerCharacter::GetSingleton();
                     auto* gold = RE::TESForm::LookupByID<RE::TESBoundObject>(0xF);
-                    if (!player || !gold || player->GetItemCount(gold) < static_cast<std::int32_t>(a->gold)) return {};
+                    const auto cost = a->price ? a->price : a->gold;
+                    if (!player || !gold || player->GetItemCount(gold) < static_cast<std::int32_t>(cost)) return {};
                 }
             }
             return Fill(n.options[i], *a);
@@ -1202,6 +1329,7 @@ namespace IntelEngine {
         if (name == "fight") return Fill("Settle it with {rival} here and now, with your fists?", *a);
         if (name == "grievance") return a->pattern == A::Pattern::Feud ? Fill(A::FeudGrievance(a->seed).heard, *a) : std::string();
         if (name == "question") {
+            if (!n.question.empty()) return Fill(n.question, *a);
             switch (n.objective) {
                 case A::Objective::Confront: return Fill("{culprit} stole {item0}. What will you do with {culprit}?", *a);
                 case A::Objective::DecideFeud: return Fill("How will you settle it between {asker} and {rival}?", *a);
@@ -1266,8 +1394,35 @@ namespace IntelEngine {
         std::scoped_lock lock(m_mutex);
         for (const auto& a : m_book.all) {
             if (a.slot == 0xFF || a.title.empty()) continue;
-            if (auto* quest = JournalQuest(a.slot)) quest->fullName = a.title.c_str();
+            auto* quest = JournalQuest(a.slot);
+            if (!quest) continue;
+            quest->fullName = Fill(a.title, a).c_str();
+            if (a.pattern != A::Pattern::Tale) continue;
+            // A tale's step goals are its objectives' texts (objectives kTaleObjective.. of the slot's quest).
+            for (auto* objective : quest->objectives) {
+                if (!objective || objective->index < A::kTaleObjective) continue;
+                const auto n = static_cast<std::size_t>(objective->index - A::kTaleObjective);
+                if (n < a.graph.size()) objective->displayText = Fill(a.graph[n].goal, a).c_str();
+            }
+            // The log: the story so far, and how it ended, as the names of the slot's two holders' own base items.
+            const auto name = [](RE::FormID ref, const std::string& text) {
+                auto* holder = ref ? RE::TESForm::LookupByID<RE::TESObjectREFR>(ref) : nullptr;
+                auto* base = holder ? holder->GetBaseObject() : nullptr;
+                auto* full = base ? base->As<RE::TESFullName>() : nullptr;
+                if (full) full->fullName = text.c_str();
+            };
+            name(m_holders[a.slot][0], Fill(a.story, a));
+            if (a.phase == A::Phase::Ended) name(m_holders[a.slot][1], Fill(A::TaleClosing(a), a));
         }
+    }
+
+    void ArcBridge::SetHolders(std::uint8_t slot, RE::TESObjectREFR* tale, RE::TESObjectREFR* close) {
+        if (slot >= A::kSlots) return;
+        {
+            std::scoped_lock lock(m_mutex);
+            m_holders[slot] = {tale ? tale->GetFormID() : 0u, close ? close->GetFormID() : 0u};
+        }
+        ApplyTitles();
     }
 
     void ArcBridge::Ended(const A::Arc& a) {
@@ -1436,6 +1591,10 @@ namespace IntelEngine {
         }
         void ArcApplyTitles(RE::StaticFunctionTag*) { ArcBridge::GetSingleton()->ApplyTitles(); }
         void ArcDebugCast(RE::StaticFunctionTag*, RE::Actor* actor) { g_forcedCast.store(actor ? actor->GetFormID() : 0); }
+        void ArcSetHolders(RE::StaticFunctionTag*, std::int32_t slot, RE::TESObjectREFR* tale, RE::TESObjectREFR* close) {
+            if (slot >= 0) ArcBridge::GetSingleton()->SetHolders(static_cast<std::uint8_t>(slot), tale, close);
+        }
+        bool ArcRequestTale(RE::StaticFunctionTag*, RE::Actor* asker) { return ArcBridge::GetSingleton()->RequestTale(asker); }
     }
 
     void ArcBridge::Register(RE::BSScript::IVirtualMachine* a_vm, int& count) {
@@ -1458,5 +1617,7 @@ namespace IntelEngine {
         a_vm->RegisterFunction("ArcText", script, ArcText); ++count;
         a_vm->RegisterFunction("ArcApplyTitles", script, ArcApplyTitles); ++count;
         a_vm->RegisterFunction("ArcDebugCast", script, ArcDebugCast); ++count;
+        a_vm->RegisterFunction("ArcSetHolders", script, ArcSetHolders); ++count;
+        a_vm->RegisterFunction("ArcRequestTale", script, ArcRequestTale); ++count;
     }
 }
