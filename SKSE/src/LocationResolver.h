@@ -242,6 +242,8 @@ namespace IntelEngine {
         RE::TESObjectREFR* GetDungeonBossAnchor(RE::BGSLocation* loc);
         /** Every dungeon of the index: its location and its boss room anchor (4.0 quests pick their places here). */
         std::vector<std::pair<RE::FormID, RE::FormID>> DungeonAnchors() const;
+        /** (actor base, the interior cell of the bed they own) for every NPC with a home (story arcs' townsfolk). */
+        std::vector<std::pair<RE::FormID, RE::FormID>> HomeCells() const;
         RE::TESObjectREFR* GetDungeonBossAnchor(const std::string& locationName);
 
     private:

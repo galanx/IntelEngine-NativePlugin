@@ -24,6 +24,7 @@
 #include "LivingWorldBridge.h"
 #include "StorylineBridge.h"
 #include "QuestBridge.h"
+#include "ArcBridge.h"
 #include "QuestStateTracker.h"
 #include "StringUtils.h"
 #include "AsyncDispatch.h"
@@ -104,6 +105,7 @@ namespace IntelEngine {
         LivingWorldBridge::GetSingleton()->Save(a_intfc);
         StorylineBridge::GetSingleton()->Save(a_intfc);
         QuestBridge::GetSingleton()->Save(a_intfc);
+        ArcBridge::GetSingleton()->Save(a_intfc);
     }
 
     void LoadCallback(SKSE::SerializationInterface* a_intfc) {
@@ -134,6 +136,8 @@ namespace IntelEngine {
                 StorylineBridge::GetSingleton()->Load(a_intfc, version, length);
             } else if (type == Quests::kRecordType) {
                 QuestBridge::GetSingleton()->Load(a_intfc, version, length);
+            } else if (type == Arcs::kRecordType) {
+                ArcBridge::GetSingleton()->Load(a_intfc, version, length);
             }
         }
     }
@@ -157,6 +161,7 @@ namespace IntelEngine {
         LivingWorldBridge::GetSingleton()->Revert();
         StorylineBridge::GetSingleton()->Revert();
         QuestBridge::GetSingleton()->Revert();
+        ArcBridge::GetSingleton()->Revert();
         ProximityMonitor::GetSingleton()->DisarmAll();
         logger::info("RevertCallback: Save ID and SlotTracker cleared (gen={})",
             tracker->loadGeneration.load(std::memory_order_relaxed));
@@ -422,6 +427,17 @@ namespace IntelEngine {
                             return id ? std::to_string(id) : std::string();
                         });
                     logger::info("{} SkyrimNet decorator: get_intelengine_in_venture", meetingRegistered ? "Registered" : "Failed to register");
+                    // The story arc this NPC has a part in (planned or open), empty when none: their own request and
+                    // their own trips are not offered meanwhile. Arrived to ask for help with her stolen circlet, Ysolda's
+                    // model also chose AskPlayerForHelp, and a second request for the same circlet opened (2026-11-18).
+                    const bool arcRegistered = SkyrimNetAPI::RegisterDecorator(
+                        "get_intelengine_arc",
+                        "Returns the id of the story arc this NPC has a part in now, empty when none.",
+                        [](RE::Actor* actor) -> std::string {
+                            const auto id = actor ? ArcBridge::GetSingleton()->ArcOf(actor->GetFormID()) : 0u;
+                            return id ? std::to_string(id) : std::string();
+                        });
+                    logger::info("{} SkyrimNet decorator: get_intelengine_arc", arcRegistered ? "Registered" : "Failed to register");
                     // A former follower's own life since the player left them (prompt submodule 0203_intel_life).
                     const bool lifeRegistered = SkyrimNetAPI::RegisterDecorator(
                         "get_intelengine_life",
@@ -458,6 +474,8 @@ namespace IntelEngine {
                 LocationResolver::GetSingleton()->BuildLocationIndex();
                 ItemIndex::GetSingleton()->BuildIndex();
                 QuestBridge::GetSingleton()->Catalogue();   // after the dungeon index; at the main menu
+                ArcBridge::GetSingleton()->Catalogue();     // after the NPC index and the homes
+                ArcBridge::GetSingleton()->Listen();
                 FactionPolitics::GetSingleton()->LoadSettings();
                 break;
 
@@ -489,7 +507,12 @@ namespace IntelEngine {
                 logger::info("Game loaded - refreshing indexes, clearing MemoryDB caches");
                 LivingWorldBridge::GetSingleton()->OnGameLoaded(false);
                 // Journal titles are not in the save: the quests' records give them back.
-                if (auto* titles = SKSE::GetTaskInterface()) titles->AddTask([] { QuestBridge::GetSingleton()->ApplyTitles(); });
+                if (auto* titles = SKSE::GetTaskInterface()) {
+                    titles->AddTask([] {
+                        QuestBridge::GetSingleton()->ApplyTitles();
+                        ArcBridge::GetSingleton()->ApplyTitles();
+                    });
+                }
                 PoliticalEngineBridge::GetSingleton()->MarkDirty(true);
                 AsyncDispatch::Submit([] { Papyrus::PollAndSyncPE(); });  // no-op unless PE data is already ready; PE's own "loaded" event covers the other order
                 NPCIndex::GetSingleton()->RefreshIndex();

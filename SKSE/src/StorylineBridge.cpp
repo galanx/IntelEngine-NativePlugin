@@ -3,6 +3,7 @@
 #include "ItemNames.h"
 #include "LivingWorldBridge.h"
 #include "QuestBridge.h"
+#include "ArcBridge.h"
 #include "SkyrimNetAPI.h"
 
 #include <cmath>
@@ -213,6 +214,8 @@ namespace IntelEngine {
         namespace SL = Storylines;
         // 4.0 quests they give or go on (QuestBridge, its own lock, taken first and let go)
         const std::string quests = QuestBridge::GetSingleton()->LinesFor(actor);
+        // and the story arcs they have a part in (ArcBridge, the same way): the one who asked, the thief, a witness...
+        const std::string arcs = ArcBridge::GetSingleton()->LinesFor(actor);
         std::scoped_lock lock(m_mutex);
         std::string mine = quests;
         std::string aboutMe;
@@ -270,6 +273,7 @@ namespace IntelEngine {
                        "want something else), I choose the Communication action in that same reply, or nothing changes.\n";
             }
         }
+        if (!arcs.empty()) out += "## What is going on in my life\n" + arcs;
         if (!aboutMe.empty()) {
             out += "## Errands about me\n" + aboutMe;
             if (mayAnswer) {

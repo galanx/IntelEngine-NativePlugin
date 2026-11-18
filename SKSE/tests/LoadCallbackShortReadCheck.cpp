@@ -18,8 +18,10 @@ struct SlotTracker { int loads = 0; static SlotTracker* GetSingleton() { static 
 namespace LivingWorld { constexpr uint32_t kRecordType = 'IELW'; }
 namespace Storylines { constexpr uint32_t kRecordType = 'IESL'; }
 namespace Quests { constexpr uint32_t kRecordType = 'IEQS'; }
+namespace Arcs { constexpr uint32_t kRecordType = 'IEAR'; }
 struct StorylineBridge { int loads = 0; static StorylineBridge* GetSingleton() { static StorylineBridge s; return &s; } void Load(SKSE::SerializationInterface*, uint32_t, uint32_t) { ++loads; } };
 struct QuestBridge { int loads = 0; static QuestBridge* GetSingleton() { static QuestBridge s; return &s; } void Load(SKSE::SerializationInterface*, uint32_t, uint32_t) { ++loads; } };
+struct ArcBridge { int loads = 0; static ArcBridge* GetSingleton() { static ArcBridge s; return &s; } void Load(SKSE::SerializationInterface*, uint32_t, uint32_t) { ++loads; } };
 struct LivingWorldBridge { int loads = 0; static LivingWorldBridge* GetSingleton() { static LivingWorldBridge s; return &s; } void Load(SKSE::SerializationInterface*, uint32_t, uint32_t) { ++loads; } };
 #include "LoadCallback.inc"
 }

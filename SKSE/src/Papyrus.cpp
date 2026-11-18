@@ -18,6 +18,7 @@
 #include "StoryDirector.h"
 #include "StorylineBridge.h"
 #include "QuestBridge.h"
+#include "ArcBridge.h"
 #include "PlaceTargets.h"
 #include "ItemIndex.h"
 #include <random>
@@ -745,6 +746,7 @@ namespace IntelEngine::Papyrus {
         {
             int questCount = 0;
             QuestNatives::Register(a_vm, questCount);
+            ArcBridge::Register(a_vm, questCount);   // story arcs
             count += questCount;
         }
 
