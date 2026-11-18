@@ -351,6 +351,7 @@ class VM:
         if method == "LivingWorldMayDeliver": return True
         # 4.0: nobody in the modeled game takes part in a running quest.
         if method == "LivingWorldMayMove": return True
+        if method == "QuestInvolves": return False
         # 4.0 storylines: the modeled game has no storyline quest (GetQuest finds nothing), so no hook runs.
         if method == "GetQuest": return None
         if method in ("SetLivingWorldSettings", "LivingWorldMomentDispatched"):

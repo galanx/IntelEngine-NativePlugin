@@ -13,6 +13,7 @@
 #include "Settings.h"
 
 #include <cfloat>
+#include <unordered_set>
 #include <utility>
 #include <nlohmann/json.hpp>
 
@@ -1702,6 +1703,29 @@ namespace IntelEngine {
     // Unified Destination Resolution
     // =========================================================================
 
+    bool LocationResolver::IsExactPlaceName(const std::string& destination) {
+        std::string lower = StringUtils::ToLowerStd(destination);
+        // The plain words of a direction keep their meaning even if some cell's editor ID happens to be one of them.
+        static const std::unordered_set<std::string> plainWords{
+            "upstairs", "up", "above", "downstairs", "down", "below", "outside", "out", "exterior", "inside", "in",
+            "interior", "back", "the back", "back room", "cellar", "basement", "stairs", "stairwell", "staircase",
+            "bedroom", "the bedroom", "room", "my room", "bed", "my bed", "kitchen", "the kitchen", "bath", "the bath",
+            "pool", "the pool", "river", "the river", "lake", "the lake", "stream", "the stream", "water", "the water",
+            "the shore", "home", "my home", "your home"};
+        if (plainWords.contains(lower)) return false;
+        std::vector<std::string> names{lower};
+        if (lower.rfind("the ", 0) == 0) {
+            names.push_back(lower.substr(4));
+        } else {
+            names.push_back("the " + lower);
+        }
+        std::shared_lock lock(m_mutex);
+        for (const auto& name : names) {
+            if (m_cellIndex.contains(name) || m_locationIndex.contains(name)) return true;
+        }
+        return false;
+    }
+
     SemanticIntent LocationResolver::DetectSemanticIntent(const std::string& destination) {
         std::string lower = StringUtils::ToLowerStd(destination);
 
@@ -1952,8 +1976,9 @@ namespace IntelEngine {
 
         logger::debug("ResolveAnyDestination: '{}' for '{}'", destination, actor->GetDisplayFullName());
 
-        // Phase 1: Detect semantic intent
-        auto intent = DetectSemanticIntent(destination);
+        // Phase 1: Detect semantic intent. Not in a place's own name: "White River Watch" has "river" in it and sent
+        // Jenassa to the river by Riverwood instead of the fort (2026-11-18); "Riverwood" and "Lakeview Manor" alike.
+        auto intent = IsExactPlaceName(destination) ? SemanticIntent{} : DetectSemanticIntent(destination);
 
         if (intent.type != SemanticIntent::NONE) {
             logger::debug("  Semantic intent: type={}, context='{}', preferBeds={}, homeOwner={}",
