@@ -54,6 +54,9 @@ namespace IntelEngine {
         /** A murder's victim, unseen, taken home to be killed there by the script (Kill credits the killer): the victim,
          *  or None when they are in sight, already dead, or this is no murder. */
         RE::Actor* StageVictim(std::uint32_t id);
+        /** Everyone of the arc who speaks within this many seconds counts as speaking with the player: a scene among
+         *  them in front of the player (the feud's quarrel when both are in the room). */
+        void Scene(std::uint32_t id, float seconds);
         /** How the brawl of a Brawl node ended: 1 the player won, -1 lost (or it turned into a real fight). */
         bool Brawl(std::uint32_t id, int result);
         /** Gold that reached the player from this actor (the inventory event): counted toward an open arc's reward. */
@@ -104,6 +107,7 @@ namespace IntelEngine {
             bool plantFloor = false;
             float chooseHold = -1.0f;   // real seconds: no choice popup before this
             float giveHold = -1.0f;
+            float sceneUntil = -1.0f;    // real seconds: a scene among the cast in front of the player
             RE::FormID checkedCell = 0;  // the interior last looked at for the culprit's home, and what it was
             bool homeHere = false;
         };
