@@ -42,6 +42,7 @@ public static class Program
         if (args.Length >= 3 && args[0] == "copy") return Copy(args[1], args[2]);
         if (args.Length >= 3 && args[0] == "package") return DumpPackage(args[1], args[2]);
         if (args.Length >= 2 && args[0] == "reflect") return Reflect(args[1]);
+        if (args.Length >= 3 && args[0] == "findref") return FindRef(args[1], args[2]);
         Console.Error.WriteLine("usage: info <esp> | build <esp in> <output folder>");
         return 2;
     }
@@ -94,10 +95,126 @@ public static class Program
         };
         var lifeSandbox = AddLifeSandbox(mod);
         var lives = AddLivesQuest(mod, lifeSandbox);
+        var keeper = AddQuestKeeper(mod);
+        var journal = new List<Quest>();
+        for (int slot = 0; slot < QuestSlots; ++slot) journal.Add(AddJournalQuest(mod, slot));
         mod.WriteToBinary(output);
         Console.WriteLine($"{ThreadQuest} [{quest.FormKey.ID:X6}]: {quest.Aliases.Count} aliases, {quest.Objectives.Count} objectives -> {output}");
         Console.WriteLine($"{LifeSandbox} [{lifeSandbox.FormKey.ID:X6}], {LivesQuest} [{lives.FormKey.ID:X6}]");
+        Console.WriteLine($"{QuestKeeper} [{keeper.FormKey.ID:X6}], journal quests " +
+                          string.Join(", ", journal.Select(q => $"{q.EditorID} [{q.FormKey.ID:X6}]")));
         return 0;
+    }
+
+    // ------------------------------------------------------------------ quests (docs/QUESTS.md)
+
+    public const string QuestKeeper = "IntelEngine_QuestKeeper";
+    public const string JournalQuest = "IntelEngine_Quest";
+    public const int QuestSlots = 6;   // Quests.h kSlots
+
+    // The objective phrasings of every journal quest, in the order of Quests.h Objective. The marker of each points at
+    // the Marker alias, which the script moves to what the step is about.
+    public static readonly string[] QuestPhrasings =
+    {
+        "Search <Alias=Place> for the <Alias=Item>",      // 0 Search
+        "Recover the <Alias=Item>",                      // 1 Recover
+        "Bring the <Alias=Item> to <Alias=Giver>",       // 2 Bring
+        "Deal with the brigand at <Alias=Place>",        // 3 DealWith (the name is in the title)
+        "Tell <Alias=Giver> it is done",                 // 4 Report
+        "Go with <Alias=Ally> to <Alias=Place>",         // 5 GoWith
+        "Clear <Alias=Place> with <Alias=Ally>",         // 6 Clear
+        "Share the spoils with <Alias=Ally>",            // 7 Share
+    };
+
+    // The journal's log, stage by stage (Quests.h OpenStage / StepDef.logStage / EndStage). An ending's entry completes
+    // or fails the quest, which moves it to Completed Quests with the usual notice.
+    static readonly (ushort Stage, string Text, QuestLogEntry.Flag? Flag)[] QuestLog =
+    {
+        (100, "<Alias=Giver> came to me for help: someone stole a <Alias=Item> from <Alias.PronounObj=Giver> and was seen running toward <Alias=Place>. <Alias.ShortName=Giver> wants it back.", null),
+        (110, "I have reached <Alias=Place>, where the thief was headed.", null),
+        (120, "I have found the <Alias=Item>.", null),
+        (190, "I brought the <Alias=Item> back to <Alias.ShortName=Giver>.", QuestLogEntry.Flag.CompleteQuest),
+        (191, "I never brought the <Alias=Item> back to <Alias.ShortName=Giver>.", QuestLogEntry.Flag.FailQuest),
+        (192, "I never went after the <Alias=Item>, and <Alias.ShortName=Giver> has given up on it.", QuestLogEntry.Flag.FailQuest),
+        (193, "<Alias=Giver> is dead. There is no one left to return the <Alias=Item> to.", QuestLogEntry.Flag.FailQuest),
+        (200, "<Alias=Giver> asked me to deal with a brigand whose gang has settled at <Alias=Place> and preys on everyone near it.", null),
+        (210, "The brigand is dead.", null),
+        (290, "I told <Alias.ShortName=Giver> that the brigand is dead.", QuestLogEntry.Flag.CompleteQuest),
+        (292, "I never dealt with the brigand, and <Alias.ShortName=Giver> stopped waiting.", QuestLogEntry.Flag.FailQuest),
+        (293, "<Alias=Giver> is dead.", QuestLogEntry.Flag.FailQuest),
+        (300, "I ran into <Alias=Ally>, who is on the way to clear out <Alias=Place> and asked me to come along.", null),
+        (310, "We reached <Alias=Place> together.", null),
+        (320, "We cleared <Alias=Place>.", null),
+        (390, "<Alias=Ally> and I shared what we found in <Alias=Place>.", QuestLogEntry.Flag.CompleteQuest),
+        (394, "I never joined <Alias=Ally>, who went to <Alias=Place> alone.", QuestLogEntry.Flag.FailQuest),
+        (395, "<Alias=Ally> is dead.", QuestLogEntry.Flag.FailQuest),
+    };
+
+    // A journal quest of its own per slot: a side quest whose title the DLL sets from the quest record (QuestBridge),
+    // with no script; IntelEngine_Quests.psc on the keeper drives its aliases, objectives and stages.
+    static Quest AddJournalQuest(SkyrimMod mod, int slot)
+    {
+        var editorId = $"{JournalQuest}{slot}";
+        var quest = mod.Quests.FirstOrDefault(q => q.EditorID == editorId);
+        if (quest == null)
+        {
+            quest = mod.Quests.AddNew();
+            quest.EditorID = editorId;
+        }
+        quest.Name = "A Request";
+        quest.Type = Quest.TypeEnum.SideQuest;
+        quest.Priority = 50;
+        quest.Flags = Quest.Flag.AllowRepeatedStages;
+        quest.Aliases.Clear();
+        quest.Objectives.Clear();
+        quest.Stages.Clear();
+        uint nextAlias = 0;
+        AddAlias(quest, ref nextAlias, "Giver", QuestAlias.TypeEnum.Reference);
+        AddAlias(quest, ref nextAlias, "Foe", QuestAlias.TypeEnum.Reference);
+        AddAlias(quest, ref nextAlias, "Ally", QuestAlias.TypeEnum.Reference);
+        AddAlias(quest, ref nextAlias, "Item", QuestAlias.TypeEnum.Reference);
+        var marker = AddAlias(quest, ref nextAlias, "Marker", QuestAlias.TypeEnum.Reference);
+        AddAlias(quest, ref nextAlias, "Place", QuestAlias.TypeEnum.Location);
+        AddAlias(quest, ref nextAlias, "Companion", QuestAlias.TypeEnum.Reference);
+        for (int k = 0; k < QuestPhrasings.Length; ++k)
+        {
+            var objective = new QuestObjective { Index = (ushort)k, DisplayText = QuestPhrasings[k] };
+            objective.Targets.Add(new QuestObjectiveTarget { AliasID = (int)marker.ID });
+            quest.Objectives.Add(objective);
+        }
+        foreach (var (stage, text, flag) in QuestLog)
+        {
+            // Flags always set: without them the entry has no QSDT header and the game shows no log text.
+            var entry = new QuestLogEntry { Entry = text, Flags = flag ?? (QuestLogEntry.Flag)0 };
+            quest.Stages.Add(new QuestStage { Index = stage, LogEntries = { entry } });
+        }
+        quest.VirtualMachineAdapter = null;
+        return quest;
+    }
+
+    // The keeper: a quest of its own for IntelEngine_Quests.psc (its watch and its update loop), nothing in the journal.
+    static Quest AddQuestKeeper(SkyrimMod mod)
+    {
+        var quest = mod.Quests.FirstOrDefault(q => q.EditorID == QuestKeeper);
+        if (quest == null)
+        {
+            quest = mod.Quests.AddNew();
+            quest.EditorID = QuestKeeper;
+        }
+        quest.Name = null;
+        quest.Type = Quest.TypeEnum.None;
+        quest.Priority = 10;
+        quest.Flags = Quest.Flag.StartGameEnabled;
+        quest.Aliases.Clear();
+        quest.Objectives.Clear();
+        quest.Stages.Clear();
+        quest.VirtualMachineAdapter = new QuestAdapter
+        {
+            Version = 5,
+            ObjectFormat = 2,
+            Scripts = { new ScriptEntry { Name = "IntelEngine_Quests" } },
+        };
+        return quest;
     }
 
     // The package of a former follower's own life: a sandbox around where they are (an inn, a dungeon's entrance, a
@@ -263,6 +380,17 @@ public static class Program
         return 0;
     }
 
+    // Placed references of an NPC base by editor ID (test help: the reference id the console wants).
+    static int FindRef(string path, string editorId)
+    {
+        using var mod = SkyrimMod.CreateFromBinaryOverlay(path, SkyrimRelease.SkyrimSE);
+        var bases = mod.Npcs.Where(n => (n.EditorID ?? "").Contains(editorId, StringComparison.OrdinalIgnoreCase)).Select(n => n.FormKey).ToHashSet();
+        Console.WriteLine($"{bases.Count} bases: " + string.Join(", ", bases.Select(b => b.ID.ToString("X8"))));
+        foreach (var cell in mod.EnumerateMajorRecords<IPlacedNpcGetter>())
+            if (bases.Contains(cell.Base.FormKey)) Console.WriteLine($"{cell.FormKey.ID:X8} base {cell.Base.FormKey.ID:X8}");
+        return 0;
+    }
+
     static int Info(string path)
     {
         using var mod = SkyrimMod.CreateFromBinaryOverlay(path, SkyrimRelease.SkyrimSE);
@@ -291,7 +419,8 @@ public static class Program
                 Console.WriteLine($"   objective {objective.Index} '{objective.DisplayText?.String}' targets=" +
                                   string.Join(",", objective.Targets.Select(t => t.AliasID)));
             foreach (var stage in quest.Stages)
-                Console.WriteLine($"   stage {stage.Index} flags={stage.Flags} log={stage.LogEntries.Count}");
+                Console.WriteLine($"   stage {stage.Index} flags={stage.Flags} log={stage.LogEntries.Count}" +
+                                  string.Concat(stage.LogEntries.Select(l => $" [{l.Flags}] '{l.Entry?.String}'")));
             if (quest.VirtualMachineAdapter is { } vm)
                 Console.WriteLine("   scripts: " + string.Join(", ", vm.Scripts.Select(s => s.Name)));
         }

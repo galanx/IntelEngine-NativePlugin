@@ -160,6 +160,7 @@ set(SOURCES
     src/LivingWorldLives.cpp
     src/PlaceTargets.cpp
     src/StorylineBridge.cpp
+    src/QuestBridge.cpp
     src/StoryDirector.cpp
     src/SettingsBridge.cpp
     src/AsyncDispatch.cpp
@@ -206,6 +207,8 @@ add_executable(DashboardUtf8DumpCheck EXCLUDE_FROM_ALL tests/DashboardUtf8DumpCh
 target_link_libraries(DashboardUtf8DumpCheck PRIVATE nlohmann_json::nlohmann_json)
 add_executable(StorylinesCheck EXCLUDE_FROM_ALL tests/StorylinesCheck.cpp)
 target_include_directories(StorylinesCheck PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+add_executable(QuestsCheck EXCLUDE_FROM_ALL tests/QuestsCheck.cpp)
+target_include_directories(QuestsCheck PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 add_executable(LivingWorldCheck EXCLUDE_FROM_ALL tests/LivingWorldCheck.cpp)
 target_include_directories(LivingWorldCheck PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 add_executable(PlaceNamesCheck EXCLUDE_FROM_ALL tests/PlaceNamesCheck.cpp)

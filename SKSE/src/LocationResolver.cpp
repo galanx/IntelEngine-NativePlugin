@@ -1333,6 +1333,14 @@ namespace IntelEngine {
         return ref;
     }
 
+    std::vector<std::pair<RE::FormID, RE::FormID>> LocationResolver::DungeonAnchors() const {
+        std::shared_lock lock(m_mutex);
+        std::vector<std::pair<RE::FormID, RE::FormID>> out;
+        out.reserve(m_dungeonIndex.size());
+        for (const auto& [location, endpoint] : m_dungeonIndex) out.emplace_back(location, endpoint.anchorRefId);
+        return out;
+    }
+
     RE::TESObjectREFR* LocationResolver::GetDungeonBossAnchor(const std::string& locationName) {
         if (locationName.empty()) return nullptr;
 

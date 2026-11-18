@@ -17,7 +17,9 @@ std::string g_currentSaveID;
 struct SlotTracker { int loads = 0; static SlotTracker* GetSingleton() { static SlotTracker s; return &s; } void Load(SKSE::SerializationInterface*) { ++loads; } };
 namespace LivingWorld { constexpr uint32_t kRecordType = 'IELW'; }
 namespace Storylines { constexpr uint32_t kRecordType = 'IESL'; }
+namespace Quests { constexpr uint32_t kRecordType = 'IEQS'; }
 struct StorylineBridge { int loads = 0; static StorylineBridge* GetSingleton() { static StorylineBridge s; return &s; } void Load(SKSE::SerializationInterface*, uint32_t, uint32_t) { ++loads; } };
+struct QuestBridge { int loads = 0; static QuestBridge* GetSingleton() { static QuestBridge s; return &s; } void Load(SKSE::SerializationInterface*, uint32_t, uint32_t) { ++loads; } };
 struct LivingWorldBridge { int loads = 0; static LivingWorldBridge* GetSingleton() { static LivingWorldBridge s; return &s; } void Load(SKSE::SerializationInterface*, uint32_t, uint32_t) { ++loads; } };
 #include "LoadCallback.inc"
 }

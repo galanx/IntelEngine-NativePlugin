@@ -82,6 +82,10 @@ namespace IntelEngine {
         std::string OwnLifeLine(RE::Actor* actor) const;
         /** For the story director's candidate list: the same, third person. */
         std::string DirectorLifeLine(RE::FormID actor) const;
+        /** 4.0 quests: a former follower living a life of their own (a venture may be theirs). */
+        bool HasOwnLife(RE::FormID actor) const;
+        /** 4.0 quests: another former follower free to go along on a venture (as NextStep chooses one), 0 = none. */
+        RE::FormID FreeCompanionFor(RE::FormID actor) const;
         /** The hold an actor is in, by name (for world-knowledge conditions). */
         static std::string HoldName(RE::Actor* actor);
         /** How an NPC is tied to the player's quests: 0 not, 1 takes part in a running quest of the journal's kinds,
