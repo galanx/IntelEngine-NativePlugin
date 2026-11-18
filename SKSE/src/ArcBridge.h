@@ -31,10 +31,15 @@ namespace IntelEngine {
          *  culprit or a victim while that quest is not done). */
         void Catalogue();
 
-        /** Plans an arc of this pattern (0: whichever fits) with this asker (main thread). 0 = none fits. */
-        std::uint32_t PlanFor(RE::Actor* asker, int pattern);
+        /** Plans an arc of this pattern (0: whichever fits) with this asker (main thread). 0 = none fits. With
+         *  `hereOnly` (the director), only for someone of the town the player is in now. */
+        std::uint32_t PlanFor(RE::Actor* asker, int pattern, bool hereOnly = false);
+        /** Whether this actor asked the player for something in an arc that ended (or was turned down) this recently. */
+        bool AskedWithin(RE::FormID actor, float days) const;
         bool Accept(std::uint32_t id);
         bool Decline(std::uint32_t id);
+        /** A planned arc that never reached the player (the asker could not come): dropped, nobody remembers it. */
+        bool Drop(std::uint32_t id);
         std::vector<std::uint32_t> Lapse();
         std::vector<std::uint32_t> OpenIds() const;
 
@@ -113,6 +118,11 @@ namespace IntelEngine {
         void Tell(std::uint32_t id, const std::string& rumor, int replace, RE::FormID asker, RE::FormID place);
 
         void Reconcile();   // withdraws rumors of arcs this save does not know (lock not held)
+        void Pace();        // a town's story when the player has lingered there (main thread, lock not held)
+
+        RE::FormID m_paceTown = 0;       // the town the player is in, and since when (game days)
+        float m_paceSince = 0.0f;
+        float m_paceTried = -1.0f;       // the last time a story was looked for (game days)
 
         mutable std::mutex m_mutex;
         Arcs::Book m_book;
