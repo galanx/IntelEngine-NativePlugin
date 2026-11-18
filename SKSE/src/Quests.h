@@ -226,6 +226,7 @@ namespace IntelEngine::Quests {
         constexpr std::uint8_t Item = 8;         // the stamped item is on the thief, done once the cell loaded
         constexpr std::uint8_t Met = 16;         // venture: the player and they have met (they may ask them along now)
         constexpr std::uint8_t Invited = 32;     // venture: they asked the player along (the InviteAlong action)
+        constexpr std::uint8_t AtPlace = 64;     // venture: met at the place itself, not on the road
     }
 
     inline bool IsOpen(const Quest& q) { return q.phase == Phase::Open; }
@@ -574,6 +575,13 @@ namespace IntelEngine::Quests {
             case Template::Venture:
                 // What happens either way, said plainly (the user, 2026-11-18: they follow you if you accept, otherwise
                 // they go alone).
+                if (q.placed & Placed::AtPlace) {
+                    // Met at the place itself: they are about to go in, not on their way.
+                    return q.companion ? "{ally} and {companion} are about to clear out {place} and ask you to come in with them. "
+                                         "Say yes and they follow you in and share what you find; say no and they go in alone."
+                                       : "{ally} is about to clear out {place} and asks you to come in too. Say yes and {ally} "
+                                         "follows you in and shares what you find; say no and {ally} goes in alone.";
+                }
                 return q.companion ? "{ally} and {companion} are on their way to clear out {place} and ask you to come along. "
                                      "Say yes and they follow you there and share what you find; say no and they go alone."
                                    : "{ally} is on the way to clear out {place} and asks you to come along. Say yes and {ally} "
@@ -611,7 +619,11 @@ namespace IntelEngine::Quests {
                 break;
             case Template::Venture:
                 if (q.phase == Phase::Planned) {
-                    out = "I am on my way to {place}{withcompanion} to clear it out.";
+                    // Met at the place: they are there to clear it, and it is not cleared yet. Without this, Jenassa
+                    // told the player "The mine is clear" outside Embershard with its master alive inside (2026-11-18).
+                    out = (q.placed & Placed::AtPlace)
+                              ? "I came to {place}{withcompanion} to clear it out. It is not cleared yet: whoever holds it is still inside."
+                              : "I am on my way to {place}{withcompanion} to clear it out.";
                     // Once they have met the player: they may ask them along, and the asking is an action, so the
                     // offer the player answers comes when they really ask (the user, 2026-11-18).
                     if (q.placed & Placed::Met) {
