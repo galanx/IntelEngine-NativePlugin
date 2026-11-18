@@ -119,7 +119,9 @@ namespace IntelEngine::Quests {
             {StepKind::Talk, Objective::Report, Role::Giver, Role::Giver, 0, Ending::Done, 0.0f},
         };
         static constexpr StepDef venture[] = {
-            {StepKind::ReachTogether, Objective::GoWith, Role::Ally, Role::Ally, 310, Ending::None, 2.0f},
+            // The marker points at the place, not at the ally: they follow the player there, and a marker over a
+            // companion's head walking beside you points nowhere (the user, 2026-11-18).
+            {StepKind::ReachTogether, Objective::GoWith, Role::Anchor, Role::Ally, 310, Ending::None, 2.0f},
             {StepKind::Clear, Objective::Clear, Role::Anchor, Role::None, 320, Ending::None, 1.0f},
             {StepKind::Talk, Objective::Share, Role::Ally, Role::Ally, 0, Ending::Done, 0.0f},
         };

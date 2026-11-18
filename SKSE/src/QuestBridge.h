@@ -79,6 +79,11 @@ namespace IntelEngine {
          *  sends them home through SeverActions: the script walks them there. "" when nothing could be called, else
          *  the system's name. */
         static std::string Follower(RE::Actor* npc, bool join);
+        /** Ends a casual follow of SeverActions (its StartFollowing, which the dialogue model can fire for anyone: no
+         *  roster entry, no teammate flag, no follower faction). It re-applies itself on every cell load, so an NPC
+         *  IntelEngine walked home went back to the player (Olava, 2026-11-18). True when one was ended. A roster
+         *  companion is never touched. */
+        static bool StopCasualFollow(RE::Actor* npc);
 
         /** Every journal quest with a record gets its title (on accepting, and after every load: titles are not saved). */
         void ApplyTitles() const;

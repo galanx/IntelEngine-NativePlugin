@@ -107,7 +107,7 @@ leads to another person.
 **Venture** (the user's question of 2026-11-18: meeting a former follower on their own adventure). A follower
 left behind who is living their own life sets out for a dungeon, sometimes with another former follower. The
 player meets them on the road (placed ahead out of sight, walking there, as road encounters are) or at the place.
-1. Go with them to the place (Reach, together) - marker on the follower.
+1. Go with them to the place (Reach, together) - marker on the place (they follow the player there).
 2. Clear the place together (Clear) - they follow the player inside.
 3. Share the spoils (Talk, with them) - ends Done: a share of gold, their memory of it, the deed in the hold.
 If the player does not come, they go alone, and their memory says so.
@@ -143,7 +143,10 @@ SeverActions' send-home, and walk home at an ordinary pace. Turned down, they an
 their own (GoToLocation), that task leads them. Nobody asked and the player went on: the venture lapses, and
 nobody remembers it. A task given to the companion before the venture is taken on (the NPC social engine, another
 mod) drops the companion and the ally goes on alone; a task given to the ally ends the venture. The NPC social
-engine and the hourly package sweep leave the people of a meeting alone.
+engine and the hourly package sweep leave the people of a meeting alone. Someone on a venture with the player
+cannot open an AskPlayerForHelp errand as well: told "will come along, and leads the way", Jenassa asked to be
+escorted to the same fort, and that errand's follow package kept her at the player's side after the venture let her
+go.
 
 ## The journal
 
@@ -232,6 +235,11 @@ endings. A record that does not load starts empty; forms that left the load orde
   greeting is given again.
 - SeverActions may make a venture's ally a follower of its own from their "come along" line; that counts as joining,
   and they stay with the player after the venture, as SeverActions keeps them.
+- SeverActions greets a returning member of its roster with "Jenassa has returned." (its text, not IntelEngine's);
+  a first recruit gets its other notice.
+- SeverActions' casual follow (StartFollowing, which the dialogue model can fire for anyone) re-applies itself on every
+  cell load: Olava the Feeble, walked home by IntelEngine's escort, went back to trailing the player. The escort now
+  ends it too (`StopCasualFollow`; a roster companion is never touched).
 
 ## Not in the first round
 
