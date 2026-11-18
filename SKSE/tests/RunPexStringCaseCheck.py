@@ -2,8 +2,9 @@
 
 The game keeps one case-insensitive string pool, and the first spelling loaded wins. A .pex whose string table
 holds "generation" makes the lightning controller's lookup of "Generation" miss, so Sparks bolts go invisible
-(galanx/IntelEngine-GamePlugin#35). Quoted Papyrus strings are safe; bare identifiers (variables, parameters,
-properties) are what land here.
+(galanx/IntelEngine-GamePlugin#35). Bare identifiers (variables, parameters, properties, functions) land in the
+string table, and so does a quoted string whose whole text is one of the names; a longer string that contains one,
+like ",\"generation\":", is its own entry and is not flagged.
 
 Usage: python -X utf8 SKSE/tests/RunPexStringCaseCheck.py <dir>
 
@@ -48,14 +49,15 @@ def main() -> int:
         try:
             table = strings(f.read_bytes())
         except (ValueError, struct.error) as e:
-            print(f"SKIP {f.relative_to(root)}: {e}")
+            print(f"FAIL {f.relative_to(root)}: unreadable ({e})")
+            bad += 1
             continue
         for s in table:
             right = wanted.get(s.lower())
             if right and s != right:
                 print(f"FAIL {f.relative_to(root)}: '{s}' (the engine looks up '{right}')")
                 bad += 1
-    print(f"{len(files)} .pex checked, {bad} wrong-case engine names")
+    print(f"{len(files)} .pex checked, {bad} failures")
     return 1 if bad or not files else 0
 
 
