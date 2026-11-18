@@ -31,6 +31,8 @@ namespace IntelEngine {
         std::uint32_t PlanVenture(RE::Actor* ally);
         /** Whether this actor gives, or goes on, a quest that is planned or open (the lives leave them be). */
         bool Involves(RE::FormID actor) const;
+        /** A venture was put on the road: what the two remember of falling in together is written now. */
+        void Placed(std::uint32_t id);
 
         bool Accept(std::uint32_t id);
         bool Decline(std::uint32_t id);
@@ -87,6 +89,7 @@ namespace IntelEngine {
         Quests::Book m_book;
         std::vector<Place> m_places;
         std::vector<RE::FormID> m_keepsakes;
+        std::vector<RE::FormID> m_followerTypes;   // references of the follower types of the load order (ventures)
         bool m_catalogued = false;
         float m_handOverOfferedAt = -1.0f;   // real seconds (the popup at most once a minute)
     };
