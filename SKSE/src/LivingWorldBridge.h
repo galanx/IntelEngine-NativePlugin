@@ -86,6 +86,10 @@ namespace IntelEngine {
         bool HasOwnLife(RE::FormID actor) const;
         /** 4.0 quests: another former follower free to go along on a venture (as NextStep chooses one), 0 = none. */
         RE::FormID FreeCompanionFor(RE::FormID actor) const;
+        /** 4.0 quests: whether someone may be taken out on the road with a venture: a grown person, alive, not with
+         *  the player or near them, in no scene, no running quest of the journal, no IntelEngine errand, not married
+         *  to the player, not keeping a shop. Main thread. */
+        static bool FreeToTravel(RE::Actor* actor);
         /** The hold an actor is in, by name (for world-knowledge conditions). */
         static std::string HoldName(RE::Actor* actor);
         /** How an NPC is tied to the player's quests: 0 not, 1 takes part in a running quest of the journal's kinds,

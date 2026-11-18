@@ -164,6 +164,24 @@ static void VentureFlow() {
     }
 }
 
+static void VentureCompanion() {
+    Book book;
+    auto q = Make(Template::Venture, 9);
+    q.companion = 12;
+    const auto id = book.Plan(q, 1.0f);
+    Require(id != 0, "planned");
+    Require(book.Plan(Make(Template::Keepsake, 12, 600), 1.1f) == 0, "the companion is in a quest already");
+    Require(!CompanionLines(*book.Find(id)).empty() && CompanionLines(Make(Template::Venture, 9)).empty(),
+            "a companion knows of the venture; none without one");
+    Require(OfferPrompt(*book.Find(id)).find("{companion}") != std::string::npos, "the offer names both");
+    Require(FellInMemory(true).find("{ally}") != std::string::npos && FellInMemory(false).find("{companion}") != std::string::npos,
+            "each remembers the other");
+    Require(book.Accept(id, 1.2f), "accepted");
+    Facts f;
+    Require(Advance(*book.Find(id), f, 3.0f).ending == Ending::WentAlone, "never came: they went alone");
+    Require(CompanionLines(*book.Find(id)).find("went on our own") != std::string::npos, "and the companion remembers it");
+}
+
 static void BookRules() {
     Book book;
     const auto a = book.Plan(Make(Template::Keepsake, 1), 1.0f);
@@ -284,6 +302,7 @@ int main() {
         KeepsakeEndings();
         BountyTalkNeedsTheDeed();
         VentureFlow();
+        VentureCompanion();
         BookRules();
         Choices();
         SaveData();

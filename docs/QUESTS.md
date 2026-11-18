@@ -112,6 +112,18 @@ player meets them on the road (placed ahead out of sight, walking there, as road
 3. Share the spoils (Talk, with them) - ends Done: a share of gold, their memory of it, the deed in the hold.
 If the player does not come, they go alone, and their memory says so.
 
+The meeting itself (the user, 2026-11-18: "meeting them in the road and they recognizing me and stopping to talk,
+either alone or both with whomever they are travelling ... They may have met other follower types that I haven't
+travelled with"): two in three ventures have a companion, another former follower who is free or a follower type of
+the load order (the potential follower faction, mods' followers too, catalogued at the main menu) who is free to
+leave unseen (no quest of the journal, no shop, no scene, not near the player). Where they are placed: on the ground the player
+walked outdoors lately (a trail of the last 24 spots, every 400 units or more), 2000 to 6000 units behind the player
+and out of sight; they saw the player ahead and jog to catch up. Without a trail (just arrived by fast travel) they
+are placed ahead out of sight, snapped to the navmesh, walking to the place, and turn and come over when they see
+the player (in sight within 2500 units, or anywhere within 1000). Either way the ally greets, the companion has
+their say once the ally has finished (glad to see an old friend, or meeting a stranger), and then the offer. When they are met, each is given the memory of falling in with the other. Turned down, both walk on
+when the player goes, as road travellers do, and go home after a day.
+
 ## The journal
 
 Each quest is a real side quest with its own title (four slot quests `IntelEngine_Quest0..3`, the title set from
@@ -160,6 +172,10 @@ endings. A record that does not load starts empty; forms that left the load orde
 - Venture, end to end: Jenassa met on the road out of Riverwood ("Days of silence, and I find you standing in the
   rain... Come along, and we split whatever we find. You owe me that much."), together to White River Watch, the
   master of the place dead, the split ("Two hundred and ten for you, and I keep my share").
+- Road meetings (2026-11-18 afternoon): Jenassa with Illia, Lob and Vilkas in turn, caught up from 2000-2500 units
+  behind within 16 seconds; Illia, never met: "She's not wrong — bandits rarely care who walks up. I'm Illia."; Vilkas:
+  "A stranger in iron, and a Nord I've never laid eyes on ... Do you fight as well as you walk?"; both follow when
+  taken up; turned down, both walk on when the player leaves.
 - Declined (memory "refused"), time ran out (memory "never did", the hold hears the gang still holds the place),
   saved and loaded with a quest open (record, title and steps came back).
 
@@ -172,6 +188,12 @@ endings. A record that does not load starts empty; forms that left the load orde
   no log text. Every entry has explicit flags.
 - An item placed with PlaceAtMe at an unloaded boss room never reached the thief: the stamped item is made once
   the cell is loaded, at the thief, disabled, and put straight into their inventory.
+- Placed a fixed distance ahead, Jenassa stood inside a hillside by the river and never moved, and a navmesh snap
+  put her on a river bank that does not join the road: the trail behind the player is where people can walk.
+- A travel package put back on with a new target keeps its old one (Jenassa walked on); coming over is another
+  package (a jog).
+- "Not talking now" is true between two lines of one reply: waiting for 2.5 s of quiet, then for the companion's own
+  reply to start and end, before any popup.
 - SeverActions may make a venture's ally a follower of its own from their "come along" line; they stay with the
   player after the venture, as SeverActions keeps them.
 

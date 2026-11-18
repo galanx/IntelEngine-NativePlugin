@@ -4,10 +4,12 @@
 #include "ItemNames.h"
 #include "LivingWorldBridge.h"
 #include "LocationResolver.h"
+#include "NPCIndex.h"
 #include "SkyrimNetAPI.h"
 #include "SpeechTracker.h"
 #include "StorylineBridge.h"
 
+#include <atomic>
 #include <chrono>
 #include <optional>
 #include <thread>
@@ -169,6 +171,10 @@ namespace IntelEngine {
             return data ? data->LookupForm<RE::TESQuest>(kJournalQuestBase + slot, kPlugin) : nullptr;
         }
 
+        // Test hook (QuestDebugForceCompanion): 0 as chance has it, 1 a follower type the player never travelled with,
+        // 2 another former follower, 3 alone.
+        std::atomic<int> g_forceCompanion{0};
+
         // Facts that only the main thread may read, kept for the bio decorator (SkyrimNet's threads).
         struct Seen {
             bool hasItem = false;
@@ -230,11 +236,33 @@ namespace IntelEngine {
             }
         }
         if (keepsakes.empty()) keepsakes = std::move(modded);
+        // Follower types: everyone the game lets the player hire or befriend as a follower (the potential follower
+        // faction, mods' followers included), by their placed reference. A venture's ally may have fallen in with one
+        // the player never travelled with.
+        std::vector<RE::FormID> followerTypes;
+        if (auto* data = RE::TESDataHandler::GetSingleton()) {
+            auto* potential = data->LookupForm<RE::TESFaction>(0x0005C84D, "Skyrim.esm");
+            for (auto* npc : data->GetFormArray<RE::TESNPC>()) {
+                if (!npc || !potential || !npc->IsUnique()) continue;
+                bool member = false;
+                for (const auto& f : npc->factions) {
+                    if (f.faction == potential && f.rank >= 0) member = true;
+                }
+                const char* name = npc->GetFullName();
+                if (!member || !name || !*name) continue;
+                const auto refId = NPCIndex::GetSingleton()->FindFormIdByName(name);
+                auto* ref = refId ? RE::TESForm::LookupByID<RE::Actor>(refId) : nullptr;
+                if (!ref || ref->GetActorBase() != npc) continue;   // a fuzzy match or an unplaced base: not them
+                followerTypes.push_back(refId);
+            }
+        }
         const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
-        logger::info("Quests: {} places with a boss room and {} keepsakes, {:.1f} ms at the main menu", places.size(), keepsakes.size(), ms);
+        logger::info("Quests: {} places with a boss room, {} keepsakes and {} follower types, {:.1f} ms at the main menu", places.size(),
+                     keepsakes.size(), followerTypes.size(), ms);
         std::scoped_lock lock(m_mutex);
         m_places = std::move(places);
         m_keepsakes = std::move(keepsakes);
+        m_followerTypes = std::move(followerTypes);
     }
 
     // ------------------------------------------------------------------ planning
@@ -330,8 +358,31 @@ namespace IntelEngine {
             logger::info("Quests: no venture for {}: not a former follower living a life of their own", ally->GetDisplayFullName());
             return 0;
         }
-        const RE::FormID companion = lives->FreeCompanionFor(allyId);
         const float now = NowDays();
+        // Who they travel with, if anyone: another former follower who is free, or a follower type the player may never
+        // have travelled with (a hireling, an adventurer of the load order), free to leave where they are, unseen.
+        const std::uint32_t pickSeed = Q::detail::Mix(allyId, static_cast<std::uint32_t>(now * 24.0f) + 13u);
+        RE::FormID companion = 0;
+        const int force = g_forceCompanion.load();
+        if (force == 1 || force == 2 || (force == 0 && pickSeed % 100u < 65u)) {
+            const RE::FormID former = lives->FreeCompanionFor(allyId);
+            std::vector<RE::FormID> strangers;
+            {
+                std::scoped_lock lock(m_mutex);
+                for (const auto id : m_followerTypes) {
+                    if (id == allyId || id == former || m_book.LiveFor(id)) continue;
+                    strangers.push_back(id);
+                }
+            }
+            std::erase_if(strangers, [](RE::FormID id) {
+                auto* a = RE::TESForm::LookupByID<RE::Actor>(id);
+                return !a || !LivingWorldBridge::FreeToTravel(a);
+            });
+            if (force == 1) companion = strangers.empty() ? 0 : strangers[Q::detail::Mix(pickSeed, 3u) % strangers.size()];
+            else if (force == 2) companion = former;
+            else if (former && (strangers.empty() || pickSeed % 2u == 0u)) companion = former;
+            else if (!strangers.empty()) companion = strangers[Q::detail::Mix(pickSeed, 3u) % strangers.size()];
+        }
         auto* playerLoc = LocationOf(player);
         auto* playerHold = HoldOf(playerLoc);
         std::optional<RE::NiPoint3> playerAt;
@@ -371,8 +422,7 @@ namespace IntelEngine {
         q.tmpl = Q::Template::Venture;
         q.giver = allyId;
         q.ally = allyId;
-        // Now and then with another former follower who is free (and in no quest of their own).
-        if (companion && !m_book.LiveFor(companion) && Q::detail::Mix(seed, 61u) % 2u == 0u) q.companion = companion;
+        if (companion && !m_book.LiveFor(companion)) q.companion = companion;
         q.place = place->location;
         q.anchor = place->anchor;
         q.seed = seed;
@@ -390,6 +440,28 @@ namespace IntelEngine {
     bool QuestBridge::Involves(RE::FormID actor) const {
         std::scoped_lock lock(m_mutex);
         return actor && m_book.LiveFor(actor) != nullptr;
+    }
+
+    void QuestBridge::Placed(std::uint32_t id) {
+        std::string allyMemory, companionMemory, place;
+        RE::FormID ally = 0, companion = 0;
+        {
+            std::scoped_lock lock(m_mutex);
+            const auto* q = m_book.Find(id);
+            if (!q || q->tmpl != Q::Template::Venture || !q->companion) return;
+            ally = q->ally;
+            companion = q->companion;
+            allyMemory = Fill(Q::FellInMemory(false), *q);
+            companionMemory = Fill(Q::FellInMemory(true), *q);
+            place = PlaceName(q->place);
+        }
+        logger::info("Quests: #{} on the road: {:08X} and {:08X} travel together", id, ally, companion);
+        std::thread([ally, companion, allyMemory, companionMemory, place]() {
+            if (!SkyrimNetAPI::AddMemory) return;
+            const auto related = [](RE::FormID other) { return "[" + std::to_string(other) + "]"; };
+            SkyrimNetAPI::AddMemory(ally, allyMemory.c_str(), 0.55f, "EXPERIENCE", "", place.c_str(), "[\"intelengine_quest\"]", related(companion).c_str());
+            SkyrimNetAPI::AddMemory(companion, companionMemory.c_str(), 0.55f, "EXPERIENCE", "", place.c_str(), "[\"intelengine_quest\"]", related(ally).c_str());
+        }).detach();
     }
 
     bool QuestBridge::Accept(std::uint32_t id) {
@@ -614,8 +686,19 @@ namespace IntelEngine {
         if (lower == "narration") return Fill(Q::OfferNarration(*q), *q);
         // A venture is met on the road: what drives them, as the road encounter's narration ("<name> is on the way...").
         if (lower == "roadnarration") {
-            return Fill("is on the way to {place} to clear it out{withcompanion}, and on seeing {player} asks {player} to come along "
-                        "and share whatever they find there", *q);
+            return Fill("is on the way to {place}{withcompanion} to clear it out; on recognizing {player} on the road, stops to ask "
+                        "{player} to come along and share whatever they find there", *q);
+        }
+        // Met from behind: they saw the player ahead on the road they were walking and caught up.
+        if (lower == "roadcatchup") {
+            return Fill("catches up with {player} on the road, having recognized {player} from behind; is on the way to {place}"
+                        "{withcompanion} to clear it out, and asks {player} to come along and share whatever they find there", *q);
+        }
+        // The companion stops with them: glad to see an old friend, or meeting a stranger their friend knows.
+        if (lower == "companionnarration") return Fill("stops on the road with {ally}, glad to see {player} again, and is going with {ally} to clear out {place}", *q);
+        if (lower == "companionstranger") {
+            return Fill("stops on the road with {ally} and has never met {player}; fell in with {ally} a few days ago and is going "
+                        "with {ally} to clear out {place}", *q);
         }
         if (lower == "prompt") return Fill(Q::OfferPrompt(*q), *q);
         if (lower == "memory") return Fill(Q::EndMemory(*q), *q);
@@ -661,6 +744,13 @@ namespace IntelEngine {
         std::scoped_lock lock(m_mutex);
         std::string out;
         for (const auto& q : m_book.all) {
+            if (q.companion == id && q.tmpl == Q::Template::Venture) {
+                if (Q::IsLive(q) || (q.ending != Q::Ending::Lapsed && now - q.since < kMemoryDays)) {
+                    const auto line = Q::CompanionLines(q);
+                    if (!line.empty()) out += "- " + Fill(line, q) + "\n";
+                }
+                continue;
+            }
             if (q.giver != id && q.ally != id) continue;
             std::string line;
             if (Q::IsLive(q)) {
@@ -723,6 +813,8 @@ namespace IntelEngine {
     void QuestBridge::Ended(const Q::Quest& q) {
         const int openRumor = q.rumor;
         const std::string memory = Fill(Q::EndMemory(q), q);
+        const std::string companionMemory = q.companion ? Fill(Q::CompanionLines(q), q) : std::string();
+        const auto companion = q.companion;
         const std::string deed = Fill(Q::Rumor(q), q);
         const auto who = q.tmpl == Q::Template::Venture ? q.ally : q.giver;
         auto* giverLoc = LocationOf(RE::TESForm::LookupByID<RE::Actor>(who));
@@ -732,8 +824,11 @@ namespace IntelEngine {
         const std::string place = PlaceName(q.place);
         const auto id = q.id;
         logger::info("Quests: #{} ended ({}): {}", id, static_cast<int>(q.ending), memory);
-        std::thread([openRumor, memory, deed, who, holdName, giverName, place, id]() {
+        std::thread([openRumor, memory, deed, who, holdName, giverName, place, id, companion, companionMemory]() {
             if (openRumor > 0 && SkyrimNetAPI::RemoveWorldKnowledge) SkyrimNetAPI::RemoveWorldKnowledge(openRumor);
+            if (companion && !companionMemory.empty() && SkyrimNetAPI::AddMemory) {
+                SkyrimNetAPI::AddMemory(companion, companionMemory.c_str(), 0.6f, "EXPERIENCE", "", place.c_str(), "[\"intelengine_quest\"]", "[]");
+            }
             if (!memory.empty() && who && SkyrimNetAPI::AddMemory) {
                 const int m = SkyrimNetAPI::AddMemory(who, memory.c_str(), 0.7f, "EXPERIENCE", "", place.c_str(), "[\"intelengine_quest\"]", "[]");
                 logger::info("Quests: #{} memory {} for {:08X}", id, m, who);
@@ -847,6 +942,8 @@ namespace IntelEngine {
                 QuestBridge::GetSingleton()->SetPlaced(static_cast<std::uint32_t>(id), bits);
             }
             void QuestApplyTitles(RE::StaticFunctionTag*) { QuestBridge::GetSingleton()->ApplyTitles(); }
+            void QuestVenturePlaced(RE::StaticFunctionTag*, std::int32_t id) { QuestBridge::GetSingleton()->Placed(static_cast<std::uint32_t>(id)); }
+            void QuestDebugForceCompanion(RE::StaticFunctionTag*, std::int32_t mode) { g_forceCompanion.store(mode); }
         }
 
         void Register(RE::BSScript::IVirtualMachine* a_vm, int& count) {
@@ -867,6 +964,8 @@ namespace IntelEngine {
             a_vm->RegisterFunction("QuestSetFoe", script, QuestSetFoe); ++count;
             a_vm->RegisterFunction("QuestSetPlaced", script, QuestSetPlaced); ++count;
             a_vm->RegisterFunction("QuestApplyTitles", script, QuestApplyTitles); ++count;
+            a_vm->RegisterFunction("QuestVenturePlaced", script, QuestVenturePlaced); ++count;
+            a_vm->RegisterFunction("QuestDebugForceCompanion", script, QuestDebugForceCompanion); ++count;
         }
     }
 }

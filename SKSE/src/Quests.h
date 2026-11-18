@@ -564,7 +564,9 @@ namespace IntelEngine::Quests {
         switch (q.tmpl) {
             case Template::Keepsake: return "{giver} asks you to recover {their} stolen {itembase} from {place}. Reward: {gold} gold.";
             case Template::Bounty: return "{giver} asks you to deal with {foe} at {place}. Reward: {gold} gold.";
-            case Template::Venture: return "{ally} asks you to come along to {place}.";
+            case Template::Venture:
+                return q.companion ? "{ally} and {companion} ask you to come along to {place} and share what you find there."
+                                   : "{ally} asks you to come along to {place} and share what you find there.";
             default: return {};
         }
     }
@@ -638,6 +640,33 @@ namespace IntelEngine::Quests {
                 }
             default: return {};
         }
+    }
+
+    // A venture's companion (another former follower, or a follower type the player never travelled with): what they
+    // know, first person. Empty = nothing.
+    inline std::string CompanionLines(const Quest& q) {
+        if (q.tmpl != Template::Venture || !q.companion) return {};
+        if (q.phase == Phase::Planned) return "I fell in with {ally} a few days ago, and we are on our way to {place} to clear it out.";
+        if (q.phase == Phase::Open) {
+            std::string out = "{player} came along with {ally} and me to {place}.";
+            if (q.doneMask & 0b10) out += " We cleared it together; we have yet to share what we found.";
+            else if (q.doneMask & 1) out += " We are there now and it is not cleared yet.";
+            else out += " We are not there yet.";
+            return out;
+        }
+        switch (q.ending) {
+            case Ending::Done: return "{ally}, {player} and I cleared {place} together, and we shared what we found.";
+            case Ending::WentAlone:
+            case Ending::Declined: return "{ally} asked {player} to come along to {place}; {player} did not, so {ally} and I went on our own.";
+            default: return {};
+        }
+    }
+
+    // What the two of a venture remember of how they came to travel together, made true when they are met: written
+    // for the ally (about the companion) and the companion (about the ally).
+    inline std::string FellInMemory(bool forCompanion) {
+        return forCompanion ? "I fell in with {ally} a few days ago, and we set out together to clear out {place}."
+                            : "I fell in with {companion} a few days ago, and we set out together to clear out {place}.";
     }
 
     // What the people of the giver's hold heard (SkyrimNet world knowledge), past tense so it stays true. While

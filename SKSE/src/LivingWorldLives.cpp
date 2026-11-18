@@ -901,6 +901,15 @@ namespace IntelEngine {
         return false;
     }
 
+    bool LivingWorldBridge::FreeToTravel(RE::Actor* actor) {
+        auto* player = RE::PlayerCharacter::GetSingleton();
+        if (!player || !Person(actor) || actor->IsDisabled() || actor->IsPlayerTeammate() || actor->GetCurrentScene()) return false;
+        if (actor->GetVendorFaction() || actor->IsInCombat()) return false;
+        if (NearPlayer(actor, player, 6000.0f)) return false;   // never taken from where the player could see them go
+        const auto ties = TiesOf(actor);
+        return !ties.errand && !ties.journal && !ties.quest && !ties.home;
+    }
+
     RE::FormID LivingWorldBridge::FreeCompanionFor(RE::FormID actor) const {
         std::scoped_lock lock(m_mutex);
         for (const auto& other : m_lives) {
