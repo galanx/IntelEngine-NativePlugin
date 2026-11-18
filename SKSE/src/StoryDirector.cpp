@@ -3,6 +3,7 @@
 #include "AsyncDispatch.h"
 #include "LivingWorldBridge.h"
 #include "MemoryDB.h"
+#include "QuestBridge.h"
 #include "SkyrimNetAPI.h"
 #include "StoryDirectorPick.h"
 
@@ -10,6 +11,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <future>
 #include <memory>
 #include <mutex>
 #include <thread>
@@ -244,6 +246,39 @@ namespace IntelEngine::StoryDirector {
                 std::scoped_lock lock(g_restMutex);
                 g_lastChosen = chosen.formId;
                 g_lastChosenDay = GameDays();
+            }
+            // 4.0 quests (docs/QUESTS.md): a quest moment is planned by the engine first, every step a fact of the game;
+            // the 3.8 writer path runs only when no quest fits this person now (rescues, faction quests).
+            const bool venture = chosen.kind == "road_encounter" && LivingWorldBridge::GetSingleton()->HasOwnLife(chosen.formId);
+            if (chosen.kind == "quest" || venture) {
+                auto planned = std::make_shared<std::promise<std::uint32_t>>();
+                auto future = planned->get_future();
+                const RE::FormID giverId = chosen.formId;
+                if (auto* task = SKSE::GetTaskInterface()) {
+                    task->AddTask([planned, giverId, venture]() {
+                        auto* giver = RE::TESForm::LookupByID<RE::Actor>(giverId);
+                        planned->set_value(venture ? QuestBridge::GetSingleton()->PlanVenture(giver)
+                                                   : QuestBridge::GetSingleton()->PlanFor(giver));
+                    });
+                    if (future.wait_for(std::chrono::seconds(5)) == std::future_status::ready) {
+                        if (const auto id = future.get(); id != 0) {
+                            logger::info("[Director] {} acts: quest #{} planned by the engine; the offer goes out", chosen.name, id);
+                            task->AddTask([id, giverId]() {
+                                auto* source = SKSE::GetModCallbackEventSource();
+                                if (!source) return;
+                                SKSE::ModCallbackEvent event{};
+                                event.eventName = "IntelEngine_QuestOffer";
+                                event.strArg = "";
+                                event.numArg = static_cast<float>(id);
+                                event.sender = RE::TESForm::LookupByID(giverId);
+                                source->SendEvent(&event);
+                            });
+                            session->done("");
+                            return;
+                        }
+                    }
+                }
+                logger::info("[Director] no quest of the engine fits {} now: the dungeon master writes one as before", chosen.name);
             }
             // The dungeon master sees that one person and that kind of moment only (a quest keeps its sub-types).
             std::unordered_set<std::string> writerExcluded = session->excluded;

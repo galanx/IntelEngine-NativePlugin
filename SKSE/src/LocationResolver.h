@@ -240,6 +240,8 @@ namespace IntelEngine {
          * @return Boss anchor ref, or nullptr if dungeon not indexed
          */
         RE::TESObjectREFR* GetDungeonBossAnchor(RE::BGSLocation* loc);
+        /** Every dungeon of the index: its location and its boss room anchor (4.0 quests pick their places here). */
+        std::vector<std::pair<RE::FormID, RE::FormID>> DungeonAnchors() const;
         RE::TESObjectREFR* GetDungeonBossAnchor(const std::string& locationName);
 
     private:

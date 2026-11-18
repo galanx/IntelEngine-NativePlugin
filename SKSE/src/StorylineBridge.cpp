@@ -2,6 +2,7 @@
 
 #include "ItemNames.h"
 #include "LivingWorldBridge.h"
+#include "QuestBridge.h"
 #include "SkyrimNetAPI.h"
 
 #include <cmath>
@@ -210,8 +211,10 @@ namespace IntelEngine {
         const int level = player ? player->GetLevel() : 1;
         const bool withPlayer = PlayerIsWith(actor);
         namespace SL = Storylines;
+        // 4.0 quests they give or go on (QuestBridge, its own lock, taken first and let go)
+        const std::string quests = QuestBridge::GetSingleton()->LinesFor(actor);
         std::scoped_lock lock(m_mutex);
-        std::string mine;
+        std::string mine = quests;
         std::string aboutMe;
         bool openMine = false;     // an open request of theirs: what they say may change it
         bool mayAnswer = false;    // a request about them they may answer now

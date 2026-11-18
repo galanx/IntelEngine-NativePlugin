@@ -1,4 +1,5 @@
 #include "LivingWorldBridge.h"
+#include "QuestBridge.h"
 
 #include "ProcessUtils.h"
 #include "SkyrimNetAPI.h"
@@ -166,6 +167,13 @@ namespace IntelEngine {
                 }
                 if (id == "IntelEngine_Threads") {
                     if (!skipStorylines) t.journal = true;
+                    continue;
+                }
+                // 4.0 quests: the one who asked is the journal's target; a former follower on a venture with the
+                // player is on the player's errand.
+                if (id.starts_with("IntelEngine_Quest") && id != "IntelEngine_QuestKeeper") {
+                    if (alias == "Ally" || alias == "Companion") t.errand = true;
+                    else if (alias == "Giver") t.journal = true;
                     continue;
                 }
                 if (id.starts_with("IntelEngine")) continue;
@@ -389,7 +397,9 @@ namespace IntelEngine {
                 if (LivingWorld::OwnLife(life)) life.flags |= LivingWorld::kNeedsRelease;
                 if (settings.level == LivingWorld::WorldLevel::Classic) continue;
             }
-            const auto ties = TiesOf(actor);
+            auto ties = TiesOf(actor);
+            // A quest planned with them that has no journal alias yet (a venture on its way): theirs is the player's errand.
+            if (QuestBridge::GetSingleton()->Involves(life.actor)) ties.errand = true;
             const bool teammate = actor->IsPlayerTeammate();
             const bool wasServing = (life.flags & LivingWorld::kWithPlayer) != 0;
             const bool wasAway = (life.flags & LivingWorld::kOnTask) != 0 || life.activity == Activity::OnTask;
@@ -877,6 +887,33 @@ namespace IntelEngine {
             return "## My own life lately\n" + Fill(line, life, player ? player->GetDisplayFullName() : "");
         }
         return {};
+    }
+
+    bool LivingWorldBridge::HasOwnLife(RE::FormID actor) const {
+        std::scoped_lock lock(m_mutex);
+        if (m_settings.level != LivingWorld::WorldLevel::Lives) return false;
+        for (const auto& life : m_lives) {
+            if (life.actor == actor) {
+                return LivingWorld::Has(life, LivingWorld::kWasFollower) && life.parkedSince >= 0.0f &&
+                       !LivingWorld::Has(life, LivingWorld::kWithPlayer) && !LivingWorld::Has(life, LivingWorld::kOnTask);
+            }
+        }
+        return false;
+    }
+
+    RE::FormID LivingWorldBridge::FreeCompanionFor(RE::FormID actor) const {
+        std::scoped_lock lock(m_mutex);
+        for (const auto& other : m_lives) {
+            const bool free = LivingWorld::Has(other, LivingWorld::kWasFollower) && other.actor != actor &&
+                              !LivingWorld::PinnedByReality(other) && !LivingWorld::Has(other, LivingWorld::kQuestTarget) &&
+                              !LivingWorld::Has(other, LivingWorld::kQuestBound) && !LivingWorld::Has(other, LivingWorld::kKeepsShop) &&
+                              (other.activity == Activity::Home || other.activity == Activity::Working) && other.companion == 0 &&
+                              other.parkedSince >= 0.0f;
+            if (!free) continue;
+            auto* a = RE::TESForm::LookupByID<RE::Actor>(other.actor);
+            if (a && !a->IsDead() && !a->IsDisabled()) return other.actor;
+        }
+        return 0;
     }
 
     std::string LivingWorldBridge::DirectorLifeLine(RE::FormID actor) const {

@@ -23,6 +23,7 @@
 #include "SpeechTracker.h"
 #include "LivingWorldBridge.h"
 #include "StorylineBridge.h"
+#include "QuestBridge.h"
 #include "QuestStateTracker.h"
 #include "StringUtils.h"
 #include "AsyncDispatch.h"
@@ -102,6 +103,7 @@ namespace IntelEngine {
         // 4.0 living world: the record of known NPCs and the director's pacing
         LivingWorldBridge::GetSingleton()->Save(a_intfc);
         StorylineBridge::GetSingleton()->Save(a_intfc);
+        QuestBridge::GetSingleton()->Save(a_intfc);
     }
 
     void LoadCallback(SKSE::SerializationInterface* a_intfc) {
@@ -130,6 +132,8 @@ namespace IntelEngine {
                 LivingWorldBridge::GetSingleton()->Load(a_intfc, version, length);
             } else if (type == Storylines::kRecordType) {
                 StorylineBridge::GetSingleton()->Load(a_intfc, version, length);
+            } else if (type == Quests::kRecordType) {
+                QuestBridge::GetSingleton()->Load(a_intfc, version, length);
             }
         }
     }
@@ -152,6 +156,7 @@ namespace IntelEngine {
         tracker->ClearAll();
         LivingWorldBridge::GetSingleton()->Revert();
         StorylineBridge::GetSingleton()->Revert();
+        QuestBridge::GetSingleton()->Revert();
         ProximityMonitor::GetSingleton()->DisarmAll();
         logger::info("RevertCallback: Save ID and SlotTracker cleared (gen={})",
             tracker->loadGeneration.load(std::memory_order_relaxed));
@@ -434,6 +439,7 @@ namespace IntelEngine {
                 NPCIndex::GetSingleton()->BuildIndex();
                 LocationResolver::GetSingleton()->BuildLocationIndex();
                 ItemIndex::GetSingleton()->BuildIndex();
+                QuestBridge::GetSingleton()->Catalogue();   // after the dungeon index; at the main menu
                 FactionPolitics::GetSingleton()->LoadSettings();
                 break;
 
@@ -464,6 +470,8 @@ namespace IntelEngine {
                 // ClearAll moved to RevertCallback to avoid wiping co-save data.
                 logger::info("Game loaded - refreshing indexes, clearing MemoryDB caches");
                 LivingWorldBridge::GetSingleton()->OnGameLoaded(false);
+                // Journal titles are not in the save: the quests' records give them back.
+                if (auto* titles = SKSE::GetTaskInterface()) titles->AddTask([] { QuestBridge::GetSingleton()->ApplyTitles(); });
                 PoliticalEngineBridge::GetSingleton()->MarkDirty(true);
                 AsyncDispatch::Submit([] { Papyrus::PollAndSyncPE(); });  // no-op unless PE data is already ready; PE's own "loaded" event covers the other order
                 NPCIndex::GetSingleton()->RefreshIndex();

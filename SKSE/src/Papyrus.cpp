@@ -17,6 +17,7 @@
 #include "ItemNames.h"
 #include "StoryDirector.h"
 #include "StorylineBridge.h"
+#include "QuestBridge.h"
 #include "PlaceTargets.h"
 #include "ItemIndex.h"
 #include <random>
@@ -735,6 +736,13 @@ namespace IntelEngine::Papyrus {
         a_vm->RegisterFunction("SetAutoBioCount", SCRIPT_NAME, SetAutoBioCount); ++count;
         a_vm->RegisterFunction("GetAutoBioCount", SCRIPT_NAME, GetAutoBioCount); ++count;
         a_vm->RegisterFunction("GetAutoBioCountsJson", SCRIPT_NAME, GetAutoBioCountsJson); ++count;
+
+        // 4.0 quests (QuestBridge)
+        {
+            int questCount = 0;
+            QuestNatives::Register(a_vm, questCount);
+            count += questCount;
+        }
 
         logger::info("Registered {} Papyrus functions", count);
         return true;
