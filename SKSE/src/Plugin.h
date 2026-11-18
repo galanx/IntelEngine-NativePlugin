@@ -8,6 +8,7 @@
 
 #include <RE/Skyrim.h>
 #include <SKSE/SKSE.h>
+#include <spdlog/async.h>
 #include <spdlog/sinks/basic_file_sink.h>
 
 #define INTELENGINE_VERSION "3.8.1"

@@ -2,9 +2,12 @@
 // From a VS developer shell: cl /nologo /std:c++20 /EHsc /W4 /WX /I SKSE/src SKSE/tests/ItemNamesCheck.cpp
 #include "ItemNames.h"
 
+#include <cstdint>
 #include <iostream>
+#include <iterator>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 using namespace IntelEngine::ItemNames;
 
@@ -101,12 +104,51 @@ static void Languages() {
     Require(Same("Ale\xFF", "Ale\xFF") && !Same("Ale\xFF", "Ale\xFE"), "bytes that are not UTF-8 compare as they are");
 }
 
+// The book built once must answer exactly as the scan over every item did (the first Same, then the plainest Loose,
+// the first of equals), for names that match, names that do not, and names that only a vaguer word reaches.
+static void Booked() {
+    const char* items[] = {
+        "Vase", "Pale Ale", "[Drink] Nord Mead", "Honningbrew Mead", "Nord Mead", "Ingot - Iron", "Iron Ingot", "Iron Ore",
+        "Sweetroll", "Sweet Roll", "Drink - Ale", "Ale", "Black-Briar Mead", "Mead Barrel", "Iron Sword", "Steel Sword",
+        "Potion of Healing", "Potion of Minor Healing", "()", "", "Hunter\xE2\x80\x99s Bow", "\xE2\x98\x85 Nord Mead",
+        "Mjalt\xC3\xAB Nordik", "[Pije] Mjalt\xC3\xAB Nordik", "Ale\xFF", "Stale Ale", "Ale of Riften",
+    };
+    Book book;
+    for (const char* name : items) book.Add(name);
+    Require(book.Size() == std::size(items), "every item has a number");
+    const char* asked[] = {"Ale", "ale", "Nord Mead", "nord mead", "Mead", "Iron Ingot", "Ingot", "Sweet Roll", "Sweetroll",
+                           "Healing", "Hunters Bow", "Mjalt\xC3\xAB", "MJALT\xC3\x8B NORDIK", "Ale\xFF", "Al", "Vase",
+                           "Steel", "Sword", "Potion", "Black Briar Mead", "nothing like it", "", "()"};
+    for (const char* said : asked) {
+        std::int64_t same = -1;
+        std::vector<std::uint32_t> all;
+        for (std::size_t i = 0; i < std::size(items); ++i) {
+            if (!Same(said, items[i])) continue;
+            if (same < 0) same = static_cast<std::int64_t>(i);
+            all.push_back(static_cast<std::uint32_t>(i));
+        }
+        Require(book.FindSame(said) == same, std::string("the book finds the same item as the scan for '") + said + "'");
+        Require(book.SameAll(said) == all, std::string("the book lists every same item for '") + said + "'");
+        std::int64_t loose = -1;
+        int best = 0;
+        for (std::size_t i = 0; i < std::size(items); ++i) {
+            const int rank = Loose(said, items[i]);
+            if (rank > 0 && (best == 0 || rank < best)) {
+                best = rank;
+                loose = static_cast<std::int64_t>(i);
+            }
+        }
+        Require(book.FindLoose(said) == loose, std::string("the book finds the plainest item as the scan for '") + said + "'");
+    }
+}
+
 int main() {
     try {
         Names();
         Vague();
         Shown();
         Languages();
+        Booked();
     } catch (const std::exception& e) {
         std::cerr << "ItemNamesCheck FAILED: " << e.what() << "\n";
         return 1;

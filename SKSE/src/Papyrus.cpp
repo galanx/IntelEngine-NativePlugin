@@ -23,6 +23,8 @@
 #include <algorithm>
 #include <chrono>
 #include <mutex>
+#include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include "LocationResolver.h"
 #include "StringUtils.h"
@@ -2171,7 +2173,10 @@ namespace IntelEngine::Papyrus {
             }
             std::string questEditorId = qedit;
             logger::debug("[NPCTick] Phase A snapshot (gen={})", generation);
-            auto snap = NPCIndex::GetSingleton()->BuildNPCTickSnapshot(static_cast<int>(maxPairs));
+            // The snapshot is taken a slice per frame; the rest goes on, on the game's thread, once it is done.
+            NPCIndex::GetSingleton()->BuildNPCTickSnapshotSpread(static_cast<int>(maxPairs),
+                [generation, questEditorId = std::move(questEditorId), scriptName = std::move(scriptName),
+                 functionName = std::move(functionName)](NPCIndex::NPCTickSnapshot snap) mutable {
             const bool playerAtInn = FactionPolitics::IsPlayerAtInn();
             if (snap.candidates.empty()) {
                 NPCTickResult result;
@@ -2209,6 +2214,7 @@ namespace IntelEngine::Papyrus {
                     AsyncDispatch::ExecuteQuestFunctionString(questEditorId, scriptName, functionName, requestJson);
                 });
             });
+                });
         });
     }
 
@@ -2389,6 +2395,39 @@ namespace IntelEngine::Papyrus {
         each(data->GetFormArray<RE::TESAmmo>());
     }
 
+    // Every item name of the load order, read once at the main menu (kDataLoaded): finding the item someone named is
+    // then a few lookups. ResolveItemByName used to read every item's name up to three times, inside a frame of play,
+    // when someone asked the player to bring something; on a large load order that is tens of thousands of names.
+    // Items made during play (a brewed potion) are not in it; FindItemNamedExactly still matches them by name.
+    namespace {
+        struct ItemBook {
+            std::vector<RE::TESForm*> forms;                        // in the order ForEachItemForm lists them
+            std::unordered_map<std::string, std::uint32_t> exact;   // lower-case name -> the first item called so
+            std::unordered_map<RE::FormID, std::uint32_t> number;   // form -> its number
+            ItemNames::Book names;
+            bool built = false;
+        };
+        ItemBook g_itemBook;
+    }
+
+    void BuildItemBook() {
+        if (g_itemBook.built) return;
+        auto* data = RE::TESDataHandler::GetSingleton();
+        if (!data) return;
+        const auto started = std::chrono::steady_clock::now();
+        ForEachItemForm(data, [](RE::TESForm* form, const char* name) {
+            const auto index = static_cast<std::uint32_t>(g_itemBook.forms.size());
+            g_itemBook.forms.push_back(form);
+            g_itemBook.exact.try_emplace(StringUtils::ToLowerStd(name), index);
+            g_itemBook.number.try_emplace(form->GetFormID(), index);
+            g_itemBook.names.Add(name);
+            return false;
+        });
+        g_itemBook.built = true;
+        const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
+        logger::info("Item names: {} items read at the main menu ({:.0f} ms)", g_itemBook.forms.size(), ms);
+    }
+
     /** The base form of the item someone named, searched in every kind of item a person can carry; the first
      *  plugin's wins. In this order: exactly that name (any case); the same item under the modlist's own spelling
      *  (sorting tags, words turned round, "Sweetroll" for "Sweet Roll": ItemNames::Same); else the plainest item whose
@@ -2396,52 +2435,45 @@ namespace IntelEngine::Papyrus {
      *  never ask for "Vase" when "Ale" was said (the item index has no drinks, and its fuzzy match did exactly that). */
     RE::TESForm* ResolveItemByName(RE::StaticFunctionTag*, RE::BSFixedString itemName) {
         if (!itemName.c_str() || !*itemName.c_str()) return nullptr;
-        auto* data = RE::TESDataHandler::GetSingleton();
-        if (!data) return nullptr;
+        BuildItemBook();   // at the main menu already; only if that was missed
+        if (!g_itemBook.built) return nullptr;
         const std::string said = itemName.c_str();
-        const auto wanted = StringUtils::ToLowerStd(said);
-        RE::TESForm* found = nullptr;
-        ForEachItemForm(data, [&](RE::TESForm* form, const char* name) {
-            if (StringUtils::ToLowerStd(name) != wanted) return false;
-            found = form;
-            return true;
-        });
-        if (found) return found;
-        ForEachItemForm(data, [&](RE::TESForm* form, const char* name) {
-            if (!ItemNames::Same(said, name)) return false;
-            found = form;
-            return true;
-        });
-        if (found) {
+        if (auto it = g_itemBook.exact.find(StringUtils::ToLowerStd(said)); it != g_itemBook.exact.end()) {
+            return g_itemBook.forms[it->second];
+        }
+        if (const auto i = g_itemBook.names.FindSame(said); i >= 0) {
+            auto* found = g_itemBook.forms[static_cast<std::size_t>(i)];
             logger::info("ResolveItemByName: '{}' is called '{}' here", said, found->GetName());
             return found;
         }
-        int best = 0;
-        ForEachItemForm(data, [&](RE::TESForm* form, const char* name) {
-            const int rank = ItemNames::Loose(said, name);
-            if (rank > 0 && (best == 0 || rank < best)) {
-                best = rank;
-                found = form;
-            }
-            return false;
-        });
-        if (found) logger::info("ResolveItemByName: no item is called '{}'; taking '{}'", said, found->GetName());
-        return found;
+        if (const auto i = g_itemBook.names.FindLoose(said); i >= 0) {
+            auto* found = g_itemBook.forms[static_cast<std::size_t>(i)];
+            logger::info("ResolveItemByName: no item is called '{}'; taking '{}'", said, found->GetName());
+            return found;
+        }
+        return nullptr;
     }
 
     /** An item this actor carries that is the named item (exactly, or under another spelling of the same words:
-     *  ItemNames::Same), else None. Two mods' "Ale" both count, "[Drink] Ale" too; "Pale Ale" does not. */
+     *  ItemNames::Same), else None. Two mods' "Ale" both count, "[Drink] Ale" too; "Pale Ale" does not. Called every
+     *  two seconds while a request for an item is open: the items that are the same are looked up in the book once
+     *  per call instead of reading each carried item's name. */
     RE::TESForm* FindItemNamedExactly(RE::StaticFunctionTag*, RE::Actor* actor, RE::BSFixedString itemName) {
         if (!actor || !itemName.c_str() || !*itemName.c_str()) return nullptr;
+        BuildItemBook();
         const std::string said = itemName.c_str();
         const auto wanted = StringUtils::ToLowerStd(said);
+        std::unordered_set<RE::FormID> sameForms;
+        for (const auto index : g_itemBook.names.SameAll(said)) sameForms.insert(g_itemBook.forms[index]->GetFormID());
         RE::TESForm* same = nullptr;
         for (const auto& [item, data] : actor->GetInventory()) {
             if (!item || data.first <= 0) continue;
             const char* name = item->GetName();
             if (!name || !*name) continue;
             if (StringUtils::ToLowerStd(name) == wanted) return item;
-            if (!same && ItemNames::Same(said, name)) same = item;
+            if (same) continue;
+            const bool known = g_itemBook.number.contains(item->GetFormID());
+            if (known ? sameForms.contains(item->GetFormID()) : ItemNames::Same(said, name)) same = item;
         }
         return same;
     }
@@ -2547,7 +2579,12 @@ namespace IntelEngine::Papyrus {
 
     RE::TESObjectREFR* ResolveSkyrimNetPlace(RE::StaticFunctionTag*, RE::Actor* npc, RE::BSFixedString destination) {
         if (!npc) return nullptr;
+        const auto started = std::chrono::steady_clock::now();
         const auto target = PlaceTargets::Resolve(npc, destination.c_str() ? destination.c_str() : "");
+        // Every trip asks SkyrimNet's places first, inside a frame of play: how long that takes, in the log.
+        const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
+        logger::info("ResolveSkyrimNetPlace('{}'): {} ({:.2f} ms of the game's frame)", destination.c_str() ? destination.c_str() : "",
+                     target ? target->name : std::string("no such place"), ms);
         if (!target) return nullptr;
         LocationResolver::GetSingleton()->ClearLastResolvedHome();
         std::scoped_lock lock(g_placeOffsetsMutex);
@@ -2978,7 +3015,10 @@ namespace IntelEngine::Papyrus {
                            questEditorId = std::move(questEditorId),
                            scriptName = std::move(scriptName),
                            functionName = std::move(functionName)]() mutable {
-                auto snap = NPCIndex::GetSingleton()->BuildStoryDMTickSnapshot(maxC, absenceDays, prefetch);
+              // 4.0: the snapshot is taken a slice per frame; the rest goes on, on the game's thread, once it is done.
+              NPCIndex::GetSingleton()->BuildStoryDMTickSnapshotSpread(maxC, absenceDays, std::move(prefetch),
+                  [excludedSet = std::move(excludedSet), questEditorId = std::move(questEditorId),
+                   scriptName = std::move(scriptName), functionName = std::move(functionName)](NPCIndex::StoryDMTickSnapshot snap) mutable {
                 bool playerAtInn = FactionPolitics::IsPlayerAtInn();
                 float currentGameTime = snap.currentGameTime;
 
@@ -3031,6 +3071,7 @@ namespace IntelEngine::Papyrus {
                         AsyncDispatch::ExecuteQuestFunctionString(questEditorId, scriptName, functionName, requestJson);
                     });
                 });
+              });
             });
         });
     }

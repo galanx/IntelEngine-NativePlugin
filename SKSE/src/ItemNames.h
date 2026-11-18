@@ -17,6 +17,7 @@
 #include <cstdint>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <vector>
 
 namespace IntelEngine::ItemNames {
@@ -219,6 +220,92 @@ namespace IntelEngine::ItemNames {
         }
         return best;
     }
+
+    // The keys a name is known by: for each way of reading it, its words in sorted order and its letters run together.
+    // Two names are the same item (Same) exactly when they share a key.
+    inline std::vector<std::string> Keys(std::string_view name) {
+        std::vector<std::string> keys;
+        for (const auto& words : detail::Readings(name)) {
+            std::string sorted = "S";
+            for (const auto& w : detail::Sorted(words)) {
+                sorted += '\x1f';   // never part of a word: words are letters
+                sorted += w;
+            }
+            keys.push_back(std::move(sorted));
+            keys.push_back("J" + detail::Joined(words));
+        }
+        return keys;
+    }
+
+    // Every item name of a load order, read once (at the main menu), so that finding the item someone named takes a
+    // few lookups. Searching all of them by Same and Loose read tens of thousands of names inside a frame of play.
+    // Items are numbered in the order they were added; the answers are those of a scan in that order.
+    class Book {
+    public:
+        void Add(std::string_view name) {
+            const auto index = count_++;
+            for (auto& key : Keys(name)) {
+                auto& list = same_[std::move(key)];
+                if (list.empty() || list.back() != index) list.push_back(index);
+            }
+            for (auto& words : detail::Readings(name)) {
+                if (words.empty()) continue;
+                const auto last = words.back();
+                endings_[last].push_back({index, std::move(words)});
+            }
+        }
+
+        std::uint32_t Size() const { return count_; }
+
+        // Every item that is the same item as `said` (Same), in order.
+        std::vector<std::uint32_t> SameAll(std::string_view said) const {
+            std::vector<std::uint32_t> out;
+            for (const auto& key : Keys(said)) {
+                if (auto it = same_.find(key); it != same_.end()) out.insert(out.end(), it->second.begin(), it->second.end());
+            }
+            std::sort(out.begin(), out.end());
+            out.erase(std::unique(out.begin(), out.end()), out.end());
+            return out;
+        }
+
+        // The first item that is the same item as `said`, or -1.
+        std::int64_t FindSame(std::string_view said) const {
+            std::int64_t best = -1;
+            for (const auto& key : Keys(said)) {
+                auto it = same_.find(key);
+                if (it != same_.end() && !it->second.empty() && (best < 0 || it->second.front() < best)) best = it->second.front();
+            }
+            return best;
+        }
+
+        // The plainest item whose name ends in the said words (Loose), the first of equals; -1 when none.
+        std::int64_t FindLoose(std::string_view said) const {
+            const auto w = detail::Split(detail::StripTags(said));
+            if (w.empty() || detail::Joined(w).size() < 3) return -1;
+            auto it = endings_.find(w.back());
+            if (it == endings_.end()) return -1;
+            std::int64_t best = -1;
+            int bestRank = 0;
+            for (const auto& [index, n] : it->second) {   // in item order
+                if (n.size() <= w.size() || !std::equal(w.rbegin(), w.rend(), n.rbegin())) continue;
+                const int rank = static_cast<int>(n.size()) * 1000 + static_cast<int>(std::min<std::size_t>(detail::Joined(n).size(), 999));
+                if (best < 0 || rank < bestRank || (rank == bestRank && index < best)) {
+                    best = index;
+                    bestRank = rank;
+                }
+            }
+            return best;
+        }
+
+    private:
+        struct Ending {
+            std::uint32_t index;
+            std::vector<std::string> words;
+        };
+        std::uint32_t count_ = 0;
+        std::unordered_map<std::string, std::vector<std::uint32_t>> same_;
+        std::unordered_map<std::string, std::vector<Ending>> endings_;
+    };
 
     // The name to put in what people say: tags in brackets left out ("[Drink] Nord Mead" is "Nord Mead").
     inline std::string Display(std::string_view name) {

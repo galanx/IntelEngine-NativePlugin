@@ -25,6 +25,9 @@ namespace IntelEngine {
 
         /** Listen for the player's arrivals and waking up (kDataLoaded). Safe to call twice. */
         void Register();
+        /** kDataLoaded: the places a life can go (inns, dungeons, towns) are read from the game's data once, at the main
+         *  menu. It used to be done on the first look after a save loaded, inside a frame of play. */
+        void CatalogPlaces();
 
         LivingWorld::Settings GetSettings() const;
         /** From the scripts: on load and whenever a living-world setting changes. */
