@@ -910,6 +910,14 @@ namespace IntelEngine {
         return !ties.errand && !ties.journal && !ties.quest && !ties.home;
     }
 
+    std::pair<RE::FormID, RE::FormID> LivingWorldBridge::AdventuringAt(RE::FormID actor) const {
+        std::scoped_lock lock(m_mutex);
+        for (const auto& life : m_lives) {
+            if (life.actor == actor && life.activity == Activity::Adventuring && life.place) return {life.place, life.companion};
+        }
+        return {0, 0};
+    }
+
     RE::FormID LivingWorldBridge::FreeCompanionFor(RE::FormID actor) const {
         std::scoped_lock lock(m_mutex);
         for (const auto& other : m_lives) {

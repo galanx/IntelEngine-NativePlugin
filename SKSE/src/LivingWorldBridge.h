@@ -90,6 +90,9 @@ namespace IntelEngine {
          *  the player or near them, in no scene, no running quest of the journal, no IntelEngine errand, not married
          *  to the player, not keeping a shop. Main thread. */
         static bool FreeToTravel(RE::Actor* actor);
+        /** 4.0 quests: where a former follower is on an adventure of their own life right now (the dungeon), and with
+         *  whom; {0, 0} when they are not. */
+        std::pair<RE::FormID, RE::FormID> AdventuringAt(RE::FormID actor) const;
         /** The hold an actor is in, by name (for world-knowledge conditions). */
         static std::string HoldName(RE::Actor* actor);
         /** How an NPC is tied to the player's quests: 0 not, 1 takes part in a running quest of the journal's kinds,

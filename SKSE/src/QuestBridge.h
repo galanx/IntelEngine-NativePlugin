@@ -28,7 +28,21 @@ namespace IntelEngine {
         std::uint32_t PlanFor(RE::Actor* giver);
         /** Plans a venture (main thread): a former follower living a life of their own sets out for a dungeon of the
          *  player's hold, now and then with another former follower, and is met on the road. 0 = none fits. */
-        std::uint32_t PlanVenture(RE::Actor* ally);
+        std::uint32_t PlanVenture(RE::Actor* ally, RE::FormID atPlace = 0, RE::FormID with = 0);
+        /** A venture where a former follower already is on an adventure of their life (met at the dungeon). */
+        std::uint32_t PlanVentureHere(RE::Actor* ally);
+        /** Spots ahead of the player where people stand (camp furniture, idle markers, markers, map markers, doors),
+         *  2500 to 7000 units out within 40 degrees of the way (dx, dy) the player is going, best first. Main thread. */
+        std::vector<RE::TESObjectREFR*> SpotsAhead(float dx, float dy);
+        /** Points on the ground ahead, from the navmesh of the loaded cells that way: road triangles first (the game
+         *  marks them preferred), then any; 2500 to 7000 units out within 40 degrees and near the player's height, as x, y, z triples, best first. */
+        std::vector<float> GroundAhead(float dx, float dy);
+        /** The planned venture this actor (the ally or the companion) is on, 0 = none. */
+        std::uint32_t VentureOf(RE::FormID actor) const;
+        /** The InviteAlong action's eligibility: the id while they have met the player and not asked yet, else "". */
+        std::string InviteFor(RE::Actor* actor) const;
+        /** A planned quest ends before it was taken on (12 declined, 15 went alone, 17 nothing came of it). */
+        bool EndPlanned(std::uint32_t id, int ending);
         /** Whether this actor gives, or goes on, a quest that is planned or open (the lives leave them be). */
         bool Involves(RE::FormID actor) const;
         /** A venture was put on the road: what the two remember of falling in together is written now. */
@@ -56,6 +70,15 @@ namespace IntelEngine {
         /** The foe was placed: their name (given now, by their sex), recorded with them. */
         std::string SetFoe(std::uint32_t id, RE::Actor* foe);
         void SetPlaced(std::uint32_t id, int bits);
+        /** A venture's companion who could not be put beside the ally: they are not part of it any more, so no text
+         *  names them (only before the meeting). */
+        void DropCompanion(std::uint32_t id);
+        /** Makes someone the player's follower (join) or lets them go again, through the follower system the player
+         *  uses: SeverActions' follower manager when SeverActions.esp is loaded, else SkyrimNet's own follow (the
+         *  StartFollow / StopFollow actions). Called by name, so neither is needed to build or run. Letting go never
+         *  sends them home through SeverActions: the script walks them there. "" when nothing could be called, else
+         *  the system's name. */
+        static std::string Follower(RE::Actor* npc, bool join);
 
         /** Every journal quest with a record gets its title (on accepting, and after every load: titles are not saved). */
         void ApplyTitles() const;

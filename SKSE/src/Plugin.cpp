@@ -404,6 +404,13 @@ namespace IntelEngine {
                         "Returns the id of a request about this NPC they may answer through the player now, empty when none.",
                         [](RE::Actor* actor) -> std::string { return StorylineBridge::GetSingleton()->AnswerPending(actor); });
                     logger::info("{} SkyrimNet decorator: get_intelengine_storyline_about", aboutRegistered ? "Registered" : "Failed to register");
+                    // 4.0 quests: whether a former follower met on the way to a venture may ask the player along now
+                    // (the InviteAlong action's eligibility, is_not_empty).
+                    const bool inviteRegistered = SkyrimNetAPI::RegisterDecorator(
+                        "get_intelengine_venture_invite",
+                        "Returns the id of the venture this NPC may ask the player along on now, empty when none.",
+                        [](RE::Actor* actor) -> std::string { return QuestBridge::GetSingleton()->InviteFor(actor); });
+                    logger::info("{} SkyrimNet decorator: get_intelengine_venture_invite", inviteRegistered ? "Registered" : "Failed to register");
                     // A former follower's own life since the player left them (prompt submodule 0203_intel_life).
                     const bool lifeRegistered = SkyrimNetAPI::RegisterDecorator(
                         "get_intelengine_life",

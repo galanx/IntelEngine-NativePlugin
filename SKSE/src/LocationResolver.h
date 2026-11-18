@@ -284,6 +284,9 @@ namespace IntelEngine {
 
         // Detect semantic intent from any destination string
         SemanticIntent DetectSemanticIntent(const std::string& destination);
+        /** The whole destination is the name of a place in the game (a cell or a location, with or without a leading
+         *  "the "), so no word inside it is a semantic hint. */
+        bool IsExactPlaceName(const std::string& destination);
 
         // Resolve via parent BGSLocation (for "outside" fallback)
         RE::TESObjectREFR* ResolveViaParentLocation(RE::Actor* actor);

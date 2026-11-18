@@ -346,7 +346,17 @@ namespace IntelEngine {
         return id;
     }
 
-    std::uint32_t QuestBridge::PlanVenture(RE::Actor* ally) {
+    std::uint32_t QuestBridge::PlanVentureHere(RE::Actor* ally) {
+        if (!ally) return 0;
+        const auto [place, with] = LivingWorldBridge::GetSingleton()->AdventuringAt(ally->GetFormID());
+        if (!place) {
+            logger::info("Quests: no venture here for {}: not on an adventure of their own", ally->GetDisplayFullName());
+            return 0;
+        }
+        return PlanVenture(ally, place, with);
+    }
+
+    std::uint32_t QuestBridge::PlanVenture(RE::Actor* ally, RE::FormID atPlace, RE::FormID with) {
         auto* player = RE::PlayerCharacter::GetSingleton();
         if (!ally || !player || ally->IsDead() || ally->IsPlayerTeammate() || player->IsInCombat()) {
             logger::info("Quests: no venture for {:08X} now", ally ? ally->GetFormID() : 0);
@@ -362,9 +372,9 @@ namespace IntelEngine {
         // Who they travel with, if anyone: another former follower who is free, or a follower type the player may never
         // have travelled with (a hireling, an adventurer of the load order), free to leave where they are, unseen.
         const std::uint32_t pickSeed = Q::detail::Mix(allyId, static_cast<std::uint32_t>(now * 24.0f) + 13u);
-        RE::FormID companion = 0;
+        RE::FormID companion = with;
         const int force = g_forceCompanion.load();
-        if (force == 1 || force == 2 || (force == 0 && pickSeed % 100u < 65u)) {
+        if (!atPlace && (force == 1 || force == 2 || (force == 0 && pickSeed % 100u < 65u))) {
             const RE::FormID former = lives->FreeCompanionFor(allyId);
             std::vector<RE::FormID> strangers;
             {
@@ -402,6 +412,7 @@ namespace IntelEngine {
         }
         std::vector<Q::PlaceOption> options;
         for (const auto& p : m_places) {
+            if (atPlace && p.location != atPlace) continue;   // met where they already are
             auto* location = RE::TESForm::LookupByID<RE::BGSLocation>(p.location);
             Q::PlaceOption o;
             o.location = p.location;
@@ -413,7 +424,7 @@ namespace IntelEngine {
             options.push_back(o);
         }
         const std::uint32_t seed = Q::detail::Mix(allyId, static_cast<std::uint32_t>(now * 24.0f) + 7u);
-        const auto* place = Q::PickPlace(options, m_book, playerLoc ? playerLoc->GetFormID() : 0, seed);
+        const auto* place = Q::PickPlace(options, m_book, atPlace ? 0 : (playerLoc ? playerLoc->GetFormID() : 0), seed);
         if (!place) {
             logger::info("Quests: no venture for {}: no place to set out for", ally->GetDisplayFullName());
             return 0;
@@ -435,6 +446,195 @@ namespace IntelEngine {
                          PlaceName(q.place), q.companion ? " with " + NameOf(q.companion) : std::string(), static_cast<int>(q.truth), q.gold);
         }
         return id;
+    }
+
+    namespace {
+        /** The attached exterior cells within reach that lie (at least partly) that way: only these are read when
+         *  looking for a place ahead. A cell's centre is at most 2900 units from any point of it. */
+        std::vector<RE::TESObjectCELL*> CellsAhead(const RE::NiPoint3& origin, float dx, float dy, float reach) {
+            std::vector<RE::TESObjectCELL*> cells;
+            auto* tes = RE::TES::GetSingleton();
+            auto* grid = tes ? tes->gridCells : nullptr;
+            if (!grid) return cells;
+            for (std::uint32_t x = 0; x < grid->length; ++x) {
+                for (std::uint32_t y = 0; y < grid->length; ++y) {
+                    auto* cell = grid->GetCell(x, y);
+                    if (!cell || !cell->IsAttached()) continue;
+                    auto* coords = cell->GetCoordinates();
+                    if (!coords) continue;
+                    const float cx = coords->worldX + 2048.0f - origin.x, cy = coords->worldY + 2048.0f - origin.y;
+                    const float cd = std::sqrt(cx * cx + cy * cy);
+                    if (cd > reach + 2900.0f || (cd > 2900.0f && (cx * dx + cy * dy) / cd < 0.2f)) continue;
+                    cells.push_back(cell);
+                }
+            }
+            return cells;
+        }
+    }
+
+    std::vector<RE::TESObjectREFR*> QuestBridge::SpotsAhead(float dx, float dy) {
+        std::vector<RE::TESObjectREFR*> out;
+        auto* player = RE::PlayerCharacter::GetSingleton();
+        auto* tes = RE::TES::GetSingleton();
+        auto* cell = player ? player->GetParentCell() : nullptr;
+        if (!player || !tes || !cell || cell->IsInteriorCell()) return out;
+        const auto started = std::chrono::steady_clock::now();
+        const auto origin = player->GetPosition();
+        float length = std::sqrt(dx * dx + dy * dy);
+        if (length < 1.0f) {
+            // Standing still: the way they face (Skyrim's angle 0 is north, +y, turning clockwise).
+            const float a = player->GetAngleZ();
+            dx = std::sin(a);
+            dy = std::cos(a);
+            length = 1.0f;
+        }
+        dx /= length;
+        dy /= length;
+        struct Spot {
+            RE::TESObjectREFR* ref;
+            float score;
+        };
+        std::vector<Spot> spots;
+        std::size_t looked = 0;
+        const auto cells = CellsAhead(origin, dx, dy, 7000.0f);
+        for (auto* aheadCell : cells) {
+            aheadCell->ForEachReference([&](RE::TESObjectREFR* ref) {
+                ++looked;
+                auto* base = ref ? ref->GetBaseObject() : nullptr;
+                if (!base) return RE::BSContainer::ForEachResult::kContinue;
+                // Where people stand or sit: furniture first (a bench, a bedroll, a campfire seat), then idle markers
+                // and map markers (the MapMarker static, 0x10), doors last. Not plain markers: one in Riverwood sat on
+                // a thatched roof, and Jenassa with it (2026-11-18). The base type is checked first, it is cheapest.
+                int kind = -1;
+                if (base->Is(RE::FormType::Furniture)) kind = 0;
+                else if (base->Is(RE::FormType::IdleMarker) || base->GetFormID() == 0x10) kind = 1;
+                else if (base->Is(RE::FormType::Door)) kind = 3;
+                if (kind < 0) return RE::BSContainer::ForEachResult::kContinue;
+                const auto pos = ref->GetPosition();
+                const float ox = pos.x - origin.x, oy = pos.y - origin.y;
+                const float d = std::sqrt(ox * ox + oy * oy);
+                const float dz = std::abs(pos.z - origin.z);
+                if (d < 2500.0f || d > 7000.0f || dz > 600.0f) return RE::BSContainer::ForEachResult::kContinue;
+                const float cosine = (ox * dx + oy * dy) / d;
+                if (cosine < 0.766f) return RE::BSContainer::ForEachResult::kContinue;   // within 40 degrees
+                if (ref->IsDisabled() || ref->IsDeleted()) return RE::BSContainer::ForEachResult::kContinue;
+                const float angle = std::acos(std::clamp(cosine, -1.0f, 1.0f)) * 57.2958f;
+                spots.push_back({ref, kind * 500.0f + std::abs(d - 4000.0f) * 0.3f + angle * 20.0f + dz * 2.0f});
+                return RE::BSContainer::ForEachResult::kContinue;
+            });
+        }
+        std::sort(spots.begin(), spots.end(), [](const Spot& a, const Spot& b) { return a.score < b.score; });
+        for (const auto& s : spots) {
+            const bool tooClose = std::any_of(out.begin(), out.end(), [&](RE::TESObjectREFR* r) {
+                return r->GetPosition().GetDistance(s.ref->GetPosition()) < 400.0f;
+            });
+            if (!tooClose) out.push_back(s.ref);
+            if (out.size() >= 6) break;
+        }
+        const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
+        logger::info("Quests: {} spots ahead of the player ({} cells, {} references looked at, {:.2f} ms of the game's frame)", out.size(),
+                     cells.size(), looked, ms);
+        return out;
+    }
+
+    std::vector<float> QuestBridge::GroundAhead(float dx, float dy) {
+        std::vector<float> out;
+        auto* player = RE::PlayerCharacter::GetSingleton();
+        auto* tes = RE::TES::GetSingleton();
+        auto* here = player ? player->GetParentCell() : nullptr;
+        if (!player || !tes || !here || here->IsInteriorCell()) return out;
+        const auto started = std::chrono::steady_clock::now();
+        const auto origin = player->GetPosition();
+        float length = std::sqrt(dx * dx + dy * dy);
+        if (length < 1.0f) {
+            const float a = player->GetAngleZ();
+            dx = std::sin(a);
+            dy = std::cos(a);
+            length = 1.0f;
+        }
+        dx /= length;
+        dy /= length;
+        struct Point {
+            RE::NiPoint3 at;
+            float score;
+            bool road;
+        };
+        std::vector<Point> points;
+        std::size_t triangles = 0;
+        std::size_t cellsRead = 0;
+        for (auto* cell : CellsAhead(origin, dx, dy, 7000.0f)) {
+            auto* navs = cell->GetRuntimeData().navMeshes;
+            if (!navs) continue;
+            ++cellsRead;
+            for (auto& mesh : navs->navMeshes) {
+                if (!mesh) continue;
+                const auto& vertices = mesh->vertices;
+                for (const auto& tri : mesh->triangles) {
+                    ++triangles;
+                    if (tri.triangleFlags.any(RE::BSNavmeshTriangle::TriangleFlag::kDeleted)) continue;
+                    if (tri.vertices[0] >= vertices.size() || tri.vertices[1] >= vertices.size() || tri.vertices[2] >= vertices.size()) continue;
+                    const auto& a = vertices[tri.vertices[0]].location;
+                    const auto& b = vertices[tri.vertices[1]].location;
+                    const auto& c = vertices[tri.vertices[2]].location;
+                    const RE::NiPoint3 at{(a.x + b.x + c.x) / 3.0f, (a.y + b.y + c.y) / 3.0f, (a.z + b.z + c.z) / 3.0f};
+                    // Cheapest tests first, without a root: thousands of triangles go through here in one frame.
+                    const float ox = at.x - origin.x, oy = at.y - origin.y;
+                    const float d2 = ox * ox + oy * oy;
+                    if (d2 < 2500.0f * 2500.0f || d2 > 7000.0f * 7000.0f) continue;
+                    const float dz = std::abs(at.z - origin.z);
+                    if (dz > 450.0f) continue;
+                    const float dot = ox * dx + oy * dy;
+                    if (dot <= 0.0f || dot * dot < 0.5868f * d2) continue;   // within 40 degrees (cos 40 = 0.766)
+                    const float d = std::sqrt(d2);
+                    const bool road = tri.triangleFlags.any(RE::BSNavmeshTriangle::TriangleFlag::kPreferred);
+                    // (1 - cos) * 3600 is about 20 points a degree up to 40 degrees, without an arc cosine.
+                    points.push_back({at, (road ? 0.0f : 2500.0f) + std::abs(d - 4000.0f) * 0.3f + (1.0f - dot / d) * 3600.0f + dz * 2.0f, road});
+                }
+            }
+        }
+        std::sort(points.begin(), points.end(), [](const Point& p, const Point& q) { return p.score < q.score; });
+        std::vector<RE::NiPoint3> kept;
+        std::size_t onRoad = 0;
+        for (const auto& p : points) {
+            const bool tooClose = std::any_of(kept.begin(), kept.end(), [&](const RE::NiPoint3& k) { return k.GetDistance(p.at) < 500.0f; });
+            if (tooClose) continue;
+            kept.push_back(p.at);
+            if (p.road) ++onRoad;
+            out.insert(out.end(), {p.at.x, p.at.y, p.at.z});
+            if (kept.size() >= 6) break;
+        }
+        const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
+        logger::info("Quests: {} points on the ground ahead, {} on a road ({} cells, {} navmesh triangles looked at, {:.2f} ms of the game's frame)",
+                     kept.size(), onRoad, cellsRead, triangles, ms);
+        return out;
+    }
+
+    std::uint32_t QuestBridge::VentureOf(RE::FormID actor) const {
+        std::scoped_lock lock(m_mutex);
+        for (const auto& q : m_book.all) {
+            if (q.phase == Q::Phase::Planned && q.tmpl == Q::Template::Venture && actor && (q.ally == actor || q.companion == actor)) return q.id;
+        }
+        return 0;
+    }
+
+    std::string QuestBridge::InviteFor(RE::Actor* actor) const {
+        if (!actor) return {};
+        std::scoped_lock lock(m_mutex);
+        for (const auto& q : m_book.all) {
+            if (q.phase != Q::Phase::Planned || q.tmpl != Q::Template::Venture) continue;
+            if (q.ally != actor->GetFormID() && q.companion != actor->GetFormID()) continue;
+            if ((q.placed & Q::Placed::Met) && !(q.placed & Q::Placed::Invited)) return std::to_string(q.id);
+        }
+        return {};
+    }
+
+    bool QuestBridge::EndPlanned(std::uint32_t id, int ending) {
+        std::scoped_lock lock(m_mutex);
+        if (!m_book.EndPlanned(id, static_cast<Q::Ending>(ending), NowDays())) return false;
+        const auto* q = m_book.Find(id);
+        logger::info("Quests: #{} ended before it was taken on ({})", id, ending);
+        if (q->ending != Q::Ending::Lapsed) Ended(*q);
+        return true;
     }
 
     bool QuestBridge::Involves(RE::FormID actor) const {
@@ -685,9 +885,10 @@ namespace IntelEngine {
         if (lower == "foename") return q->foeName;
         if (lower == "narration") return Fill(Q::OfferNarration(*q), *q);
         // A venture is met on the road: what drives them, as the road encounter's narration ("<name> is on the way...").
+        // Met ahead on the road or resting in the woods: they recognise the player and come over to talk. Asking the
+        // player along is theirs to do in conversation (the InviteAlong action), not something said for them.
         if (lower == "roadnarration") {
-            return Fill("is on the way to {place}{withcompanion} to clear it out; on recognizing {player} on the road, stops to ask "
-                        "{player} to come along and share whatever they find there", *q);
+            return Fill("recognizes {player} and comes over to talk; is on the way to {place}{withcompanion} to clear it out", *q);
         }
         // Met from behind: they saw the player ahead on the road they were walking and caught up.
         if (lower == "roadcatchup") {
@@ -725,6 +926,51 @@ namespace IntelEngine {
     void QuestBridge::SetPlaced(std::uint32_t id, int bits) {
         std::scoped_lock lock(m_mutex);
         if (auto* q = m_book.Find(id)) q->placed = static_cast<std::uint8_t>(q->placed | (bits & 0xFF));
+    }
+
+    std::string QuestBridge::Follower(RE::Actor* npc, bool join) {
+        auto* vm = RE::BSScript::Internal::VirtualMachine::GetSingleton();
+        if (!npc || !vm) return {};
+        RE::BSTSmartPointer<RE::BSScript::IStackCallbackFunctor> none;
+        // SeverActions: its follower manager script sits on quest 0xD62 (what its own scripts look up).
+        auto* data = RE::TESDataHandler::GetSingleton();
+        if (data && data->LookupModByName("SeverActions.esp")) {
+            auto* quest = data->LookupForm<RE::TESQuest>(0xD62, "SeverActions.esp");
+            auto* policy = vm->GetObjectHandlePolicy1();
+            if (quest && policy) {
+                const auto handle = policy->GetHandleForObject(RE::FormType::Quest, quest);
+                RE::BSTSmartPointer<RE::BSScript::Object> object;
+                if (handle != policy->EmptyHandle() && vm->FindBoundObject(handle, "SeverActions_FollowerManager", object) && object) {
+                    // RegisterFollower: on the roster and following. UnregisterFollower(actor, sendHome false, deliberate
+                    // exit true): off the roster as when the player dismisses them, but without SeverActions' send-home,
+                    // whose home sandbox lets the engine run them there; IntelEngine walks them home (the user,
+                    // 2026-11-18: walking normally, not running).
+                    auto* args = join ? RE::MakeFunctionArguments(static_cast<RE::Actor*>(npc))
+                                      : RE::MakeFunctionArguments(static_cast<RE::Actor*>(npc), false, true);
+                    if (vm->DispatchMethodCall1(object, join ? "RegisterFollower" : "UnregisterFollower", args, none)) {
+                        logger::info("Quests: {} {} through SeverActions", npc->GetDisplayFullName(), join ? "follows the player" : "goes their own way");
+                        return "SeverActions";
+                    }
+                }
+            }
+            logger::warn("Quests: SeverActions.esp is loaded but its follower manager was not found; SkyrimNet's follow instead");
+        }
+        // SkyrimNet: the global functions behind its StartFollow and StopFollow actions.
+        auto* args = RE::MakeFunctionArguments(static_cast<RE::Actor*>(npc), RE::BSFixedString(""), RE::BSFixedString(""));
+        if (vm->DispatchStaticCall("SkyrimNetInternal", join ? "StartFollow_Execute" : "StopFollow_Execute", args, none)) {
+            logger::info("Quests: {} {} through SkyrimNet", npc->GetDisplayFullName(), join ? "follows the player" : "goes their own way");
+            return "SkyrimNet";
+        }
+        logger::warn("Quests: no follower system to make {} {}", npc->GetDisplayFullName(), join ? "follow" : "leave");
+        return {};
+    }
+
+    void QuestBridge::DropCompanion(std::uint32_t id) {
+        std::scoped_lock lock(m_mutex);
+        auto* q = m_book.Find(id);
+        if (!q || q->tmpl != Q::Template::Venture || q->phase != Q::Phase::Planned || !q->companion) return;
+        logger::info("Quests: #{} {:08X} could not be put beside the ally and is not part of the venture", id, q->companion);
+        q->companion = 0;
     }
 
     void QuestBridge::ApplyTitles() const {
@@ -909,6 +1155,21 @@ namespace IntelEngine {
             std::int32_t QuestPlanVenture(RE::StaticFunctionTag*, RE::Actor* ally) {
                 return static_cast<std::int32_t>(QuestBridge::GetSingleton()->PlanVenture(ally));
             }
+            std::int32_t QuestPlanVentureHere(RE::StaticFunctionTag*, RE::Actor* ally) {
+                return static_cast<std::int32_t>(QuestBridge::GetSingleton()->PlanVentureHere(ally));
+            }
+            std::vector<RE::TESObjectREFR*> QuestSpotsAhead(RE::StaticFunctionTag*, float dx, float dy) {
+                return QuestBridge::GetSingleton()->SpotsAhead(dx, dy);
+            }
+            std::vector<float> QuestGroundAhead(RE::StaticFunctionTag*, float dx, float dy) {
+                return QuestBridge::GetSingleton()->GroundAhead(dx, dy);
+            }
+            std::int32_t QuestVentureOf(RE::StaticFunctionTag*, RE::Actor* actor) {
+                return actor ? static_cast<std::int32_t>(QuestBridge::GetSingleton()->VentureOf(actor->GetFormID())) : 0;
+            }
+            bool QuestEndPlanned(RE::StaticFunctionTag*, std::int32_t id, std::int32_t ending) {
+                return QuestBridge::GetSingleton()->EndPlanned(static_cast<std::uint32_t>(id), ending);
+            }
             bool QuestAccept(RE::StaticFunctionTag*, std::int32_t id) {
                 const bool ok = QuestBridge::GetSingleton()->Accept(static_cast<std::uint32_t>(id));
                 if (ok) QuestBridge::GetSingleton()->ApplyTitles();
@@ -944,12 +1205,26 @@ namespace IntelEngine {
             void QuestApplyTitles(RE::StaticFunctionTag*) { QuestBridge::GetSingleton()->ApplyTitles(); }
             void QuestVenturePlaced(RE::StaticFunctionTag*, std::int32_t id) { QuestBridge::GetSingleton()->Placed(static_cast<std::uint32_t>(id)); }
             void QuestDebugForceCompanion(RE::StaticFunctionTag*, std::int32_t mode) { g_forceCompanion.store(mode); }
+            RE::BSFixedString QuestFollower(RE::StaticFunctionTag*, RE::Actor* npc, bool join) {
+                return RE::BSFixedString(QuestBridge::Follower(npc, join).c_str());
+            }
+            bool QuestInvolves(RE::StaticFunctionTag*, RE::Actor* actor) {
+                return actor && QuestBridge::GetSingleton()->Involves(actor->GetFormID());
+            }
+            void QuestDropCompanion(RE::StaticFunctionTag*, std::int32_t id) {
+                QuestBridge::GetSingleton()->DropCompanion(static_cast<std::uint32_t>(id));
+            }
         }
 
         void Register(RE::BSScript::IVirtualMachine* a_vm, int& count) {
             constexpr auto script = "IntelEngine";
             a_vm->RegisterFunction("QuestPlanFor", script, QuestPlanFor); ++count;
             a_vm->RegisterFunction("QuestPlanVenture", script, QuestPlanVenture); ++count;
+            a_vm->RegisterFunction("QuestPlanVentureHere", script, QuestPlanVentureHere); ++count;
+            a_vm->RegisterFunction("QuestSpotsAhead", script, QuestSpotsAhead); ++count;
+            a_vm->RegisterFunction("QuestVentureOf", script, QuestVentureOf); ++count;
+            a_vm->RegisterFunction("QuestGroundAhead", script, QuestGroundAhead); ++count;
+            a_vm->RegisterFunction("QuestEndPlanned", script, QuestEndPlanned); ++count;
             a_vm->RegisterFunction("QuestAccept", script, QuestAccept); ++count;
             a_vm->RegisterFunction("QuestDecline", script, QuestDecline); ++count;
             a_vm->RegisterFunction("QuestLapse", script, QuestLapse); ++count;
@@ -966,6 +1241,9 @@ namespace IntelEngine {
             a_vm->RegisterFunction("QuestApplyTitles", script, QuestApplyTitles); ++count;
             a_vm->RegisterFunction("QuestVenturePlaced", script, QuestVenturePlaced); ++count;
             a_vm->RegisterFunction("QuestDebugForceCompanion", script, QuestDebugForceCompanion); ++count;
+            a_vm->RegisterFunction("QuestDropCompanion", script, QuestDropCompanion); ++count;
+            a_vm->RegisterFunction("QuestInvolves", script, QuestInvolves); ++count;
+            a_vm->RegisterFunction("QuestFollower", script, QuestFollower); ++count;
         }
     }
 }
