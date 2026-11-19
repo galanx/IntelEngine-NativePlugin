@@ -267,7 +267,7 @@ static void SaveData() {
     Book untouched = back;
     Require(!Deserialize(bad, untouched), "a short record is refused");
     Require(untouched.all.size() == back.all.size(), "a refused record leaves the book as it was");
-    Require(!Deserialize(bytes, untouched, 4), "an unknown version is refused");
+    Require(!Deserialize(bytes, untouched, 5), "an unknown version is refused");
 
     // A save made before tales (record version 1: no tale block) still loads, every pattern arc as it was.
     std::vector<std::uint8_t> v1;
@@ -308,7 +308,7 @@ static void SaveData() {
     Require(Deserialize(v1, old, 1), "a record of version 1 loads");
     const Arc& o = *old.Find(id);
     Require(o.node == 2 && o.cast == a.cast && o.title == a.title && o.paid == 40 && o.graph.empty(), "and its arc is whole");
-    Require(!Deserialize(v1, untouched, 3), "a version 1 record read as version 3 is refused, not misread");
+    Require(!Deserialize(v1, untouched, 4), "a version 1 record read as version 4 is refused, not misread");
 }
 
 static void Words() {
