@@ -4752,6 +4752,9 @@ namespace IntelEngine::Papyrus {
             if (spawned) {
                 auto* actor = spawned->As<RE::Actor>();
                 if (actor) {
+                    // Aggressive (attacks enemies only), at once: soldier and bandit templates are Very Aggressive,
+                    // and the callers' own SetActorValue came after a whelp had already killed a townsperson.
+                    actor->AsActorValueOwner()->SetActorValue(RE::ActorValue::kAggression, 1.f);
                     result.push_back(actor);
                 } else {
                     logger::error("[IntelEngine] SpawnBattleSoldiers: [{}] spawned FormID={:08X} but type={} (not Actor!)",

@@ -295,8 +295,14 @@ Event OnUpdate()
             EndIf
         EndIf
 
-        ; Cleanup when combat has ended OR hard cap reached
-        If (combatOver && elapsed >= 15.0) || elapsed >= ManifestCleanupDelay
+        ; Cleanup when combat has ended OR hard cap reached. A brawl or skirmish is over only once it has begun:
+        ; the sides take a while to reach each other, and "nobody fighting after 15 s" ended one before they met
+        ; (17:49:19, cleaned up at 26 s with nobody ever in combat).
+        If !combatOver
+            _manifestEngaged = true
+        EndIf
+        Bool begun = _manifestEngaged || ManifestLeaderTarget != None
+        If (begun && combatOver && elapsed >= 15.0) || elapsed >= ManifestCleanupDelay
             CleanupManifestation()
         Else
             Core.RequestTick(PollInterval)
@@ -1440,7 +1446,12 @@ Function DisperseSoldiers(Int winningSide, Bool findAlly)
     If !xmarkerBase
         Return
     EndIf
-    ClearExitMarkers()
+    ; The old exit markers go only after everyone has been sent to the new ones (below). A travel order holds its
+    ; marker by a bare pointer: deleting it under soldiers of an earlier fight still walking to it crashed the
+    ; game the moment a skirmish ended (crash-2026-11-18-23-23-36/23-42-26, IntelEngine travel package on a
+    ; Companion Whelp).
+    ObjectReference oldExitA = ExitMarkerA
+    ObjectReference oldExitB = ExitMarkerB
     ExitMarkerA = player.PlaceAtMe(xmarkerBase)
     ExitMarkerA.SetPosition(cx + dx * ExitDistance, cy + dy * ExitDistance, z)
     ExitMarkerB = player.PlaceAtMe(xmarkerBase)
@@ -1469,9 +1480,13 @@ Function DisperseSoldiers(Int winningSide, Bool findAlly)
                     EndIf
                 EndIf
             EndIf
+        ElseIf soldier != None
+            PO3_SKSEFunctions.SetLinkedRef(soldier, None, Core.IntelEngine_TravelTarget)
         EndIf
         i += 1
     EndWhile
+    DeleteMarker(oldExitA)
+    DeleteMarker(oldExitB)
     _alliesLeft = leavingA
     Core.DebugMsg("Battle: the field empties - " + leavingA + " soldiers leave one way, " + leavingB + " the other (" + \
         (Utility.GetCurrentRealTime() - began) + " s)")
@@ -1560,6 +1575,13 @@ Function LeaveBattleSides()
         EndIf
         i += 1
     EndWhile
+EndFunction
+
+Function DeleteMarker(ObjectReference marker)
+    If marker
+        marker.DisableNoWait()
+        marker.Delete()
+    EndIf
 EndFunction
 
 Function ClearExitMarkers()
@@ -1775,13 +1797,14 @@ Function ManifestEvent(String manifestJson)
     ManifestLeaderTarget = None
     ManifestAssassinAttacked = false
     ManifestAssassinStruck = false
-    ; Everyone spawned below joins battle side B, the enemy of side A. The player only belongs to a side
+    ; Attackers spawned below join battle side B, defenders side A (enemies). The player only belongs to a side
     ; during a full battle; a membership left over from one that ended badly would turn every brawl and
     ; skirmish on the player.
     If PlayerBattleSide == ""
         player.RemoveFromFaction(Intel_BattleSideA)
         player.RemoveFromFaction(Intel_BattleSideB)
     EndIf
+    Intel_BattleSideA.SetEnemy(Intel_BattleSideB)
 
     ; Pre-calculate spawn offset — actors spawn at offset, not at player position
     Float playerAngle = player.GetAngleZ()
@@ -1800,9 +1823,12 @@ Function ManifestEvent(String manifestJson)
         EndIf
         ; Created at a marker behind the player (outdoors), as the battle waves are at their rally markers.
         ; Created at the player they all stood on that spot until the loop below had moved each one away.
+        ; Both sides start out of view, to the left and right of the player (the defenders used to appear
+        ; 800-1200 straight ahead, on screen), a little ahead of the player's sides so that running at each other
+        ; they meet in front of the player.
         ObjectReference attackMarker = None
         If IsPlayerInExterior()
-            attackMarker = PlaceSpawnMarker(player, playerAngle + 180.0, 2000.0)
+            attackMarker = PlaceSpawnMarker(player, playerAngle + 75.0, 1750.0)
         EndIf
         ObjectReference attackAt = player as ObjectReference
         If attackMarker
@@ -1818,8 +1844,8 @@ Function ManifestEvent(String manifestJson)
         While i < attackers.Length
             If attackers[i]
                 If IsPlayerInExterior()
-                    Float angle = playerAngle + 180.0 + Utility.RandomFloat(-60.0, 60.0)
-                    Float dist = Utility.RandomFloat(1500.0, 2500.0)
+                    Float angle = playerAngle + 75.0 + Utility.RandomFloat(-15.0, 15.0)
+                    Float dist = Utility.RandomFloat(1500.0, 2000.0)
                     Float offsetX = Math.Sin(angle) * dist
                     Float offsetY = Math.Cos(angle) * dist
                     attackers[i].MoveTo(player, offsetX, offsetY, 0.0)
@@ -1916,7 +1942,7 @@ Function ManifestEvent(String manifestJson)
             defCap = defenderCount
         EndIf
         ; (At a marker on their side of the player, not at the player's feet: see the attackers above.)
-        ObjectReference defendMarker = PlaceSpawnMarker(player, playerAngle, 1000.0)
+        ObjectReference defendMarker = PlaceSpawnMarker(player, playerAngle - 75.0, 1750.0)
         ObjectReference defendAt = player as ObjectReference
         If defendMarker
             defendAt = defendMarker
@@ -1930,13 +1956,16 @@ Function ManifestEvent(String manifestJson)
         i = 0
         While i < defenders.Length
             If defenders[i]
-                ; Position offset from attackers (opposite side of player)
-                Float angle = playerAngle + Utility.RandomFloat(-45.0, 45.0)
-                Float dist = Utility.RandomFloat(800.0, 1200.0)
+                ; To the player's other side from the attackers
+                Float angle = playerAngle - 75.0 + Utility.RandomFloat(-15.0, 15.0)
+                Float dist = Utility.RandomFloat(1500.0, 2000.0)
                 Float offsetX = Math.Sin(angle) * dist
                 Float offsetY = Math.Cos(angle) * dist
                 defenders[i].MoveTo(player, offsetX, offsetY, 0.0)
-                defenders[i].AddToFaction(Intel_BattleSideB)
+                ; Side A, the enemy of the attackers' side B. Both used to join B, so the defenders saw the
+                ; attackers as allies and fought back only while their templates were Very Aggressive (which
+                ; also turned them on townspeople). The player is on neither side here (cleared above).
+                defenders[i].AddToFaction(Intel_BattleSideA)
                 defenders[i].SetActorValue("Aggression", 1)
                 ManifestActors[ManifestCount] = defenders[i]
                 ManifestCount += 1
@@ -1946,17 +1975,26 @@ Function ManifestEvent(String manifestJson)
 
         ; Only start combat if we have defenders
         If ManifestCount > defStart
-            ; Make attackers fight defenders
+            ; Pair the sides both ways, as KickStartCombat does for full battles. Attackers used to call
+            ; StartCombat on every defender in turn (so all ended up on the last one) and the defenders on
+            ; nobody: they stood idle unless an attacker came close enough to be seen (diag 2026-11-18).
+            ; With StartCombat alone the sides searched for each other 1300-2000 apart and gave up (row 6). Each
+            ; one runs at their paired foe instead and attacks on sight (Aggression 1, enemy sides). A marker
+            ; ahead of the player as the meeting point worked at 500 units and not at 1000 (rows 7-9): a placed
+            ; spot can be one nobody can reach, a foe never is.
+            Int defCount = ManifestCount - defStart
             i = 0
-            While i < defStart
-                If ManifestActors[i] != None
-                    Int k = defStart
-                    While k < ManifestCount
-                        If ManifestActors[k] != None
-                            ManifestActors[i].StartCombat(ManifestActors[k])
-                        EndIf
-                        k += 1
-                    EndWhile
+            While i < ManifestCount
+                Actor foe
+                If i < defStart
+                    foe = ManifestActors[defStart + (i % defCount)]
+                Else
+                    foe = ManifestActors[(i - defStart) % defStart]
+                EndIf
+                If ManifestActors[i] != None && foe != None
+                    PO3_SKSEFunctions.SetLinkedRef(ManifestActors[i], foe, Core.IntelEngine_TravelTarget)
+                    ActorUtil.AddPackageOverride(ManifestActors[i], Core.TravelPackage_Run, Core.PRIORITY_TRAVEL, 1)
+                    ManifestActors[i].EvaluatePackage()
                 EndIf
                 i += 1
             EndWhile
@@ -1990,6 +2028,7 @@ Function ManifestEvent(String manifestJson)
     EndIf
 
     ManifestActive = true
+    _manifestEngaged = false
     ManifestStartTime = Utility.GetCurrentRealTime()
     Core.RequestTick(PollInterval)
 EndFunction
@@ -2148,7 +2187,15 @@ Function CalmManifestActor(Actor fighter)
     fighter.EvaluatePackage()
 EndFunction
 
+Bool _manifestCleaning = false
+Bool _manifestEngaged = false   ; somebody of the current brawl or skirmish has been in combat
+
 Function CleanupManifestation()
+    ; One at a time: OnUpdate ran it twice two seconds apart (15:46:57/59, 17:42:25/26).
+    If _manifestCleaning
+        Return
+    EndIf
+    _manifestCleaning = true
     Core.DebugMsg("Battle: Cleaning up manifestation (" + ManifestCount + " actors)")
 
     ; Clear assassination task slot to prevent permanent slot leak
@@ -2162,6 +2209,11 @@ Function CleanupManifestation()
     Int i = 0
     While i < ManifestCount
         If ManifestActors[i] != None
+            ; Off the run at their foe before anyone is deleted: a travel order holds its target by a bare
+            ; pointer (see DisperseSoldiers).
+            ActorUtil.RemovePackageOverride(ManifestActors[i], Core.TravelPackage_Run)
+            PO3_SKSEFunctions.SetLinkedRef(ManifestActors[i], None, Core.IntelEngine_TravelTarget)
+            ManifestActors[i].EvaluatePackage()
             If ManifestActors[i].IsDead()
                 ; A body the player is looking at is not blinked away (this runs fifteen seconds after the
                 ; fight): it is only flagged for deletion, like the survivors below, and goes with the area.
@@ -2189,6 +2241,7 @@ Function CleanupManifestation()
     ManifestAssassinAttacked = false
     ManifestAssassinStruck = false
     ManifestLeaderTarget = None
+    _manifestCleaning = false
 EndFunction
 
 Bool Function IsAnyManifestActorInCombat()
@@ -2260,6 +2313,7 @@ Function OnGameReload()
     EndIf
 
     ; Clean up any active manifestation from pre-reload
+    _manifestCleaning = false   ; a save made in the middle of one would otherwise block every later cleanup
     If ManifestActive
         CleanupManifestation()
     EndIf
