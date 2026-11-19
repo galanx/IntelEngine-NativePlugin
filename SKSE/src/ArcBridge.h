@@ -83,6 +83,9 @@ namespace IntelEngine {
         void CluePlaced(std::uint32_t id, int clue, RE::TESObjectREFR* lies);
         /** Who or what a story lays outside a place to be looked at (Arcs::Remains): the game's own people and beasts. */
         static RE::TESBoundObject* RemainsBase(std::uint8_t what);
+        /** What helps against what lives in a place of that kind (a den's master is a spider or a troll): the game's
+         *  own potions and scrolls. Given by the one who is told rightly what killed someone. */
+        static RE::TESForm* RemedyFor(std::uint8_t kind, bool spider);
         /** The script placed the company a look asked for. */
         void GangPlaced(std::uint32_t id);
         /** The script placed one of an ambush's men (k = 0 leads). */

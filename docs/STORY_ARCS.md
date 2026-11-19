@@ -815,8 +815,39 @@ clue in the world. That is this piece.
 - Not played: the model-written hunt's kill and ending; a beast as the remains; remains cleared away and laid
   anew; the body's name (added after the play).
 
+### Naming what did it (the step `"name"`, 2026-11-20)
+- `{"do": "name", "place": "dX", "with": "pX", "question": "...", "truth": "...", "others": ["...", "..."],
+  "right": {"then", "journal"}, "wrong": {"then", "journal"}}`. Having looked at what was left, the player tells
+  someone of the story what did it: the true answer, and two that people of the story believe or would rather
+  believe (what the guard says, what the one with something to hide puts about). The compiler makes it a choice
+  like any other (`Kind::Choose`, `Step::naming`), lays the three answers out in an order that follows from their
+  own words, and wants an `examine` by that place before it and the `slay` there after it.
+- **Worth something**: the branch of the true answer carries `Effect::Remedy` (12): whoever was told gives the player
+  two of what helps against what lives in that place (`ArcBridge::RemedyFor`, the game's own: Cure Disease where
+  vampires den, Cure Poison for spiders and Falmer, Resist Frost for a tomb's overlord, a scroll of Firebolt for a
+  troll, ...; `Form "remedy<s>"`, the script's `GiveRemedy`). A wrong answer costs that help and nothing else.
+- The truth itself is the engine's (the place's kind); its wording is the writer's, in the story's own language.
+- Shown by the story's ordinary choice window: with three answers the third stands behind "Something else" (Escape
+  must never choose an answer). A window with all three side by side would serve this step better.
+- Played (a hand-written hunt): the body named ("Examine / Torvald"; the window headed TORVALD), the question at
+  Anoriath's stall with the vampire as the second of three, answered rightly: two Potions of Cure Disease, and
+  the hunt as the next objective. Not played: a wrong answer; a hunt with this step written by the model.
+
+### A place that was just emptied (2026-11-20)
+The user: "what would happen if you clear the broken fang cave but another quest makes you go to the same place
+later. Will intelengine spawn new monsters and boss? Or will it stay empty".
+- A later story that leads there puts its own master at the heart, of the place's kind and with the story's name,
+  as for any place; where the game marks the place as cleared, two of its kind come with it (`PlaceGang`), and the
+  writer is told "Cleared once already; something new has moved in". The rest of the place is the game's: empty
+  until the game's own respawn. A quest of the game that goes there gets nothing from IntelEngine, and a place the
+  journal still needs is never used.
+- New: where the last four stories led rests (`restedPlaces`, TaleAuthor.cpp), as long as two other places are
+  near enough to choose from. Nothing held the dungeon master back from sending the player into the cave they had
+  just emptied; and a master that a lapsed story left alive there would have got a second one beside it.
+- Not built: taking a story's master out of the world when its story lapses without the kill. He stays where he
+  was put, with the story's name, until the game clears the place.
+
 ### Still to come for a hunt to stand beside the best of them
-- Naming what did it from the clues, with something gained for being right (the fitting potion or poison).
 - Things that only show themselves at night, and a ghost with a grievance.
 - A scene by the town (where the dead were found), tracks leading from it, more than bodies to look at.
 - The hook: a rumor of deaths heard at an inn, leading to the one who will pay to have it found out.

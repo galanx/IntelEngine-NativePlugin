@@ -98,8 +98,10 @@ namespace IntelEngine::Arcs {
         GiveItem = 9,    // the role hands prop `prop` (the edge's) to the player, from wherever it is
         Closer = 10,     // the role and the player grow closer by a step (the game's own rank, within friendship: Hearts.h)
         Apart = 11,      // the role and the player grow apart by a step
+        Remedy = 12,     // the role gives the player what they have against what lives in a place (the edge's `prop` is
+                         // the place's index): the worth of having named rightly what killed someone
     };
-    constexpr std::uint8_t kEffects = 11;
+    constexpr std::uint8_t kEffects = 12;
 
     enum class If : std::uint8_t {
         Done = 1,     // the node's own fact holds
@@ -563,7 +565,7 @@ namespace IntelEngine::Arcs {
             else if (!stays && e.ending != Ending::Lost) c.done.push_back(a.node);
             c.stayed = stays;
             c.effect = e.effect;
-            c.effectProp = e.effect == Effect::GiveItem ? e.prop : 0;
+            c.effectProp = e.effect == Effect::GiveItem || e.effect == Effect::Remedy ? e.prop : 0;
             c.effectRole = e.effectRole;
             c.log = e.log ? e.log : n.logStage;
             c.effect2 = e.effect2;
