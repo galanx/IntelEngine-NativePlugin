@@ -278,6 +278,10 @@ namespace IntelEngine {
         // Debug: Log all doors in actor's cell with direction signals
         void LogAllDoors(RE::Actor* actor);
 
+        // Resolve a SkyrimNet Named Place by exact name to the nearest reference at its position.
+        // nullptr when SkyrimNet has no ListPlaces, nothing matches, or no reference is in range.
+        RE::TESObjectREFR* ResolveNamedPlace(RE::Actor* actor, const std::string& destination);
+
         // Detect semantic intent from any destination string
         SemanticIntent DetectSemanticIntent(const std::string& destination);
 

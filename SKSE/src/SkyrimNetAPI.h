@@ -134,6 +134,10 @@ namespace IntelEngine::SkyrimNetAPI {
      *  nullptr on a SkyrimNet that predates it, and then those Papyrus natives must not be called. */
     inline uint32_t (*GetPackageApiVersion)() = nullptr;
 
+    /** Named Places of a source ("" = every source) as a JSON array of
+     *  {id, key, name, source, space, ownerLocation, x, y, z, radius}. nullptr before SkyrimNet v1.0.0-rc1. */
+    inline std::string (*ListPlaces)(const char* sourceFilter) = nullptr;
+
     /**
      * Initialize the SkyrimNet API by loading function pointers from the DLL.
      * Returns true if SkyrimNet was found and API version is >= 3.
@@ -239,18 +243,20 @@ namespace IntelEngine::SkyrimNetAPI {
         GetPackageApiVersion = reinterpret_cast<uint32_t(*)()>(
             GetProcAddress(hDLL, "PublicGetPackageApiVersion"));
         logger::info("SkyrimNet package API: {}", GetPackageApiVersion ? GetPackageApiVersion() : 0u);
+        ListPlaces = reinterpret_cast<std::string(*)(const char*)>(
+            GetProcAddress(hDLL, "PublicListPlaces"));
 
         // Bio template API
         logger::info("SkyrimNet Data API: Memories={}, Events={}, Dialogue={}, Ready={}, "
                      "ActorEngagement={}, RelatedActors={}, PlayerContext={}, EventPairs={}, "
-                     "EventCallback={}, BioTemplate={}, WorldKnowledge={}",
+                     "EventCallback={}, BioTemplate={}, WorldKnowledge={}, ListPlaces={}",
                      GetMemoriesForActor != nullptr, GetRecentEvents != nullptr,
                      GetRecentDialogue != nullptr,
                      IsMemorySystemReady != nullptr, GetActorEngagement != nullptr,
                      GetRelatedActors != nullptr, GetPlayerContext != nullptr,
                      GetEventPairCounts != nullptr,
                      RegisterEventCallback != nullptr, GetBioTemplateName != nullptr,
-                     GetWorldKnowledgeForActor != nullptr);
+                     GetWorldKnowledgeForActor != nullptr, ListPlaces != nullptr);
 
         return true;
     }
