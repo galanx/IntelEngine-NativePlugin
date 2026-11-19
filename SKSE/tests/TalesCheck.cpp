@@ -628,7 +628,9 @@ static void Captive() {
     // A rescue was asked for: a story without someone held is not it.
     auto rescue = TownThatHolds();
     rescue.mustCaptive = true;
-    Require(Tales::Compile(Taken(), rescue).ok, "a rescue is a story with someone held");
+    Require(errorsOf(Taken(), rescue).find("must be close to the one who asks") != std::string::npos, "a rescue is for someone who is theirs");
+    rescue.people[1].close = true;   // Brenuin lodges under Ysolda's roof in this town
+    Require(Tales::Compile(Taken(), rescue).ok, "a rescue is a story with someone held who is close to the asker");
     Require(errorsOf(Sample(), rescue).find("someone held at one of the places") != std::string::npos, "and nothing else");
 }
 
