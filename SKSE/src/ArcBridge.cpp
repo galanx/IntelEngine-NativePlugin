@@ -66,6 +66,21 @@ namespace IntelEngine {
             return nullptr;
         }
 
+        // Out in the wilds: outdoors, and nowhere people live (a town, a farm, an inn, a home). An ambush falls there
+        // only, never where guards or townsfolk would join in.
+        bool InTheWilds(RE::TESObjectREFR* ref) {
+            auto* cell = ref ? ref->GetParentCell() : nullptr;
+            if (!cell || cell->IsInteriorCell()) return false;
+            int depth = 0;
+            for (auto* loc = ref->GetCurrentLocation(); loc && depth < 12; loc = loc->parentLoc, ++depth) {
+                for (const char* kw : {"LocTypeCity", "LocTypeTown", "LocTypeSettlement", "LocTypeHabitation", "LocTypeDwelling",
+                                       "LocTypeInn", "LocTypePlayerHouse", "LocTypeFarm", "LocTypeCastle", "LocTypeJail", "LocTypeStore"}) {
+                    if (loc->HasKeywordString(kw)) return false;
+                }
+            }
+            return true;
+        }
+
         RE::BGSLocation* TownOf(RE::BGSLocation* location) {
             int depth = 0;
             for (auto* loc = location; loc && depth < 12; loc = loc->parentLoc, ++depth) {
@@ -985,6 +1000,21 @@ namespace IntelEngine {
                 else f.bossDead[s] = boss->IsDead() && (pending.bossSeenAlive[s] || f.atDepths[s]);
             }
         }
+        // A tale's ambush: its men are down, each dead or gone from the game, and at least one fell (they are placed
+        // beside the player, in loaded ground: a death there is a real one).
+        const bool ambushStep = tale && a->node < nodes.size() && nodes[a->node].kind == A::Kind::Ambush;
+        int thugsPlaced = 0;
+        if (ambushStep) {
+            int dead = 0, gone = 0;
+            for (std::size_t k = 0; k < A::kThugs; ++k) {
+                if (!a->thug[k]) continue;
+                ++thugsPlaced;
+                auto* t = RE::TESForm::LookupByID<RE::Actor>(a->thug[k]);
+                if (!t || t->IsDeleted()) ++gone;
+                else if (t->IsDead()) ++dead;
+            }
+            f.ambushOver = thugsPlaced > 0 && dead > 0 && dead + gone == thugsPlaced;
+        }
         if (tale) TaleTalk(id, *a, pending, f);
         const auto change = A::Advance(*a, f, now);
         pending.answer = -1;
@@ -1049,6 +1079,17 @@ namespace IntelEngine {
                 }
             }
             if (pending.gangSite) bits |= 1 << 7;   // asked again every look until the script says it is done
+            // A prop the ambush's leader carries goes into their pack once they are placed and loaded.
+            for (std::size_t p = 0; p < A::kProps && pending.plantProp < 0; ++p) {
+                if (!(a->propAmbush & (1u << p)) || a->propAt[p] || !a->propBase[p] || !a->thug[0]) continue;
+                auto* leader = RE::TESForm::LookupByID<RE::Actor>(a->thug[0]);
+                if (!leader || !leader->Is3DLoaded()) continue;
+                pending.plantAt = leader->GetFormID();
+                pending.plantProp = static_cast<int>(p);
+                pending.plantFloor = false;
+                bits |= 1 << 24;
+                logger::info("Arcs: #{} '{}' goes into the pack of the ambush's leader {:08X}", id, a->propName[p], leader->GetFormID());
+            }
             // A prop the boss carries goes into their pack once they are loaded (an unloaded actor's pack never got it).
             for (std::size_t p = 0; p < A::kProps && pending.plantProp < 0; ++p) {
                 if (!a->propSite[p] || a->propAt[p] || !a->propBase[p]) continue;
@@ -1066,7 +1107,7 @@ namespace IntelEngine {
             // The step's person has started talking with the player: they stay with the player until the talk is over
             // (the user, 2026-11-18: "Only if the player doesnt respond for a long time, the npc gets bored and walks
             // off"). Jon Battle-Born walked home in the middle of being asked about a goblet (2026-11-19).
-            if (n.who && n.kind != A::Kind::Wait && n.kind != A::Kind::Have && f.with[n.who] && f.spoke[n.who] && !f.dead[n.who] &&
+            if (n.who && n.kind != A::Kind::Wait && n.kind != A::Kind::Have && n.kind != A::Kind::Ambush && f.with[n.who] && f.spoke[n.who] && !f.dead[n.who] &&
                 !pending.lingering && RealSeconds() >= pending.lingerHold) {
                 pending.lingering = true;
                 bits |= 1 << 6;
@@ -1088,6 +1129,7 @@ namespace IntelEngine {
                 logger::info("Arcs: #{} step {}: {} has talked with the player; the decision is offered", id, static_cast<int>(a->node),
                              NameOf(a->cast[n.who]));
             }
+            if (n.kind == A::Kind::Ambush) AmbushLook(id, *a, pending, now, thugsPlaced, bits);
             A::Role to = A::RNone;
             std::uint8_t prop = 0;
             if (HandOverOf(n, to, prop) && f.has[prop] && f.spoke[to] && !f.dead[to] && real >= pending.giveHold && !(bits & (1 << 25))) {
@@ -1302,6 +1344,145 @@ namespace IntelEngine {
                      NameOf(a->site[s]), a->siteBoss[s]);
     }
 
+    void ArcBridge::AmbushLook(std::uint32_t id, A::Arc& a, Pending& pending, float now, int placed, std::int32_t& bits) {
+        auto* player = RE::PlayerCharacter::GetSingleton();
+        const float real = RealSeconds();
+        if (pending.ambushDo) {
+            bits |= 1 << 13;   // asked again every look until the script says it is done
+            return;
+        }
+        const bool wilds = InTheWilds(player);
+        if (!wilds) pending.wildsSince = -1.0f;
+        else if (pending.wildsSince < 0.0f) pending.wildsSince = real;
+        if (!placed) {
+            // Out in the wilds for a while, a quarter of an hour of the game into the step, nothing else going on, and
+            // no quest of the game moving lately (the player is not to be stopped in the middle of the main story).
+            const float hours = (now - a.since) * 24.0f;
+            std::string wait;
+            if (!wilds) {
+                auto* loc = player->GetCurrentLocation();
+                const char* where = loc ? loc->GetFullName() : nullptr;
+                wait = std::string("not out in the wilds (") + (where && *where ? where : "an interior or nowhere named") + ")";
+            } else if (real - pending.wildsSince < 20.0f || hours < 0.25f) {
+                wait = "too soon";
+            } else if (real < pending.ambushHold || now < pending.ambushAgain) {
+                wait = "after the last try";
+            } else if (player->IsInCombat() || LivingWorldBridge::GetSingleton()->IsBadMoment()) {
+                wait = "a fight or a menu";
+            } else if (real < m_questBusyUntil.load()) {
+                wait = "a quest of the game moved on lately";
+            }
+            if (wait != pending.ambushWait) {
+                pending.ambushWait = wait;
+                if (!wait.empty()) logger::info("Arcs: #{} the ambush waits: {}", id, wait);
+            }
+            if (!wait.empty()) return;
+            pending.ambushDo = 1;
+            pending.ambushHold = real + 30.0f;
+            bits |= 1 << 13;
+            logger::info("Arcs: #{} the ambush: its men are to wait on the player's way", id);
+            return;
+        }
+        auto* leader = a.thug[0] ? RE::TESForm::LookupByID<RE::Actor>(a.thug[0]) : nullptr;
+        bool anyLoaded = false, anyAlive = false, fighting = false;
+        float nearest = 1.0e9f;
+        for (const auto ref : a.thug) {
+            auto* t = ref ? RE::TESForm::LookupByID<RE::Actor>(ref) : nullptr;
+            if (!t || t->IsDead() || t->IsDeleted()) continue;
+            anyAlive = true;
+            if (!t->Is3DLoaded()) continue;
+            anyLoaded = true;
+            // Fighting the player (or someone at the player's side), not a wolf that crossed their path.
+            if (t->IsInCombat()) {
+                auto target = t->GetActorRuntimeData().currentCombatTarget.get();
+                fighting = fighting || (target && (target.get() == player || target->IsPlayerTeammate()));
+            }
+            if (t->GetWorldspace() == player->GetWorldspace()) nearest = std::min(nearest, t->GetPosition().GetDistance(player->GetPosition()));
+        }
+        if (!anyAlive) {
+            // None of them alive and none fell: the game took them away (a cell reset). They come again later.
+            const bool anyDead = std::any_of(a.thug.begin(), a.thug.end(), [](std::uint32_t ref) {
+                auto* t = ref ? RE::TESForm::LookupByID<RE::Actor>(ref) : nullptr;
+                return t && !t->IsDeleted() && t->IsDead();
+            });
+            if (!anyDead) {
+                for (std::size_t p = 0; p < A::kProps; ++p) {
+                    if ((a.propAmbush & (1u << p)) && std::find(a.thug.begin(), a.thug.end(), a.propAt[p]) != a.thug.end()) a.propAt[p] = 0;
+                }
+                a.thug = {};
+                pending.struck = false;
+                logger::info("Arcs: #{} the ambush: its men are gone from the game unfought; they come again later", id);
+            }
+            return;
+        }
+        // The player has come near and they are not fighting (yet, or any more: they lost the player): they strike.
+        // Fighting already before they stepped out (the player struck first): all of them join at once.
+        if (anyLoaded && ((!fighting && nearest < 2000.0f && real >= pending.strikeHold) || (fighting && !pending.struck))) {
+            pending.ambushDo = 2;
+            pending.strikeHold = real + 15.0f;
+            bits |= 1 << 13;
+            logger::info("Arcs: #{} the ambush: the player is {:.0f} away, they {}", id, nearest,
+                         fighting ? "join the fight" : pending.struck ? "come at the player again" : "step out");
+            return;
+        }
+        // The player got away: out of the fight and far from them (this modlist keeps them loaded 17000 units off,
+        // 2026-11-19), or indoors. They are taken out of the world unseen and come again another time.
+        auto* cell = player->GetParentCell();
+        const bool away = !fighting && !player->IsInCombat() && (!cell || cell->IsInteriorCell() || nearest > 12000.0f);
+        {
+            const std::string state = std::string(anyLoaded ? "loaded" : "not loaded") + (fighting ? ", fighting the player" : "") +
+                                      (player->IsInCombat() ? ", the player in a fight" : "") + (nearest > 12000.0f ? ", far" : "");
+            if (state != pending.ambushWait) {
+                pending.ambushWait = state;
+                logger::info("Arcs: #{} the ambush's men: {}", id, state);
+            }
+        }
+        if (away) {
+            pending.ambushDo = 3;
+            bits |= 1 << 13;
+            logger::info("Arcs: #{} the ambush: the player got away from {}; they are called off and come again later", id,
+                         leader ? NameOf(leader->GetFormID()) : std::string("its men"));
+        }
+    }
+
+    void ArcBridge::ThugPlaced(std::uint32_t id, int k, RE::Actor* thug) {
+        std::scoped_lock lock(m_mutex);
+        auto* a = m_book.Find(id);
+        if (!a || k < 0 || k >= static_cast<int>(A::kThugs) || !thug) return;
+        a->thug[static_cast<std::size_t>(k)] = thug->GetFormID();
+        logger::info("Arcs: #{} the ambush: {} ({:08X}) waits{}", id, thug->GetDisplayFullName(), thug->GetFormID(), k == 0 ? ", leading them" : "");
+    }
+
+    void ArcBridge::AmbushDone(std::uint32_t id, int what) {
+        std::scoped_lock lock(m_mutex);
+        auto* a = m_book.Find(id);
+        auto it = m_pending.find(id);
+        if (!a || it == m_pending.end()) return;
+        auto& pending = it->second;
+        pending.ambushDo = 0;
+        if (what == 1) {
+            const bool any = std::any_of(a->thug.begin(), a->thug.end(), [](std::uint32_t t) { return t != 0; });
+            if (!any) {
+                ++pending.ambushTries;
+                logger::info("Arcs: #{} the ambush: no ground out of sight on the player's way yet; tried again in a while", id);
+            }
+        } else if (what == 2) {
+            pending.struck = true;
+        } else if (what == 3) {
+            // The living ones were taken out unseen; the dead stay where they fell (and count).
+            for (std::size_t k = 0; k < A::kThugs; ++k) {
+                auto* t = a->thug[k] ? RE::TESForm::LookupByID<RE::Actor>(a->thug[k]) : nullptr;
+                if (t && t->IsDead()) continue;
+                for (std::size_t p = 0; p < A::kProps; ++p) {
+                    if ((a->propAmbush & (1u << p)) && a->propAt[p] == a->thug[k]) a->propAt[p] = 0;   // it went with them
+                }
+                a->thug[k] = 0;
+            }
+            pending.struck = false;
+            pending.ambushAgain = NowDays() + 0.25f;   // six hours of the game
+        }
+    }
+
     void ArcBridge::GangPlaced(std::uint32_t id) {
         std::scoped_lock lock(m_mutex);
         if (auto it = m_pending.find(id); it != m_pending.end()) it->second.gangSite = 0;
@@ -1375,6 +1556,14 @@ namespace IntelEngine {
         if (name == "bondwith") return pending != m_pending.end() ? pending->second.bondWith : 0;
         if (name == "effectprop") return pending != m_pending.end() ? pending->second.effectProp : 0;
         if (name == "gangsite") return pending != m_pending.end() ? pending->second.gangSite - 1 : -1;
+        if (name == "ambushdo") return pending != m_pending.end() ? pending->second.ambushDo : 0;
+        if (name == "ambushtries") return pending != m_pending.end() ? pending->second.ambushTries : 0;
+        if (name == "struck") return pending != m_pending.end() && pending->second.struck ? 1 : 0;
+        if (name == "thugs") {
+            // How many come: two for a player still finding their feet, three after.
+            auto* player = RE::PlayerCharacter::GetSingleton();
+            return player && player->GetLevel() >= 12 ? 3 : 2;
+        }
         if (name == "quiet") {
             // Seconds since the step's person or the player last spoke (the talk between them going quiet).
             if (a->node >= nodes.size() || !nodes[a->node].who) return 9999;
@@ -1451,6 +1640,17 @@ namespace IntelEngine {
             for (const auto p : a->propSite) needed = needed || p == s + 1;
             return needed ? BossBase(a->siteKind[s], a->seed + static_cast<std::uint32_t>(s)) : nullptr;
         }
+        if (name.starts_with("thugbase")) {
+            // The game's own Hired Thugs (Skyrim.esm WIThug, WIThugNordM, WIThugCommonerM): leveled to the player,
+            // named by the game in its own language.
+            static constexpr RE::FormID kThugBases[] = {0x35B5E, 0xD783B, 0xD783C};
+            const auto k = static_cast<std::uint32_t>(std::atoi(name.c_str() + 8));
+            return RE::TESForm::LookupByID(kThugBases[(a->seed + k) % 3u]);
+        }
+        if (name.starts_with("thug")) {
+            const auto k = static_cast<std::size_t>(std::atoi(name.c_str() + 4));
+            return k < A::kThugs && a->thug[k] ? RE::TESForm::LookupByID(a->thug[k]) : nullptr;
+        }
         if (name.starts_with("pocket")) {
             // Who carries a prop from the start: a tale's pocket, the murder's gem with the killer.
             const auto p = static_cast<std::size_t>(std::atoi(name.c_str() + 6));
@@ -1487,6 +1687,9 @@ namespace IntelEngine {
             std::uint8_t site = 0;
             if ((n.kind == A::Kind::Delve || n.kind == A::Kind::Slay) && n.site) site = n.site;
             if (n.kind == A::Kind::Have && n.prop < A::kProps && a->propSite[n.prop]) site = a->propSite[n.prop];
+            if (n.kind == A::Kind::Have && n.prop < A::kProps && (a->propAmbush & (1u << n.prop)) && a->thug[0]) {
+                if (auto* leader = RE::TESForm::LookupByID(a->thug[0])) return leader;
+            }
             if (site) {
                 auto* boss = a->siteBoss[site - 1u] ? RE::TESForm::LookupByID<RE::Actor>(a->siteBoss[site - 1u]) : nullptr;
                 if (boss && !boss->IsDead() && n.kind != A::Kind::Delve) return boss;
@@ -1552,6 +1755,16 @@ namespace IntelEngine {
             const auto s = static_cast<std::size_t>(std::atoi(name.c_str() + 8));
             return s < A::kSites ? a->bossName[s] : std::string();
         }
+        if (name == "thugname") return a->thugName;
+        if (name == "thugwhy") {
+            // What the men know of their errand (a fact in their bios): who paid them, and for what.
+            for (const auto& n : A::NodesOf(*a)) {
+                if (n.kind != A::Kind::Ambush) continue;
+                const std::string by = n.who ? NameOf(a->cast[n.who]) + "'s coin" : std::string("coin");
+                return "took " + by + " to waylay " + PlayerName() + " on the road: " + Fill(n.why, *a);
+            }
+            return {};
+        }
         if (name == "closing") return a->phase == A::Phase::Ended ? Fill(A::TaleClosing(*a), *a) : std::string();
         const auto nodes = A::NodesOf(*a);
         if (a->node >= nodes.size()) return {};
@@ -1605,7 +1818,11 @@ namespace IntelEngine {
             std::uint8_t prop = 0;
             if (!HandOverOf(n, to, prop)) return {};
             if (name == "giveto") return NameOf(a->cast[to]);
-            return Fill("Give {item" + std::to_string(prop) + "} back to " + NameOf(a->cast[to]) + "?", *a);
+            // "back" only when it is theirs (named after them): Sven's garnet goes TO Faendal (2026-11-19).
+            const std::string name = NameOf(a->cast[to]);
+            const std::string first = name.substr(0, name.find(' '));
+            const bool theirs = !first.empty() && a->propName[prop].find(first) != std::string::npos;
+            return Fill("Give {item" + std::to_string(prop) + (theirs ? "} back to " : "} to ") + name + "?", *a);
         }
         return {};
     }
@@ -1859,6 +2076,11 @@ namespace IntelEngine {
             ArcBridge::GetSingleton()->BossPlaced(U(id), site, boss);
         }
         void ArcGangPlaced(RE::StaticFunctionTag*, std::int32_t id) { ArcBridge::GetSingleton()->GangPlaced(U(id)); }
+        void ArcThugPlaced(RE::StaticFunctionTag*, std::int32_t id, std::int32_t k, RE::Actor* thug) {
+            ArcBridge::GetSingleton()->ThugPlaced(U(id), k, thug);
+        }
+        void ArcAmbushDone(RE::StaticFunctionTag*, std::int32_t id, std::int32_t what) { ArcBridge::GetSingleton()->AmbushDone(U(id), what); }
+        bool ArcInWilds(RE::StaticFunctionTag*, RE::TESObjectREFR* ref) { return InTheWilds(ref); }
         // Test hook: a tale as the director asks for one (a reason of the asker's own, coming from afar).
         bool ArcRequestTaleWhy(RE::StaticFunctionTag*, RE::Actor* asker, RE::BSFixedString why) {
             ArcBridge::TaleSeed seed{why.c_str() ? why.c_str() : "", "seek_player", true};
@@ -1902,6 +2124,9 @@ namespace IntelEngine {
         a_vm->RegisterFunction("ArcLingerOver", script, ArcLingerOver); ++count;
         a_vm->RegisterFunction("ArcBossPlaced", script, ArcBossPlaced); ++count;
         a_vm->RegisterFunction("ArcGangPlaced", script, ArcGangPlaced); ++count;
+        a_vm->RegisterFunction("ArcThugPlaced", script, ArcThugPlaced); ++count;
+        a_vm->RegisterFunction("ArcAmbushDone", script, ArcAmbushDone); ++count;
+        a_vm->RegisterFunction("ArcInWilds", script, ArcInWilds); ++count;
         a_vm->RegisterFunction("ArcRequestTaleWhy", script, ArcRequestTaleWhy); ++count;
         a_vm->RegisterFunction("ArcFetchProp", script, ArcFetchProp); ++count;
         a_vm->RegisterFunction("ArcDebugTaleFile", script, ArcDebugTaleFile); ++count;

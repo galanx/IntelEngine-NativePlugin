@@ -763,13 +763,13 @@ namespace IntelEngine {
     }
 
     void ArcBridge::LogOutline(const A::Arc& a) {
-        static constexpr const char* kKinds[] = {"?", "talk", "find", "give", "choose", "brawl", "go", "visit", "wait", "delve", "slay"};
+        static constexpr const char* kKinds[] = {"?", "talk", "find", "give", "choose", "brawl", "go", "visit", "wait", "delve", "slay", "ambush"};
         static constexpr const char* kWhens[] = {"?", "done", "option 1", "option 2", "option 3", "picked", "dead", "has", "won", "lost",
                                                  "handed", "persuaded", "said 1", "said 2", "said 3", "waited"};
         for (std::size_t i = 0; i < a.graph.size(); ++i) {
             const auto& n = a.graph[i];
             std::string line = "Tales: #" + std::to_string(a.id) + " step " + std::to_string(i) + " " +
-                               kKinds[std::min<std::size_t>(static_cast<std::size_t>(n.kind), 10)] + " " + NameOf(n.who ? a.cast[n.who] : 0) +
+                               kKinds[std::min<std::size_t>(static_cast<std::size_t>(n.kind), std::size(kKinds) - 1)] + " " + NameOf(n.who ? a.cast[n.who] : 0) +
                                ": " + n.goal + " |";
             for (const auto& e : n.edges) {
                 if (e.when == A::If{}) continue;
