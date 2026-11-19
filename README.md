@@ -157,6 +157,7 @@ A message delivered at the right time. If the message includes a meeting request
 Send any NPC to a destination right now. The location resolver understands:
 
 - **Named places** — Whiterun, Dragonsreach, Bannered Mare, the Drunken Huntsman
+- **SkyrimNet Named Places** — places defined in SkyrimNet's Named Places, such as a "Kitchen", matched by exact name first (needs SkyrimNet v1.0.0-rc1 or newer)
 - **Relative directions** — upstairs, downstairs, outside, inside, the back room
 - **Fuzzy matching** — typos and partial names still resolve (*"Bannred Mare"* finds the Bannered Mare)
 - **Contextual resolution** — *"go upstairs"* scans doors by Z-axis, *"go outside"* identifies exterior doors
@@ -507,7 +508,7 @@ Ten story types, each individually toggleable via MCM:
 **Background events in SkyrimNet History — implemented, pending live acceptance:** persistent `intel_social` and `intel_story` schemas categorize executed NPC interactions, gossip exchanges and story/seek/informant outcomes. Matching generic memories are replaced rather than duplicated; travel proposals, rejections and cooldown blocks do not emit these types. SkyrimNet's existing automatic-audience distance/configuration filters still apply, so off-screen registration does not guarantee History retention. Politics remains in IntelEngine's Politics tab: SkyrimNet currently has no History-only sink excluded from NPC prompts/memory.
 
 Every event injects facts into NPC bios that persist and influence all future dialogue. Message and quest courier facts/memories are recorded only after arrival passes the travel rejection checks; rejected pending quests do not publish quest facts or repetition history. The Dungeon Master prompt lists only enabled story types and guards long-absence seek-player guidance accordingly. Anti-repetition, type balancing, and per-NPC cooldowns keep stories varied and meaningful. Story arrival interleaving has compiled-PEX coverage, but live acceptance remains pending. Localized-place-name prompt guidance is not localized-install acceptance.
-Localized place-name guidance adds neither Unicode/alias resolution nor custom named-Place routing.
+Travel resolves SkyrimNet Named Places by exact name (needs SkyrimNet v1.0.0-rc1 or later). Localized place-name guidance still adds no Unicode/alias resolution.
 
 ---
 

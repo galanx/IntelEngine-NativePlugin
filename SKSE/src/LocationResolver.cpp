@@ -11,6 +11,8 @@
 #include "StringUtils.h"
 #include "ProcessUtils.h"
 #include "Settings.h"
+#include "SkyrimNetAPI.h"
+#include "NamedPlaceMatch.h"
 
 #include <cfloat>
 #include <unordered_set>
@@ -1976,6 +1978,72 @@ namespace IntelEngine {
         return "";
     }
 
+    RE::TESObjectREFR* LocationResolver::ResolveNamedPlace(RE::Actor* actor, const std::string& destination) {
+        if (!SkyrimNetAPI::ListPlaces) return nullptr;  // SkyrimNet older than v1.0.0-rc1
+
+        const auto places = ParseNamedPlaces(SkyrimNetAPI::ListPlaces(""));
+        RE::FormID currentSpace = 0;
+        if (auto* cell = actor->GetParentCell(); cell && cell->IsInteriorCell()) {
+            currentSpace = cell->GetFormID();
+        } else if (auto* worldspace = actor->GetWorldspace()) {
+            currentSpace = worldspace->GetFormID();
+        }
+
+        const auto* place = MatchNamedPlace(places, destination, currentSpace);
+        if (!place) {
+            logger::debug("  Named Place: no match for '{}' among {} places", destination, places.size());
+            return nullptr;
+        }
+
+        auto* interiorCell = RE::TESForm::LookupByID<RE::TESObjectCELL>(place->space);
+        // SkyrimNet's defaults for a place without a radius (PublicAPI.h "Named places")
+        const float radius = place->radius > 0.0f ? place->radius : (interiorCell ? 350.0f : 1500.0f);
+        const RE::NiPoint3 center{place->x, place->y, place->z};
+
+        // SkyrimNet's containment rule: a place reaches 200 units up or down (PublicAPI.h "Named places")
+        constexpr float kPlaceHalfHeight = 200.0f;
+        RE::TESObjectREFR* bestRef = nullptr;
+        float bestDistance = radius;
+        // Persistent refs only: travel holds the target as a linked ref, and a temporary ref is freed when its
+        // cell unloads (2026-11-17-run1: CTD in the travel package after the player left the cell).
+        const auto consider = [&](RE::TESObjectREFR* ref) -> RE::BSContainer::ForEachResult {
+            if (ref && ref->IsPersistent() && !ref->IsDisabled() && !ref->IsDeleted() && !ref->As<RE::Actor>()) {
+                const auto pos = ref->GetPosition();
+                const float dz = pos.z - center.z;
+                const float distance = pos.GetDistance(center);
+                if (dz >= -kPlaceHalfHeight && dz <= kPlaceHalfHeight && distance <= bestDistance) {
+                    bestDistance = distance;
+                    bestRef = ref;
+                }
+            }
+            return RE::BSContainer::ForEachResult::kContinue;
+        };
+
+        if (interiorCell) {
+            interiorCell->ForEachReference(consider);
+        } else if (auto* worldspace = RE::TESForm::LookupByID<RE::TESWorldSpace>(place->space)) {
+            auto* player = RE::PlayerCharacter::GetSingleton();
+            auto* tes = RE::TES::GetSingleton();
+            auto* playerCell = player ? player->GetParentCell() : nullptr;
+            if (tes && playerCell && !playerCell->IsInteriorCell() && player->GetWorldspace() == worldspace) {
+                tes->ForEachReferenceInRange(player, player->GetPosition().GetDistance(center) + radius, consider);
+            } else if (worldspace->persistentCell) {
+                // ponytail: a place in an unloaded exterior only sees persistent refs; add a cell-grid
+                // lookup at (x, y) if such places fail to resolve in play.
+                worldspace->persistentCell->ForEachReference(consider);
+            }
+        }
+
+        if (!bestRef) {
+            logger::info("  Named Place '{}' (space {:08X}) matched, but no reference within {:.0f} units",
+                         place->name, place->space, radius);
+            return nullptr;
+        }
+        logger::info("  Named Place '{}' (space {:08X}) -> ref {:08X}, {:.0f} units from its position",
+                     place->name, place->space, bestRef->GetFormID(), bestDistance);
+        return bestRef;
+    }
+
     RE::TESObjectREFR* LocationResolver::ResolveAnyDestination(RE::Actor* actor, const std::string& destination) {
         if (!actor || destination.empty()) return nullptr;
 
@@ -1983,6 +2051,12 @@ namespace IntelEngine {
         m_lastResolvedHomeCellId = 0;
 
         logger::debug("ResolveAnyDestination: '{}' for '{}'", destination, actor->GetDisplayFullName());
+
+        // SkyrimNet's Named Places are not asked for here (3.8.3's ResolveNamedPlace, above, stays for whoever wants
+        // the nearest reference of a place by its exact name): in 4.0 every trip asks them first, before this
+        // resolver (Core.ResolveTravelTarget -> PlaceTargets: the name in any spelling, the place's own spot, and a
+        // room word such as "the kitchen" only inside the building one stands in). Asking again here would list
+        // SkyrimNet's places a second time on every resolution, and a room word would mean any room so named anywhere.
 
         // Phase 1: Detect semantic intent. Not in a place's own name: "White River Watch" has "river" in it and sent
         // Jenassa to the river by Riverwood instead of the fort (2026-11-18); "Riverwood" and "Lakeview Manor" alike.

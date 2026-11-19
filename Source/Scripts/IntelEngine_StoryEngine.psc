@@ -4769,6 +4769,7 @@ EndFunction
 
 ; The last parameter must not be called "generation": as a bare name it replaces the game's own "Generation",
 ; which the lightning bolt mesh looks up by exact case, and Sparks bolts turn invisible (3.8.0 to 3.8.2).
+; (SKSE/tests/RunPexStringCaseCheck.py holds every compiled script to it; galanx/IntelEngine-GamePlugin#35.)
 Function ReleaseStrandedCourier(Actor npc, Int slot, Int dispatchGen)
     {The arrival handler came back from a wait (the pause before the offer, the offer itself) and found its
     quest gone: cancelled from the dashboard, expired, replaced. It used to just return. The courier then
