@@ -1,4 +1,5 @@
 #include "QuestBridge.h"
+#include "FrameCost.h"
 #include "Safe.h"
 
 #include "ArcBridge.h"
@@ -28,6 +29,7 @@ namespace IntelEngine {
         constexpr std::uint32_t kJournalQuestBase = 0x58D2;   // IntelEngine_Quest0..5 in IntelEngine.esp (esp/EspBuilder)
         constexpr const char* kPlugin = "IntelEngine.esp";
         constexpr float kWithDistance = 450.0f;              // "with someone": a few steps away
+        constexpr std::int32_t kMarkerMoved = 1 << 30;       // Advance: nothing done, the step's marker has moved
         constexpr float kSpokeSeconds = 20.0f;               // "while they speak": they said something this long ago
         constexpr float kGiverRestDays = 7.0f;               // a giver whose quest ended asks again after a week at least
         constexpr float kMemoryDays = 30.0f;                 // an ended quest stays in the giver's bio this long
@@ -182,6 +184,8 @@ namespace IntelEngine {
         // Facts that only the main thread may read, kept for the bio decorator (SkyrimNet's threads).
         struct Seen {
             bool hasItem = false;
+            RE::FormID marker = 0;          // where the journal pointed at the last look,
+            std::uint8_t markerStep = 0xFF; // and for which step
         };
     }
 
@@ -768,14 +772,41 @@ namespace IntelEngine {
 
     namespace {
         std::unordered_map<std::uint32_t, Seen> g_seen;   // by quest id, under QuestBridge's lock
+        FrameStats g_lookCost;                            // what a look at a quest costs its frame; same lock
+
+        // Where the journal points for the step a quest is on, as the game stands now: the first of the step's
+        // candidates that is in the game. One switched off or gone shows no marker at all, and a player does not keep
+        // to the order of the steps: what a marker stood on may be gone by the time they get there. A handful of
+        // lookups; asked inside the look that is made anyway (Advance), so it costs no call of its own.
+        RE::TESForm* MarkerNow(const Q::Quest& q) {
+            const auto steps = Q::StepsOf(q.tmpl);
+            if (q.step >= steps.size()) return nullptr;
+            const auto first = [](std::initializer_list<RE::FormID> ids) -> RE::TESForm* {
+                for (const auto id : ids) {
+                    auto* ref = id ? RE::TESForm::LookupByID<RE::TESObjectREFR>(id) : nullptr;
+                    if (ref && !ref->IsDeleted() && !ref->IsDisabled()) return ref;
+                }
+                return nullptr;
+            };
+            switch (steps[q.step].marker) {
+                case Q::Role::Giver: return first({q.giver});
+                case Q::Role::Foe: return first({q.foe, q.anchor});
+                case Q::Role::Ally: return first({q.ally, q.anchor});
+                case Q::Role::Holder: return first({q.holder, q.foe, q.anchor});
+                case Q::Role::Anchor: return first({q.anchor});
+                default: return nullptr;
+            }
+        }
     }
 
     std::int32_t QuestBridge::Advance(std::uint32_t id) {
         auto* player = RE::PlayerCharacter::GetSingleton();
         if (!player) return 0;
+        const auto began = FrameClock::Now();
         std::scoped_lock lock(m_mutex);
         auto* q = m_book.Find(id);
         if (!q || q->phase != Q::Phase::Open) return 0;
+        FrameClock cost("Quests: a look at a quest", g_lookCost, began);
         Q::Facts f;
         auto* giver = RE::TESForm::LookupByID<RE::Actor>(q->giver);
         auto* foe = q->foe ? RE::TESForm::LookupByID<RE::Actor>(q->foe) : nullptr;
@@ -800,9 +831,21 @@ namespace IntelEngine {
         f.allySpoke = ally && SpokeJustNow(q->ally);
         f.giverDead = giver && giver->IsDead();
         f.allyDead = ally && ally->IsDead();
-        g_seen[id].hasItem = f.hasItem;
+        auto& seen = g_seen[id];
+        seen.hasItem = f.hasItem;
         const auto change = Q::Advance(*q, f, NowDays());
-        if (!change.any()) return 0;
+        // The journal's marker, as the game stands now. A new step sets its own (the script's ShowStep); on the same
+        // step the script is told when it has moved (kMarkerMoved, alone: nothing was done).
+        const auto* marker = q->phase == Q::Phase::Open ? MarkerNow(*q) : nullptr;
+        const RE::FormID markerNow = marker ? marker->GetFormID() : 0u;
+        const bool sameStep = seen.markerStep == q->step;
+        const bool moved = sameStep && markerNow != 0 && markerNow != seen.marker;
+        seen.markerStep = q->step;
+        seen.marker = markerNow ? markerNow : (sameStep ? seen.marker : 0u);
+        if (!change.any()) {
+            if (moved) logger::info("Quests: #{} the journal now points at {:08X}, step {}", id, markerNow, static_cast<int>(q->step));
+            return moved ? kMarkerMoved : 0;
+        }
         std::int32_t bits = 0;
         for (const auto step : change.done) bits |= 1 << step;
         logger::info("Quests: #{} steps done {:#x}, now at step {}{}", id, bits, static_cast<int>(q->step),
@@ -896,28 +939,7 @@ namespace IntelEngine {
         if (lower == "anchor") return form(q->anchor);
         if (lower == "item") return form(q->item);
         if (lower == "holder") return form(q->holder ? q->holder : q->foe);
-        if (lower == "marker") {
-            // Where the journal points, as the game stands now: asked again on every look (Quests.KeepMarker), since
-            // a player does not keep to the order of the steps and what a marker stood on may be gone by then. The
-            // first of the step's candidates that is in the game: one switched off or gone shows no marker at all.
-            const auto steps = Q::StepsOf(q->tmpl);
-            if (q->step >= steps.size()) return nullptr;
-            const auto first = [](std::initializer_list<RE::FormID> ids) -> RE::TESForm* {
-                for (const auto id : ids) {
-                    auto* ref = id ? RE::TESForm::LookupByID<RE::TESObjectREFR>(id) : nullptr;
-                    if (ref && !ref->IsDeleted() && !ref->IsDisabled()) return ref;
-                }
-                return nullptr;
-            };
-            switch (steps[q->step].marker) {
-                case Q::Role::Giver: return first({q->giver});
-                case Q::Role::Foe: return first({q->foe, q->anchor});
-                case Q::Role::Ally: return first({q->ally, q->anchor});
-                case Q::Role::Holder: return first({q->holder, q->foe, q->anchor});
-                case Q::Role::Anchor: return first({q->anchor});
-                default: return nullptr;
-            }
-        }
+        if (lower == "marker") return MarkerNow(*q);   // the same answer the look compares (Advance)
         return nullptr;
     }
 

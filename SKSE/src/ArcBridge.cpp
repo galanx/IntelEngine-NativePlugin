@@ -1,4 +1,5 @@
 #include "ArcBridge.h"
+#include "FrameCost.h"
 #include "Safe.h"
 #include "HeartBridge.h"
 
@@ -688,6 +689,10 @@ namespace IntelEngine {
             return street ? street : any;
         }
 
+        // What a look at a story costs the frame it runs in (the scripts call Advance every two seconds for each
+        // open story). Under the bridge's lock.
+        FrameStats g_lookCost;
+
         // The door of each home asked for so far (home cell -> door, 0 = it has none): a home's doors do not change,
         // and finding one means walking the cell's references. Read and written under the bridge's lock.
         std::unordered_map<RE::FormID, RE::FormID> g_homeDoors;
@@ -701,8 +706,12 @@ namespace IntelEngine {
             return Points(door) ? door : nullptr;
         }
         auto* cell = RE::TESForm::LookupByID<RE::TESObjectCELL>(folk->home);
+        const auto began = FrameClock::Now();
         auto* door = cell ? DoorOf(cell) : nullptr;
         g_homeDoors[folk->home] = door ? door->GetFormID() : 0u;
+        // Once for each home, inside a frame: said, so a home with a great many things in it shows.
+        logger::info("Arcs: the door of home {:08X}: {:08X} ({:.2f} ms of the game's frame, once)", folk->home, door ? door->GetFormID() : 0u,
+                     std::chrono::duration<double, std::milli>(FrameClock::Now() - began).count());
         return Points(door) ? door : nullptr;
     }
 
@@ -1172,9 +1181,11 @@ namespace IntelEngine {
         auto* player = RE::PlayerCharacter::GetSingleton();
         if (!player) return 0;
         const float now = NowDays();
+        const auto began = FrameClock::Now();
         std::scoped_lock lock(m_mutex);
         auto* a = m_book.Find(id);
         if (!a || !A::IsOpen(*a)) return 0;
+        FrameClock cost("Arcs: a look at a story", g_lookCost, began);
         auto& pending = m_pending[id];
         A::Facts f;
         std::array<RE::Actor*, A::kRoles> actors{};
