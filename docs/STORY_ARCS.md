@@ -64,6 +64,27 @@ as the fallback when no model answers.
 7. **Pacing**: a tale is offered only to a player idling in a town, never within a while of a main, faction or DLC
    quest moving on, never in a bad moment; a day between tales; the ledger keeps the last tales so nothing repeats.
 
+### Status of tales (2026-11-19)
+
+Built: `SKSE/src/Tales.h` (the check and the build of a tale, `SKSE/tests/TalesCheck.cpp`), `SKSE/src/TaleAuthor.cpp`
+(who may be cast and what is said of them, the request, the judge of a talk), the arc engine's graphs, kinds Visit and
+Wait, conditions Said0..2 and Waited, effects Leave, Befriend, Estrange and GiveItem, ending Lost, co-save IEAR v3
+(v1 and v2 load), the journal's runtime objective texts (objectives 20..31) and the Tale/Close holders, the prompts
+`intel_tale_author`, `intel_tale_turn` (decision) and `intel_tale_turn_chat`, the quest gate (TESQuestStageEvent), the
+linger of a step's person while the player talks with them (all arcs).
+
+Played in game (Whiterun, test profile): written tales "The Goblet Saadia Never Owned" (mystery, 6 steps: three talks
+turned by the judge from what was really said, the hand-over, the decision, the friendship of Saadia and Hulda, both
+remembering it) and "The Ring in the Wrong Stall" (9 steps, first draft refused for a ring in a pocket and rewritten);
+hand-written tests through `IntelEngine_Arcs.DebugTaleFile` (wait, visit, brawl won, a hand-over by the loser, the
+return; a death mid-tale ending as lost); a v2 save loaded by v3; the pattern thief still running on the same engine;
+the director's own pacing bringing a tale after 2.3 game hours (0.5 ms to cast); the quest gate after a main-quest
+stage. Not seen yet: the Leave effect, a Wait longer than an hour with a visitor coming from afar, the Albanian
+profiles, home visits (not built).
+
+Test hooks: `IntelEngine_Arcs.DebugTale(asker)` (asks the model), `DebugTaleFile(asker, absolute path)` (a tale
+written by hand; people by name; no fallback); the log has each tale as written and its outline.
+
 ## 1. Principles
 
 1. **Truth first.** Code decides what happens and makes it true in the game (people, items, bodies, places) before
