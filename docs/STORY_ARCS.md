@@ -681,13 +681,27 @@ counted only while the story stood on the step that asked for it.
 ### The engine's own quests (keepsake, bounty, venture)
 - Their steps already counted whenever their fact held (several steps a look). The marker was set only when a
   step was shown, on whatever the step's role named. `QuestForm(id, "marker")` now takes the first of the step's
-  candidates that is in the game (the holder, the foe, the place's heart), and `Quests.KeepMarker` asks again on
-  every look and sets the alias anew when the answer has changed.
+  candidates that is in the game (the holder, the foe, the place's heart). `QuestBridge::Advance`, the look that
+  is made anyway, compares it with the one before and returns `kMarkerMoved` (1 << 30, alone: nothing was done)
+  when it has changed on the same step; the script's `Settle` sets the alias anew. No call of its own.
+
+### What it costs
+- No model call anywhere in this. A step left by the shortcut is a talk the judge never has to read.
+- Inside the game's frame (the looks are Papyrus natives, every 2 s for each open story or quest): the marker is a
+  handful of form lookups and flag reads inside the look that ran before; nothing walks the loaded actors. The one
+  walk is `HomeDoorOf`'s, over the references of one home cell, once for each home in a session's load, and it
+  says in the log what it took ("the door of home ... ms of the game's frame, once").
+- `FrameCost.h` (`FrameClock`): both looks are now timed where they run, the wait for the bridge's lock included.
+  A look of 0.5 ms or more is said at once; the slowest of every 150 is logged ("Arcs: a look at a story: at most
+  ... ms of the game's frame in the last 150 runs", "Quests: a look at a quest: ..."). Neither look was timed
+  before, so the first play gives the figure for the whole look, not only for what this added.
+- The co-save: one bit of a byte that was there (`siteState`), and the shortcut edges of a story with someone held.
 
 ### Checked
 - Offline: `TalesCheck` (the shortcut is compiled where it belongs and nowhere else; found early with the witness
   dead; the master dead and they free in the same look; two ways of freeing), the whole suite 46 of 46.
-- **Not played yet.** The test PC's screen was in use when this was built, so the test game could not be started.
+- **Not played yet, and not timed yet.** The test PC's screen was in use when this was built, so the test game
+  could not be started.
   To play, with a hand-written tale (the asker, a witness in town, someone held at a camp, a "go to their home"
   step): go to the camp and stand by the one held before asking the witness (free at once, "found before the story
   asked for it" in the log; the talk with the witness gone from the journal); the same after asking; the marker for
