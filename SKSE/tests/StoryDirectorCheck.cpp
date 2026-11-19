@@ -114,6 +114,17 @@ static void Distance() {
     Require(Pick({At(V("a", 3, 3.0f, "road_encounter", 1.0f, all), 2, true)}, never) == 0, "an old companion may be");
     // The far one is passed over and someone here with a real reason acts instead.
     Require(Pick({At(V("far", 4, 4.0f, "quest"), 2), At(V("here", 3, 3.0f, "seek_player"), 0)}, never) == 1, "the one who is here acts");
+    // Someone who has never had to do with the player does not set out to find them.
+    {
+        auto stranger = At(V("a", 4, 4.0f, "quest"), 1);
+        stranger.known = false;
+        Require(Pick({stranger}, never) == -1, "a stranger down the road does not come, whatever the reason");
+        stranger.reach = 0;
+        Require(Pick({stranger}, never) == 0, "a stranger right here may speak up");
+        auto lurker = At(V("a", 4, 4.0f, "ambush", 1.0f, all), 1);
+        lurker.known = false;
+        Require(Pick({lurker}, never) == 0, "whoever lies in wait on the hold's roads needs no acquaintance");
+    }
     // A quiet world's gentle moment on a mild reason: only from someone who is here anyway.
     Require(Pick({At(V("a", 2, 2.0f, "seek_player"), 0)}, never, true) == 0, "a mild reason, here, in a quiet world");
     Require(Pick({At(V("a", 2, 2.0f, "seek_player"), 1, true)}, never, true) == -1, "never from down the road");

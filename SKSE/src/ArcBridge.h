@@ -125,6 +125,19 @@ namespace IntelEngine {
         bool FarComerLately(float days) const;
         /** The offer of someone who came from another hold could not go out now: tried again in an hour. */
         void OfferLater(std::uint32_t id);
+        /** The asker set out at a walk and the player was gone before they got there: the story stands, and the offer
+         *  goes out when the two next meet (Lapse). */
+        void OfferDeferred(std::uint32_t id, const std::string& company = {});
+        /** Someone of this story (not its asker) who stands beside the player right now, or null: nobody brings their
+            trouble to the player in front of the people it is about. */
+        RE::Actor* Company(std::uint32_t id) const;
+        /** Whether someone coming to the player has truly been looking for them (and so hurries): close to the
+         *  player, or come all the way from another hold. Not someone who merely failed to reach them once. Main
+         *  thread. */
+        bool Hurries(std::uint32_t id, RE::Actor* actor) const;
+        /** 2 has had to do with the player before, 1 their town has heard what the player did there, 0 a stranger.
+         *  Main thread. */
+        int KnowsPlayer(RE::Actor* actor, RE::FormID town) const;
         bool RequestTale(RE::Actor* asker, const std::string& written = {}, const TaleSeed* seed = nullptr);
         /** Plans a compiled tale (main thread). 0 = refused. */
         std::uint32_t PlanTale(Arcs::Arc a);
@@ -180,6 +193,7 @@ namespace IntelEngine {
             bool tooFar = false;         // the step's visitor or shadow waits: the player is out of the tale's hold (logged once)
             float offerDue = -1.0f;      // game days: someone on the road from another hold reaches the player then (< 0: not set)
             bool offerSent = false;      // ... and their offer went out
+            float deferredAt = -1.0f;    // real seconds: the asker gave up reaching the player (not offered again at once)
             bool lingering = false;      // the step's person stays with the player while they talk (the script's)
             float lingerHold = -1.0f;    // real seconds: not asked to linger again before this (refused or let go)
             std::array<std::int8_t, Arcs::kSites> bossState{};   // last seen: 0 unknown, 1 alive and loaded, 2 dead, 3 gone
@@ -215,6 +229,8 @@ namespace IntelEngine {
         void SendOffer(std::uint32_t id, RE::Actor* asker);
         void SendJudge(std::uint32_t id, std::uint8_t node, RE::FormID who, std::string goal, std::array<std::string, 3> turns,
                        bool force);
+        /** The game's own small quests (favours with a name) of each person, by base: for the tale author only. */
+        std::unordered_map<RE::FormID, std::vector<RE::FormID>> m_favours;
         std::atomic<bool> m_taleBusy{false};
         std::atomic<float> m_questBusyUntil{-1.0f};   // real seconds: a quest moved on lately
         std::array<std::array<RE::FormID, 2>, Arcs::kSlots> m_holders{};

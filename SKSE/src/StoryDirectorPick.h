@@ -61,6 +61,7 @@ namespace IntelEngine::StoryDirector {
                                     // in the same hold, 2 another hold (or nobody knows where)
         bool bonded = false;        // close to the player in the game's own terms (travelled together, a confidant, wed)
         bool farRested = true;      // nobody came from another hold lately
+        bool known = true;          // they have had to do with the player before (SkyrimNet's record), or are close to them
     };
 
     // Nobody acts again this soon unless their reason became pressing: Elrindir came after the player twice running
@@ -105,6 +106,11 @@ namespace IntelEngine::StoryDirector {
 
     inline bool MayCome(const Verdict& v) {
         if (v.reach <= 0) return true;   // with the player, or of the place the player is in
+        // Someone who has never had to do with the player does not set out to find them, whatever the model made of
+        // their reason (the user, 2026-11-19: "it wouldn't make sense if a faendal or sven who neither have heard
+        // anything about the player, nor have met him, to just run to him for some errand"). Whoever lies in wait
+        // for the player on the hold's roads needs no acquaintance.
+        if (!v.known && !v.bonded && !Hostile(v.kind)) return false;
         if (v.reach == 1) {
             // Elsewhere in the same hold, hours on the road. Someone close to the player comes on a real reason; anyone
             // else needs a pressing one. What happens out on the hold's roads (a meeting, someone lying in wait) is

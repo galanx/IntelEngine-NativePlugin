@@ -201,6 +201,10 @@ namespace IntelEngine {
          * Returns interaction count + last interaction time per NPC.
          */
         std::vector<PlayerRelationship> GetPlayerRelationshipData();
+        /** Has this NPC ever had to do with the player, by the last relationship data read (the director reads it
+         *  on every round, off the game's thread)? False before the first read. Any thread. */
+        bool HasMetPlayer(RE::FormID formId) const;
+        std::vector<PlayerRelationship> ReadPlayerRelationshipData();
 
         /**
          * Get NPCs ranked by NPC-to-NPC event density (excluding player interactions).

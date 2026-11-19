@@ -238,6 +238,18 @@ static void BookRules() {
     Require(second != 0 && book.Accept(second, 1.1f), "a second arc");
     Require(book.Plan(Make(Pattern::Murder, 600), 1.2f) == 0, "two open at most");
     Require(book.Find(first)->slot != book.Find(second)->slot, "different journal slots");
+    // The quiet stretch: counted from the last offer made or answered or the last ending, never from a plan that
+    // was dropped unseen.
+    Book quiet;
+    Require(quiet.LastBeat() < 0.0f && QuietFor(quiet.LastBeat(), 5.0f, kQuietHours), "nothing told yet: no wait");
+    const auto told = quiet.Plan(Make(Pattern::Thief, 100), 2.0f);
+    Require(quiet.LastBeat() == 2.0f && !QuietFor(quiet.LastBeat(), 2.0f + 5.0f / 24.0f, kQuietHours), "five hours after an offer: still quiet");
+    Require(QuietFor(quiet.LastBeat(), 2.0f + 6.5f / 24.0f, kQuietHours), "six and a half hours after: free");
+    Require(quiet.EndPlanned(told, Ending::Declined, 2.5f) && quiet.LastBeat() == 2.5f, "a refusal counts from when it was said");
+    Require(quiet.LastBeat(told) < 0.0f, "the asking arc itself is left out");
+    const auto unseen = quiet.Plan(Make(Pattern::Feud, 200), 4.0f);
+    Require(quiet.EndPlanned(unseen, Ending::Lapsed, 4.1f) && quiet.LastBeat() == 2.5f, "a plan dropped unseen is no beat");
+    Require(QuietFor(3.0f, 2.0f, kQuietHours), "a clock that went back never blocks");
     // A planned arc whose offer never came lapses.
     Book lapse;
     const auto id = lapse.Plan(Make(Pattern::Murder, 700), 1.0f);
