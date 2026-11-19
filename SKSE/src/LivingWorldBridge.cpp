@@ -406,6 +406,7 @@ namespace IntelEngine {
 
     void LivingWorldBridge::Revert() {
         g_sceneBusyUntil.store(0.0);
+        ++m_scanEpoch;   // who serves the player is asked afresh (Track)
         std::scoped_lock lock(m_mutex);
         m_lives.clear();
         m_state = LivingWorld::DirectorState{};

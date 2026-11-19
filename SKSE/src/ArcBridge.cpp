@@ -1099,9 +1099,14 @@ namespace IntelEngine {
             if (actors[r] && OwnedBy(cell->GetOwner(), actors[r])) return static_cast<std::uint8_t>(r);
         }
         // A bed of theirs is here (the player is in the cell, so its references are loaded): where they sleep is home.
+        // Only furniture is asked who owns it. Asked of everything in the room, with "is this one of the faction that
+        // owns it" for every person of the story, this took 0.52 ms of one frame in the Bannered Mare (2026-11-19,
+        // the first time the look was timed): most of what stands in a room is no bed and falls out here.
         std::uint8_t found = 0;
         cell->ForEachReference([&](RE::TESObjectREFR* ref) {
             if (!ref || ref->IsDisabled()) return RE::BSContainer::ForEachResult::kContinue;
+            auto* base = ref->GetBaseObject();
+            if (!base || !base->Is(RE::FormType::Furniture)) return RE::BSContainer::ForEachResult::kContinue;
             auto* owner = ref->GetOwner();
             if (!owner) return RE::BSContainer::ForEachResult::kContinue;
             for (std::size_t r = 1; r < A::kRoles; ++r) {
@@ -1130,7 +1135,8 @@ namespace IntelEngine {
             cell->ForEachReference([&](RE::TESObjectREFR* ref) {
                 if (!ref || ref->IsDisabled() || ref->IsDeleted()) return RE::BSContainer::ForEachResult::kContinue;
                 auto* base = ref->GetBaseObject();
-                if (!base) return RE::BSContainer::ForEachResult::kContinue;
+                // Only a container or a bed can be the spot: the rest is not asked who owns it (the dear part).
+                if (!base || (!base->Is(RE::FormType::Container) && !base->Is(RE::FormType::Furniture))) return RE::BSContainer::ForEachResult::kContinue;
                 auto* refOwner = ref->GetOwner();
                 const bool theirs = OwnedBy(refOwner, owner) || (!refOwner && OwnedBy(cellOwner, owner));
                 if (!theirs) return RE::BSContainer::ForEachResult::kContinue;
@@ -1298,23 +1304,10 @@ namespace IntelEngine {
                 else f.bossDead[s] = boss->IsDead() && (pending.bossSeenAlive[s] || f.atDepths[s]);
             }
         }
-        // Someone held at a place: reached where they are bound, with no fight going on around them.
-        // Free from that moment, whichever step the story is on: a player who walks into the camp before asking around
-        // finds her all the same, and nobody is left kneeling in their bonds beside the one who came for them. The step
-        // that frees them is then done the moment the story comes to it.
-        if (tale && a->captive) {
-            if (a->captiveState == A::CaptiveBound) {
-                auto* held = actors[a->captive];
-                const bool reached = held && !held->IsDead() && !held->IsDisabled() && held->Is3DLoaded() && held->GetParentCell() == cell &&
-                                     held->GetPosition().GetDistance(player->GetPosition()) < 300.0f && !player->IsInCombat();
-                if (reached) {
-                    a->captiveState = A::CaptiveFreed;
-                    const bool asked = a->node < nodes.size() && nodes[a->node].kind == A::Kind::Free;
-                    logger::info("Arcs: #{} {} is free{}", id, NameOf(a->cast[a->captive]), asked ? "" : " (found before the story asked for it)");
-                }
-            }
-            f.captiveReached = a->captiveState >= A::CaptiveFreed;
-        }
+        // Someone held at a place is free once the player has cut them loose with their own hand (Activated, below),
+        // whichever step the story was on at the time: the step that frees them is done the moment the story comes to
+        // it, and nobody is left kneeling in their bonds beside the one who came for them.
+        if (tale && a->captive) f.captiveReached = a->captiveState >= A::CaptiveFreed;
         // A tale's ambush: its men are down, each dead or gone from the game, and at least one fell (they are placed
         // beside the player, in loaded ground: a death there is a real one).
         const bool ambushStep = tale && a->node < nodes.size() && nodes[a->node].kind == A::Kind::Ambush;
@@ -1657,6 +1650,52 @@ namespace IntelEngine {
         };
     }
 
+    namespace {
+        // The player lays hands on someone (activates them). The game sends this for every activation by anyone, of
+        // anything: all but the player's on an actor fall out at once, so it costs nothing while playing.
+        class ActivateSink : public RE::BSTEventSink<RE::TESActivateEvent> {
+        public:
+            RE::BSEventNotifyControl ProcessEvent(const RE::TESActivateEvent* e, RE::BSTEventSource<RE::TESActivateEvent>*) override {
+                if (!e || !e->actionRef || !e->objectActivated || !e->actionRef->IsPlayerRef()) return RE::BSEventNotifyControl::kContinue;
+                if (auto* actor = e->objectActivated->As<RE::Actor>()) ArcBridge::GetSingleton()->Activated(actor);
+                return RE::BSEventNotifyControl::kContinue;
+            }
+        };
+    }
+
+    // Someone a story holds bound is freed by the player's own hand: they walk up and activate them (the user,
+    // 2026-11-19: "freeing should be activate"). Coming within a few steps used to free them, wanted or not: sneaking
+    // past, or with their captors still standing around. Now nothing happens until the player does it, and then at
+    // once: the state here, and a word to the script, which takes the bonds off without waiting for its next look.
+    // In the middle of a fight too, at the player's own risk: the one freed still cannot die and is still left alone
+    // by the people of the place until they part from the player (the script's UnholdCaptive, keepSafe).
+    void ArcBridge::Activated(RE::Actor* actor) {
+        if (!actor || actor->IsDead() || actor->IsDisabled()) return;
+        std::uint32_t freed = 0;
+        {
+            std::scoped_lock lock(m_mutex);
+            for (auto& a : m_book.all) {
+                if (!A::IsOpen(a) || !a.captive || a.captiveState != A::CaptiveBound || a.cast[a.captive] != actor->GetFormID()) continue;
+                a.captiveState = A::CaptiveFreed;
+                const auto nodes = A::NodesOf(a);
+                const bool asked = a.node < nodes.size() && nodes[a.node].kind == A::Kind::Free;
+                logger::info("Arcs: #{} {} is cut loose by the player{}", a.id, NameOf(actor->GetFormID()),
+                             asked ? "" : " (before the story asked for it)");
+                freed = a.id;
+                break;
+            }
+        }
+        if (!freed) return;
+        if (auto* source = SKSE::GetModCallbackEventSource()) {
+            SKSE::ModCallbackEvent event{};
+            event.eventName = "IntelEngine_ArcUntie";
+            event.strArg = "";
+            event.numArg = static_cast<float>(freed);
+            event.sender = actor;
+            source->SendEvent(&event);
+        }
+    }
+
     void ArcBridge::QuestMovedOn(RE::TESQuest* quest) {
         const float until = RealSeconds() + kQuestBusySeconds;
         if (until - m_questBusyUntil.load() > 60.0f) {
@@ -1670,11 +1709,13 @@ namespace IntelEngine {
     void ArcBridge::Listen() {
         static GoldSink sink;
         static QuestStageSink stages;
+        static ActivateSink hands;
         static bool listening = false;
         if (listening) return;
         if (auto* events = RE::ScriptEventSourceHolder::GetSingleton()) {
             events->AddEventSink<RE::TESContainerChangedEvent>(&sink);
             events->AddEventSink<RE::TESQuestStageEvent>(&stages);
+            events->AddEventSink<RE::TESActivateEvent>(&hands);
             listening = true;
         }
     }
