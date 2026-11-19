@@ -37,7 +37,7 @@ namespace IntelEngine {
         std::vector<RE::TESObjectREFR*> SpotsAhead(float dx, float dy);
         /** Points on the ground ahead, from the navmesh of the loaded cells that way: road triangles first (the game
          *  marks them preferred), then any; 2500 to 7000 units out within 40 degrees and near the player's height, as x, y, z triples, best first. */
-        std::vector<float> GroundAhead(float dx, float dy);
+        std::vector<float> GroundAhead(float dx, float dy, bool roadOnly = false);
         /** The planned venture this actor (the ally or the companion) is on, 0 = none. */
         std::uint32_t VentureOf(RE::FormID actor) const;
         /** The InviteAlong action's eligibility: the id while they have met the player and not asked yet, else "". */
