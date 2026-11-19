@@ -41,11 +41,16 @@ template<class... T> void error(T&&...) {}
     methods = []
     for signature in ("void FactionPolitics::RecalculateRelationScores(",
                       "bool FactionPolitics::EndWar(",
+                      "std::optional<FactionConfig> FactionPolitics::GetFaction(",
                       "int FactionPolitics::RecordOffScreenBattle("):
         start = source.index("    " + signature)
         end = source.index("\n    }", start) + len("\n    }")
         methods.append(source[start:end])
     (work / "FactionPoliticsMethods.inc").write_text(
+        # EndWar asks the game's own civil war (VanillaWar.h) and looks the two factions up.
+        "#include \"VanillaWar.h\"\n#include <cctype>\n"
+        "static std::string ToLower(std::string value) {\n"
+        " for (char& c : value) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));\n return value;\n}\n"
         "namespace IntelEngine {\n" + "\n".join(methods) +
         "\nvoid FactionPolitics::WritePoliticalStateFile() {}\n}\n", encoding="utf-8")
     executable = work / "check.exe"

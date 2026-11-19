@@ -1,4 +1,5 @@
 #include "ArcBridge.h"
+#include "Safe.h"
 #include "HeartBridge.h"
 
 #include "CellAnalyzer.h"
@@ -618,6 +619,7 @@ namespace IntelEngine {
         // The place (index + 1) a tale's step is about: where to go, what to kill there, or what its master carries.
         std::uint8_t SiteOfStep(const A::Arc& a, const A::Node& n) {
             if ((n.kind == A::Kind::Delve || n.kind == A::Kind::Slay) && n.site) return n.site;
+            if (n.kind == A::Kind::Free && a.captiveSite) return a.captiveSite;
             if (n.kind == A::Kind::Have && n.prop < A::kProps && a.propSite[n.prop]) return a.propSite[n.prop];
             return 0;
         }
@@ -630,6 +632,13 @@ namespace IntelEngine {
         RE::TESForm* PlaceMarker(const A::Arc& a, const A::Node& n, std::uint8_t site) {
             const auto s = static_cast<std::size_t>(site - 1u);
             auto* boss = a.siteBoss[s] ? RE::TESForm::LookupByID<RE::Actor>(a.siteBoss[s]) : nullptr;
+            // Someone held there: the marker is on them once they are at the heart of the place; until then it
+            // leads to the place like any other step out there, never to its master.
+            if (n.kind == A::Kind::Free) {
+                auto* held = a.captive ? RE::TESForm::LookupByID<RE::Actor>(a.cast[a.captive]) : nullptr;
+                if (held && a.captiveState >= A::CaptiveBound && !held->IsDisabled() && !held->IsDead()) return held;
+                boss = nullptr;
+            }
             // What is to be found is on the master, alive or dead: the marker is on the body, wherever the fight
             // ended (played at White River Watch: the chief fell five hundred units from his room, and the marker
             // for "take the stone from him" pointed at the empty room). Held by the marker alias, the body also
@@ -1178,6 +1187,12 @@ namespace IntelEngine {
                 else f.bossDead[s] = boss->IsDead() && (pending.bossSeenAlive[s] || f.atDepths[s]);
             }
         }
+        // Someone held at a place: reached where they are bound, with no fight going on around them.
+        if (tale && a->captive && a->captiveState == A::CaptiveBound) {
+            auto* held = actors[a->captive];
+            f.captiveReached = held && !held->IsDead() && !held->IsDisabled() && held->Is3DLoaded() && held->GetParentCell() == cell &&
+                               held->GetPosition().GetDistance(player->GetPosition()) < 300.0f && !player->IsInCombat();
+        }
         // A tale's ambush: its men are down, each dead or gone from the game, and at least one fell (they are placed
         // beside the player, in loaded ground: a death there is a real one).
         const bool ambushStep = tale && a->node < nodes.size() && nodes[a->node].kind == A::Kind::Ambush;
@@ -1215,6 +1230,13 @@ namespace IntelEngine {
         const auto change = A::Advance(*a, f, now);
         pending.answer = -1;
         std::int32_t bits = 0;
+        // The step that frees someone is done: they are free from here on (the script unties them and has them come
+        // along; WatchCaptives reads the state).
+        if (tale && nodeBefore < nodes.size() && nodes[nodeBefore].kind == A::Kind::Free && f.captiveReached &&
+            a->captiveState == A::CaptiveBound && (a->node != nodeBefore || change.ending != A::Ending::None)) {
+            a->captiveState = A::CaptiveFreed;
+            logger::info("Arcs: #{} {} is free", id, NameOf(a->cast[a->captive]));
+        }
         // The ambush's step was left with men still standing (the player beaten, or they were talked out of it): they
         // stand down and leave.
         if (ambushStep && (a->node != nodeBefore || change.ending != A::Ending::None)) {
@@ -1286,6 +1308,13 @@ namespace IntelEngine {
                 auto* anchor = a->siteAnchor[s] ? RE::TESForm::LookupByID<RE::TESObjectREFR>(a->siteAnchor[s]) : nullptr;
                 if (needed && InTheWorldNow(anchor)) bits |= 1 << 14;
             }
+            // Someone held there and still away: they are put at the heart of the place now that it is in the game
+            // (the script's PlaceCaptive; asked again every look until it is done).
+            if (a->captive && a->captiveSite && a->captiveState == A::CaptiveAway) {
+                const auto s = static_cast<std::size_t>(a->captiveSite - 1u);
+                auto* anchor = a->siteAnchor[s] ? RE::TESForm::LookupByID<RE::TESObjectREFR>(a->siteAnchor[s]) : nullptr;
+                if (InTheWorldNow(anchor)) bits |= 1 << 14;
+            }
             // The journal's marker for a step out in the world moves with what is in the game (the place on the map,
             // nothing while inside, the heart, the master, the body): said to the script when it has moved.
             if (a->node < nodes.size()) {
@@ -1344,7 +1373,7 @@ namespace IntelEngine {
             // The step's person has started talking with the player: they stay with the player until the talk is over
             // (the user, 2026-11-18: "Only if the player doesnt respond for a long time, the npc gets bored and walks
             // off"). Jon Battle-Born walked home in the middle of being asked about a goblet (2026-11-19).
-            if (n.who && n.kind != A::Kind::Wait && n.kind != A::Kind::Have && n.kind != A::Kind::Ambush && n.kind != A::Kind::Stalk && f.with[n.who] && f.spoke[n.who] && !f.dead[n.who] &&
+            if (n.who && n.kind != A::Kind::Wait && n.kind != A::Kind::Have && n.kind != A::Kind::Ambush && n.kind != A::Kind::Stalk && n.kind != A::Kind::Free && f.with[n.who] && f.spoke[n.who] && !f.dead[n.who] &&
                 !pending.lingering && RealSeconds() >= pending.lingerHold) {
                 pending.lingering = true;
                 bits |= 1 << 6;
@@ -1621,6 +1650,17 @@ namespace IntelEngine {
         a->siteBoss[s] = boss ? boss->GetFormID() : 0u;
         logger::info("Arcs: #{} {} waits at the heart of {} ({:08X})", id, a->bossName[s].empty() ? std::string("its master") : a->bossName[s],
                      NameOf(a->site[s]), a->siteBoss[s]);
+    }
+
+    void ArcBridge::Captive(std::uint32_t id, int state) {
+        std::scoped_lock lock(m_mutex);
+        auto* a = m_book.Find(id);
+        if (!a || !a->captive || state < 0 || state > A::CaptiveHome) return;
+        // Free they become by the story's step alone (Advance); the script tells the rest.
+        if (state == A::CaptiveFreed || a->captiveState == state) return;
+        static constexpr const char* kStates[] = {"is to be taken", "is away, taken", "is bound at the heart of", "is free", "has gone their own way from"};
+        logger::info("Arcs: #{} {} {} {}", id, NameOf(a->cast[a->captive]), kStates[state], a->captiveSite ? NameOf(a->site[a->captiveSite - 1u]) : std::string());
+        a->captiveState = static_cast<std::uint8_t>(state);
     }
 
     void ArcBridge::AmbushLook(std::uint32_t id, A::Arc& a, Pending& pending, const A::Node& n, float now, int placed) {
@@ -1905,6 +1945,19 @@ namespace IntelEngine {
         if (name == "effectprop") return pending != m_pending.end() ? pending->second.effectProp : 0;
         if (name == "gangsite") return pending != m_pending.end() ? pending->second.gangSite - 1 : -1;
         if (name == "camefar") return (a->flags & A::Flag::CameFar) ? 1 : 0;
+        if (name == "captivestate") return a->captive ? static_cast<int>(a->captiveState) : -1;
+        if (name == "captiveout") {
+            // The player has left the place someone was held at, and stands under the open sky: they part here.
+            if (!a->captive || !a->captiveSite) return 1;
+            auto* player = RE::PlayerCharacter::GetSingleton();
+            auto* cell = player ? player->GetParentCell() : nullptr;
+            if (!cell || cell->IsInteriorCell()) return 0;
+            auto* site = RE::TESForm::LookupByID<RE::BGSLocation>(a->site[a->captiveSite - 1u]);
+            for (auto* at = player->GetCurrentLocation(); at; at = at->parentLoc) {
+                if (at == site) return 0;
+            }
+            return 1;
+        }
         if (name == "ambushdo") return pending != m_pending.end() ? pending->second.ambushDo : 0;
         if (name == "ambushtries") return pending != m_pending.end() ? pending->second.ambushTries : 0;
         if (name == "ambushchase") return pending != m_pending.end() && pending->second.chasing ? 1 : 0;
@@ -1986,6 +2039,10 @@ namespace IntelEngine {
         if (name == "suspect3") return actor(A::RSuspect3);
         if (name.starts_with("role")) return actor(static_cast<std::size_t>(std::atoi(name.c_str() + 4)));
         if (name == "place") return a->place ? RE::TESForm::LookupByID(a->place) : nullptr;
+        if (name == "captive") return a->captive ? actor(a->captive) : nullptr;
+        if (name == "captiveanchor") {
+            return a->captive && a->captiveSite && a->siteAnchor[a->captiveSite - 1u] ? RE::TESForm::LookupByID(a->siteAnchor[a->captiveSite - 1u]) : nullptr;
+        }
         if (name.starts_with("bossbase") || name.starts_with("siteanchor") || name.starts_with("gangbase")) {
             // The master a place of the story needs (its own kind), and where its heart is; "gangbase<k>" the company
             // of the place a look asked for (PlaceGang).
@@ -2118,6 +2175,7 @@ namespace IntelEngine {
             return s < A::kSites ? a->bossName[s] : std::string();
         }
         if (name == "thugname") return a->thugName;
+        if (name == "captiveplace") return a->captive && a->captiveSite ? NameOf(a->site[a->captiveSite - 1u]) : std::string();
         if (name == "thugwhy") {
             // What the men know of their errand (a fact in their bios): who paid them, and for what.
             for (const auto& n : A::NodesOf(*a)) {
@@ -2381,8 +2439,8 @@ namespace IntelEngine {
             if (!entries.is_array()) return;
             int withdrawn = 0;
             for (const auto& entry : entries) {
-                const auto label = entry.value("display_name", std::string());
-                const int id = entry.value("id", 0);
+                const auto label = Safe::Text(entry, "display_name");
+                const int id = Safe::Int(entry, "id");
                 if (id <= 0 || !label.starts_with(kRumorLabel) || known.contains(id)) continue;
                 if (SkyrimNetAPI::RemoveWorldKnowledge(id)) ++withdrawn;
             }
@@ -2406,7 +2464,7 @@ namespace IntelEngine {
     }
 
     void ArcBridge::Load(SKSE::SerializationInterface* intfc, std::uint32_t version, std::uint32_t length) {
-        if (version < 1 || version > A::kRecordVersion || length > (1u << 20)) {   // older records load too
+        if (version < 1 || version > A::kRecordVersion || length > (1u << 23)) {   // older records load too; 24 stories at their longest stay under this
             logger::warn("Arcs: skipping a co-save record of version {} ({} bytes)", version, length);
             return;
         }
@@ -2439,7 +2497,18 @@ namespace IntelEngine {
             }
             resolve(a.place);
             resolve(a.scene);
-            return false;
+            // Its places out in the world and whoever was placed for it (made at run time: those stay as they are).
+            bool lostPlace = false;
+            for (std::size_t s = 0; s < A::kSites; ++s) {
+                const bool had = a.site[s] != 0;
+                resolve(a.site[s]);
+                resolve(a.siteAnchor[s]);
+                resolve(a.siteBoss[s]);
+                lostPlace = lostPlace || (had && a.site[s] == 0);
+            }
+            for (auto& man : a.thug) resolve(man);
+            // A story still running whose place left the load order cannot be finished: it is let go.
+            return lostPlace && A::IsLive(a);
         });
         std::scoped_lock lock(m_mutex);
         m_book = std::move(book);
@@ -2513,6 +2582,18 @@ namespace IntelEngine {
             ArcBridge::GetSingleton()->BossPlaced(U(id), site, boss);
         }
         void ArcGangPlaced(RE::StaticFunctionTag*, std::int32_t id) { ArcBridge::GetSingleton()->GangPlaced(U(id)); }
+        void ArcCaptive(RE::StaticFunctionTag*, std::int32_t id, std::int32_t state) { ArcBridge::GetSingleton()->Captive(U(id), state); }
+        // A rescue asked for by the old dungeon master or the dashboard: a story of the town about someone held at a
+        // place near it, written and run like any other tale, or nothing.
+        bool ArcRequestRescue(RE::StaticFunctionTag*, RE::Actor* giver) {
+            if (!giver) return false;
+            ArcBridge::TaleSeed seed;
+            seed.kind = "rescue";
+            const int reach = NPCIndex::ReachOf(giver);
+            seed.fromAfar = reach != 0;
+            seed.otherHold = reach >= 2;
+            return ArcBridge::GetSingleton()->RequestTale(giver, {}, &seed);
+        }
         void ArcThugPlaced(RE::StaticFunctionTag*, std::int32_t id, std::int32_t k, RE::Actor* thug) {
             ArcBridge::GetSingleton()->ThugPlaced(U(id), k, thug);
         }
@@ -2600,6 +2681,8 @@ namespace IntelEngine {
         a_vm->RegisterFunction("ArcLingerOver", script, ArcLingerOver); ++count;
         a_vm->RegisterFunction("ArcBossPlaced", script, ArcBossPlaced); ++count;
         a_vm->RegisterFunction("ArcGangPlaced", script, ArcGangPlaced); ++count;
+        a_vm->RegisterFunction("ArcCaptive", script, ArcCaptive); ++count;
+        a_vm->RegisterFunction("ArcRequestRescue", script, ArcRequestRescue); ++count;
         a_vm->RegisterFunction("ArcThugPlaced", script, ArcThugPlaced); ++count;
         a_vm->RegisterFunction("ArcAmbushDone", script, ArcAmbushDone); ++count;
         a_vm->RegisterFunction("ArcInWilds", script, ArcInWilds); ++count;

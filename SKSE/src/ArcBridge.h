@@ -75,6 +75,8 @@ namespace IntelEngine {
         static RE::TESBoundObject* GangBase(std::uint8_t kind, std::uint32_t seed);
         /** The script placed a place's master (Papyrus' PlaceAtMe resolves the game's leveled lists). */
         void BossPlaced(std::uint32_t id, int site, RE::Actor* boss);
+        /** The script moved the one held at a place on (Arcs::CaptiveState: away, bound at the heart, gone home). */
+        void Captive(std::uint32_t id, int state);
         /** The script placed the company a look asked for. */
         void GangPlaced(std::uint32_t id);
         /** The script placed one of an ambush's men (k = 0 leads). */

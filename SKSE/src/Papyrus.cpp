@@ -120,6 +120,7 @@ namespace IntelEngine::Papyrus {
     void LivingWorldOrderDone(RE::StaticFunctionTag*, bool);
     RE::BSFixedString LivingWorldDescribe(RE::StaticFunctionTag*, RE::Actor*);
     bool LivingWorldMayMove(RE::StaticFunctionTag*, RE::Actor*, RE::BSFixedString);
+    bool LivingWorldQuestHolds(RE::StaticFunctionTag*, RE::Actor*);
     RE::TESObjectREFR* ResolveSkyrimNetPlace(RE::StaticFunctionTag*, RE::Actor*, RE::BSFixedString);
     float SkyrimNetPlaceOffset(RE::StaticFunctionTag*, RE::Actor*, std::int32_t);
     RE::TESForm* ResolveItemByName(RE::StaticFunctionTag*, RE::BSFixedString);
@@ -511,6 +512,7 @@ namespace IntelEngine::Papyrus {
         a_vm->RegisterFunction("LivingWorldOrderDone", SCRIPT_NAME, LivingWorldOrderDone); ++count;
         a_vm->RegisterFunction("LivingWorldDescribe", SCRIPT_NAME, LivingWorldDescribe); ++count;
         a_vm->RegisterFunction("LivingWorldMayMove", SCRIPT_NAME, LivingWorldMayMove); ++count;
+        a_vm->RegisterFunction("LivingWorldQuestHolds", SCRIPT_NAME, LivingWorldQuestHolds); ++count;
         a_vm->RegisterFunction("ResolveSkyrimNetPlace", SCRIPT_NAME, ResolveSkyrimNetPlace); ++count;
         a_vm->RegisterFunction("SkyrimNetPlaceOffset", SCRIPT_NAME, SkyrimNetPlaceOffset); ++count;
         a_vm->RegisterFunction("ResolveItemByName", SCRIPT_NAME, ResolveItemByName); ++count;
@@ -2016,7 +2018,7 @@ namespace IntelEngine::Papyrus {
                         } else if (value.is_null()) {
                             s_cachedFields[keyLower] = "";
                         } else {
-                            s_cachedFields[keyLower] = value.dump();
+                            s_cachedFields[keyLower] = value.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
                         }
                     }
 
@@ -2647,6 +2649,14 @@ namespace IntelEngine::Papyrus {
 
     bool LivingWorldMayMove(RE::StaticFunctionTag*, RE::Actor* npc, RE::BSFixedString storyType) {
         return LivingWorldBridge::GetSingleton()->MayMoveForStory(npc, storyType.c_str() ? storyType.c_str() : "");
+    }
+
+    // Held by the game right now, whatever the settings say: a scene they are part of, or a quest of the player's whose
+    // shown objective points at them. (Neloth was walked off by a travel task in the middle of his own quest.)
+    bool LivingWorldQuestHolds(RE::StaticFunctionTag*, RE::Actor* npc) {
+        if (!npc) return false;
+        if (npc->GetCurrentScene()) return true;
+        return LivingWorldBridge::QuestTie(npc, false) == 2;
     }
 
     /** 4.0 living world: a story moment really started with this NPC (the success path only, never a rejection). */
@@ -3516,7 +3526,7 @@ namespace IntelEngine::Papyrus {
         for (const auto& [formId, count] : counts) {
             j[std::to_string(formId)] = count;
         }
-        return j.dump();
+        return j.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
     }
 
     // ==========================================================================
@@ -4510,7 +4520,15 @@ namespace IntelEngine::Papyrus {
                          factionA.c_str());
             return db->GetRelation(factionA.c_str(), factionB.c_str());
         }
-        return db->AdjustRelation(factionA.c_str(), factionB.c_str(), delta);
+        // Ids as factions.yaml writes them, whatever case they came in; an id that is no faction changes nothing (it
+        // used to leave an orphan row behind).
+        const auto a = FactionPolitics::GetSingleton()->CanonicalId(factionA.c_str());
+        const auto b = FactionPolitics::GetSingleton()->CanonicalId(factionB.c_str());
+        if (a.empty() || b.empty()) {
+            logger::warn("FactionPolitics: relation adjustment for an unknown faction: '{}' / '{}'", factionA.c_str(), factionB.c_str());
+            return 0;
+        }
+        return db->AdjustRelation(a, b, delta);
     }
 
     int GetPlayerFactionStanding(RE::StaticFunctionTag*, RE::BSFixedString factionId) {
@@ -4523,7 +4541,12 @@ namespace IntelEngine::Papyrus {
         auto* db = PoliticalDB::GetSingleton();
         if (!db->IsReady()) return 0;
         float gameTime = RE::Calendar::GetSingleton() ? RE::Calendar::GetSingleton()->GetHoursPassed() : 0.0f;
-        return db->AdjustPlayerStanding(factionId.c_str(), delta, gameTime);
+        const auto id = FactionPolitics::GetSingleton()->CanonicalId(factionId.c_str());
+        if (id.empty()) {
+            logger::warn("FactionPolitics: standing adjustment for an unknown faction: '{}'", factionId.c_str());
+            return 0;
+        }
+        return db->AdjustPlayerStanding(id, delta, gameTime);
     }
 
     bool IsFactionAtWar(RE::StaticFunctionTag*, RE::BSFixedString factionA, RE::BSFixedString factionB) {
@@ -4589,6 +4612,7 @@ namespace IntelEngine::Papyrus {
 
         // Phase A — main thread.
         auto snap = politics->BuildPoliticsTickSnapshot(currentGameTime);
+        politics->HoldToTheGamesWar(snap);   // first: what the game's own civil war allows
         politics->EnforceWarRule(snap);  // fix 94: before the context build so this tick's DM sees the new war
 
         AsyncDispatch::Submit([snap = std::move(snap),
@@ -4622,7 +4646,7 @@ namespace IntelEngine::Papyrus {
     }
 
     RE::BSFixedString GetPoliticalEventsAfter(RE::StaticFunctionTag*, int afterId, int limit) {
-        return RE::BSFixedString(PoliticalDB::GetSingleton()->GetPoliticalEventsAfter(afterId, limit).dump());
+        return RE::BSFixedString(PoliticalDB::GetSingleton()->GetPoliticalEventsAfter(afterId, limit).dump(-1, ' ', false, nlohmann::json::error_handler_t::replace));
     }
 
     RE::BSFixedString GetFactionsJson(RE::StaticFunctionTag*) {
@@ -4750,6 +4774,13 @@ namespace IntelEngine::Papyrus {
 
         std::string targetFacId(targetFaction.c_str());
         std::string attackerFacId(attackerFaction.c_str());
+
+        // Never in the player's own home: a leader who happens to stand there (a spouse, a guest) drew the assassin
+        // into the house ("random assassins spawn in player homes").
+        if (CellAnalyzer::GetSingleton()->IsPlayerInOwnHome()) {
+            logger::info("ExecuteAssassination: not in the player's own home");
+            return nullptr;
+        }
 
         // 1. Find leader in player's cell/proximity
         auto leaders = GetFactionLeaderActors(nullptr, targetFaction);
@@ -5118,6 +5149,11 @@ namespace IntelEngine::Papyrus {
             if (actor->IsInCombat()) return false;
             // Only humanoid NPCs — skip creatures, animals, daedra (e.g., Volkihar death hounds)
             if (kwActorTypeNPC && !actor->HasKeyword(kwActorTypeNPC)) return false;
+            // A person of a playable people, no child, nobody made at run time, and no enemy of the player: a mod's
+            // creature that carries the "NPC" keyword and its faction was sent as a faction's messenger, and
+            // everything in sight attacked it ("a little banekamp creature").
+            if (actor->IsDynamicForm() || actor->IsChild() || actor->IsHostileToActor(player)) return false;
+            if (auto* race = actor->GetRace(); !race || !race->GetPlayable() || race->IsChildRace()) return false;
 
             // Skip high-status NPCs (Jarls, court wizards, stewards, housecarls)
             if (NPCIndex::IsHighStatus(actor)) return false;
@@ -5285,8 +5321,13 @@ namespace IntelEngine::Papyrus {
         // attack everyone on sight, then add them to the political faction they fight for.
         // For faction templates: soldiers already belong to the right faction.
         // Battle factions (Intel_BattleSideA/B) are assigned later by Papyrus.
+        // Every soldier, from a fallback template or a faction's own, belongs to the side they were called up for
+        // and to nothing else. Only fallback bandits used to be stripped: soldiers from a real template kept its
+        // factions, and where that template is the game's bandits, thieves or Forsworn (several of the default
+        // factions) they attacked the player on sight, a player who had sided with nobody ("random people spawn and
+        // attack me", gone with politics switched off). A hold's guards kept their crime faction, too.
         bool isFallbackTemplate = templateId.empty() || !LookupLeveledActor(templateId.c_str());
-        if (isFallbackTemplate) {
+        {
             // Look up the political faction's Skyrim engine faction (e.g., CWSonsFaction)
             RE::TESFaction* politicalFaction = nullptr;
             auto factionConfig = FactionPolitics::GetSingleton()->GetFaction(factionId);
@@ -5306,7 +5347,7 @@ namespace IntelEngine::Papyrus {
                     return false;
                 });
                 for (auto* fac : toRemove) {
-                    actor->AddToFaction(fac, -1);
+                    if (fac != politicalFaction) actor->AddToFaction(fac, -1);
                 }
                 // Add to the political faction they fight for
                 if (politicalFaction) {
@@ -5896,7 +5937,7 @@ namespace IntelEngine::Papyrus {
                 if (arr[index].is_string()) {
                     return RE::BSFixedString(arr[index].get<std::string>());
                 }
-                return RE::BSFixedString(arr[index].dump());
+                return RE::BSFixedString(arr[index].dump(-1, ' ', false, nlohmann::json::error_handler_t::replace));
             }
         } catch (...) {}
         return RE::BSFixedString("");

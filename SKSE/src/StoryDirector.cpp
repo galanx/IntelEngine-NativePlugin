@@ -1,4 +1,5 @@
 #include "StoryDirector.h"
+#include "Safe.h"
 
 #include "AsyncDispatch.h"
 #include "LivingWorldBridge.h"
@@ -158,8 +159,8 @@ namespace IntelEngine::StoryDirector {
                         if (open != std::string::npos && close != std::string::npos && close > open) {
                             const auto json = nlohmann::json::parse(text.substr(open, close - open + 1), nullptr, false);
                             if (json.is_object()) {
-                                level = json.value("reason", "none");
-                                kind = json.value("kind", "");
+                                level = Safe::Text(json, "reason", "none");
+                                kind = Safe::Text(json, "kind");
                                 answered = LevelOf(level) >= 0;
                             }
                         }
@@ -179,7 +180,7 @@ namespace IntelEngine::StoryDirector {
                 [session, index](const char*, const char* resultJson, int success) {
                     const auto json = nlohmann::json::parse(resultJson ? resultJson : "", nullptr, false);
                     if (!success) {
-                        const std::string error = json.is_object() ? json.value("error", "") : "";
+                        const std::string error = Safe::Text(json, "error");
                         if (error == "no_decisions_route") {
                             // No decision provider (the player is not on OpenRouter): the chat model answers instead.
                             g_noDecisionRoute.store(true);
@@ -197,14 +198,14 @@ namespace IntelEngine::StoryDirector {
                         const auto& answers = json["answers"];
                         if (answers.contains("reason") && answers["reason"].is_object()) {
                             const auto& reason = answers["reason"];
-                            level = reason.value("choice", "none");
+                            level = Safe::Text(reason, "choice", "none");
                             if (reason.contains("probabilities") && reason["probabilities"].is_object()) {
                                 for (const auto& [key, p] : reason["probabilities"].items()) {
                                     if (p.is_number()) probabilities.emplace_back(key, p.get<float>());
                                 }
                             }
                         }
-                        if (answers.contains("kind") && answers["kind"].is_object()) kind = answers["kind"].value("choice", "");
+                        if (answers.contains("kind") && answers["kind"].is_object()) kind = Safe::Text(answers["kind"], "choice");
                     }
                     Record(session, index, LevelOf(level) >= 0, level, probabilities, kind);
                 });
@@ -267,7 +268,7 @@ namespace IntelEngine::StoryDirector {
                 std::string why;
                 {
                     const auto ctx = nlohmann::json::parse(session->contexts[index], nullptr, false);
-                    why = ctx.is_object() ? ctx.value("candidate", std::string()) : std::string();
+                    why = Safe::Text(ctx, "candidate");
                 }
                 auto asked = std::make_shared<std::promise<bool>>();
                 auto future = asked->get_future();
@@ -300,6 +301,7 @@ namespace IntelEngine::StoryDirector {
             // 4.0 quests (docs/QUESTS.md): a quest moment is planned by the engine first, every step a fact of the game;
             // the 3.8 writer path runs only when no quest fits this person now (rescues, faction quests).
             const bool venture = chosen.kind == "road_encounter" && LivingWorldBridge::GetSingleton()->HasOwnLife(chosen.formId);
+            bool noEngineQuest = false;
             if (chosen.kind == "quest" || venture) {
                 auto planned = std::make_shared<std::promise<std::uint32_t>>();
                 auto future = planned->get_future();
@@ -351,7 +353,8 @@ namespace IntelEngine::StoryDirector {
                         }
                     }
                 }
-                logger::info("[Director] no quest of the engine fits {} now: the dungeon master writes one as before", chosen.name);
+                logger::info("[Director] no quest of the engine fits {} now: the dungeon master may ask for a rescue or a faction's quest", chosen.name);
+                noEngineQuest = chosen.kind == "quest";
             }
             // The dungeon master sees that one person and that kind of moment only (a quest keeps its sub-types).
             std::unordered_set<std::string> writerExcluded = session->excluded;
@@ -360,6 +363,24 @@ namespace IntelEngine::StoryDirector {
                 const bool same = t == chosen.kind || (t.starts_with(chosen.kind + "_")) ||
                                   (chosen.kind == "ambush" && t == "faction_ambush");
                 if (!same) writerExcluded.insert(type);
+            }
+            if (noEngineQuest) {
+                // The engine's own quests (a bounty, a keepsake, a venture, a tale) stand in for the old "clear out" and
+                // "find an item": where none of them fits, the old ones are not written in their place (they were the
+                // quests that would not complete, had no text, or put a dragon inside a fort). What the dungeon master
+                // may still ask for: a rescue, which becomes a story of the town with someone held at a place
+                // (StoryEngine.HandleQuestDispatch -> ArcRequestRescue), and the factions' own quests.
+                writerExcluded.insert("quest_combat");
+                writerExcluded.insert("quest_find_item");
+                bool left = false;
+                for (const char* type : {"quest_rescue", "quest_faction_combat", "quest_faction_rescue", "quest_faction_battle"}) {
+                    left = left || !writerExcluded.contains(type);
+                }
+                if (!left) {
+                    logger::info("[Director] nothing left to ask for {}: no quest comes of it", chosen.name);
+                    session->done("");
+                    return;
+                }
             }
             const auto md = NPCIndex::GetSingleton()->RenderDungeonMasterContext(session->snap, {session->pool[index]}, writerExcluded);
             logger::info("[Director] {} acts: a {} moment ({} reason)", chosen.name, chosen.kind, kLevels[std::clamp(chosen.level, 0, 5)]);
@@ -415,7 +436,7 @@ namespace IntelEngine::StoryDirector {
                 list.push_back({{"key", kind}, {"description", Replace(KindMeaning(kind), "{player}", playerName)}});
             }
             context["kinds"] = list;
-            std::string json = context.dump();
+            std::string json = context.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
             // Their block, already JSON-escaped by the renderer, goes in as the first field.
             const auto md = kinds.empty() ? std::string()
                                           : NPCIndex::GetSingleton()->RenderDungeonMasterContext(session->snap, {candidate}, session->excluded);

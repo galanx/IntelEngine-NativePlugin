@@ -34,6 +34,15 @@ with tempfile.TemporaryDirectory(prefix="pe-prompts-") as directory:
                 (b"(Imperial Legion, Stormcloaks, Thalmor): border_skirmish, war_declaration", b"(Imperial Legion, Stormcloaks, Thalmor): border_skirmish, and war_declaration only for pairs with `war_possible: true`")]:
                 assert o in data, o
                 data = data.replace(o, n)
+            # 4.0: the game's own civil war is told at the head of the lore section, with or without Political Engine
+            # (VanillaWar.h). The same paragraph goes into the baseline, so that only the PE gating is compared.
+            current = (repo / (base+name)).read_bytes()
+            head, after = b"## Lore & Geography", b"Each faction controls a specific hold"
+            start = current.index(head) + len(head)
+            told = current[start:current.index(after, start)]
+            assert b"civil_war" in told, "the lore section tells of the game's own civil war"
+            at = data.index(head) + len(head)
+            data = data[:at] + told + data[data.index(after, at):]
         (work / f"baseline{i}.prompt").write_bytes(data)
     (work / "check.cpp").write_text(r'''
 #include <inja/inja.hpp>

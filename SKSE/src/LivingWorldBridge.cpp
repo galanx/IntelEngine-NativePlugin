@@ -1,4 +1,5 @@
 #include "LivingWorldBridge.h"
+#include "Safe.h"
 
 #include "StorylineBridge.h"
 
@@ -286,8 +287,8 @@ namespace IntelEngine {
             if (firstAfterLoad) return;  // where a save loads is no arrival
         }
         const auto seam = LivingWorld::ClassifySeam(KindOf(from), KindOf(location));
-        logger::info("LivingWorld: the player went from '{}' to '{}' (seam {})", from ? from->GetFullName() : "the wilds",
-                     location ? location->GetFullName() : "the wilds", static_cast<int>(seam));
+        logger::info("LivingWorld: the player went from '{}' to '{}' (seam {})", from ? Safe::Name(from->GetFullName(), "a place") : "the wilds",
+                     location ? Safe::Name(location->GetFullName(), "a place") : "the wilds", static_cast<int>(seam));
         if (seam == LivingWorld::Seam::InDungeon) return;
         if (seam == LivingWorld::Seam::OnRoad) {
             // Wandering between named wilderness places: a look at most every two game hours.

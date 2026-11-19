@@ -240,6 +240,8 @@ namespace IntelEngine {
             std::string playerHold;
             std::vector<PoliticsLeaderSnapshot> leaders;
             nlohmann::json vanillaSides = nlohmann::json::array();
+            std::uint8_t civilWar = 0;   // VanillaWar::State: the game's own civil war as the game keeps it
+            int playerSide = 0;          // 0 none, 1 the Empire, 2 the Stormcloaks
         };
 
         /**
@@ -373,6 +375,17 @@ namespace IntelEngine {
 
         /** fix 94: declare the lowest-scored eligible Critical pair (Rule 3) in code. Returns war id or -1. */
         int EnforceWarRule(const PoliticsTickSnapshot& snap);
+        /** Main thread, each political tick before the war rule: the simulation is held to the game's own civil war
+         *  (VanillaWar.h): no war between the Empire and the Stormcloaks goes on under the truce or after the game
+         *  decided it, the Empire and the Thalmor stay short of war while the Concordat binds them, and the Empire and
+         *  the Stormcloaks never drift into friendship. */
+        void HoldToTheGamesWar(const PoliticsTickSnapshot& snap);
+        /** The id of a faction as factions.yaml writes it, whatever case it was asked for in ("CollegeOfWinterholdFaction"
+         *  for "CollegeofWinterholdFaction"); empty when there is no such faction. */
+        std::string CanonicalId(const std::string& anyCase) const;
+        /** The game's own civil war as last read (VanillaWar::State). Any thread. */
+        std::uint8_t CivilWarState() const { return vanillaWar_.load(); }
+        int CivilWarPlayerSide() const { return vanillaAllegiance_.load(); }
 
         /** Process one war tick for all active wars.
          *  Applies morale decay, checks surrender conditions.
@@ -506,6 +519,9 @@ namespace IntelEngine {
         // Prevents repeated boosting if the player later loses standing through gameplay.
         // Cleared on Initialize() (new game / load).
         std::unordered_set<std::string> vanillaSynced_;
+        std::unordered_map<std::string, std::string> idByLower_;   // lowercase id -> id as written (ids are asked for in any case)
+        std::atomic<std::uint8_t> vanillaWar_{0};                  // VanillaWar::State, read on the game's thread each tick
+        std::atomic<int> vanillaAllegiance_{0};
     };
 
 }  // namespace IntelEngine

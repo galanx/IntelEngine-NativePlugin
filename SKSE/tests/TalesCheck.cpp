@@ -376,7 +376,7 @@ static void Adventure() {
     Require(back.Find(id)->bossName[0] == "Grelka the Silent" && back.Find(id)->graph[1].site == 1 && back.Find(id)->propSite[0] == 1, "whole");
     // A save made before ambushes (record version 4: no ambush block) still loads.
     auto v4 = bytes;
-    v4.resize(v4.size() - (3 * 4 + 2 + 1));
+    v4.resize(v4.size() - (3 * 4 + 2 + 1) - 3);   // the ambush block, and the three bytes of someone held (version 7)
     Book older;
     Require(Deserialize(v4, older, 4) && older.Find(id)->bossName[0] == "Grelka the Silent", "a record of version 4 loads");
 
@@ -450,7 +450,9 @@ static void Ambush() {
     Require(!Deserialize(bytes, untouched, 4), "an ambush step read as version 4 is refused, not misread");
     // A save of record version 5 (ambushes, before stalkers) loads as it was.
     Book five;
-    Require(Deserialize(bytes, five, 5) && five.Find(id)->graph[0].kind == Kind::Ambush, "a record of version 5 loads");
+    auto v5 = bytes;
+    v5.resize(v5.size() - 3);   // before someone could be held (version 7)
+    Require(Deserialize(v5, five, 5) && five.Find(id)->graph[0].kind == Kind::Ambush, "a record of version 5 loads");
 
     const auto errorsOf = [](json x) { return Tales::Compile(x, Town()).errors; };
     json two = j;
@@ -517,6 +519,154 @@ static void Stalk() {
     j["steps"][0]["by"] = "p3";
     j["steps"][0].erase("why");
     Require(Tales::Compile(j, Town()).errors.find("needs \"why\"") != std::string::npos, "a reason to follow");
+}
+
+// Someone held at a place: who may be, where, the step that frees them, what is refused, and the co-save.
+static json Taken() {
+    return json::parse(R"({
+      "title": "The Price of Brenuin", "genre": "adventure",
+      "premise": "Hulda had Brenuin sold to the bandits of Embershard to be rid of what he owes her.",
+      "people": [
+        {"who": "p0", "part": "the one who asks", "truth": "Brenuin has been gone since last night. Nobody will say where."},
+        {"who": "p1", "part": "the one taken", "truth": "Hulda's men walked me up to the mine and sold me for ten septims.", "held": "d2"},
+        {"who": "p2", "part": "the one who sold him", "truth": "I had Brenuin taken to Embershard. He drank my cellar dry and laughed."}
+      ],
+      "offer": {"words": "Ysolda comes to {player}, white in the face.", "ask": "Find Brenuin for me.",
+                "journal": "Ysolda asked me to find Brenuin.", "reward": 150, "days": 3},
+      "steps": [
+        {"id": "s1", "do": "talk", "with": "p2", "goal": "Ask Hulda when she last saw Brenuin",
+         "outcomes": [{"if": "Hulda lets the mine slip", "then": "s2", "journal": "Hulda named Embershard."},
+                      {"if": "Hulda says nothing", "then": "s2", "journal": "Hulda told me nothing."}]},
+        {"id": "s2", "do": "slay", "place": "d2", "boss": "Grelka the Silent", "goal": "Kill Grelka the Silent", "then": "s3", "journal": "Grelka is dead."},
+        {"id": "s3", "do": "free", "who": "p1", "goal": "Free Brenuin", "then": "s4", "journal": "I cut Brenuin loose."},
+        {"id": "s4", "do": "talk", "with": "p1", "goal": "Hear from Brenuin how he came there",
+         "outcomes": [{"if": "Brenuin names Hulda", "then": "s5", "journal": "Brenuin said Hulda sold him."},
+                      {"if": "Brenuin is too afraid to say", "then": "end:other", "journal": "Brenuin would not say."}]},
+        {"id": "s5", "do": "choose", "with": "p2", "goal": "Face Hulda with it", "question": "What now?",
+         "options": [{"say": "The guard will hear of this.", "then": "end:good", "journal": "I told the guard."},
+                     {"say": "Pay him what you owe, and it stays between us.", "then": "end:other", "journal": "Hulda paid."}]}
+      ],
+      "endings": {"good": {"journal": "Brenuin is home.", "rumor": "", "pay": true},
+                  "bad": {"journal": "Brenuin is lost.", "rumor": "", "pay": false},
+                  "other": {"journal": "It stays quiet.", "rumor": "", "pay": true}}
+    })");
+}
+
+static Tales::Pool TownThatHolds() {
+    auto pool = Town();
+    pool.people[1].canHold = true;   // Brenuin: nobody the town cannot do without
+    pool.depth = true;               // as for a story asked of the model
+    return pool;
+}
+
+static void Captive() {
+    const auto r = Tales::Compile(Taken(), TownThatHolds());
+    if (!r.ok) std::cerr << r.errors;
+    Require(r.ok, "a story with someone held compiles");
+    const Arc& a = r.arc;
+    Require(a.captive == 2 && a.cast[a.captive] == 0x101 && a.captiveSite == 1 && a.site[0] == 0x710 && a.captiveState == CaptiveToTake,
+            "who is held, and where");
+    Require(a.graph[2].kind == Kind::Free && a.graph[2].who == 2 && a.graph[2].site == 1 && a.graph[2].marker == 2, "the step that frees them");
+    Book book;
+    const auto id = book.Plan(a, 1.0f);
+    book.Accept(id, 1.0f);
+    Arc& t = *book.Find(id);
+    Facts f;
+    f.with[3] = f.spoke[3] = true;
+    f.turn = 0;
+    Advance(t, f, 1.1f);
+    Require(t.node == 1, "the talk in town leads out to the place");
+    Facts dead;
+    dead.bossDead[0] = true;
+    Advance(t, dead, 1.2f);
+    Require(t.node == 2, "the master dead: now to the one held");
+    Require(!Advance(t, dead, 1.3f).any(), "not free until the player stands by them");
+    Facts reached;
+    reached.captiveReached = true;
+    Advance(t, reached, 1.4f);
+    Require(t.node == 3, "reached: free, and the talk with them is next");
+    // Through the co-save, with where they stand.
+    t.captiveState = CaptiveBound;
+    const auto bytes = Serialize(book);
+    Book back;
+    Require(Deserialize(bytes, back), "someone held survives the co-save");
+    Require(back.Find(id)->captive == 2 && back.Find(id)->captiveSite == 1 && back.Find(id)->captiveState == CaptiveBound &&
+            back.Find(id)->graph[2].kind == Kind::Free, "whole");
+    Book six;
+    auto v6 = bytes;
+    v6.resize(v6.size() - 3);
+    Require(!Deserialize(v6, six, 6), "a step that frees someone read as version 6 is refused, not misread");
+    auto wrong = bytes;
+    wrong[wrong.size() - 1] = 9;   // no such state
+    Require(!Deserialize(wrong, six), "a state that does not exist is refused");
+
+    const auto errorsOf = [](json x, Tales::Pool pool) { return Tales::Compile(x, pool).errors; };
+    json j = Taken();
+    Require(errorsOf(j, Town()).find("cannot be held anywhere") != std::string::npos, "only someone the town can do without");
+    j["people"][1]["held"] = "d1";
+    Require(errorsOf(j, TownThatHolds()).find("keeps no prisoners") != std::string::npos, "a Dwemer ruin holds nobody");
+    j = Taken();
+    j["people"][0]["held"] = "d2";
+    Require(errorsOf(j, TownThatHolds()).find("is not the one held") != std::string::npos, "never the one who asks");
+    j = Taken();
+    j["steps"][0]["with"] = "p1";   // a talk with the one held, before anyone has freed them
+    Require(errorsOf(j, TownThatHolds()).find("is held until a step frees them") != std::string::npos, "nothing is done with them before");
+    j = Taken();
+    j["steps"][2]["do"] = "delve";
+    j["steps"][2]["place"] = "d2";
+    Require(errorsOf(j, TownThatHolds()).find("no step frees them") != std::string::npos, "held, and never freed");
+    j = Taken();
+    j["people"][1].erase("held");
+    Require(errorsOf(j, TownThatHolds()).find("nobody of the story is held") != std::string::npos, "a step that frees nobody");
+    j = Taken();
+    j["steps"][2]["who"] = "p2";
+    Require(errorsOf(j, TownThatHolds()).find("the one who is held") != std::string::npos, "the one to free is the one held");
+    // Told lately: none this time.
+    auto barred = TownThatHolds();
+    barred.barred = 1u << static_cast<unsigned>(Kind::Free);
+    Require(errorsOf(Taken(), barred).find("no \"free\" in this story") != std::string::npos, "not in every story");
+    // A rescue was asked for: a story without someone held is not it.
+    auto rescue = TownThatHolds();
+    rescue.mustCaptive = true;
+    Require(Tales::Compile(Taken(), rescue).ok, "a rescue is a story with someone held");
+    Require(errorsOf(Sample(), rescue).find("someone held at one of the places") != std::string::npos, "and nothing else");
+}
+
+// What a story asked of the model is held to: ways that end differently, and a place as one act among people.
+static void Depth() {
+    auto pool = Town();
+    pool.depth = true;
+    const auto errorsOf = [&](const json& x) { return Tales::Compile(x, pool).errors; };
+    Require(Tales::Compile(Sample(), pool).ok, "the sample has two endings and stays among people");
+    // The errand: into the mine, kill, take, hand over.
+    json j = Sample();
+    j["items"] = json::parse(R"([{"id": "i1", "item": "Silver Ring", "name": "Ysolda's Ring", "hidden": "at", "of": "d2"}])");
+    j["steps"] = json::parse(R"([
+      {"id": "a", "do": "delve", "place": "d2", "goal": "Go into Embershard Mine", "then": "b", "journal": "In."},
+      {"id": "b", "do": "slay", "place": "d2", "boss": "Grelka the Silent", "goal": "Kill Grelka", "then": "c", "journal": "Dead."},
+      {"id": "c", "do": "find", "item": "i1", "goal": "Take the ring from Grelka", "then": "e", "journal": "Mine."},
+      {"id": "e", "do": "give", "item": "i1", "to": "p0", "goal": "Give Ysolda her ring", "then": "end:good", "journal": "Hers."}])");
+    const auto errand = errorsOf(j);
+    Require(errand.find("leads to the same ending") != std::string::npos, "one ending is no story");
+    Require(errand.find("never the whole of it") != std::string::npos, "a place alone is no story");
+    Require(errand.find("the story ends at the place") != std::string::npos, "fetching and handing over is no story");
+    Require(Tales::Compile(j, Town()).ok, "a test's own tale is not held to it");
+    // The same place as one act: a talk before, and what is found forces a choice after.
+    j["steps"] = json::parse(R"([
+      {"id": "t", "do": "talk", "with": "p1", "goal": "Ask Brenuin who he sold the ring to",
+       "outcomes": [{"if": "Brenuin names Grelka", "then": "b", "journal": "Grelka has it."}, {"if": "Brenuin lies", "then": "end:bad", "journal": "He lied."}]},
+      {"id": "b", "do": "slay", "place": "d2", "boss": "Grelka the Silent", "goal": "Kill Grelka", "then": "c", "journal": "Dead."},
+      {"id": "c", "do": "find", "item": "i1", "goal": "Take the ring from Grelka", "then": "d", "journal": "Mine."},
+      {"id": "d", "do": "choose", "with": "p0", "goal": "Tell Ysolda who sold it", "question": "What do you tell her?",
+       "options": [{"say": "Brenuin sold it.", "then": "end:good", "journal": "She knows."}, {"say": "I found it in the mine.", "then": "end:other", "journal": "I kept it from her."}]}])");
+    j["endings"]["other"] = json::parse(R"({"journal": "Ysolda never learned.", "rumor": "", "pay": true})");
+    const auto act = Tales::Compile(j, pool);
+    if (!act.ok) std::cerr << act.errors;
+    Require(act.ok, "a place as one act among people");
+    // The engine's count says this one goes out into the world.
+    pool.mustPlace = true;
+    Require(errorsOf(Sample()).find("leads out into the world") != std::string::npos, "a story in town when one out there is due");
+    Require(Tales::Compile(j, pool).ok, "one with a place is it");
 }
 
 static void LongWords() {
@@ -602,6 +752,8 @@ int main() {
         Adventure();
         Ambush();
         Stalk();
+        Captive();
+        Depth();
         LongWords();
         Refusals();
     } catch (const std::exception& e) {

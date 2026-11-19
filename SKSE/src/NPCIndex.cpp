@@ -1145,6 +1145,24 @@ namespace IntelEngine {
             if (verbose) logger::debug("[StoryDM] Rejected '{}': not ActorTypeNPC", displayName);
             return false;
         }
+        // The people of the game's carriages and ferries stay with their cart or boat (CarriageSystemFaction,
+        // JobCarriageFaction; Dawnguard's DLC1FerrySystemFaction; Hearthfire's BYOHCarriageDriverFaction): sent to the
+        // player they were stuck off it for good, and the service was broken.
+        {
+            static const std::array<RE::TESFaction*, 4> kDrivers = []() {
+                auto* data = RE::TESDataHandler::GetSingleton();
+                return std::array<RE::TESFaction*, 4>{
+                    RE::TESForm::LookupByID<RE::TESFaction>(0x00017F04), RE::TESForm::LookupByID<RE::TESFaction>(0x000DDDA8),
+                    data ? data->LookupForm<RE::TESFaction>(0x016849, "Dawnguard.esm") : nullptr,
+                    data ? data->LookupForm<RE::TESFaction>(0x007890, "HearthFires.esm") : nullptr};
+            }();
+            for (auto* drivers : kDrivers) {
+                if (drivers && actor->IsInFaction(drivers)) {
+                    if (verbose) logger::debug("[StoryDM] Rejected '{}': a carriage driver or ferryman", displayName);
+                    return false;
+                }
+            }
+        }
         if (auto* race = actor->GetRace()) {
             if (race->IsChildRace()) {
                 if (verbose) logger::debug("[StoryDM] Rejected '{}': child race", displayName);

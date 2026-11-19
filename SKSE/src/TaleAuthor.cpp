@@ -3,6 +3,7 @@
 // request and its answer, and the judge who reads a talk and names which prepared outcome it turned into.
 
 #include "ArcBridge.h"
+#include "Safe.h"
 
 #include "AsyncDispatch.h"
 #include "DialogueTracker.h"
@@ -495,6 +496,9 @@ namespace IntelEngine {
             const bool tradesOrServes = InFactionId(actor, 0x5091B) || InFactionId(actor, 0x51596) || InFactionId(actor, 0x53514) ||
                                         actor->GetVendorFaction() != nullptr;
             person.canBrawl = !isAsker && Usable(actor, 2, none) && !tradesOrServes && static_cast<int>(confidence) >= 2;
+            // Held at a place when the story begins: nobody the town or a quest needs, and nobody near the player (they
+            // are taken out of sight, before the asker has come). The same measure as a murder's victim (3).
+            person.canHold = !isAsker && Usable(actor, 3, none);
             if (person.name.empty()) return false;
             nlohmann::json j;
             j["key"] = person.key;
@@ -511,6 +515,7 @@ namespace IntelEngine {
             nlohmann::json can = nlohmann::json::array();
             if (person.canJail) can.push_back("may be taken by the guard or leave town for a while");
             if (person.canBrawl) can.push_back("would settle a matter with fists");
+            if (person.canHold) can.push_back("may be held at a place out in the world when the story begins");
             j["may"] = can;
             j["ties"] = TiesOf(npc);
             // What stands between them and the player, as the game and its mods keep it: fact for the author, so no
@@ -676,6 +681,7 @@ namespace IntelEngine {
                 j["heart"] = SiteHeart(n.kind);
                 j["far"] = n.distance < 15000.0f ? "close by" : n.distance < 40000.0f ? "half a day's walk" : "far across the hold";
                 j["cleared"] = location && location->IsCleared();
+                j["holds"] = Tales::SiteHolds(n.kind);
                 places.push_back(j);
             }
             if (refused) logger::info("Tales: {} place(s) of the hold left out: a quest of the game or of the player's needs them", refused);
@@ -743,6 +749,7 @@ namespace IntelEngine {
             if (used(bit(A::Kind::Ambush), 3)) barred |= bit(A::Kind::Ambush);
             if (used(bit(A::Kind::Brawl), 2)) barred |= bit(A::Kind::Brawl);
             if (used(bit(A::Kind::Stalk), 3)) barred |= bit(A::Kind::Stalk);
+            if (used(bit(A::Kind::Free), 3)) barred |= bit(A::Kind::Free);   // someone held: once in four stories
             if (recentBeats.size() >= 2 && (recentBeats[0] & place) && (recentBeats[1] & place)) barred |= place;
             if (barred & place) {
                 request->pool.sites.clear();
@@ -757,13 +764,44 @@ namespace IntelEngine {
             ctx["bar_brawl"] = (barred & bit(A::Kind::Brawl)) != 0;
             ctx["bar_stalk"] = (barred & bit(A::Kind::Stalk)) != 0;
             ctx["bar_places"] = (barred & place) != 0;
+            // Out into the world by the engine's count, not the author's mood: after two stories among people the
+            // next one has a place in it (never a story of the heart: that one is between two people).
+            const bool must = heartLean.empty() && !(barred & place) && !request->pool.sites.empty() && recentBeats.size() >= 2 &&
+                              !used(place | bit(A::Kind::Free), 2);
+            request->pool.mustPlace = must;
+            ctx["must_place"] = must;
+            if (must) logger::info("Tales: this one leads out into the world (the last two stayed among people)");
         } else {
             ctx["bar_ambush"] = false;
             ctx["bar_brawl"] = false;
             ctx["bar_stalk"] = false;
             ctx["bar_places"] = false;
+            ctx["must_place"] = false;
         }
         request->pool.barred = barred;
+        request->pool.depth = written.empty();
+        // Someone held at a place: on offer when a place that keeps prisoners is near and someone of the town may be
+        // held. A rescue asked for (the old dungeon master's quest of that name) is a story about exactly that, or
+        // nothing: no rescue without a place and a person the game can carry it out with.
+        {
+            const bool holds = std::any_of(request->pool.sites.begin(), request->pool.sites.end(), [](const Tales::Site& s) { return Tales::SiteHolds(s.kind); });
+            const bool someone = std::any_of(request->pool.people.begin(), request->pool.people.end(), [](const Tales::Person& p) { return p.canHold; });
+            const bool mayHold = holds && someone && !(barred & (1u << static_cast<unsigned>(A::Kind::Free))) && heartLean.empty();
+            const bool rescue = taleSeed && taleSeed->kind == "rescue";
+            if (rescue && !mayHold) {
+                logger::info("Tales: no rescue for {}: {}", asker->GetDisplayFullName(),
+                             !holds ? "no place near that keeps prisoners" : !someone ? "nobody of the town may be held" : "someone was held in a story told lately");
+                return false;
+            }
+            ctx["bar_captive"] = !mayHold;
+            if (!mayHold) request->pool.barred |= 1u << static_cast<unsigned>(A::Kind::Free);
+            request->pool.mustCaptive = rescue;
+            ctx["must_captive"] = rescue;
+            if (rescue) {
+                request->pool.mustPlace = false;
+                ctx["must_place"] = false;
+            }
+        }
         ctx["places"] = places;
         ctx["quests"] = PlayerQuests();
         ctx["told"] = told;
@@ -794,7 +832,7 @@ namespace IntelEngine {
             if (loc && loc->HasKeywordString("LocTypePlayerHouse")) where += " (" + PlayerName() + "'s own home)";
             ctx["player_where"] = where;
         }
-        request->context = ctx.dump();
+        request->context = ctx.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
 
         m_taleBusy.store(true);
         g_requestAt = real;
@@ -806,7 +844,7 @@ namespace IntelEngine {
         if (!written.empty()) {
             std::string who;
             for (const auto& p : request->pool.people) {
-                if (p.canJail || p.canBrawl) who += " " + p.name + (p.canJail ? " [jail]" : "") + (p.canBrawl ? " [brawl]" : "") + ";";
+                if (p.canJail || p.canBrawl || p.canHold) who += " " + p.name + (p.canJail ? " [jail]" : "") + (p.canBrawl ? " [brawl]" : "") + (p.canHold ? " [hold]" : "") + ";";
             }
             for (const auto& s : request->pool.sites) who += " place " + s.key + " " + s.name + " (" + SiteWhat(s.kind) + ");";
             logger::info("Tales: test pool:{}", who);
@@ -830,7 +868,7 @@ namespace IntelEngine {
                     }
                     if (!bio.empty()) ctx["people"][i]["about"] = bio;
                 }
-                request->context = ctx.dump();
+                request->context = ctx.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
             }
             SendTale(request, 0, {}, {});
         });
@@ -845,7 +883,7 @@ namespace IntelEngine {
             if (ctx.is_object()) {
                 ctx["fix"] = fix;
                 ctx["previous"] = previous.size() > 6000 ? previous.substr(0, 6000) : previous;
-                context = ctx.dump();
+                context = ctx.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
             }
         }
         const bool queued = SkyrimNetAPI::SendCustomPromptToLLM(
@@ -883,7 +921,7 @@ namespace IntelEngine {
         nlohmann::json json;
         if (open != std::string::npos && close != std::string::npos && close > open) json = nlohmann::json::parse(text.substr(open, close - open + 1), nullptr, false);
         // The tale as written, for the record (one line; the model's own words).
-        logger::info("Tales: the tale as written (attempt {}): {}", attempt + 1, json.is_object() ? json.dump() : text.substr(0, 4000));
+        logger::info("Tales: the tale as written (attempt {}): {}", attempt + 1, json.is_object() ? json.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace) : text.substr(0, 4000));
         auto result = Tales::Compile(json, request->pool);
         if (!result.ok) {
             logger::info("Tales: the tale (attempt {}) does not hold: {}", attempt + 1, result.errors);
@@ -1111,12 +1149,18 @@ namespace IntelEngine {
             outcomes.push_back({{"key", "o" + std::to_string(k)}, {"text", turns[k]}});
         }
         ctx["outcomes"] = outcomes;
-        const std::string context = ctx.dump();
+        const std::string context = ctx.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
         logger::info("Tales: #{} reading the talk with {} ({} lines{})", id, name, lines.size(), force ? ", an outcome must be named" : "");
+        // The reading is taken in on the game's own thread, in a task of its own, never inside the call that asked for
+        // it: the watch asks with this bridge's lock held (Advance), and a call that fails at once (no API, nothing
+        // queued, no route for decisions) used to answer on the spot and take that lock a second time: a hang. The
+        // names read for the log are the game's, too.
         const auto answer = [this, id, node](const std::string& choice) {
             int turn = -1;
             if (choice.size() == 2 && choice[0] == 'o' && choice[1] >= '0' && choice[1] <= '2') turn = choice[1] - '0';
-            Judged(id, node, turn);
+            if (auto* task = SKSE::GetTaskInterface()) {
+                task->AddTask([this, id, node, turn]() { Judged(id, node, turn); });
+            }
         };
         const auto byChat = [context, answer]() {
             if (!SkyrimNetAPI::SendCustomPromptToLLM) return answer("none");
@@ -1129,7 +1173,7 @@ namespace IntelEngine {
                         const auto close = text.rfind('}');
                         if (open != std::string::npos && close != std::string::npos && close > open) {
                             const auto json = nlohmann::json::parse(text.substr(open, close - open + 1), nullptr, false);
-                            if (json.is_object()) choice = json.value("turn", std::string("none"));
+                            choice = Safe::Text(json, "turn", "none");
                         }
                     }
                     answer(choice);
@@ -1141,14 +1185,14 @@ namespace IntelEngine {
             [answer, byChat](const char*, const char* resultJson, int success) {
                 const auto json = nlohmann::json::parse(resultJson ? resultJson : "", nullptr, false);
                 if (!success) {
-                    const std::string error = json.is_object() ? json.value("error", "") : "";
+                    const std::string error = Safe::Text(json, "error");
                     if (error == "no_decisions_route") return byChat();
                     return answer("none");
                 }
                 std::string choice = "none";
                 if (json.is_object() && json.contains("answers") && json["answers"].is_object() && json["answers"].contains("turn") &&
                     json["answers"]["turn"].is_object()) {
-                    choice = json["answers"]["turn"].value("choice", std::string("none"));
+                    choice = Safe::Text(json["answers"]["turn"], "choice", "none");
                 }
                 answer(choice);
             });

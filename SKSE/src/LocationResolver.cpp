@@ -2197,7 +2197,7 @@ namespace IntelEngine {
         stats["npcHomesIndexed"] = m_npcHomeIndex.size();
         stats["indexBuilt"] = m_indexBuilt;
 
-        return RE::BSFixedString(stats.dump());
+        return RE::BSFixedString(stats.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace));
     }
 
     std::vector<RE::FormID> LocationResolver::GetHouseholdMembers(RE::Actor* actor) {
