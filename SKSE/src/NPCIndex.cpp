@@ -5,6 +5,7 @@
  */
 
 #include "NPCIndex.h"
+#include "NameMatch.h"
 #include "LivingWorldBridge.h"
 #include "StorylineBridge.h"
 #include "Utf8Truncate.h"
@@ -606,7 +607,9 @@ namespace IntelEngine {
         int maxDist = Settings::GetSingleton()->fuzzyMatchThreshold;
         auto fuzzy = StringUtils::FuzzyFind(lowerSearch, m_allNames, maxDist);
 
-        if (fuzzy) {
+        // A slip of the pen is measured by the length of the name (NameMatch.h): three letters off in a name of four
+        // is another name.
+        if (fuzzy && fuzzy.distance <= NameMatch::Slips(lowerSearch, fuzzy.match, maxDist)) {
             matchedName = fuzzy.match;
             // First try loaded actor
             auto loadedIt = m_npcIndex.find(matchedName);
@@ -630,10 +633,10 @@ namespace IntelEngine {
             }
         }
 
-        // 4. Partial substring match
+        // 4. One name inside the other, as whole words ("Jon" for "Jon Battle-Born"; never "Garth" for "Gollgarth",
+        // who came from another mod's land when someone asked for Gollgarth, or a modded name with "tsun" in it for Tsun)
         for (const auto& name : m_allNames) {
-            if (name.find(lowerSearch) != std::string::npos ||
-                lowerSearch.find(name) != std::string::npos) {
+            if (NameMatch::PartOf(name, lowerSearch)) {
 
                 auto loadedIt = m_npcIndex.find(name);
                 if (loadedIt != m_npcIndex.end()) {
@@ -661,8 +664,10 @@ namespace IntelEngine {
         RE::Actor* bestLiveMatch = nullptr;
         int bestLiveDist = maxDist + 1;
 
+        static auto* kwPerson = RE::TESForm::LookupByID<RE::BGSKeyword>(0x00013794);   // ActorTypeNPC
         ProcessUtils::ForEachLoadedActor([&](RE::Actor* actor) {
-            if (!actor || actor->IsDeleted()) return false;
+            // The dead and the disabled are nobody to send for.
+            if (!actor || actor->IsDeleted() || actor->IsDead() || actor->IsDisabled()) return false;
             auto displayName = actor->GetDisplayFullName();
             if (!displayName || strlen(displayName) == 0) return false;
 
@@ -674,16 +679,18 @@ namespace IntelEngine {
                 bestLiveDist = 0;
                 return true;
             }
+            // A creature answers to its own name only (a summoned "Edan's Shadow" drew every near-miss to itself).
+            if (kwPerson && !actor->HasKeyword(kwPerson)) return false;
 
-            // Fuzzy match
+            // A slip of the pen, by the length of the name
             int dist = StringUtils::LevenshteinDistance(lowerSearch, lowerName);
-            if (dist < bestLiveDist) {
+            if (dist <= NameMatch::Slips(lowerSearch, lowerName, maxDist) && dist < bestLiveDist) {
                 bestLiveDist = dist;
                 bestLiveMatch = actor;
             }
 
-            // Substring match (treat as distance 1)
-            if (lowerName.find(lowerSearch) != std::string::npos && 1 < bestLiveDist) {
+            // The name asked for inside theirs, as whole words (treated as distance 1)
+            if (NameMatch::WholeWords(lowerName, lowerSearch) && 1 < bestLiveDist) {
                 bestLiveDist = 1;
                 bestLiveMatch = actor;
             }
@@ -723,23 +730,25 @@ namespace IntelEngine {
         std::vector<Candidate> candidates;
 
         // Single pass through all loaded actors — collect all candidates
+        static auto* kwPersonNear = RE::TESForm::LookupByID<RE::BGSKeyword>(0x00013794);   // ActorTypeNPC
         ProcessUtils::ForEachLoadedActor([&](RE::Actor* actor) {
-            if (!actor || actor->IsDeleted()) return false;
+            if (!actor || actor->IsDeleted() || actor->IsDead() || actor->IsDisabled()) return false;
             if (!allowSelf && actor == nearActor) return false;  // skip self unless allowed
             auto displayName = actor->GetDisplayFullName();
             if (!displayName || strlen(displayName) == 0) return false;
 
             std::string lowerName = StringUtils::ToLowerStd(displayName);
             int nameScore = -1;  // -1 = no match
+            // A creature answers to its own name only; people also to part of it (whole words) or a slip of the pen.
+            const bool person = !kwPersonNear || actor->HasKeyword(kwPersonNear);
 
             if (lowerName == lowerSearch) {
                 nameScore = 0;  // exact
-            } else if (lowerName.find(lowerSearch) != std::string::npos ||
-                       lowerSearch.find(lowerName) != std::string::npos) {
-                nameScore = 1;  // substring
-            } else {
+            } else if (person && NameMatch::PartOf(lowerName, lowerSearch)) {
+                nameScore = 1;  // one name inside the other, as whole words (NameMatch.h)
+            } else if (person) {
                 int leven = StringUtils::LevenshteinDistance(lowerSearch, lowerName);
-                if (leven <= maxDist) {
+                if (leven <= NameMatch::Slips(lowerSearch, lowerName, maxDist)) {
                     nameScore = 2 + leven;  // fuzzy
                 }
             }
@@ -1311,6 +1320,15 @@ namespace IntelEngine {
         auto* loc = ResolveActorLocation(actor);
         if (!loc) return "";
 
+        // The hold is the location the game itself marks as one (LocTypeHold). Where a load order has none above
+        // this place, the old rule below stands in.
+        {
+            int depth = 0;
+            for (auto* at = loc; at && depth < 12; at = at->parentLoc, ++depth) {
+                if (!at->HasKeywordString("LocTypeHold")) continue;
+                if (auto holdName = at->GetFullName(); holdName && holdName[0]) return holdName;
+            }
+        }
         // Walk up but stop at the hold level — the topmost is "Tamriel" (worldspace), one too far.
         // Stop when the parent's parent is null (parent = worldspace = top).
         while (loc->parentLoc && loc->parentLoc->parentLoc) {
@@ -2287,8 +2305,12 @@ namespace IntelEngine {
         // (file I/O moved off main thread to eliminate first-encounter stutter).
         a.bio          = NPCIndex::GetNPCBioFallbackLine(actor);
 
-        a.npcHold      = NPCIndex::GetActorSettlementName(actor);
-        if (a.npcHold.empty()) a.npcHold = NPCIndex::GetNPCHoldName(actor);
+        // The hold is the hold: it is compared with the player's ("same hold" or "different hold (far)"), and a
+        // town's name stood here instead, so someone in Dragon Bridge or in Solitude itself read as "different hold
+        // (far)" for a player standing in Haafingar. The town is shown beside it.
+        a.npcSettlement = NPCIndex::GetActorSettlementName(actor);
+        a.npcHold       = NPCIndex::GetNPCHoldName(actor);
+        if (a.npcHold.empty()) a.npcHold = a.npcSettlement;
         if (a.npcHold.empty()) a.npcHold = "Unknown";
 
         // How far they are from the player, for the director's rule on who may come (StoryDirectorPick.h MayCome):
@@ -3044,7 +3066,9 @@ namespace IntelEngine {
             if (a->hereWithPlayer) {
                 md += "Here: in the same place as the player right now; a quest from them is a public plea\n";
             }
-            md += "Hold: ";       md += a->npcHold;        md += "\n";
+            md += "Hold: ";       md += a->npcHold;
+            if (!a->npcSettlement.empty() && a->npcSettlement != a->npcHold) { md += " ("; md += a->npcSettlement; md += ")"; }
+            md += "\n";
             // 4.0: what is already going on between them and the player, so a new beat continues it rather than
             // asking the same thing again.
             if (const auto business = StorylineBridge::GetSingleton()->BusinessLine(a->formId); !business.empty()) {

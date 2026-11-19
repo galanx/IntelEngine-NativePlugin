@@ -133,6 +133,8 @@ namespace IntelEngine {
         std::string Describe(RE::Actor* actor) const;
         /** A fight, a conversation, a scene, a menu over the game: no ordinary moment lands now. */
         static bool IsBadMoment();
+        /** Another mod's scene with the player in it has begun or ended (OStim's thread events, told by the script). */
+        static void SetSceneBusy(bool busy);
         /** A dungeon, cave, crypt, camp, lair or den: the place itself, not its parents. */
         static bool IsDungeon(const RE::BGSLocation* location);
 

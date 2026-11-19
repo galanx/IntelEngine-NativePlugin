@@ -445,6 +445,9 @@ namespace IntelEngine {
                         auto markerPtr = std::as_const(loc->worldLocMarker).get();
                         if (markerPtr) {
                             auto* ref = markerPtr.get();
+                            // Under the open sky only: a marker inside a building is that building, not the town it
+                            // stands in ("Whiterun" became Dragonsreach, and a horse was sent up the palace steps).
+                            if (auto* markerCell = ref ? ref->GetParentCell() : nullptr; markerCell && markerCell->IsInteriorCell()) continue;
                             if (ref) {
                                 float dist = ref->GetPosition().GetDistance(playerPos);
                                 if (dist < bestChildDist) {
