@@ -5,6 +5,8 @@
 #include "LivingWorldBridge.h"
 #include "LocationResolver.h"
 #include "NPCIndex.h"
+#include "MemoryDB.h"
+#include "DialogueTracker.h"
 #include "StoryDirectorPick.h"
 #include "QuestBridge.h"
 #include "Papyrus.h"
@@ -324,9 +326,36 @@ namespace IntelEngine {
         // Who the quests of the journal name (forced references and unique actors): a culprit is never one of them while
         // that quest is not done, so no story takes away someone a quest the player has not finished still needs.
         std::unordered_map<RE::FormID, std::vector<RE::FormID>> named;
+        std::unordered_map<RE::FormID, std::vector<RE::FormID>> favours;
         std::unordered_map<RE::FormID, std::vector<RE::FormID>> places;
         std::size_t aliasCount = 0;
         if (auto* data = RE::TESDataHandler::GetSingleton()) {
+            // The game's own small quests of a person (a favour with a name of its own: the letter between Faendal,
+            // Sven and Camilla): they keep nobody out of a story, but the author is told of them so that no tale
+            // retells one (the user, 2026-11-19: "never give the same letter via vanilla quest and then dungeon
+            // master quest to camilla"). Only those that name a few people; the ones that name half a town say nothing.
+            for (auto* quest : data->GetFormArray<RE::TESQuest>()) {
+                if (!quest || quest->GetType() != RE::QUEST_DATA::Type::kMiscellaneous) continue;
+                const char* title = quest->GetFullName();
+                if (!title || !*title) continue;
+                std::vector<RE::FormID> people;
+                for (auto* alias : quest->aliases) {
+                    if (!alias || alias->GetVMTypeID() != RE::BGSRefAlias::VMTYPEID) continue;
+                    auto* refAlias = static_cast<RE::BGSRefAlias*>(alias);
+                    RE::TESNPC* npc = nullptr;
+                    const auto fill = refAlias->fillType.get();
+                    if (fill == RE::BGSBaseAlias::FILL_TYPE::kUniqueActor) {
+                        npc = refAlias->fillData.uniqueActor.uniqueActor;
+                    } else if (fill == RE::BGSBaseAlias::FILL_TYPE::kForced) {
+                        auto forced = refAlias->fillData.forced.forcedRef.get();
+                        auto* actor = forced ? forced->As<RE::Actor>() : nullptr;
+                        npc = actor ? actor->GetActorBase() : nullptr;
+                    }
+                    if (npc && std::find(people.begin(), people.end(), npc->GetFormID()) == people.end()) people.push_back(npc->GetFormID());
+                }
+                if (people.empty() || people.size() > 6) continue;
+                for (const auto who : people) favours[who].push_back(quest->GetFormID());
+            }
             for (auto* quest : data->GetFormArray<RE::TESQuest>()) {
                 // Favours (miscellaneous) and quests of no type are left out: they name half a town and never end.
                 if (!quest || quest->GetType() == RE::QUEST_DATA::Type::kNone || quest->GetType() == RE::QUEST_DATA::Type::kMiscellaneous) continue;
@@ -369,6 +398,7 @@ namespace IntelEngine {
         std::scoped_lock lock(m_mutex);
         m_folk = std::move(folk);
         m_journalAliases = std::move(named);
+        m_favours = std::move(favours);
         m_questPlaces = std::move(places);
     }
 
@@ -556,6 +586,33 @@ namespace IntelEngine {
         }
     }
 
+    namespace {
+        constexpr float kEarshot = 500.0f;   // "stands beside the player"
+
+        // Someone of the story other than its asker who stands beside the player (the caller holds the lock, or owns
+        // the arc). A follower of the player is not counted: they are always there, and the story would never come.
+        RE::Actor* StandsBy(const A::Arc& a) {
+            auto* player = RE::PlayerCharacter::GetSingleton();
+            auto* cell = player ? player->GetParentCell() : nullptr;
+            if (!cell) return nullptr;
+            for (std::size_t role = 0; role < a.cast.size(); ++role) {
+                if (role == static_cast<std::size_t>(A::RAsker) || !a.cast[role]) continue;
+                auto* who = RE::TESForm::LookupByID<RE::Actor>(a.cast[role]);
+                if (!who || who->IsDead() || !who->Is3DLoaded() || who->IsPlayerTeammate()) continue;
+                auto* theirs = who->GetParentCell();
+                if (!theirs || theirs->IsInteriorCell() != cell->IsInteriorCell() || (cell->IsInteriorCell() && theirs != cell)) continue;
+                if (who->GetPosition().GetDistance(player->GetPosition()) <= kEarshot) return who;
+            }
+            return nullptr;
+        }
+    }
+
+    RE::Actor* ArcBridge::Company(std::uint32_t id) const {
+        std::scoped_lock lock(m_mutex);
+        const auto* a = m_book.Find(id);
+        return a ? StandsBy(*a) : nullptr;
+    }
+
     bool ArcBridge::AskedWithin(RE::FormID actor, float days) const {
         const float now = NowDays();
         std::scoped_lock lock(m_mutex);
@@ -594,6 +651,14 @@ namespace IntelEngine {
         if (!Usable(asker, kStays, why)) {
             logger::info("Arcs: no arc for {}: {}", asker->GetDisplayFullName(), why);
             return 0;
+        }
+        {
+            std::scoped_lock lock(m_mutex);
+            if (const float last = m_book.LastBeat(), now = NowDays(); !A::QuietFor(last, now, A::kQuietHours)) {
+                logger::info("Arcs: no arc for {}: a story came to the player or ended {:.1f} hours ago (quiet for {:.0f})",
+                             asker->GetDisplayFullName(), (now - last) * 24.0f, A::kQuietHours);
+                return 0;
+            }
         }
         std::vector<A::Pattern> tries;
         A::Pattern last = A::Pattern::None;
@@ -709,6 +774,7 @@ namespace IntelEngine {
                     if (pending.offerSent) continue;
                     if (pending.offerDue < 0.0f) pending.offerDue = std::max(now, a.created + 8.0f / 24.0f);
                     if (now < pending.offerDue || LivingWorldBridge::GetSingleton()->IsBadMoment()) continue;
+                    if (!A::QuietFor(m_book.LastBeat(a.id), now, A::kQuietHoursOwed) || StandsBy(a)) continue;
                     pending.offerSent = true;
                     const auto arcId = a.id;
                     const RE::FormID askerId = a.cast[A::RAsker];
@@ -716,6 +782,33 @@ namespace IntelEngine {
                     if (auto* task = SKSE::GetTaskInterface()) {
                         task->AddTask([this, arcId, askerId]() {
                             if (auto* asker = RE::TESForm::LookupByID<RE::Actor>(askerId)) SendOffer(arcId, asker);
+                        });
+                    }
+                }
+                // Someone who could not reach the player last time and now has them in front of them again: this is
+                // the next chance (the user: "If the player disappears before they can reach him, then they defer
+                // until next chance to meet him").
+                auto* player = RE::PlayerCharacter::GetSingleton();
+                const float real = RealSeconds();
+                for (auto& a : m_book.all) {
+                    if (!player || a.phase != A::Phase::Planned || !(a.flags & A::Flag::Deferred)) continue;
+                    auto& pending = m_pending[a.id];
+                    if (pending.offerSent || (pending.deferredAt >= 0.0f && real - pending.deferredAt < 60.0f)) continue;
+                    auto* asker = RE::TESForm::LookupByID<RE::Actor>(a.cast[A::RAsker]);
+                    if (!asker || asker->IsDead() || !asker->Is3DLoaded() || asker->GetWorldspace() != player->GetWorldspace()) continue;
+                    auto* theirCell = asker->GetParentCell();
+                    auto* cell = player->GetParentCell();
+                    if (!cell || !theirCell || (cell->IsInteriorCell() && cell != theirCell) || theirCell->IsInteriorCell() != cell->IsInteriorCell()) continue;
+                    if (asker->GetPosition().GetDistance(player->GetPosition()) > 3000.0f) continue;
+                    if (LivingWorldBridge::GetSingleton()->IsBadMoment()) continue;
+                    if (!A::QuietFor(m_book.LastBeat(a.id), NowDays(), A::kQuietHoursOwed) || StandsBy(a)) continue;
+                    pending.offerSent = true;
+                    const auto arcId = a.id;
+                    const RE::FormID askerId = a.cast[A::RAsker];
+                    logger::info("Arcs: #{} {} meets the player again: the offer goes out", arcId, NameOf(askerId));
+                    if (auto* task = SKSE::GetTaskInterface()) {
+                        task->AddTask([this, arcId, askerId]() {
+                            if (auto* found = RE::TESForm::LookupByID<RE::Actor>(askerId)) SendOffer(arcId, found);
                         });
                     }
                 }
@@ -771,6 +864,13 @@ namespace IntelEngine {
         std::sort(folk.begin(), folk.end(), [seed](const Folk* x, const Folk* y) {
             return A::detail::Mix(seed, x->ref) < A::detail::Mix(seed, y->ref);
         });
+        // Those who have had to do with the player come first (the order of the hour among them is kept).
+        std::unordered_map<RE::FormID, int> knows;
+        for (const auto* f : folk) {
+            auto* who = RE::TESForm::LookupByID<RE::Actor>(f->ref);
+            knows[f->ref] = who ? KnowsPlayer(who, townId) : 0;
+        }
+        std::stable_sort(folk.begin(), folk.end(), [&](const Folk* x, const Folk* y) { return knows[x->ref] > knows[y->ref]; });
         int tries = 0;
         const auto started = std::chrono::steady_clock::now();
         const auto spent = [&] { return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count(); };
@@ -779,6 +879,15 @@ namespace IntelEngine {
             auto* asker = RE::TESForm::LookupByID<RE::Actor>(f->ref);
             if (!asker || asker->IsDead() || asker->IsDisabled()) continue;
             if (AskedWithin(asker->GetFormID(), kAskerRestDays)) continue;
+            // A stranger who has heard nothing of the player does not go looking for them: only when the player is
+            // right there, where a stranger with trouble might take a chance on a stranger.
+            if (knows[f->ref] == 0) {
+                const bool there = asker->Is3DLoaded() && asker->GetWorldspace() == player->GetWorldspace() &&
+                                   asker->GetParentCell() && cell && asker->GetParentCell()->IsInteriorCell() == cell->IsInteriorCell() &&
+                                   (!cell->IsInteriorCell() || asker->GetParentCell() == cell) &&
+                                   asker->GetPosition().GetDistance(player->GetPosition()) < 2500.0f;
+                if (!there) continue;
+            }
             // A tale the dungeon master writes for them, when a model can be asked; its answer brings the offer.
             if (RequestTale(asker)) {
                 logger::info("Arcs: a tale is being written in {} after {:.1f} hours there, with {} ({:.2f} ms)", PlaceName(townId),
@@ -1177,7 +1286,7 @@ namespace IntelEngine {
             const auto withinReach = [&](std::size_t role) {
                 auto* who = actors[role];
                 if (!who) return false;
-                if (who->Is3DLoaded()) return true;
+                if (NPCIndex::ReachOf(who) == 0) return true;   // with the player, or of the place the player is in
                 const Folk* folk = FolkOf(a->cast[role]);
                 if (!folk || folk->town != a->place) return true;
                 auto* playerHold = HoldOf(player->GetCurrentLocation());
@@ -2024,6 +2133,57 @@ namespace IntelEngine {
 
     // ------------------------------------------------------------------ what people know
 
+    void ArcBridge::OfferDeferred(std::uint32_t id, const std::string& company) {
+        std::scoped_lock lock(m_mutex);
+        auto* a = m_book.Find(id);
+        if (!a || a->phase != A::Phase::Planned) return;
+        auto& pending = m_pending[id];
+        pending.offerSent = false;
+        a->deadline = std::max(a->deadline, NowDays() + 3.0f);   // it keeps for a few days
+        if (a->flags & A::Flag::CameFar) {
+            // Someone who came from another hold is not at home here: they try again within the hour.
+            pending.offerDue = NowDays() + 1.0f / 24.0f;
+        } else {
+            a->flags |= A::Flag::Deferred;
+            pending.deferredAt = RealSeconds();
+        }
+        if (company.empty()) {
+            logger::info("Arcs: #{} {} could not reach the player (gone): the story waits until they next meet", id, NameOf(a->cast[A::RAsker]));
+        } else {
+            logger::info("Arcs: #{} {} holds back: {} stands with the player, and the story is about them too", id, NameOf(a->cast[A::RAsker]), company);
+        }
+    }
+
+    bool ArcBridge::Hurries(std::uint32_t id, RE::Actor* actor) const {
+        if (!actor) return false;
+        if (LivingWorldBridge::GetSingleton()->CloseToPlayer(actor)) return true;
+        std::scoped_lock lock(m_mutex);
+        const auto* a = id ? m_book.Find(id) : nullptr;
+        // Having failed to reach the player once is no reason to run the next time: Faendal, a stranger with a small
+        // matter, jogged at the player on their second meeting (the user, 2026-11-19: "He Faendal still came running
+        // though"). Only who came all the way from another hold has truly been looking.
+        return a && a->cast[A::RAsker] == actor->GetFormID() && (a->flags & A::Flag::CameFar) != 0;
+    }
+
+    int ArcBridge::KnowsPlayer(RE::Actor* actor, RE::FormID town) const {
+        if (!actor) return 0;
+        const RE::FormID id = actor->GetFormID();
+        if (MemoryDB::GetSingleton()->HasMetPlayer(id) || DialogueTracker::GetSingleton()->GetCount(id) > 0 ||
+            LivingWorldBridge::GetSingleton()->CloseToPlayer(actor)) {
+            return 2;
+        }
+        auto* player = RE::PlayerCharacter::GetSingleton();
+        auto* npc = actor->GetActorBase();
+        auto* pc = player ? player->GetActorBase() : nullptr;
+        if (npc && pc && RE::BGSRelationship::GetRelationship(npc, pc)) return 2;   // the game itself ties them
+        // What the player did in their town went round it: an earlier story there that ended and was talked about.
+        std::scoped_lock lock(m_mutex);
+        const bool heard = town && std::any_of(m_book.all.begin(), m_book.all.end(), [&](const A::Arc& a) {
+            return a.place == town && a.phase == A::Phase::Ended && a.rumor != 0;
+        });
+        return heard ? 1 : 0;
+    }
+
     void ArcBridge::OfferLater(std::uint32_t id) {
         std::scoped_lock lock(m_mutex);
         auto& pending = m_pending[id];
@@ -2293,6 +2453,18 @@ namespace IntelEngine {
         void ArcAmbushDone(RE::StaticFunctionTag*, std::int32_t id, std::int32_t what) { ArcBridge::GetSingleton()->AmbushDone(U(id), what); }
         bool ArcInWilds(RE::StaticFunctionTag*, RE::TESObjectREFR* ref) { return InTheWilds(ref); }
         void ArcOfferLater(RE::StaticFunctionTag*, std::int32_t id) { ArcBridge::GetSingleton()->OfferLater(U(id)); }
+        void ArcOfferDeferred(RE::StaticFunctionTag*, std::int32_t id) { ArcBridge::GetSingleton()->OfferDeferred(U(id)); }
+        RE::Actor* ArcCompany(RE::StaticFunctionTag*, std::int32_t id) { return ArcBridge::GetSingleton()->Company(U(id)); }
+        void ArcOfferHeldBack(RE::StaticFunctionTag*, std::int32_t id) {
+            auto* bridge = ArcBridge::GetSingleton();
+            auto* by = bridge->Company(U(id));
+            const char* name = by ? by->GetDisplayFullName() : nullptr;
+            bridge->OfferDeferred(U(id), name && *name ? name : "someone");
+        }
+        bool ArcHurries(RE::StaticFunctionTag*, std::int32_t id, RE::Actor* actor) {
+            return ArcBridge::GetSingleton()->Hurries(id > 0 ? U(id) : 0u, actor);
+        }
+        std::int32_t ArcReachOf(RE::StaticFunctionTag*, RE::Actor* actor) { return actor ? NPCIndex::ReachOf(actor) : 2; }
         // Test hook: how the director's distance rule sees someone: reach (0 here, 1 the hold, 2 another hold), plus 10
         // when they are close to the player.
         std::int32_t ArcDebugReach(RE::StaticFunctionTag*, RE::Actor* actor) {
@@ -2354,6 +2526,11 @@ namespace IntelEngine {
         a_vm->RegisterFunction("ArcInWilds", script, ArcInWilds); ++count;
         a_vm->RegisterFunction("ArcDebugReach", script, ArcDebugReach); ++count;
         a_vm->RegisterFunction("ArcOfferLater", script, ArcOfferLater); ++count;
+        a_vm->RegisterFunction("ArcOfferDeferred", script, ArcOfferDeferred); ++count;
+        a_vm->RegisterFunction("ArcCompany", script, ArcCompany); ++count;
+        a_vm->RegisterFunction("ArcOfferHeldBack", script, ArcOfferHeldBack); ++count;
+        a_vm->RegisterFunction("ArcHurries", script, ArcHurries); ++count;
+        a_vm->RegisterFunction("ArcReachOf", script, ArcReachOf); ++count;
         a_vm->RegisterFunction("ArcRequestTaleWhy", script, ArcRequestTaleWhy); ++count;
         a_vm->RegisterFunction("ArcFetchProp", script, ArcFetchProp); ++count;
         a_vm->RegisterFunction("ArcDebugTaleFile", script, ArcDebugTaleFile); ++count;

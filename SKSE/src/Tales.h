@@ -142,9 +142,31 @@ namespace IntelEngine::Tales {
                 for (auto at = s.find(word); at != std::string::npos; at = s.find(word, at + 8)) s.replace(at, std::strlen(word), "{player}");
             }
             if (s.size() > limit) {
-                std::size_t n = limit;
+                // Too long for where it is shown. Keep what reads whole: up to the last full sentence, or else up
+                // to the last clause (a plea in the offer box read "...because I cannot go near him... Reward: 155
+                // gold", 2026-11-19); by punctuation only, so it holds in any language.
+                const auto before = [&](std::size_t i) { return i + 1 < s.size() && s[i + 1] == ' '; };
+                for (std::size_t i = std::min(limit, s.size()); i-- > limit / 2;) {
+                    if ((s[i] == '.' || s[i] == '!' || s[i] == '?') && before(i)) {
+                        s.resize(i + 1);
+                        return s;
+                    }
+                }
+                for (std::size_t i = std::min(limit, s.size()); i-- > limit * 3 / 5;) {
+                    if ((s[i] == ',' || s[i] == ';' || s[i] == ':') && before(i)) {
+                        s.resize(i);
+                        s += ".";
+                        return s;
+                    }
+                }
+                // No such place: cut at the end of a word, and say that it was cut (an answer in a popup read
+                // "...swindled by Quickhand, and th", 2026-11-19).
+                std::size_t n = limit > 3 ? limit - 3 : limit;
                 while (n > 0 && (static_cast<unsigned char>(s[n]) & 0xC0) == 0x80) --n;
+                if (const auto space = s.rfind(' ', n); space != std::string::npos && space + 30 >= n && space > 0) n = space;
                 s.resize(n);
+                while (!s.empty() && (s.back() == ',' || s.back() == ';' || s.back() == ':' || s.back() == ' ')) s.pop_back();
+                s += "...";
             }
             return s;
         }
@@ -560,7 +582,7 @@ namespace IntelEngine::Tales {
                     for (std::size_t k = 0; k < options.size(); ++k) {
                         const auto& o = options[k];
                         const auto oWhere = where + " option " + std::to_string(k + 1);
-                        n.options[k] = Words(Str(o, "say"), 90);
+                        n.options[k] = Words(Str(o, "say"), 140);
                         if (n.options[k].empty()) fail(oWhere + ": \"say\" is missing");
                         const auto when = static_cast<A::If>(static_cast<int>(A::If::Option0) + static_cast<int>(k));
                         if (Bool(o, "persuade")) {

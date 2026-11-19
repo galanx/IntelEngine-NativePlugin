@@ -189,6 +189,7 @@ namespace IntelEngine::Arcs {
         constexpr std::uint32_t BoughtOff = 1u << 9;      // peace bought with the player's gold
         constexpr std::uint32_t Refused = 1u << 10;       // the rival would not be talked round
         constexpr std::uint32_t CameFar = 1u << 11;       // the asker came to the player from another hold (rare: counted)
+        constexpr std::uint32_t Deferred = 1u << 12;      // the asker could not reach the player (gone): at the next meeting
     }
 
     struct PatternDef {
@@ -556,12 +557,35 @@ namespace IntelEngine::Arcs {
     constexpr std::size_t kMaxKept = 24;
     constexpr float kOfferDays = 1.0f;
 
+    // A quiet stretch after every story that came to the player or came to its end, whoever wants to bring the next
+    // one and why (the user, 2026-11-19: Sven stood before the player with a new trouble moments after Faendal had
+    // been turned down: "The pacing isn't quite right"). An offer that was already owed (its asker missed the player,
+    // or is on the road from another hold) only waits out the shorter one.
+    constexpr float kQuietHours = 6.0f;
+    constexpr float kQuietHoursOwed = 1.0f;
+    inline bool QuietFor(float lastBeat, float now, float hours) {
+        return lastBeat < 0.0f || now < lastBeat || (now - lastBeat) * 24.0f >= hours;
+    }
+
     class Book {
     public:
         std::vector<Arc> all;
         std::uint32_t nextId = 1;
         Pattern lastPattern = Pattern::None;
         std::uint8_t lastSlot = 0xFF;
+
+        /** When a story last came to the player or ended (game days; -1 = never): the offers made and answered and
+            the endings, never a plan dropped unseen. `skip`: an arc left out (the one that asks). */
+        float LastBeat(std::uint32_t skip = 0) const {
+            float last = -1.0f;
+            for (const auto& a : all) {
+                if (a.id == skip || a.ending == Ending::Lapsed) continue;
+                last = std::max(last, a.created);
+                if (a.phase != Phase::Planned) last = std::max(last, a.opened);
+                if (a.phase == Phase::Ended) last = std::max(last, a.since);
+            }
+            return last;
+        }
 
         std::size_t Count(Phase p) const {
             return static_cast<std::size_t>(std::count_if(all.begin(), all.end(), [p](const Arc& a) { return a.phase == p; }));

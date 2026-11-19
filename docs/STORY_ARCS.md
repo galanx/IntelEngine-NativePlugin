@@ -180,6 +180,72 @@ with his offer in the Bannered Mare; the ten-day flag set.
 Tests are walked, not teleported: `IntelEngine_Quests.DebugWalkTo(ref, run)` moves the player by the game's own
 pathfinding (`Scripts/intelengine/ambush_setup.sh`, `ambush_meet.sh`).
 
+### How someone comes, and how they go (2026-11-19)
+
+The user: "it wouldn't make sense if a faendal or sven who neither have heard anything about the player, nor have met
+him, to just run to him for some errand. Maybe the running should be reduced to walking so it looks less targeted and
+more natural. If the player disappears before they can reach him, then they defer until next chance to meet him.
+Running into the player is only by people who have genuinely been looking for him, missed him or who want to kill
+him." Later the same day, watching a test: "When declining Faendal's quest, he doesn't walk away. Sven came just
+moments after Faendal ... while Faendal was standing beside me all the time. The pacing isn't quite right."
+
+**At a walk.** `StoryEngine.StoryComesAtAWalk` (seek_player, informant, message, quest, road_encounter): the visitor
+gets `TravelPackage_Walk` unless `ActiveStoryHurries`, which is `IntelEngine.ArcHurries(arc, npc)`: someone close to
+the player (`LivingWorldBridge::CloseToPlayer`) or an asker who came from another hold (`Flag::CameFar`). Having missed
+the player once is no reason to run the next time. Attackers keep their own packages.
+
+**Letting it be.** A walking visitor does not follow the player across the world: `DeferStory` when the player is in
+another place (`ArcReachOf >= 1`) or walked off faster than they follow (2500 units beyond the nearest they got, and
+more than 3500 away). `Core.HandleOffScreenTravel` asks `StoryEngine.LetsItBe` before it would set a visitor down near
+the player (Faendal of Riverwood stood in the Bannered Mare a minute and a half after the player had left). The arc is
+flagged `Deferred`, keeps three more days, and `ArcBridge::Lapse` sends the offer again when the asker is loaded, in the
+same space, within 3000 units, at least a minute later.
+
+**Strangers.** `ArcBridge::KnowsPlayer`: 2 met (SkyrimNet's memory of a meeting, a talk counted by the dialogue tracker,
+close to the player, a friend in the game's relationships), 1 the town heard of the player (an ended story with a
+rumour there), 0 stranger. The pacer asks those who know the player first; a stranger only when they are loaded within
+2500 units of the player in the same space ("a stranger with trouble takes a chance on a stranger who is right
+there"). The author is told `asker_knows` and writes the offer accordingly.
+
+**Never the game's own quests again.** The user: "Dungeon master written quests should never copy original game quests
+but should branch of them or even create new stories based on the knowledge, but never give the same letter via
+vanilla quest and then dungeon master quest to camilla." The catalogue keeps each person's named small quests
+(`m_favours`: miscellaneous quests that name at most six people). The author gets per person `quest` (not finished,
+"(begun)" only when one of its objectives has been in the player's journal: the game starts many quests with the
+world), `quest_done` (finished: a story may grow out of how it ended) and `favours` (never retold), with the rule
+"Never retell a quest of the game". Seen: Sven, Faendal and Camilla listed with "A Lovely Letter", Camilla and Lucan
+with "The Golden Claw"; the tale written was "The Bard Who Sold the Wrong Song".
+
+**Taking their leave.** A story visitor used to stand beside the player for the rest of the visit (three minutes, more
+while anyone talked) whatever the answer had been. Now `IntelEngine_Arcs.OnAskerArrived`, once the answer is given
+and the asker has said their word to it, calls `StoryEngine.VisitOver`: the linger ends as soon as `TalkOver` holds
+(no line of theirs pending, their last one 6 s ago, the player silent for 12 s; by SkyrimNet's account of speech, not
+by the dialogue target, which many people carry for minutes), and `Core.WalkBack` sends them at a walk to the spot
+they set out from (`RememberWhereFrom` moves their own marker there at dispatch), or home when that spot is beside the
+player; tracked like every walk home (`CheckWalkHomeActors`). An asker the first step is with stays. A tale's visitor
+leaves the same way when their step is done.
+
+**A quiet stretch.** `Arcs.h`: `Book::LastBeat` (the last offer made or answered, or ending; a plan dropped unseen is
+no beat) and `QuietFor`. No tale is requested and no pattern planned within `kQuietHours` (6) of it, whoever asks and
+why (the director's reasons and the test hooks too; before, only the pacer kept a day between its own stories). An
+offer already owed (deferred, or on the road from afar) waits out `kQuietHoursOwed` (1).
+
+**Not in front of the people it is about.** `ArcBridge::Company(id)`: someone of the story other than its asker who
+stands within 500 units of the player (followers are not counted). With such a person there the offer is not sent
+(`SendOffer`, the deferred and far-comer loops); a visitor already on the way turns back when within 1400 units
+(`StoryEngine.HeldBackByCompany`, also asked at the moment of arrival), walks back, and the story waits until the two
+are apart (`ArcOfferHeldBack`; a far-comer tries again within the hour).
+
+Long texts are cut where they read whole (`Tales.h Words`): at the last full sentence, else the last clause, else a
+word with "...". An asker's plea in the offer box read "...because I cannot go near him... Reward: 155 gold".
+
+Played on foot: Faendal comes at 77 units a second (a walk) at the first approach and again at the next meeting; lets
+it be when the player leaves for Whiterun; Sven's model-written tale offered as from a stranger, Embry questioned by
+text and the talk read. Offline: `ArcsCheck` (the quiet stretch), `RunArrivalDeliveryBytecodeCheck` ("visit over":
+stays while anyone speaks, then walks back; nowhere to go = stays), `TalesCheck LongWords`. **Not yet seen in game:**
+taking leave, the quiet stretch and holding back for company (the PC's active Windows session was not the test's when
+they were built).
+
 ## 1. Principles
 
 1. **Truth first.** Code decides what happens and makes it true in the game (people, items, bodies, places) before

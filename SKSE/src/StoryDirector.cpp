@@ -400,6 +400,7 @@ namespace IntelEngine::StoryDirector {
             v.sincePicked = LivingWorldBridge::GetSingleton()->DaysSincePicked(v.formId);
             v.reach = candidate.a->reach;
             v.bonded = candidate.a->bonded;
+            v.known = candidate.a->fromMemoryDB || candidate.a->bonded;
             v.farRested = farRested;
             const auto kinds = KindsFor(*candidate.a, session->excluded);
             nlohmann::json context;

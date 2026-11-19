@@ -158,6 +158,18 @@ namespace IntelEngine {
             return out;
         }
 
+        // True when the player has begun this quest of the game: one of its objectives has been in their journal.
+        // (A quest that merely runs says nothing: the game starts many of its quests with the world, long before
+        // the player hears of them: "A Lovely Letter" and "The Golden Claw" both run from the first day.)
+        bool Begun(const RE::TESQuest* quest) {
+            auto* player = RE::PlayerCharacter::GetSingleton();
+            if (!player || !quest) return false;
+            for (auto& instance : player->GetPlayerRuntimeData().objectives) {
+                if (instance.Objective && instance.Objective->ownerQuest == quest) return true;
+            }
+            return false;
+        }
+
         // The quests the player is on now (their journal's shown objectives): never to be contradicted or touched.
         std::vector<std::string> PlayerQuests() {
             std::vector<std::string> out;
@@ -405,6 +417,11 @@ namespace IntelEngine {
                 logger::info("Tales: no tale for {}: another story is on its way or two are open", asker->GetDisplayFullName());
                 return false;
             }
+            if (const float last = m_book.LastBeat(), now = NowDays(); !A::QuietFor(last, now, A::kQuietHours)) {
+                logger::info("Tales: no tale for {}: a story came to the player or ended {:.1f} hours ago (quiet for {:.0f})",
+                             asker->GetDisplayFullName(), (now - last) * 24.0f, A::kQuietHours);
+                return false;
+            }
             // What was told already (newest first): never again.
             for (auto it = m_book.all.rbegin(); it != m_book.all.rend() && told.size() < 10; ++it) {
                 if (it->ending == A::Ending::Lapsed) continue;
@@ -491,16 +508,42 @@ namespace IntelEngine {
             // A quest of the game not done yet that has a part for them (Saadia and the Alik'r): their past and fate
             // there are that quest's, never a tale's.
             if (const auto bound = npc ? m_journalAliases.find(npc->GetFormID()) : m_journalAliases.end(); bound != m_journalAliases.end()) {
-                std::string quests;
-                int n = 0;
+                std::string quests, done;
+                int n = 0, finished = 0;
                 for (const auto questId : bound->second) {
                     auto* quest = RE::TESForm::LookupByID<RE::TESQuest>(questId);
                     const char* qname = quest ? quest->GetFullName() : nullptr;
-                    if (!quest || quest->IsCompleted() || !qname || !*qname || quests.find(qname) != std::string::npos) continue;
-                    quests += (quests.empty() ? "" : ", ") + std::string(qname);
+                    if (!quest || !qname || !*qname) continue;
+                    if (quest->IsCompleted()) {
+                        // Finished with the player: a tale may grow out of how it ended, never repeat it.
+                        if (done.find(qname) == std::string::npos && finished++ < 3) done += (done.empty() ? "" : ", ") + std::string(qname);
+                        continue;
+                    }
+                    if (quests.find(qname) != std::string::npos) continue;
+                    quests += (quests.empty() ? "" : ", ") + std::string(qname) + (Begun(quest) ? " (begun)" : " (not begun)");
                     if (++n >= 3) break;
                 }
                 if (!quests.empty()) j["quest"] = quests;
+                if (!done.empty()) j["quest_done"] = done;
+            }
+            // The game's own small quests with them (favours): never retold, whatever their state.
+            if (const auto errands = npc ? m_favours.find(npc->GetFormID()) : m_favours.end(); errands != m_favours.end()) {
+                std::string favours;
+                int n = 0;
+                for (const auto questId : errands->second) {
+                    auto* quest = RE::TESForm::LookupByID<RE::TESQuest>(questId);
+                    const char* qname = quest ? quest->GetFullName() : nullptr;
+                    if (!quest || !qname || !*qname || favours.find(qname) != std::string::npos) continue;
+                    favours += (favours.empty() ? "" : ", ") + std::string(qname) + (quest->IsCompleted() ? " (finished)" : Begun(quest) ? " (begun)" : " (not begun)");
+                    if (++n >= 4) break;
+                }
+                if (!favours.empty()) j["favours"] = favours;
+            }
+            if (j.contains("quest") || j.contains("quest_done") || j.contains("favours")) {
+                logger::info("Tales: the game's own quests with {}:{}{}{}", person.name,
+                             j.contains("quest") ? " unfinished: " + j["quest"].get<std::string>() + ";" : std::string(),
+                             j.contains("quest_done") ? " finished: " + j["quest_done"].get<std::string>() + ";" : std::string(),
+                             j.contains("favours") ? " errands: " + j["favours"].get<std::string>() : std::string());
             }
             request->pool.people.push_back(person);
             request->bios.push_back(f.ref);
@@ -681,6 +724,12 @@ namespace IntelEngine {
         ctx["told"] = told;
         ctx["lean"] = lean;
         ctx["reward"] = request->pool.gold;
+        {
+            const int knowsPlayer = KnowsPlayer(asker, me->town);
+            ctx["asker_knows"] = knowsPlayer >= 2 ? "met" : knowsPlayer == 1 ? "heard" : "stranger";
+            logger::info("Tales: {} {}", asker->GetDisplayFullName(),
+                         knowsPlayer >= 2 ? "has had to do with the player before" : knowsPlayer == 1 ? "has heard of the player in town" : "is a stranger to the player");
+        }
         if (taleSeed && !taleSeed->why.empty()) {
             // The candidate analyser's view of them: the reason this story begins now must come from it.
             std::string why = taleSeed->why;
@@ -842,6 +891,13 @@ namespace IntelEngine {
     }
 
     void ArcBridge::SendOffer(std::uint32_t id, RE::Actor* asker) {
+        // Not in front of the people it is about: with one of them beside the player the asker does not even set
+        // out; the story waits for the next moment the two are apart (Lapse asks again).
+        if (auto* by = Company(id)) {
+            const char* name = by->GetDisplayFullName();
+            OfferDeferred(id, name && *name ? name : "someone");
+            return;
+        }
         if (auto* source = SKSE::GetModCallbackEventSource()) {
             SKSE::ModCallbackEvent event{};
             event.eventName = "IntelEngine_ArcOffer";

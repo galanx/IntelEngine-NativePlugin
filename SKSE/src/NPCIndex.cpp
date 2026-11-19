@@ -1670,7 +1670,18 @@ namespace IntelEngine {
     std::uint8_t NPCIndex::ReachOf(RE::Actor* actor) {
         auto* player = RE::PlayerCharacter::GetSingleton();
         if (!actor || !player) return 2;
-        if (actor->Is3DLoaded()) return 0;
+        // With the player: in the same room, or out of doors in the same world and not far off. "Loaded" alone says
+        // nothing: the game keeps the people of a place it just left in memory (Sven in Riverwood read as "here"
+        // from inside the inn at Whiterun, 2026-11-19).
+        auto* theirCell = actor->GetParentCell();
+        auto* cell = player->GetParentCell();
+        if (theirCell && cell) {
+            if (theirCell == cell) return 0;
+            if (!theirCell->IsInteriorCell() && !cell->IsInteriorCell() && actor->GetWorldspace() == player->GetWorldspace() &&
+                actor->GetPosition().GetDistance(player->GetPosition()) < 10000.0f) {
+                return 0;
+            }
+        }
         const std::string theirTown = GetActorSettlementName(actor);
         if (!theirTown.empty() && theirTown == GetActorSettlementName(player)) return 0;
         const std::string theirHold = GetNPCHoldName(actor);

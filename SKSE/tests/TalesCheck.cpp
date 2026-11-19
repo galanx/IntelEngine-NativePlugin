@@ -378,6 +378,36 @@ static void Stalk() {
     Require(Tales::Compile(j, Town()).errors.find("needs \"why\"") != std::string::npos, "a reason to follow");
 }
 
+static void LongWords() {
+    // An answer longer than the popup holds keeps what reads whole: up to its last clause...
+    json j = Sample();
+    j["steps"][2]["options"][1]["say"] = "Tell her plainly that Saadia is innocent and that she herself was swindled by Quickhand, and that the casks were watered from the first day she bought them";
+    auto r = Tales::Compile(j, Town());
+    Require(r.ok, "a long answer still compiles");
+    std::string said;
+    for (const auto& n : r.arc.graph) if (n.kind == Kind::Choose) said = n.options[1];
+    Require(said == "Tell her plainly that Saadia is innocent and that she herself was swindled by Quickhand.", "cut at the last clause");
+    // ...or its last full sentence...
+    j["steps"][2]["options"][1]["say"] = "Tell her plainly that Saadia is innocent and that she herself was swindled. Then say the casks were watered from the first day she bought them and never once since";
+    r = Tales::Compile(j, Town());
+    for (const auto& n : r.arc.graph) if (n.kind == Kind::Choose) said = n.options[1];
+    Require(said == "Tell her plainly that Saadia is innocent and that she herself was swindled.", "cut at the last sentence");
+    // ...and with no such place, it is cut at the end of a word and says so.
+    j["steps"][2]["options"][1]["say"] = "Tell her plainly that Saadia is innocent and that she herself was swindled by Quickhand and that the casks were watered from the first day she bought them";
+    r = Tales::Compile(j, Town());
+    for (const auto& n : r.arc.graph) if (n.kind == Kind::Choose) said = n.options[1];
+    const std::string whole = j["steps"][2]["options"][1]["say"].get<std::string>();
+    const std::string kept = said.size() >= 3 ? said.substr(0, said.size() - 3) : std::string();
+    Require(said.size() <= 140 && said.ends_with("...") && !kept.empty() && whole.starts_with(kept) && whole[kept.size()] == ' ' &&
+                kept.back() != ' ' && kept.back() != ',',
+            "cut at a word, marked as cut");
+    // The same for what an asker says in the offer box.
+    j = Sample();
+    j["offer"]["ask"] = "Please, you look like someone with a steady hand and no stake in this town's quarrels; speak with Embry for me and find out what he really knows about the song I sang, because I cannot go near him without paying and I cannot pay.";
+    r = Tales::Compile(j, Town());
+    Require(r.ok && r.arc.offerAsk.ends_with("what he really knows about the song I sang."), "a plea ends where a clause ends");
+}
+
 static void Refusals() {
     const auto errorsOf = [](json j) { return Tales::Compile(j, Town()).errors; };
     json j = Sample();
@@ -429,6 +459,7 @@ int main() {
         Adventure();
         Ambush();
         Stalk();
+        LongWords();
         Refusals();
     } catch (const std::exception& e) {
         std::cerr << "TalesCheck FAILED: " << e.what() << "\n";
