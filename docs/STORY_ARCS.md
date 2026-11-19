@@ -572,3 +572,69 @@ Each pattern is played through every branch. Beyond that:
 5. Safety catalogue (quest aliases at data load), the battle bounty fix, memory writes that survive SkyrimNet's
    post-load check, rumor reconciliation.
 6. Long play tests and the edge cases above; Albanian profile; the full Isekai profile.
+
+## Someone held at a place, and stories that are more than an errand (2026-11-19 night)
+
+The user, of the tales played that day: "are these quests this flat only because you are testing ... I thought the
+composer would tie a story to multiple types where going deep into the ruins and killing a boss can be part of a
+larger story, not a flat fetch quest. And do we still have kidnapping and rescue quests?" The flat ones were test
+tales written by hand to exercise single steps. Two things followed.
+
+### Depth is held to by the compiler (Tales.h, `Pool::depth`: stories asked of the model only)
+- Ways that end differently: a story whose every way leads to the same ending is refused.
+- A place out in the world is one act among people: at least two steps among people (talk, choose, visit, stalk,
+  brawl) besides it, and after every step out there (delve, slay, free) a talk or a choice must still be reachable.
+  "Go there, kill it, take it, hand it over" is refused with the reason, and the author writes again.
+- `Pool::mustPlace`: after two stories that stayed in town (and none barred), the next has a place in it.
+- The prompt says the same in the author's terms ("Never an errand", "one act of a story"), and that each outcome of
+  a talk is ONE thing (see "what the play showed" below).
+
+### Someone held (`"held": "dX"` on a person, step `"free"`; Arcs.h `Kind::Free`, `CaptiveState`, co-save 7)
+- Who: `Person::canHold` (the measure of a murder's victim: nobody the town or a quest needs, nobody near the
+  player). Where: `SiteHolds` (bandits, necromancers, vampires, Forsworn, hagravens, Falmer; never a Dwemer ruin, a
+  tomb or a den). One person a story, never the asker; nothing is done with them before the step that frees them
+  (checked on the graph); once in four stories (`barred`).
+- The game side (IntelEngine_Arcs, "someone held at a place"): taken (disabled) once unseen, when the offer goes
+  out; if they still stand in sight when the asker arrives, the offer is dropped. Away until the heart of the place
+  is in the game (the same signal 14 that places a master), then put beside it: FIRST made a prisoner of the place
+  (Skyrim.esm `dunPrisonerFaction` 000AA784, a friend of every such place's people, so nobody there harms them) and
+  unable to die, THEN moved in, restrained, on their knees (`IdleBoundKneesStart`). Freed when the player stands by
+  them with no fight going on (`Facts::captiveReached`, 300 units). They follow the player (IntelEngine's own follow
+  package), stay while a step of the story is with them, and part once the player is out of the place under the
+  open sky, or after three game hours: they walk home, or are simply home when the player is far ahead. Everything
+  put on them comes off at the parting. A story declined, dropped or ended with them still held brings them home
+  unseen; no memory is written of anything that did not happen.
+- A rescue asked for (`ArcRequestRescue`; `TaleSeed::kind == "rescue"`, `Pool::mustCaptive`): the old dungeon
+  master's rescue quest (IntelEngine_StoryEngine.HandleQuestDispatch) hands over to this at the new levels, and the
+  one held must be close to the asker as the game has it (`Person::close`: a relationship record between the two,
+  or the same roof), or nothing is written. The user, of a hand-written test in which Ysolda asked after Nazeem:
+  "it kinda doesn't make sense".
+- The 3.8 rescue (teleported in view, beaten into bleedout, a hostage nobody could find, memories of a captivity
+  that never was) runs at the Classic level only, with its two worst faults mended.
+
+### Played (test profile, by talk; the camp and the cave entered by console, fights by real swings in god mode)
+- A hand-written tale at White River Watch: taken unseen, placed 0.2 s after the cave loaded, freed on reaching him,
+  came out through the passage with the player, parted after three hours and set off home, flags restored.
+- **A model-written rescue, offer to ending** ("The Quiet Wife", second attempt): Nazeem asks after his wife Ahlam;
+  Anoriath saw her leave of her own will; she is held at Halted Stream Camp beside the bandit chief; freed, she will
+  not say why until she faces Nazeem; Nazeem owns up to the crooked bargain that had him blackmailed; the choice
+  (Speech too low to press him) ended "other", 160 gold paid in person, a memory for each of them.
+- What the play showed, all mended:
+  - Placed first and made a prisoner a moment later, the bandits beside him had already drawn and went on striking
+    (half his health in twenty seconds). Now a prisoner before they stand there; seen at Halted Stream: untouched.
+  - A talk that really took place could hang: Nazeem told all he knew four times, and neither prepared outcome was
+    what he said. After three exchanges that match none, the judge names the nearest (`pending.nones >= 3`). Seen:
+    "an outcome must be named", and the story moved on. The prompt now asks for outcomes that are one thing each.
+  - The log called the step "stalk".
+- Not played: a model-written story with `must_place` (needs two stories told first), the Falmer/vampire/Forsworn
+  kinds of place, a captive left behind by fast travel, a declined rescue (the release path was read, not seen).
+
+## The game's own civil war (VanillaWar.h), and the reports from Discord
+
+See `Scripts\intelengine\reports\bug-ledger-vs-4.0-2026-11-19.md` on the user's PC for every report with where it
+stood in this branch and what was done. In short: the simulation reads the civil war from the game (CWObj stage 255,
+CWPlayerAllegiance, MQ302, MQ305) each political tick and is held to it; ids in any case; soldiers belong to their
+side only; nothing political with politics off; drivers and ferrymen never sent; removal that removes; failures told
+once; names as whole words (NameMatch.h); nobody walks into a scene; JSON dumps that cannot throw. The maintainer's
+3.8.3 is merged in.
+

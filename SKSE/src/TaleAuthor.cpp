@@ -499,6 +499,11 @@ namespace IntelEngine {
             // Held at a place when the story begins: nobody the town or a quest needs, and nobody near the player (they
             // are taken out of sight, before the asker has come). The same measure as a murder's victim (3).
             person.canHold = !isAsker && Usable(actor, 3, none);
+            // Close to the one who asks, as the game itself has it: a relationship between the two (kin, spouse, lover,
+            // friend, ally), or the same roof. A rescue is about such a person or it is not written (the user,
+            // 2026-11-19, of a test in which Ysolda asked after Nazeem: "it kinda doesn't make sense").
+            person.close = !isAsker && ((askerBase && npc && RE::BGSRelationship::GetRelationship(askerBase, npc)) ||
+                                        (f.home != 0 && f.home == me->home));
             if (person.name.empty()) return false;
             nlohmann::json j;
             j["key"] = person.key;
@@ -516,6 +521,7 @@ namespace IntelEngine {
             if (person.canJail) can.push_back("may be taken by the guard or leave town for a while");
             if (person.canBrawl) can.push_back("would settle a matter with fists");
             if (person.canHold) can.push_back("may be held at a place out in the world when the story begins");
+            if (person.close) j["close"] = true;
             j["may"] = can;
             j["ties"] = TiesOf(npc);
             // What stands between them and the player, as the game and its mods keep it: fact for the author, so no
@@ -786,11 +792,13 @@ namespace IntelEngine {
         {
             const bool holds = std::any_of(request->pool.sites.begin(), request->pool.sites.end(), [](const Tales::Site& s) { return Tales::SiteHolds(s.kind); });
             const bool someone = std::any_of(request->pool.people.begin(), request->pool.people.end(), [](const Tales::Person& p) { return p.canHold; });
+            const bool dear = std::any_of(request->pool.people.begin(), request->pool.people.end(), [](const Tales::Person& p) { return p.canHold && p.close; });
             const bool mayHold = holds && someone && !(barred & (1u << static_cast<unsigned>(A::Kind::Free))) && heartLean.empty();
             const bool rescue = taleSeed && taleSeed->kind == "rescue";
-            if (rescue && !mayHold) {
+            if (rescue && (!mayHold || !dear)) {
                 logger::info("Tales: no rescue for {}: {}", asker->GetDisplayFullName(),
-                             !holds ? "no place near that keeps prisoners" : !someone ? "nobody of the town may be held" : "someone was held in a story told lately");
+                             !holds ? "no place near that keeps prisoners" : !someone ? "nobody of the town may be held"
+                             : !dear ? "nobody close to them may be held (a rescue is for someone who is theirs)" : "someone was held in a story told lately");
                 return false;
             }
             ctx["bar_captive"] = !mayHold;
@@ -844,7 +852,7 @@ namespace IntelEngine {
         if (!written.empty()) {
             std::string who;
             for (const auto& p : request->pool.people) {
-                if (p.canJail || p.canBrawl || p.canHold) who += " " + p.name + (p.canJail ? " [jail]" : "") + (p.canBrawl ? " [brawl]" : "") + (p.canHold ? " [hold]" : "") + ";";
+                if (p.canJail || p.canBrawl || p.canHold || p.close) who += " " + p.name + (p.canJail ? " [jail]" : "") + (p.canBrawl ? " [brawl]" : "") + (p.canHold ? " [hold]" : "") + (p.close ? " [close]" : "") + ";";
             }
             for (const auto& s : request->pool.sites) who += " place " + s.key + " " + s.name + " (" + SiteWhat(s.kind) + ");";
             logger::info("Tales: test pool:{}", who);
@@ -1015,7 +1023,7 @@ namespace IntelEngine {
     }
 
     void ArcBridge::LogOutline(const A::Arc& a) {
-        static constexpr const char* kKinds[] = {"?", "talk", "find", "give", "choose", "brawl", "go", "visit", "wait", "delve", "slay", "ambush", "stalk"};
+        static constexpr const char* kKinds[] = {"?", "talk", "find", "give", "choose", "brawl", "go", "visit", "wait", "delve", "slay", "ambush", "stalk", "free"};
         static constexpr const char* kWhens[] = {"?", "done", "option 1", "option 2", "option 3", "picked", "dead", "has", "won", "lost",
                                                  "handed", "persuaded", "said 1", "said 2", "said 3", "waited"};
         for (std::size_t i = 0; i < a.graph.size(); ++i) {
@@ -1063,10 +1071,13 @@ namespace IntelEngine {
         pending.judging = true;
         pending.judgedAt = RealNow();
         pending.askedAt = -1.0f;
-        // Never forced: a talk turns only when the conversation really came to one of its outcomes (an ignored line
-        // or idle chatter forced into "the closest outcome" would move the story on a matter never spoken of). The
-        // author prepares a refusal among the outcomes; a person who will not engage is that outcome, or the time runs out.
-        SendJudge(id, a.node, who, n.goal, n.turns, false);
+        // Not forced at first: a talk turns only when the conversation really came to one of its outcomes (an ignored
+        // line or idle chatter forced into "the closest outcome" would move the story on a matter never spoken of).
+        // But a talk that has really taken place does not hang for want of a prepared outcome: after three exchanges
+        // with this person on this step that matched none of them, the nearest is named. (Played 2026-11-19: Nazeem,
+        // freed, told all he knew, in character and four times over; neither outcome the story had prepared was
+        // what he said, and the journal stood still at "Hear how they came to be taken".)
+        SendJudge(id, a.node, who, n.goal, n.turns, pending.nones >= 3);
     }
 
     bool ArcBridge::Parley(std::uint32_t id, const A::Arc& a, Pending& pending, const A::Node& n, float nearest, std::string& why) {

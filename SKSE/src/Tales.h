@@ -44,6 +44,7 @@ namespace IntelEngine::Tales {
         bool canBrawl = false;    // would settle something with fists
         bool canHold = false;     // may be held at a place when the story begins (the town can do without them for a
                                   // while, and they are nowhere the player could see them go)
+        bool close = false;       // close to the one who asks, as the game has it (a relationship, or the same roof)
     };
 
     // What a prop may be: an item of the game, by its name.
@@ -828,6 +829,13 @@ namespace IntelEngine::Tales {
         }
         if (pool.mustCaptive && !a.captive) {
             fail("people: this story is about someone held at one of the places: give one of the people \"held\": \"dX\", and free them in a step");
+        }
+        // A rescue is asked for by someone to whom the one taken belongs: never a stranger for no reason.
+        if (pool.mustCaptive && a.captive) {
+            const auto* held = personOf(static_cast<A::Role>(a.captive));
+            if (held && !held->close) {
+                fail("people: " + held->key + " is nothing to " + pool.people[0].key + ": the one held must be close to the one who asks (a line that says \"Close to\")");
+            }
         }
 
         // ---- what makes a story worth living, held to by the engine (stories asked of the model only)
