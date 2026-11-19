@@ -9,6 +9,7 @@
 #include "ItemIndex.h"
 #include "ItemNames.h"
 #include "LivingWorldBridge.h"
+#include "NPCIndex.h"
 #include "MemoryDB.h"
 #include "QuestBridge.h"
 #include "SkyrimNetAPI.h"
@@ -28,6 +29,7 @@ namespace IntelEngine {
         namespace A = Arcs;
 
         constexpr float kQuietSeconds = 6.0f;      // a talk is read once both have been quiet this long
+        constexpr float kFarRoadDays = 8.0f / 24.0f;   // someone coming from another hold is on the road this long
         constexpr float kTalkWindow = 300.0f;      // the conversation read: its lines of the last five minutes
         constexpr std::size_t kTalkLines = 16;
         constexpr std::size_t kPoolSize = 10;      // the asker and up to nine others
@@ -313,6 +315,7 @@ namespace IntelEngine {
             RE::FormID asker = 0;
             RE::FormID town = 0;
             bool afar = false;             // the director's: the asker comes to the player wherever the player is
+            bool otherHold = false;        // ... from another hold
             std::vector<RE::FormID> bios;  // whose bio summaries the worker adds (file reads stay off the game thread)
         };
         std::shared_ptr<Request> g_request;   // the tale being written (one at a time)
@@ -364,6 +367,18 @@ namespace IntelEngine {
         // A town's story comes to a player who is in that town, from someone who has not asked for anything lately. One
         // the director chose for a reason of their own comes to the player wherever the player is.
         if (afar) {
+            // The player's own setting for who may cross holds to seek them out holds here too (the offer travels as
+            // such a visit): asked before anything is written. Lod of Falkreath had a whole story written and was
+            // then turned back on the road by it (2026-11-19).
+            {
+                auto* index = NPCIndex::GetSingleton();
+                auto* pc = RE::PlayerCharacter::GetSingleton();
+                const std::string playerHold = pc ? NPCIndex::GetNPCHoldName(pc) : std::string();
+                if (index && !NPCIndex::PassesHoldRestriction(asker, playerHold, index->GetHoldRestrictionPolicy("seek_player"))) {
+                    logger::info("Tales: no tale for {}: the settings do not let them cross holds to seek the player out", asker->GetDisplayFullName());
+                    return false;
+                }
+            }
             if (written.empty() && AskedWithin(asker->GetFormID(), 7.0f)) {
                 logger::info("Tales: no tale for {}: they asked the player for something lately", asker->GetDisplayFullName());
                 return false;
@@ -412,6 +427,7 @@ namespace IntelEngine {
         request->asker = asker->GetFormID();
         request->town = me->town;
         request->afar = afar;
+        request->otherHold = taleSeed && taleSeed->otherHold;
         // ---- the people: the asker, then those of the town the game ties to them, then the town's known faces
         struct Candidate {
             const Folk* folk;
@@ -806,12 +822,23 @@ namespace IntelEngine {
             }
         }
         a.place = request->town;
+        if (request->otherHold) a.flags |= A::Flag::CameFar;
         a.seed = A::detail::Mix(request->asker, static_cast<std::uint32_t>(NowDays() * 1440.0f));
         g_request.reset();
         m_taleBusy.store(false);
+        const bool onTheRoad = (a.flags & A::Flag::CameFar) != 0;
         const auto id = PlanTale(std::move(a));
         auto* asker = RE::TESForm::LookupByID<RE::Actor>(request->asker);
-        if (id && asker) SendOffer(id, asker);
+        if (id && asker && onTheRoad) {
+            // From another hold: they are on the road for a good part of a day before they reach the player (Lapse
+            // sends the offer then). Nothing is held meanwhile: no story slot, no visitor on the way.
+            std::scoped_lock lock(m_mutex);
+            m_pending[id].offerDue = NowDays() + kFarRoadDays;
+            logger::info("Tales: #{} {} is on the road from another hold: with the player in about {:.0f} hours", id,
+                         asker->GetDisplayFullName(), kFarRoadDays * 24.0f);
+        } else if (id && asker) {
+            SendOffer(id, asker);
+        }
     }
 
     void ArcBridge::SendOffer(std::uint32_t id, RE::Actor* asker) {

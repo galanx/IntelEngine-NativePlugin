@@ -5,6 +5,7 @@
 #include "LivingWorldBridge.h"
 #include "LocationResolver.h"
 #include "NPCIndex.h"
+#include "StoryDirectorPick.h"
 #include "QuestBridge.h"
 #include "Papyrus.h"
 #include "SkyrimNetAPI.h"
@@ -698,6 +699,27 @@ namespace IntelEngine {
         {
             std::scoped_lock lock(m_mutex);
             ids = m_book.Lapse(NowDays());
+            // Someone on the road from another hold reaches the player: their offer goes out now (after a load too:
+            // the road is counted from when their story was planned).
+            {
+                const float now = NowDays();
+                for (auto& a : m_book.all) {
+                    if (a.phase != A::Phase::Planned || !(a.flags & A::Flag::CameFar)) continue;
+                    auto& pending = m_pending[a.id];
+                    if (pending.offerSent) continue;
+                    if (pending.offerDue < 0.0f) pending.offerDue = std::max(now, a.created + 8.0f / 24.0f);
+                    if (now < pending.offerDue || LivingWorldBridge::GetSingleton()->IsBadMoment()) continue;
+                    pending.offerSent = true;
+                    const auto arcId = a.id;
+                    const RE::FormID askerId = a.cast[A::RAsker];
+                    logger::info("Arcs: #{} {} has come all the way: the offer goes out", arcId, NameOf(askerId));
+                    if (auto* task = SKSE::GetTaskInterface()) {
+                        task->AddTask([this, arcId, askerId]() {
+                            if (auto* asker = RE::TESForm::LookupByID<RE::Actor>(askerId)) SendOffer(arcId, asker);
+                        });
+                    }
+                }
+            }
             // A murder never brought to the player still happened: the town hears of it.
             for (const auto id : ids) {
                 if (const auto* a = m_book.Find(id); a && a->pattern == A::Pattern::Murder) Ended(*a);
@@ -1149,8 +1171,28 @@ namespace IntelEngine {
             }
             // A visit: the step's person is sent to the player (again after a couple of game hours if they could not
             // come); when they are already here the script has them speak up.
-            if (n.kind == A::Kind::Visit && n.who && !f.dead[n.who] && !(f.with[n.who] && f.spoke[n.who]) &&
+            // Nobody crosses Skyrim inside a town's story: a visitor or a shadow comes when the player is in the
+            // tale's own hold (or they are near anyway). An old companion, who is of no town, comes from wherever
+            // their life has them: that journey is their part in it.
+            const auto withinReach = [&](std::size_t role) {
+                auto* who = actors[role];
+                if (!who) return false;
+                if (who->Is3DLoaded()) return true;
+                const Folk* folk = FolkOf(a->cast[role]);
+                if (!folk || folk->town != a->place) return true;
+                auto* playerHold = HoldOf(player->GetCurrentLocation());
+                auto* taleHold = HoldOf(RE::TESForm::LookupByID<RE::BGSLocation>(a->place));
+                return playerHold && taleHold && playerHold == taleHold;
+            };
+            if ((n.kind == A::Kind::Visit || n.kind == A::Kind::Stalk) && n.who && !f.dead[n.who] && !withinReach(n.who)) {
+                if (!pending.tooFar) {
+                    pending.tooFar = true;
+                    logger::info("Arcs: #{} {} does not come after the player across Skyrim: step {} waits until the player is back in {}", id,
+                                 NameOf(a->cast[n.who]), static_cast<int>(a->node), NameOf(a->place));
+                }
+            } else if (n.kind == A::Kind::Visit && n.who && !f.dead[n.who] && !(f.with[n.who] && f.spoke[n.who]) &&
                 (pending.visitAt < 0.0f || now - pending.visitAt > 2.0f / 24.0f || now < pending.visitAt)) {
+                pending.tooFar = false;
                 pending.visitAt = now;
                 bits |= 1 << 5;
                 logger::info("Arcs: #{} {} is to come to the player (step {})", id, NameOf(a->cast[n.who]), static_cast<int>(a->node));
@@ -1159,7 +1201,7 @@ namespace IntelEngine {
             // Someone shadowing the player: sent after them (the visit's signal; the script sees the step's kind) when
             // the player is out of doors, in no fight, and not standing next to them already. Tried again every couple
             // of minutes while it cannot be (another visitor on the way, indoors).
-            if (n.kind == A::Kind::Stalk && n.who && !f.dead[n.who] && !f.with[n.who] && real >= pending.stalkHold && cell &&
+            if (n.kind == A::Kind::Stalk && n.who && !f.dead[n.who] && !f.with[n.who] && withinReach(n.who) && real >= pending.stalkHold && cell &&
                 !cell->IsInteriorCell() && !player->IsInCombat() && !LivingWorldBridge::GetSingleton()->IsBadMoment() &&
                 real >= m_questBusyUntil.load()) {
                 auto* shadow = actors[n.who];
@@ -1681,6 +1723,7 @@ namespace IntelEngine {
         if (name == "bondwith") return pending != m_pending.end() ? pending->second.bondWith : 0;
         if (name == "effectprop") return pending != m_pending.end() ? pending->second.effectProp : 0;
         if (name == "gangsite") return pending != m_pending.end() ? pending->second.gangSite - 1 : -1;
+        if (name == "camefar") return (a->flags & A::Flag::CameFar) ? 1 : 0;
         if (name == "ambushdo") return pending != m_pending.end() ? pending->second.ambushDo : 0;
         if (name == "ambushtries") return pending != m_pending.end() ? pending->second.ambushTries : 0;
         if (name == "ambushchase") return pending != m_pending.end() && pending->second.chasing ? 1 : 0;
@@ -1981,6 +2024,22 @@ namespace IntelEngine {
 
     // ------------------------------------------------------------------ what people know
 
+    void ArcBridge::OfferLater(std::uint32_t id) {
+        std::scoped_lock lock(m_mutex);
+        auto& pending = m_pending[id];
+        pending.offerSent = false;
+        pending.offerDue = NowDays() + 1.0f / 24.0f;
+        logger::info("Arcs: #{} the offer could not go out now: tried again in an hour", id);
+    }
+
+    bool ArcBridge::FarComerLately(float days) const {
+        const float now = NowDays();
+        std::scoped_lock lock(m_mutex);
+        return std::any_of(m_book.all.begin(), m_book.all.end(), [&](const A::Arc& a) {
+            return (a.flags & A::Flag::CameFar) && a.ending != A::Ending::Lapsed && now - a.created < days && now >= a.created;
+        });
+    }
+
     bool ArcBridge::Involves(RE::FormID actor) const {
         std::scoped_lock lock(m_mutex);
         return m_book.LiveFor(actor) != nullptr;
@@ -2233,9 +2292,23 @@ namespace IntelEngine {
         }
         void ArcAmbushDone(RE::StaticFunctionTag*, std::int32_t id, std::int32_t what) { ArcBridge::GetSingleton()->AmbushDone(U(id), what); }
         bool ArcInWilds(RE::StaticFunctionTag*, RE::TESObjectREFR* ref) { return InTheWilds(ref); }
+        void ArcOfferLater(RE::StaticFunctionTag*, std::int32_t id) { ArcBridge::GetSingleton()->OfferLater(U(id)); }
+        // Test hook: how the director's distance rule sees someone: reach (0 here, 1 the hold, 2 another hold), plus 10
+        // when they are close to the player.
+        std::int32_t ArcDebugReach(RE::StaticFunctionTag*, RE::Actor* actor) {
+            if (!actor) return -1;
+            const int reach = NPCIndex::ReachOf(actor);
+            const bool bonded = LivingWorldBridge::GetSingleton()->CloseToPlayer(actor);
+            logger::info("[Director] test: {} is {}{}; someone came from afar within {:.0f} days: {}", actor->GetDisplayFullName(),
+                         reach == 0 ? "here" : reach == 1 ? "elsewhere in the hold" : "in another hold",
+                         bonded ? ", close to the player" : ", not close to the player", StoryDirector::kFarRestDays,
+                         ArcBridge::GetSingleton()->FarComerLately(StoryDirector::kFarRestDays) ? "yes" : "no");
+            return reach + (bonded ? 10 : 0);
+        }
         // Test hook: a tale as the director asks for one (a reason of the asker's own, coming from afar).
         bool ArcRequestTaleWhy(RE::StaticFunctionTag*, RE::Actor* asker, RE::BSFixedString why) {
-            ArcBridge::TaleSeed seed{why.c_str() ? why.c_str() : "", "seek_player", true};
+            // As the director would seed it: from another hold when that is where they are.
+            ArcBridge::TaleSeed seed{why.c_str() ? why.c_str() : "", "seek_player", true, NPCIndex::ReachOf(asker) >= 2};
             return ArcBridge::GetSingleton()->RequestTale(asker, {}, &seed);
         }
         bool ArcFetchProp(RE::StaticFunctionTag*, std::int32_t id, std::int32_t prop) { return ArcBridge::GetSingleton()->FetchProp(U(id), prop); }
@@ -2279,6 +2352,8 @@ namespace IntelEngine {
         a_vm->RegisterFunction("ArcThugPlaced", script, ArcThugPlaced); ++count;
         a_vm->RegisterFunction("ArcAmbushDone", script, ArcAmbushDone); ++count;
         a_vm->RegisterFunction("ArcInWilds", script, ArcInWilds); ++count;
+        a_vm->RegisterFunction("ArcDebugReach", script, ArcDebugReach); ++count;
+        a_vm->RegisterFunction("ArcOfferLater", script, ArcOfferLater); ++count;
         a_vm->RegisterFunction("ArcRequestTaleWhy", script, ArcRequestTaleWhy); ++count;
         a_vm->RegisterFunction("ArcFetchProp", script, ArcFetchProp); ++count;
         a_vm->RegisterFunction("ArcDebugTaleFile", script, ArcDebugTaleFile); ++count;

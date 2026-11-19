@@ -57,6 +57,10 @@ namespace IntelEngine::StoryDirector {
         std::string kind;           // the kind of moment the model chose for them; "" or "none" = none
         std::string allowed;        // the kinds they may be used for, ", "-separated (the candidate's Eligible line)
         float sincePicked = 1.0e6f; // game days since the last moment they were part of
+        int reach = 0;              // how far they are: 0 with the player or of the place the player is in, 1 elsewhere
+                                    // in the same hold, 2 another hold (or nobody knows where)
+        bool bonded = false;        // close to the player in the game's own terms (travelled together, a confidant, wed)
+        bool farRested = true;      // nobody came from another hold lately
     };
 
     // Nobody acts again this soon unless their reason became pressing: Elrindir came after the player twice running
@@ -90,11 +94,39 @@ namespace IntelEngine::StoryDirector {
 
     inline bool Gentle(std::string_view kind) { return kind == "seek_player" || kind == "informant" || kind == "message"; }
 
+    // How far a reason carries (the user, 2026-11-19: "The cases where someone should come from very far should be
+    // too rare and only for good reason. This was exactly my complaint, that people from afar were visiting for
+    // absurd reasons"). The farther off someone is, the more it takes, and from another hold it is rare whatever
+    // the reason. No setting loosens this; the hold policies of the settings can only tighten it further.
+    inline constexpr int kUrgentLevel = 5;
+    inline constexpr float kUrgentExpected = 4.5f;
+    inline constexpr float kFarRestDays = 10.0f;    // between two who come from another hold
+    inline bool Hostile(std::string_view kind) { return kind == "ambush" || kind == "stalker"; }
+
+    inline bool MayCome(const Verdict& v) {
+        if (v.reach <= 0) return true;   // with the player, or of the place the player is in
+        if (v.reach == 1) {
+            // Elsewhere in the same hold, hours on the road. Someone close to the player comes on a real reason; anyone
+            // else needs a pressing one. What happens out on the hold's roads (a meeting, someone lying in wait) is
+            // the hold's own business, as before.
+            if (Hostile(v.kind) || v.kind == "road_encounter") return true;
+            return v.level >= kPressingLevel || (v.bonded && v.level >= kRealLevel);
+        }
+        // Another hold: days on the road. Nobody crosses Skyrim to waylay or shadow the player on a whim, and nobody
+        // at all comes that far twice in a short while. Someone close to the player comes on a pressing reason; a
+        // mere acquaintance only when it is urgent beyond doubt.
+        if (Hostile(v.kind) || !v.farRested) return false;
+        if (v.kind == "road_encounter") return v.bonded;
+        if (v.bonded) return v.level >= kPressingLevel;
+        return v.level >= kUrgentLevel && v.expected >= kUrgentExpected;
+    }
+
     inline bool Qualifies(const Verdict& v, bool quiet = false) {
-        if (!v.answered || !Allowed(v)) return false;
+        if (!v.answered || !Allowed(v) || !MayCome(v)) return false;
         if (v.sincePicked < kRepeatDays && v.level < kPressingLevel) return false;
         if (v.level >= kRealLevel && v.expected >= kRealExpected) return true;
-        return quiet && Gentle(v.kind) && v.level >= kMildLevel && v.expected >= kMildExpected;
+        // A gentle moment on a mild reason: only from someone who is here anyway.
+        return quiet && v.reach <= 0 && Gentle(v.kind) && v.level >= kMildLevel && v.expected >= kMildExpected;
     }
 
     // Index of the one who acts, or -1 (nobody has a reason enough: no moment now).

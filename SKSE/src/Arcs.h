@@ -188,6 +188,7 @@ namespace IntelEngine::Arcs {
         constexpr std::uint32_t Apology = 1u << 8;        // peace through the asker's apology
         constexpr std::uint32_t BoughtOff = 1u << 9;      // peace bought with the player's gold
         constexpr std::uint32_t Refused = 1u << 10;       // the rival would not be talked round
+        constexpr std::uint32_t CameFar = 1u << 11;       // the asker came to the player from another hold (rare: counted)
     }
 
     struct PatternDef {

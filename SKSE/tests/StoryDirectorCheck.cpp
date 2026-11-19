@@ -83,10 +83,47 @@ static void Picks() {
     Require(Pick({repeat, other}, never) == 0, "after two days they may act again");
 }
 
+static Verdict At(Verdict v, int reach, bool bonded = false, bool farRested = true) {
+    v.reach = reach;
+    v.bonded = bonded;
+    v.farRested = farRested;
+    return v;
+}
+
+// How far a reason carries: the user's complaint was people visiting from afar for absurd reasons.
+static void Distance() {
+    const auto never = [](const std::string&) { return 0; };
+    const char* all = "seek_player, informant, message, quest, ambush, stalker, road_encounter";
+    // Here: as before.
+    Require(Pick({At(V("a", 3, 3.0f, "seek_player"), 0)}, never) == 0, "someone here acts on a real reason");
+    // Elsewhere in the hold: a real reason only from someone close; anyone on a pressing one.
+    Require(Pick({At(V("a", 3, 3.0f, "quest"), 1)}, never) == -1, "an acquaintance does not walk hours for a matter that can wait");
+    Require(Pick({At(V("a", 3, 3.0f, "quest"), 1, true)}, never) == 0, "someone close does");
+    Require(Pick({At(V("a", 4, 4.0f, "quest"), 1)}, never) == 0, "a pressing matter brings anyone of the hold");
+    Require(Pick({At(V("a", 3, 3.0f, "ambush", 1.0f, all), 1)}, never) == 0, "the hold's roads are as before");
+    // Another hold.
+    Require(Pick({At(V("a", 4, 4.0f, "quest"), 2)}, never) == -1, "nobody crosses Skyrim on a pressing matter for an acquaintance");
+    Require(Pick({At(V("a", 5, 4.2f, "quest"), 2)}, never) == -1, "nor on an urgent one the probabilities doubt");
+    Require(Pick({At(V("a", 5, 4.8f, "quest"), 2)}, never) == 0, "urgent beyond doubt: they come");
+    Require(Pick({At(V("a", 3, 3.0f, "seek_player"), 2, true)}, never) == -1, "even someone close does not cross Skyrim for a matter that can wait");
+    Require(Pick({At(V("a", 4, 4.0f, "seek_player"), 2, true)}, never) == 0, "someone close, on a pressing matter: they come");
+    Require(Pick({At(V("a", 5, 5.0f, "quest"), 2, true, false)}, never) == -1, "not twice in a short while, whatever the reason");
+    Require(Pick({At(V("a", 5, 5.0f, "ambush", 1.0f, all), 2, true)}, never) == -1, "nobody crosses Skyrim to lie in wait");
+    Require(Pick({At(V("a", 5, 5.0f, "stalker", 1.0f, all), 2)}, never) == -1, "nor to shadow the player");
+    Require(Pick({At(V("a", 3, 3.0f, "road_encounter", 1.0f, all), 2)}, never) == -1, "a stranger from afar is not met on the road by chance");
+    Require(Pick({At(V("a", 3, 3.0f, "road_encounter", 1.0f, all), 2, true)}, never) == 0, "an old companion may be");
+    // The far one is passed over and someone here with a real reason acts instead.
+    Require(Pick({At(V("far", 4, 4.0f, "quest"), 2), At(V("here", 3, 3.0f, "seek_player"), 0)}, never) == 1, "the one who is here acts");
+    // A quiet world's gentle moment on a mild reason: only from someone who is here anyway.
+    Require(Pick({At(V("a", 2, 2.0f, "seek_player"), 0)}, never, true) == 0, "a mild reason, here, in a quiet world");
+    Require(Pick({At(V("a", 2, 2.0f, "seek_player"), 1, true)}, never, true) == -1, "never from down the road");
+}
+
 int main() {
     try {
         Levels();
         Picks();
+        Distance();
     } catch (const std::exception& e) {
         std::cerr << "StoryDirectorCheck FAILED: " << e.what() << "\n";
         return 1;

@@ -983,6 +983,43 @@ namespace IntelEngine {
         return 0;
     }
 
+    bool LivingWorldBridge::CloseToPlayer(RE::Actor* actor) const {
+        auto* player = RE::PlayerCharacter::GetSingleton();
+        if (!actor || !player) return false;
+        {
+            std::scoped_lock lock(m_mutex);
+            for (const auto& life : m_lives) {
+                if (life.actor == actor->GetFormID() && (life.flags & LivingWorld::kWasFollower)) return true;
+            }
+        }
+        auto* npc = actor->GetActorBase();
+        auto* pc = player->GetActorBase();
+        if (npc && pc) {
+            if (auto* tie = RE::BGSRelationship::GetRelationship(npc, pc)) {
+                using L = RE::BGSRelationship::RELATIONSHIP_LEVEL;
+                const auto level = tie->level.get();
+                if (level == L::kLover || level == L::kAlly || level == L::kConfidant) return true;
+            }
+        }
+        auto* data = RE::TESDataHandler::GetSingleton();
+        if (!data) return false;
+        // Wed to the player (the game's own faction; SkyrimNet Relationships adds its spouses to it too).
+        if (auto* married = data->LookupForm<RE::TESFaction>(0x0C6472, "Skyrim.esm"); married && actor->IsInFaction(married)) return true;
+        // SkyrimNet Relationships, when installed: a Confidant or more (its bond faction's rank; its README invites the read).
+        if (auto* bond = data->LookupForm<RE::TESFaction>(0xD63, "SNRom_Integration.esp")) {
+            bool member = false;
+            std::int8_t rank = -1;
+            actor->VisitFactions([&](RE::TESFaction* faction, std::int8_t r) {
+                if (faction != bond) return false;
+                member = true;
+                rank = r;
+                return true;
+            });
+            if (member && rank >= 3) return true;
+        }
+        return false;
+    }
+
     std::vector<LivingWorldBridge::OldCompanion> LivingWorldBridge::OldCompanions() const {
         std::vector<OldCompanion> out;
         std::vector<std::pair<RE::FormID, RE::FormID>> lives;

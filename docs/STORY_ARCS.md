@@ -145,6 +145,38 @@ move them on (`LivingWorldLives.cpp`).
 Office: a jarl or steward in the pool is marked for the author (may hear, judge, advise; never guilty, never
 changed).
 
+### How far a reason carries (2026-11-19)
+
+The user: "The cases where someone should come from very far should be too rare and only for good reason. This was
+exactly my complaint, that people from afar were visiting for absurd reasons. Everything should connect to an
+entertaining story arc and make sense." Before this, a "quest" moment had no distance rule at all and its asker came
+in person from anywhere.
+
+`StoryDirectorPick.h MayCome` (pure, `StoryDirectorCheck.cpp Distance`), fed per candidate with `reach` (0 loaded or
+of the player's settlement, 1 the same hold, 2 another hold or unknown: `NPCIndex::ReachOf`), `bonded`
+(`LivingWorldBridge::CloseToPlayer`: once a follower, a confidant or more in the game's relationships, wed to the
+player, a Confidant in SkyrimNet Relationships read softly) and `farRested` (no arc flagged `Flag::CameFar` in the
+last ten days):
+- here: as before;
+- the same hold: pressing, or real when bonded; a mild reason's gentle moment only from someone here;
+- another hold: bonded and pressing, or urgent with the probabilities agreeing (4.5); never ambush or stalker; a road
+  meeting only with someone bonded; never when someone came from afar within ten days.
+A far candidate who fails is passed over, so someone here with a real reason acts instead. The decision prompt is
+told the distance. Kinds quest, seek_player, message and informant become a tale seeded with the candidate's reason;
+when no tale can be written for someone who is not here, nothing happens (never the old one-off visit).
+
+A far-comer's tale is flagged `CameFar`; its offer goes out eight game hours after planning (`ArcBridge::Lapse`,
+nothing reserved meanwhile; after a load the road counts from the planning), retried hourly when the moment is wrong.
+The seek_player hold policy of the settings is asked before the tale is requested (Lod of Falkreath had a story
+written and was then turned back on the road by it). Inside a tale, a visit or stalk step by someone of the tale's
+town waits while the player is outside the tale's hold ("does not come after the player across Skyrim"); an old
+companion, who is of no town, may come from wherever their life has them.
+
+Test hook: `IntelEngine_Arcs.DebugReach(actor)` logs how the rule sees someone. Played: Hulda here, Faendal in the
+hold, Faendal from Falkreath in another hold; Sven's visit waiting while the player stood in Falkreath and going out on
+the return to Riverwood; Lod refused before writing; Bolund (not a civilian) on the road eight hours, then arriving
+with his offer in the Bannered Mare; the ten-day flag set.
+
 Tests are walked, not teleported: `IntelEngine_Quests.DebugWalkTo(ref, run)` moves the player by the game's own
 pathfinding (`Scripts/intelengine/ambush_setup.sh`, `ambush_meet.sh`).
 
