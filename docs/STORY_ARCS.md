@@ -126,6 +126,25 @@ Variety (`Tales::Pool::barred`): an ambush in any of the last three stories the 
 the last two, or places out in the world in both of the last two, and that beat is not on offer: the prompt does not
 show it and `Compile` refuses it.
 
+### The stalker, old companions, office (2026-11-19)
+
+Step `"stalk"` (`Kind::Stalk`, co-save v6): `"by"` (never the asker) shadows the player out of doors; `"why"` is what
+makes them follow and what they dare not say. The DLL sends them (the visit's signal) only when the player is
+outdoors, in no fight, and they are behind the player and not beside them; the script uses the story engine's stalker
+(`DispatchArcStalk`: the stalk package, holding at 800 units). Seen by the player, or after 75 s unnoticed, they stand
+up, walk over (a walk package to the player) and speak within 350 units; the step is done when they and the player
+have talked. First version let them "come forward" where they crouched: Sven whispered his confession from a thousand
+units off and the step never completed.
+
+Old companions (`LivingWorldBridge::OldCompanions`): up to two former followers living a life of their own (alive,
+not with the player, in no quest or story) join a tale's pool with where they are now and their life in a line;
+never jailed, sent away, fought, or hiding anything. A talk with them is a journey to where they are (the marker
+follows them); a visit brings them to the player. While they have a part in an open story their own life does not
+move them on (`LivingWorldLives.cpp`).
+
+Office: a jarl or steward in the pool is marked for the author (may hear, judge, advise; never guilty, never
+changed).
+
 Tests are walked, not teleported: `IntelEngine_Quests.DebugWalkTo(ref, run)` moves the player by the game's own
 pathfinding (`Scripts/intelengine/ambush_setup.sh`, `ambush_meet.sh`).
 

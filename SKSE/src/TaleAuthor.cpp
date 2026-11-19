@@ -8,6 +8,7 @@
 #include "DialogueTracker.h"
 #include "ItemIndex.h"
 #include "ItemNames.h"
+#include "LivingWorldBridge.h"
 #include "MemoryDB.h"
 #include "QuestBridge.h"
 #include "SkyrimNetAPI.h"
@@ -467,6 +468,10 @@ namespace IntelEngine {
             if (person.canBrawl) can.push_back("would settle a matter with fists");
             j["may"] = can;
             j["ties"] = TiesOf(npc);
+            // Who holds office in the hold (the jarl, the steward) has a part in Skyrim's own story: a tale may bring a
+            // matter before them, never make them the guilty one (the first model-written politics tale made the
+            // jarl's steward a secret smuggler, 2026-11-19).
+            if (InFactionId(actor, 0x50920) || InFactionId(actor, 0x50922)) j["office"] = true;
             // A quest of the game not done yet that has a part for them (Saadia and the Alik'r): their past and fate
             // there are that quest's, never a tale's.
             if (const auto bound = npc ? m_journalAliases.find(npc->GetFormID()) : m_journalAliases.end(); bound != m_journalAliases.end()) {
@@ -496,6 +501,44 @@ namespace IntelEngine {
         if (request->pool.people.size() < 3) {
             logger::info("Tales: no tale for {}: too few free people in {}", asker->GetDisplayFullName(), NameOf(me->town));
             return false;
+        }
+        // ---- old companions: former followers living a life of their own, wherever it has taken them. A story may
+        // lead the player to them (a talk with someone out at a ruin is a journey there) or have them seek the player
+        // out; they are never jailed, sent away or fought, and nothing is hidden with them (the user, 2026-11-19:
+        // "You can meet followers along the way in a dungeon or on the road if you dismissed them. Or they may seek
+        // you out if the story permits and it is something important").
+        {
+            int companions = 0;
+            for (const auto& c : LivingWorldBridge::GetSingleton()->OldCompanions()) {
+                if (companions >= 2) break;
+                if (std::any_of(request->pool.people.begin(), request->pool.people.end(), [&](const Tales::Person& p) { return p.form == c.actor; })) continue;
+                auto* companion = RE::TESForm::LookupByID<RE::Actor>(c.actor);
+                auto* base = companion ? companion->GetActorBase() : nullptr;
+                const char* name = companion ? companion->GetDisplayFullName() : nullptr;
+                if (!base || !name || !*name) continue;
+                Tales::Person person;
+                person.key = "p" + std::to_string(request->pool.people.size());
+                person.name = name;
+                person.form = c.actor;
+                nlohmann::json j;
+                j["key"] = person.key;
+                j["name"] = person.name;
+                j["sex"] = base->IsFemale() ? "woman" : "man";
+                auto* race = companion->GetRace();
+                j["race"] = race && race->GetFullName() ? race->GetFullName() : "";
+                j["work"] = "once travelled with " + PlayerName() + ", now on a road of their own";
+                j["temperament"] = Temperament(base);
+                const std::string where = c.place ? NameOf(c.place) : std::string();
+                j["home"] = where.empty() ? std::string("away, living a life of their own") : "away, at " + where + " now";
+                j["may"] = nlohmann::json::array();
+                j["ties"] = TiesOf(base);
+                j["old"] = c.life.empty() ? std::string("They parted from " + PlayerName() + " a while ago.") : c.life;
+                request->pool.people.push_back(person);
+                request->bios.push_back(c.actor);
+                people.push_back(j);
+                ++companions;
+            }
+            if (companions) logger::info("Tales: {} old companion(s) of the player may have a part", companions);
         }
         request->pool.items = ItemChoices();
 
@@ -991,7 +1034,7 @@ namespace IntelEngine {
         pending.judging = false;
         if (turn >= 0 && turn < 3 && node < a->graph.size() && !a->graph[node].turns[static_cast<std::size_t>(turn)].empty()) {
             pending.turn = turn;
-            logger::info("Tales: #{} the talk turned out: {}", id, a->graph[node].turns[static_cast<std::size_t>(turn)]);
+            logger::info("Tales: #{} the talk turned out: {}", id, Fill(a->graph[node].turns[static_cast<std::size_t>(turn)], *a));
         } else {
             ++pending.nones;
             logger::info("Tales: #{} the talk has not turned yet ({} readings)", id, pending.nones);

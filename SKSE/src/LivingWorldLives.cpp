@@ -1,5 +1,6 @@
 #include "LivingWorldBridge.h"
 #include "QuestBridge.h"
+#include "ArcBridge.h"
 
 #include "ProcessUtils.h"
 #include "SkyrimNetAPI.h"
@@ -401,6 +402,9 @@ namespace IntelEngine {
             auto ties = TiesOf(actor);
             // A quest planned with them that has no journal alias yet (a venture on its way): theirs is the player's errand.
             if (QuestBridge::GetSingleton()->Involves(life.actor)) ties.errand = true;
+            // Someone with a part in an open story stays where the story has them (a tale leads the player to an old
+            // companion wherever their life took them: they do not move on in the middle of it).
+            if (ArcBridge::GetSingleton()->Involves(life.actor)) ties.errand = true;
             const bool teammate = actor->IsPlayerTeammate();
             const bool wasServing = (life.flags & LivingWorld::kWithPlayer) != 0;
             const bool wasAway = (life.flags & LivingWorld::kOnTask) != 0 || life.activity == Activity::OnTask;
@@ -977,6 +981,27 @@ namespace IntelEngine {
             if (a && !a->IsDead() && !a->IsDisabled()) return other.actor;
         }
         return 0;
+    }
+
+    std::vector<LivingWorldBridge::OldCompanion> LivingWorldBridge::OldCompanions() const {
+        std::vector<OldCompanion> out;
+        std::vector<std::pair<RE::FormID, RE::FormID>> lives;
+        {
+            std::scoped_lock lock(m_mutex);
+            if (m_settings.level != LivingWorld::WorldLevel::Lives) return out;
+            for (const auto& life : m_lives) {
+                if (!LivingWorld::OwnLife(life)) continue;
+                if (life.flags & (LivingWorld::kWithPlayer | LivingWorld::kOnTask | LivingWorld::kNeedsRelease)) continue;
+                lives.emplace_back(life.actor, life.place);
+            }
+        }
+        for (const auto& [id, place] : lives) {
+            auto* actor = RE::TESForm::LookupByID<RE::Actor>(id);
+            if (!actor || actor->IsDead() || actor->IsPlayerTeammate() || QuestTie(actor) != 0) continue;
+            if (QuestBridge::GetSingleton()->Involves(id) || ArcBridge::GetSingleton()->Involves(id)) continue;
+            out.push_back({id, place, DirectorLifeLine(id)});
+        }
+        return out;
     }
 
     std::string LivingWorldBridge::DirectorLifeLine(RE::FormID actor) const {

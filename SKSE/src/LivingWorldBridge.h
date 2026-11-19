@@ -92,6 +92,15 @@ namespace IntelEngine {
         std::string DirectorLifeLine(RE::FormID actor) const;
         /** 4.0 quests: a former follower living a life of their own (a venture may be theirs). */
         bool HasOwnLife(RE::FormID actor) const;
+        /** Tales: former followers living a life of their own whom a story may give a part: alive, not with the
+         *  player, on no errand, in no quest of the journal. Where their life has them now (a location, 0 = their
+         *  usual place) and their life in a line. Main thread. */
+        struct OldCompanion {
+            RE::FormID actor = 0;
+            RE::FormID place = 0;
+            std::string life;
+        };
+        std::vector<OldCompanion> OldCompanions() const;
         /** 4.0 quests: another former follower free to go along on a venture (as NextStep chooses one), 0 = none. */
         RE::FormID FreeCompanionFor(RE::FormID actor) const;
         /** 4.0 quests: whether someone may be taken out on the road with a venture: a grown person, alive, not with
