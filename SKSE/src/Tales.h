@@ -9,9 +9,9 @@
 // {
 //   "title": "...", "genre": "crime", "premise": "the hidden truth",
 //   "people": [ {"who": "p0", "part": "the one who asks", "truth": "first person: what I know, want, hide, say"}, ... ],
-//   "items":  [ {"id": "i1", "item": "<a name of the item list>", "name": "Ysolda's Silver Ring", "hidden": "home"|"pocket", "of": "p3"} ],
+//   "items":  [ {"id": "i1", "item": "<a name of the item list>", "name": "Ysolda's Silver Ring", "hidden": "home"|"pocket"|"at"|"ambush", "of": "p3"} ],
 //   "offer":  {"words": "what drives the asker to come", "ask": "what the player is asked", "journal": "first line", "reward": 150, "days": 3},
-//   "steps":  [ {"id": "s1", "do": "talk|find|give|choose|visit|wait|brawl|go", ...}, ... ],
+//   "steps":  [ {"id": "s1", "do": "talk|find|give|choose|visit|wait|brawl|go|delve|slay|ambush", ...}, ... ],
 //   "endings": {"good": {...}, "bad": {...}, "other": {...}}   each {"journal", "rumor", "pay", "memories": {"p0": "..."}}
 // }
 // A branch ("then") names a step id or "end:good", "end:bad", "end:other"; an "effect" is one of "jail pX", "leave pX",
@@ -270,6 +270,12 @@ namespace IntelEngine::Tales {
                 a.propName[p] = Words(Str(it, "name"), 60);
                 if (a.propName[p].empty()) a.propName[p] = base->name;
                 const auto hidden = Lower(Str(it, "hidden"));
+                if (hidden == "ambush" || hidden == "thugs" || hidden == "leader") {
+                    // Carried by the leader of the story's ambush (found on them once they are down).
+                    a.propAmbush = static_cast<std::uint8_t>(a.propAmbush | (1u << p));
+                    propOf[id] = p;
+                    continue;
+                }
                 if (hidden == "at" || hidden == "place" || hidden == "dungeon") {
                     // Carried by the boss of a place out in the world (resolved once the places are known).
                     pendingSites.emplace_back(p, Str(it, "of"));
@@ -286,7 +292,7 @@ namespace IntelEngine::Tales {
                     if (!base->pocket) fail("items: a " + base->name + " is never carried hidden in a pocket; hide it at home");
                     a.propPocket[p] = holder;
                 } else {
-                    fail("items: hidden must be \"home\", \"pocket\" or \"at\" (a place)");
+                    fail("items: hidden must be \"home\", \"pocket\", \"at\" (a place) or \"ambush\" (the ambush's leader)");
                 }
                 propOf[id] = p;
             }
@@ -476,6 +482,7 @@ namespace IntelEngine::Tales {
             int persuadeOption = -1;
         };
         std::vector<Step> built(steps.size());
+        int ambushes = 0;   // one ambush a story (its men are the arc's own)
         for (std::size_t i = 0; i < steps.size(); ++i) {
             const auto& s = steps[i];
             auto& st = built[i];
@@ -589,14 +596,25 @@ namespace IntelEngine::Tales {
                     if (!name.empty()) a.bossName[n.site - 1u] = name;
                 }
                 st.edges.push_back({A::If::Done, branch(s, i, where)});
+            } else if (kind == "ambush") {
+                // Hired men on the player's road, sent by someone of the story ("by"; left out when nobody knows yet).
+                if (ambushes++ > 0) fail(where + ": one ambush in a story");
+                n.kind = A::Kind::Ambush;
+                const auto by = Str(s, "by");
+                n.who = by.empty() ? A::RNone : person(by, where.c_str());
+                n.why = Words(Str(s, "why"), 200);
+                if (n.why.empty()) fail(where + ": an ambush needs \"why\": what the men were paid to do");
+                a.thugName = Words(Str(s, "leader"), 50);
+                st.edges.push_back({A::If::Done, branch(s, i, where)});
             } else if (kind == "wait") {
                 n.kind = A::Kind::Wait;
                 n.waitHours = static_cast<float>(std::clamp(Int(s, "hours", 12), 1, 72));
                 st.edges.push_back({A::If::Done, branch(s, i, where)});
             } else {
-                fail(where + ": \"do\" must be talk, find, give, choose, visit, wait, brawl, go, delve or slay");
+                fail(where + ": \"do\" must be talk, find, give, choose, visit, wait, brawl, go, delve, slay or ambush");
             }
-            if (n.kind != A::Kind::Have && n.kind != A::Kind::Wait && n.marker == A::RNone) n.marker = n.who;
+            // No marker on the one who sent an ambush: the men are not where they are.
+            if (n.kind != A::Kind::Have && n.kind != A::Kind::Wait && n.kind != A::Kind::Ambush && n.marker == A::RNone) n.marker = n.who;
         }
         if (!err.empty()) return r;
 
@@ -649,7 +667,8 @@ namespace IntelEngine::Tales {
             n.objective = static_cast<std::uint8_t>(A::kTaleObjective + newIndex[i]);
             std::size_t e = 0;
             // Someone the step needs is dead: the tale ends badly (the asker's death is the engine's own ending).
-            if (n.who != A::RNone && n.who != A::RAsker && n.kind != A::Kind::Have && n.kind != A::Kind::Wait) {
+            // The men of an ambush were paid already: who sent them dying changes nothing for them.
+            if (n.who != A::RNone && n.who != A::RAsker && n.kind != A::Kind::Have && n.kind != A::Kind::Wait && n.kind != A::Kind::Ambush) {
                 A::Edge dead;
                 dead.when = A::If::Dead;
                 dead.role = n.who;
@@ -690,6 +709,9 @@ namespace IntelEngine::Tales {
                 n.edges[e++] = edge;
             }
             a.graph.push_back(std::move(n));
+        }
+        if (a.propAmbush && !std::any_of(a.graph.begin(), a.graph.end(), [](const A::Node& n) { return n.kind == A::Kind::Ambush; })) {
+            fail("items: an item the ambush's leader carries needs a step that is an ambush");
         }
         // Every prop hidden must be found somewhere, and found before it is given.
         for (std::size_t p = 0; p < propOf.size(); ++p) {

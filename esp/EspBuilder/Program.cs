@@ -48,6 +48,7 @@ public static class Program
         if (args.Length >= 3 && args[0] == "questdump") return QuestDump(args[1], args[2]);
         if (args.Length >= 3 && args[0] == "finditem") return FindItem(args[1], args[2]);
         if (args.Length >= 3 && args[0] == "findnpc") return FindNpc(args[1], args[2]);
+        if (args.Length >= 3 && args[0] == "npc") return NpcInfo(args[1], args.Skip(2).ToArray());
         Console.Error.WriteLine("usage: info <esp> | build <esp in> <output folder>");
         return 2;
     }
@@ -599,6 +600,28 @@ public static class Program
         foreach (var n in mod.Npcs)
             if ((n.EditorID ?? "").Contains(part, StringComparison.OrdinalIgnoreCase) && (n.EditorID ?? "").StartsWith("Enc"))
                 Console.WriteLine($"NPC_ {n.FormKey.ID:X8} {n.EditorID} '{n.Name?.String}'");
+        return 0;
+    }
+
+    // NPC records by form id: template, flags, factions, AI data (test help: what a base is before the script places it).
+    static int NpcInfo(string path, string[] ids)
+    {
+        using var mod = SkyrimMod.CreateFromBinaryOverlay(path, SkyrimRelease.SkyrimSE);
+        foreach (var id in ids)
+        {
+            var want = Convert.ToUInt32(id, 16);
+            var n = mod.Npcs.FirstOrDefault(x => x.FormKey.ID == want);
+            if (n == null) { Console.WriteLine($"{id}: none"); continue; }
+            Console.WriteLine($"{want:X8} {n.EditorID} '{n.Name?.String}' template={n.Template.FormKey.ID:X8} flags={n.Configuration.TemplateFlags} cfg={n.Configuration.Flags} " +
+                              $"aggr={n.AIData.Aggression} conf={n.AIData.Confidence} class={n.Class.FormKey.ID:X8} race={n.Race.FormKey.ID:X8}");
+            foreach (var f in n.Factions)
+            {
+                var fac = mod.Factions.FirstOrDefault(x => x.FormKey == f.Faction.FormKey);
+                Console.WriteLine($"   faction {f.Faction.FormKey.ID:X8} {fac?.EditorID} rank {f.Rank} flags={fac?.Flags}");
+                foreach (var r in fac?.Relations ?? new List<IRelationGetter>()) Console.WriteLine($"      {r.Reaction} {r.Target.FormKey.ID:X8}");
+            }
+            foreach (var i in n.Items ?? new List<IContainerEntryGetter>()) Console.WriteLine($"   item {i.Item.Item.FormKey.ID:X8} x{i.Item.Count}");
+        }
         return 0;
     }
 

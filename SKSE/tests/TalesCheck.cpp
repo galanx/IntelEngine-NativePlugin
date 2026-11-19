@@ -233,12 +233,71 @@ static void Adventure() {
     Book back;
     Require(Deserialize(bytes, back), "places survive the co-save");
     Require(back.Find(id)->bossName[0] == "Grelka the Silent" && back.Find(id)->graph[1].site == 1 && back.Find(id)->propSite[0] == 1, "whole");
+    // A save made before ambushes (record version 4: no ambush block) still loads.
+    auto v4 = bytes;
+    v4.resize(v4.size() - (3 * 4 + 2 + 1));
+    Book older;
+    Require(Deserialize(v4, older, 4) && older.Find(id)->bossName[0] == "Grelka the Silent", "a record of version 4 loads");
 
     j["steps"][0]["place"] = "Blackreach";
     Require(Tales::Compile(j, Town()).errors.find("no place of the list") != std::string::npos, "only the places offered");
     j["steps"][0]["place"] = "d3";
     j["steps"][1]["place"] = "d1";   // a third place: Embershard (the ring), Bleakwind Basin, Mzinchaleft
     Require(Tales::Compile(j, Town()).errors.find("at most 2 places") != std::string::npos, "two places at most");
+}
+
+static void Ambush() {
+    // Uthgerd's hired men wait on the road; their leader carries the ring; then it goes home.
+    json j = Sample();
+    j["items"] = json::parse(R"([{"id": "i1", "item": "Silver Ring", "name": "Ysolda's Ring", "hidden": "ambush"}])");
+    j["steps"] = json::parse(R"([
+      {"id": "a", "do": "ambush", "by": "p3", "why": "keep {player} from asking questions in Riverwood", "leader": "Krev the Knife",
+       "goal": "Take the road to Riverwood", "then": "b", "journal": "Hired men waited for me on the road."},
+      {"id": "b", "do": "find", "item": "i1", "goal": "Search the leader's body", "then": "c", "journal": "He had Ysolda's ring."},
+      {"id": "c", "do": "give", "item": "i1", "to": "p0", "goal": "Give Ysolda her ring", "then": "end:good", "journal": "Ysolda has it."}])");
+    auto r = Tales::Compile(j, Town());
+    if (!r.ok) std::cerr << r.errors;
+    Require(r.ok, "an ambush compiles");
+    const Arc& a = r.arc;
+    const auto& n = a.graph[0];
+    Require(n.kind == Kind::Ambush && n.who != RNone && a.cast[n.who] == 0x103, "the ambush, sent by Uthgerd");
+    Require(n.marker == RNone && n.edges[0].when == If::Done, "no marker on who sent them, and their death changes nothing");
+    Require(a.thugName == "Krev the Knife" && a.propAmbush == 1 && a.graph[1].marker == RNone, "the leader is named and carries the ring");
+    Book book;
+    const auto id = book.Plan(a, 1.0f);
+    book.Accept(id, 1.0f);
+    Arc& t = *book.Find(id);
+    Facts f;
+    f.dead[n.who] = true;
+    Require(!Advance(t, f, 1.1f).any(), "nothing before the men are down, whoever else died");
+    f.ambushOver = true;
+    Advance(t, f, 1.2f);
+    Require(t.node == 1, "the men are down");
+    t.thug = {0xFF000801u, 0xFF000802u, 0u};
+    const auto bytes = Serialize(book);
+    Book back;
+    Require(Deserialize(bytes, back), "an ambush survives the co-save");
+    const Arc& b = *back.Find(id);
+    Require(b.thug[0] == 0xFF000801u && b.thug[1] == 0xFF000802u && b.thugName == "Krev the Knife" && b.propAmbush == 1 && b.graph[0].kind == Kind::Ambush,
+            "whole");
+    Book untouched;
+    Require(!Deserialize(bytes, untouched, 4), "an ambush step read as version 4 is refused, not misread");
+
+    const auto errorsOf = [](json x) { return Tales::Compile(x, Town()).errors; };
+    json two = j;
+    two["steps"][1] = two["steps"][0];
+    two["steps"][1]["id"] = "b";
+    two["steps"][1]["then"] = "c";
+    Require(errorsOf(two).find("one ambush in a story") != std::string::npos, "one ambush a story");
+    json noWhy = j;
+    noWhy["steps"][0].erase("why");
+    Require(errorsOf(noWhy).find("needs \"why\"") != std::string::npos, "the men know what they were paid for");
+    json noStep = j;
+    noStep["steps"][0] = json::parse(R"({"id": "a", "do": "wait", "hours": 5, "goal": "Wait", "then": "b"})");
+    Require(errorsOf(noStep).find("needs a step that is an ambush") != std::string::npos, "an item on the leader needs an ambush");
+    json nobody = j;
+    nobody["steps"][0].erase("by");
+    Require(Tales::Compile(nobody, Town()).ok && Tales::Compile(nobody, Town()).arc.graph[0].who == RNone, "sent by nobody known yet");
 }
 
 static void Refusals() {
@@ -290,6 +349,7 @@ int main() {
         BrawlAndWaitAndDeath();
         HandsOver();
         Adventure();
+        Ambush();
         Refusals();
     } catch (const std::exception& e) {
         std::cerr << "TalesCheck FAILED: " << e.what() << "\n";

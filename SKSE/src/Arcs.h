@@ -47,6 +47,7 @@ namespace IntelEngine::Arcs {
     constexpr std::size_t kRoles = 8;
     constexpr std::size_t kProps = 3;
     constexpr std::size_t kSites = 2;   // a tale's places out in the world (dungeons, ruins, camps)
+    constexpr std::size_t kThugs = 3;   // the men of a tale's ambush
 
     enum class Kind : std::uint8_t {
         Talk = 1,    // the player is with `who` while they speak
@@ -59,6 +60,7 @@ namespace IntelEngine::Arcs {
         Wait = 8,    // time passes: `waitHours` game hours on this step
         Delve = 9,   // the player reaches the depths of place `site` (its boss room)
         Slay = 10,   // the boss of place `site` is dead
+        Ambush = 11, // hired men sent by `who` (may be none) fall on the player out in the wilds: they are dead
     };
 
     enum class Phase : std::uint8_t { Planned = 0, Open = 1, Ended = 2 };
@@ -301,6 +303,7 @@ namespace IntelEngine::Arcs {
         float hoursHere = 0.0f;            // game hours on this step (Advance fills it in)
         std::array<bool, kSites> atDepths{};   // the player is in the boss room of the place
         std::array<bool, kSites> bossDead{};   // the place's boss is dead
+        bool ambushOver = false;               // the men of the ambush are dead
     };
 
     constexpr std::size_t kMaxText = 200;
@@ -365,6 +368,10 @@ namespace IntelEngine::Arcs {
         std::array<std::string, kSites> bossName{};     // the boss's name in the story ("Grelka the Silent"), may be empty
         std::array<std::uint8_t, kSites> siteState{};   // bit 0 the boss is placed, bit 1 its company placed
         std::array<std::uint8_t, kProps> propSite{};    // the place (index + 1) whose boss carries a prop, 0 = none
+        // ---- an ambush on the road (record version 5)
+        std::array<std::uint32_t, kThugs> thug{};       // the men placed for it, 0 = none (yet); thug[0] leads
+        std::string thugName;                           // their leader's name in the story, may be empty
+        std::uint8_t propAmbush = 0;                    // props (bit per prop) the leader carries
     };
 
     inline bool IsOpen(const Arc& a) { return a.phase == Phase::Open; }
@@ -415,6 +422,7 @@ namespace IntelEngine::Arcs {
                     case Kind::Wait: return f.hoursHere >= n.waitHours;
                     case Kind::Delve: return n.site >= 1 && n.site <= kSites && f.atDepths[n.site - 1u];
                     case Kind::Slay: return n.site >= 1 && n.site <= kSites && f.bossDead[n.site - 1u];
+                    case Kind::Ambush: return f.ambushOver;
                     default: return false;
                 }
             case If::Option0: return f.answer == 0;
@@ -996,7 +1004,7 @@ namespace IntelEngine::Arcs {
     // ------------------------------------------------------------------ save data (co-save record 'IEAR')
 
     constexpr std::uint32_t kRecordType = 'IEAR';
-    constexpr std::uint32_t kRecordVersion = 4;   // 2: tales; 3: a visit's why; 4: places out in the world. Older ones load
+    constexpr std::uint32_t kRecordVersion = 5;   // 2: tales; 3: a visit's why; 4: places out in the world; 5: ambushes. Older ones load
 
     namespace detail {
         template <class T>
@@ -1081,7 +1089,8 @@ namespace IntelEngine::Arcs {
                 !Get(in, at, n.logStage) || !Get(in, at, n.extendDays)) {
                 return false;
             }
-            if (kind < 1 || kind > static_cast<std::uint8_t>(Kind::Slay) || who >= kRoles || marker >= kRoles || n.prop >= kProps) return false;
+            const auto lastKind = static_cast<std::uint8_t>(version >= 5 ? Kind::Ambush : Kind::Slay);
+            if (kind < 1 || kind > lastKind || who >= kRoles || marker >= kRoles || n.prop >= kProps) return false;
             n.kind = static_cast<Kind>(kind);
             n.who = static_cast<Role>(who);
             n.marker = static_cast<Role>(marker);
@@ -1197,13 +1206,17 @@ namespace IntelEngine::Arcs {
                 detail::Put(out, a.siteState[s]);
             }
             for (const auto p : a.propSite) detail::Put(out, p);
+            // ---- version 5: an ambush
+            for (const auto t : a.thug) detail::Put(out, t);
+            detail::PutText(out, a.thugName);
+            detail::Put(out, a.propAmbush);
         }
         return out;
     }
 
     // All or nothing. Version 1 records (before tales) load as they were.
     inline bool Deserialize(std::span<const std::uint8_t> in, Book& book, std::uint32_t version = kRecordVersion) {
-        if (version < 1 || version > 4) return false;
+        if (version < 1 || version > 5) return false;
         std::size_t at = 0;
         Book read;
         std::uint8_t lastPattern = 0;
@@ -1275,6 +1288,10 @@ namespace IntelEngine::Arcs {
                 for (auto& p : a.propSite) {
                     if (!detail::Get(in, at, p) || p > kSites) return false;
                 }
+            }
+            if (version >= 5) {
+                for (auto& t : a.thug) if (!detail::Get(in, at, t)) return false;
+                if (!detail::GetText(in, at, a.thugName) || !detail::Get(in, at, a.propAmbush) || a.propAmbush >= (1u << kProps)) return false;
             }
             const bool tale = pattern == static_cast<std::uint8_t>(Pattern::Tale);
             const bool known = pattern >= 1 && pattern <= kPatterns;

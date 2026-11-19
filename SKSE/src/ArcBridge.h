@@ -77,6 +77,10 @@ namespace IntelEngine {
         void BossPlaced(std::uint32_t id, int site, RE::Actor* boss);
         /** The script placed the company a look asked for. */
         void GangPlaced(std::uint32_t id);
+        /** The script placed one of an ambush's men (k = 0 leads). */
+        void ThugPlaced(std::uint32_t id, int k, RE::Actor* thug);
+        /** The script did what a look asked of the ambush (1 placed them, 2 they struck, 3 called off unseen). */
+        void AmbushDone(std::uint32_t id, int what);
         /** Whether a place out in the world is free for a story: no quest of the game still needs it, none of the
          *  player's objectives points into it, no other story or quest of IntelEngine's is set there. */
         bool SiteFree(RE::BGSLocation* location, const std::unordered_set<RE::FormID>& objectiveLocations, std::string& why) const;
@@ -171,8 +175,19 @@ namespace IntelEngine {
             std::array<std::int8_t, Arcs::kSites> bossState{};   // last seen: 0 unknown, 1 alive and loaded, 2 dead, 3 gone
             std::array<bool, Arcs::kSites> bossSeenAlive{};      // the boss was loaded and alive once (its death then counts)
             std::uint8_t gangSite = 0;                           // a place (index + 1) whose company the script is to place
+            // A tale's ambush: what the script is asked to do (1 place, 2 strike, 3 call off), and when it may be asked.
+            std::uint8_t ambushDo = 0;
+            float ambushHold = -1.0f;    // real seconds: not placed again before this
+            float ambushAgain = -1.0f;   // game days: called off; they find the player again after this
+            float wildsSince = -1.0f;    // real seconds: the player has been out in the wilds since
+            bool struck = false;         // they stepped out and fight
+            float strikeHold = -1.0f;    // real seconds: not told to strike again before this
+            int ambushTries = 0;         // placings that found no ground ahead out of sight (then they come from behind)
+            std::string ambushWait;      // why the ambush waits now (logged when it changes)
         };
         void TaleTalk(std::uint32_t id, const Arcs::Arc& a, Pending& pending, const Arcs::Facts& f);   // lock held
+        /** A tale's ambush step, each look (lock held): when its men are placed, step out, or are called off. */
+        void AmbushLook(std::uint32_t id, Arcs::Arc& a, Pending& pending, float now, int placed, std::int32_t& bits);
         void SendTale(std::shared_ptr<void> request, int attempt, std::string fix, std::string previous);   // any thread
         void TaleWritten(std::shared_ptr<void> request, int attempt, const std::string& text);              // main thread
         void SendOffer(std::uint32_t id, RE::Actor* asker);
