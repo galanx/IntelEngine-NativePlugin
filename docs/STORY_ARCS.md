@@ -674,10 +674,17 @@ counted only while the story stood on the step that asked for it.
   player's hand on an actor falls out at once), sets `captiveState` to Freed there and then, and sends the mod
   event `IntelEngine_ArcUntie`, on which the script runs `WatchCaptives` at once, so the bonds come off without
   waiting for the next look. While bound, `BlockActivation(true)` keeps the game's own answer to the key (its
-  dialogue menu) away; the event still comes. The crosshair goes on saying "Talk", so the first time the player
-  stands within 500 units of them a notification says "<name> is bound. Activate to cut the bonds." In a fight
-  too, at the player's own risk: the one freed still cannot die and is still left alone by the place's people
-  until they part from the player.
+  dialogue menu) away; the event still comes. In a fight too, at the player's own risk: the one freed still cannot
+  die and is still left alone by the place's people until they part from the player.
+- **The crosshair says "Cut loose"** on someone held bound, where the game would say "Talk" (the user: "Yes,
+  relabel"). Skyrim's scripts cannot change that word on a reference (`SetActivateTextOverride` is Fallout 4's), so
+  the DLL does: `NpcActivateText` in ArcBridge.cpp replaces `TESNPC::GetActivateText` (virtual 0x4C, installed at
+  the main menu by `Listen`; the plugin's first and only change to a function of the game), calls the game's own,
+  and for the one held swaps the first line of what it wrote. Who is held is four numbers (`g_bound`, kept by
+  `RefreshBound` whenever that changes and on every `Lapse`), compared without a lock, so looking at people costs
+  nothing. The word is the name of a message of IntelEngine.esp (`IntelEngine_CutLoose` [0058E5], esp/EspBuilder),
+  so a translated plugin file translates it; without the record it is "Cut loose". The notification that said
+  what the key does is gone with it.
 - **The steps that led there are left** (`If::Freed` = 16, Tales.h `leadsUp`): every step that can only come
   before the one step that frees them gets a shortcut to that step. It fires when they are free already: the
   step's objective is taken away (the engine's own `skip`: not completed, no line in the journal, nothing for the
@@ -726,7 +733,8 @@ counted only while the story stood on the step that asked for it.
   dead; the master dead and they free in the same look; two ways of freeing), the whole suite 46 of 46.
 - **Played the same night** (test profile; a hand-written tale: Nazeem asks after Ahlam, Anoriath saw her go, Halted
   Stream Camp, "go to Nazeem's house", a choice; the camp entered by console with the bandits blind):
-  - Before asking the witness: standing on top of her does nothing; the key on her, and the log says "cut loose by
+  - Before asking the witness: standing on top of her does nothing; the crosshair reads "Cut loose / Ahlam" (and
+    "Talk / Ahlam" again once she is free); the key on her, and the log says "cut loose by
     the player (before the story asked for it)"; she stands and speaks within the moment; two seconds later the
     talk with the witness is gone from the journal (objective never completed, hidden), "Find Ahlam and set her
     free" is completed, and "Hear from Ahlam why she came here" is shown with the marker on her. No dialogue menu.
