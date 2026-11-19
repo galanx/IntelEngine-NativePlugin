@@ -109,6 +109,7 @@ public static class Program
         for (int slot = 0; slot < ArcSlots; ++slot) arcs.Add(AddArcJournalQuest(mod, slot));
         var holders = AddTaleHolders(mod);
         var cutLoose = AddCutLoose(mod);
+        var examine = AddWord(mod, Examine, "Examine");
         mod.WriteToBinary(output);
         Console.WriteLine($"{ThreadQuest} [{quest.FormKey.ID:X6}]: {quest.Aliases.Count} aliases, {quest.Objectives.Count} objectives -> {output}");
         Console.WriteLine($"{LifeSandbox} [{lifeSandbox.FormKey.ID:X6}], {LivesQuest} [{lives.FormKey.ID:X6}]");
@@ -118,6 +119,7 @@ public static class Program
                           string.Join(", ", arcs.Select(q => $"{q.EditorID} [{q.FormKey.ID:X6}]")));
         Console.WriteLine("tale holders " + string.Join(", ", holders.Select(m => $"{m.EditorID} [{m.FormKey.ID:X6}]")));
         Console.WriteLine($"{CutLoose} [{cutLoose.FormKey.ID:X6}]");
+        Console.WriteLine($"{Examine} [{examine.FormKey.ID:X6}]");
         return 0;
     }
 
@@ -125,6 +127,23 @@ public static class Program
     // say "Talk" (IntelEngine_Arcs.psc sets it on them with SetActivateTextOverride while they are bound, and takes
     // it off again). The game shows a message's title there; the text is the same in case a game version reads that.
     public const string CutLoose = "IntelEngine_CutLoose";
+
+    // The crosshair's word on what a story left to be looked at closely (what was left of a victim), where the game
+    // would say "Search": read by the DLL the same way (ArcBridge.cpp, g_examine).
+    public const string Examine = "IntelEngine_Examine";
+
+    static Message AddWord(SkyrimMod mod, string editorId, string word)
+    {
+        var message = mod.Messages.FirstOrDefault(m => m.EditorID == editorId);
+        if (message == null)
+        {
+            message = mod.Messages.AddNew();
+            message.EditorID = editorId;
+        }
+        message.Name = word;
+        message.Description = word;
+        return message;
+    }
 
     static Message AddCutLoose(SkyrimMod mod)
     {

@@ -47,6 +47,7 @@ namespace IntelEngine::Arcs {
     constexpr std::size_t kRoles = 8;
     constexpr std::size_t kProps = 3;
     constexpr std::size_t kSites = 2;   // a tale's places out in the world (dungeons, ruins, camps)
+    constexpr std::size_t kClues = 2;   // what a tale leaves out there to be looked at closely (a victim's remains)
     constexpr std::size_t kThugs = 3;   // the men of a tale's ambush
 
     enum class Kind : std::uint8_t {
@@ -63,6 +64,7 @@ namespace IntelEngine::Arcs {
         Ambush = 11, // hired men sent by `who` (may be none) fall on the player out in the wilds: they are dead
         Stalk = 12,  // `who` shadows the player out of doors until caught or coming forward, and they talk
         Free = 13,   // `who` is held at place `site`: the player has reached them there, and they are free
+        Examine = 14, // what was left of a victim lies outside place `site`: the player has looked at it closely (clue `prop`)
     };
 
     enum class Phase : std::uint8_t { Planned = 0, Open = 1, Ended = 2 };
@@ -313,6 +315,7 @@ namespace IntelEngine::Arcs {
         std::array<bool, kSites> bossDead{};   // the place's boss is dead
         bool ambushOver = false;               // the men of the ambush are dead
         bool captiveReached = false;           // the player stands by the one held at a place, and nobody is fighting
+        std::array<bool, kClues> examined{};   // the player has looked closely at what was left there
     };
 
     constexpr std::size_t kMaxText = 200;
@@ -331,6 +334,13 @@ namespace IntelEngine::Arcs {
     // until the player has come as far as the heart of the place, bound there, freed and with the player, and gone
     // their own way home. The script moves them and says so (ArcBridge::Captive); the step "free" makes them Freed.
     enum CaptiveState : std::uint8_t { CaptiveToTake = 0, CaptiveAway = 1, CaptiveBound = 2, CaptiveFreed = 3, CaptiveHome = 4 };
+
+    // What was left of a victim, to be looked at closely: who or what lies there, and where the engine has it. The
+    // script puts it down outside the place once the player has come that far (dead, where that can be helped out of
+    // sight) and says so; the player's hand on it makes it Seen (ArcBridge::Activated), whichever step is current.
+    enum Remains : std::uint8_t { RemainsNone = 0, RemainsHunter = 1, RemainsCow = 2, RemainsHorse = 3, RemainsGoat = 4, RemainsDeer = 5 };
+    constexpr std::uint8_t kRemains = 5;
+    enum ClueState : std::uint8_t { ClueToPlace = 0, CluePlaced = 1, ClueSeen = 2 };
 
     struct Arc {
         std::uint32_t id = 0;
@@ -390,6 +400,11 @@ namespace IntelEngine::Arcs {
         std::uint8_t captive = 0;                       // who is held (a role), 0 = nobody
         std::uint8_t captiveSite = 0;                   // the place (index + 1) they are held at
         std::uint8_t captiveState = CaptiveToTake;
+        // ---- what was left of a victim near a place, to be looked at closely (record version 8)
+        std::array<std::uint8_t, kClues> clueWhat{};    // who or what lies there (Remains), 0 = no such clue
+        std::array<std::uint8_t, kClues> clueSite{};    // the place (index + 1) it lies outside of
+        std::array<std::uint32_t, kClues> clueRef{};    // what the script put there, 0 = nothing yet
+        std::array<std::uint8_t, kClues> clueState{};   // ClueState
     };
 
     inline bool IsOpen(const Arc& a) { return a.phase == Phase::Open; }
@@ -443,6 +458,7 @@ namespace IntelEngine::Arcs {
                     case Kind::Slay: return n.site >= 1 && n.site <= kSites && f.bossDead[n.site - 1u];
                     case Kind::Ambush: return f.ambushOver;
                     case Kind::Free: return f.captiveReached;
+                    case Kind::Examine: return n.prop < kClues && f.examined[n.prop];
                     default: return false;
                 }
             case If::Option0: return f.answer == 0;
@@ -1063,7 +1079,7 @@ namespace IntelEngine::Arcs {
     // ------------------------------------------------------------------ save data (co-save record 'IEAR')
 
     constexpr std::uint32_t kRecordType = 'IEAR';
-    constexpr std::uint32_t kRecordVersion = 7;   // 2: tales; 3: a visit's why; 4: places out in the world; 5: ambushes; 6: stalkers; 7: someone held at a place. Older ones load
+    constexpr std::uint32_t kRecordVersion = 8;   // 2: tales; 3: a visit's why; 4: places out in the world; 5: ambushes; 6: stalkers; 7: someone held at a place; 8: remains to examine. Older ones load
 
     namespace detail {
         template <class T>
@@ -1148,7 +1164,7 @@ namespace IntelEngine::Arcs {
                 !Get(in, at, n.logStage) || !Get(in, at, n.extendDays)) {
                 return false;
             }
-            const auto lastKind = static_cast<std::uint8_t>(version >= 7 ? Kind::Free : version >= 6 ? Kind::Stalk : version >= 5 ? Kind::Ambush : Kind::Slay);
+            const auto lastKind = static_cast<std::uint8_t>(version >= 8 ? Kind::Examine : version >= 7 ? Kind::Free : version >= 6 ? Kind::Stalk : version >= 5 ? Kind::Ambush : Kind::Slay);
             if (kind < 1 || kind > lastKind || who >= kRoles || marker >= kRoles || n.prop >= kProps) return false;
             n.kind = static_cast<Kind>(kind);
             n.who = static_cast<Role>(who);
@@ -1273,13 +1289,20 @@ namespace IntelEngine::Arcs {
             detail::Put(out, a.captive);
             detail::Put(out, a.captiveSite);
             detail::Put(out, a.captiveState);
+            // ---- version 8: remains to examine
+            for (std::size_t k = 0; k < kClues; ++k) {
+                detail::Put(out, a.clueWhat[k]);
+                detail::Put(out, a.clueSite[k]);
+                detail::Put(out, a.clueRef[k]);
+                detail::Put(out, a.clueState[k]);
+            }
         }
         return out;
     }
 
     // All or nothing. Version 1 records (before tales) load as they were.
     inline bool Deserialize(std::span<const std::uint8_t> in, Book& book, std::uint32_t version = kRecordVersion) {
-        if (version < 1 || version > 7) return false;
+        if (version < 1 || version > 8) return false;
         std::size_t at = 0;
         Book read;
         std::uint8_t lastPattern = 0;
@@ -1360,6 +1383,15 @@ namespace IntelEngine::Arcs {
                 if (!detail::Get(in, at, a.captive) || !detail::Get(in, at, a.captiveSite) || !detail::Get(in, at, a.captiveState) ||
                     a.captive >= kRoles || a.captiveSite > kSites || a.captiveState > CaptiveHome || (a.captive != 0) != (a.captiveSite != 0)) {
                     return false;
+                }
+            }
+            if (version >= 8) {
+                for (std::size_t k = 0; k < kClues; ++k) {
+                    if (!detail::Get(in, at, a.clueWhat[k]) || !detail::Get(in, at, a.clueSite[k]) || !detail::Get(in, at, a.clueRef[k]) ||
+                        !detail::Get(in, at, a.clueState[k]) || a.clueWhat[k] > kRemains || a.clueSite[k] > kSites || a.clueState[k] > ClueSeen ||
+                        (a.clueWhat[k] != 0) != (a.clueSite[k] != 0)) {
+                        return false;
+                    }
                 }
             }
             const bool tale = pattern == static_cast<std::uint8_t>(Pattern::Tale);
