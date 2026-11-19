@@ -240,6 +240,10 @@ class VM:
         if method == "ForceRefTo": args[0].actor = args[1]; return None
         if method == "Clear": args[0].actor = None; return None
         if method == "GetDisplayName": return args[0].name
+        # 3.8.3: EscortTarget compares the target's name with the player's own, display name and base name; the modeled
+        # actor stands in for its base.
+        if method == "GetActorBase": return args[0]
+        if method == "GetName": return args[0].name
         if method == "GetParentCell": return args[0].cell
         if method == "IsPlayerInDangerousLocation": return False
         if method == "CheckHoldRestriction": return True
