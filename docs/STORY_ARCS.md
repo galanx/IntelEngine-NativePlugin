@@ -322,8 +322,44 @@ gestures only, and that the story ends at the door.
 Offline: `HeartsCheck` (who, what, the hard rules, the words, the rank), `TalesCheck CloserAndApart`,
 `RunTaleAuthorPromptRenderCheck` (the prompt rendered with SkyrimNet's own Inja for nine kinds of request: each of
 the four leans, a spouse in the cast of an ordinary story, a stranger, a reason of their own, a second attempt).
-**Not played in game yet**: nothing of this section. To play: someone tracked by SkyrimNet Relationships with a
-spark, the pacer's story for them, both endings, and that the bond moved.
+**Played once (2026-11-19 evening, Whiterun, by talk):** Ysolda as a friend with a spark (test hook `DebugHeart`,
+which tells the DLL without touching any mod's records). The log: "Ysolda and the player: a story of the heart
+(courtship)". The model wrote "The Price of a Stall" in one try: a fortune-teller's omen that being near the player
+would cost Ysolda what she loves, bought by Anoriath for twelve septims and a haunch of venison because the brothers
+of the Drunken Huntsman fear her plans for an inn. Olava and Anoriath each owned up when asked (read from the talk),
+Anoriath said it to Ysolda's face in the market, the last choice offered a warm answer, time, or a no; the warm one
+moved the game's rank 2 to 3 and wrote three memories and a rumour. What that run changed:
+- **No gold for it.** Ysolda had promised "155 gold the moment we're done". `Tales::Pool::heart`: the compiler sets
+  the reward to nothing and no ending pays, whatever the author wrote; the offer names no reward.
+- **A kind no cools nothing.** The author had put `apart` on "You are a friend, nothing more". The prompt now says a
+  kind no carries no effect at all; `apart` is for cruelty or carelessness only.
+- Not played: the other three leans, a refusal, someone a relationship mod really tracks, Fifi or a child (who must
+  get no line), a story held back because one of the last two was of the heart.
+
+### Places out in the world, played on foot (2026-11-19 evening)
+
+Two hand-written tales, the test character walking by the game's pathfinding and fighting with real swings
+(`Scripts\intelengine\go.py`, `fight.py`): White River Watch from Riverwood (the whole way there on foot, three wolf
+fights, the guards outside, the cave, the chief, the search, the hand-over), and Mzinchaleft from Dawnstar (entered
+by console, then on foot; one bar gate of the ruin's own lever puzzle passed by console). Both ran from offer to paid
+ending. What they showed, all fixed:
+- **The marker for "take it from him" pointed at the heart of the place once the master was dead**, not at the body.
+  It is on the master, alive or dead, while what is to be found is on them (`PlaceMarker`).
+- **Working mines were offered as bandit hideouts.** `SiteKindOf` took the mine keyword alone: Quicksilver Mine and
+  Iron-Breaker Mine in Dawnstar, Left Hand Mine, Kolskeggr, Gloombound, their "heart" a miner at work. A place now
+  needs the game's own LocTypeDungeon or LocTypeClearable.
+- **Many places have a heart that is no reference of the game until one is inside** (every Dwemer ruin looked at:
+  Mzinchaleft, Nchuand-Zel, Kagrenzel; also Hag Rock Redoubt, Druadach Redoubt, Mara's Eye Pond, Hillgrund's Tomb and
+  more). For those no master was placed at the offer and the journal had no marker: "kill what waits there" could
+  never be done. Now: until the heart is in the game the journal leads to the place by its marker on the map, and
+  shows none while the player is inside (a marker out of doors would point back at the way in); when the heart's
+  part of the place is loaded the watch says so (signal 14), the script places the master there (not in plain view
+  where that can be helped) and the marker moves onto it. Seen at Mzinchaleft: none in the first hall; on entering
+  the second, "the Warden of Mzinchaleft waits at the heart of Mzinchaleft" 0.2 s after the load, the item in its
+  works, the marker on the heart, then on the wreck.
+- A place whose name two records carry (Gloombound Mine) was offered twice.
+- Not played: a model-written story with a place in it; the walk overland to Mzinchaleft; a place the player had
+  cleared before (its company coming back); a Falmer hive, a tomb, a giants' camp.
 
 ## 1. Principles
 

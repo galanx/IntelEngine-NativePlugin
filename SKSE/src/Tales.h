@@ -84,6 +84,10 @@ namespace IntelEngine::Tales {
         // Step kinds (bit per Arcs::Kind) not on offer for this tale: a story told lately had one, and the next ones
         // are told another way (the user, 2026-11-19: never "here we go again... again someone ambushing").
         std::uint32_t barred = 0;
+        // A story between the asker and the player themselves (Hearts.h): nothing is paid for it, whatever the author
+        // wrote. (Played 2026-11-19: Ysolda promised "155 gold the moment we're done" for being helped over a fear
+        // of her own heart.)
+        bool heart = false;
     };
 
     struct Result {
@@ -357,7 +361,7 @@ namespace IntelEngine::Tales {
         a.offerWords = Words(Str(offer, "words"), 600);
         a.offerAsk = Words(Str(offer, "ask"), 200);
         a.opening = Words(Str(offer, "journal"), kMaxLine);
-        a.gold = static_cast<std::uint32_t>(std::clamp(Int(offer, "reward", static_cast<int>(pool.gold)), 25, 1000));
+        a.gold = pool.heart ? 0u : static_cast<std::uint32_t>(std::clamp(Int(offer, "reward", static_cast<int>(pool.gold)), 25, 1000));
         a.days = static_cast<float>(std::clamp(Int(offer, "days", 3), 1, 7));
         if (a.offerWords.empty() || a.offerAsk.empty()) fail("offer: words and ask are needed");
         if (a.opening.empty()) a.opening = a.offerAsk;
@@ -373,7 +377,7 @@ namespace IntelEngine::Tales {
             auto& end = a.ends[k];
             end.journal = Words(Str(e, "journal"), kMaxLine);
             end.rumor = Words(Str(e, "rumor"), kMaxLine);
-            end.pay = k == 0 ? !e.contains("pay") || Bool(e, "pay") : Bool(e, "pay");
+            end.pay = !pool.heart && (k == 0 ? !e.contains("pay") || Bool(e, "pay") : Bool(e, "pay"));
             if (e.contains("memories") && e["memories"].is_object()) {
                 for (const auto& [key, text] : e["memories"].items()) {
                     const auto it = roleOf.find(Lower(key));

@@ -614,6 +614,45 @@ namespace IntelEngine {
         }
     }
 
+    namespace {
+        // The place (index + 1) a tale's step is about: where to go, what to kill there, or what its master carries.
+        std::uint8_t SiteOfStep(const A::Arc& a, const A::Node& n) {
+            if ((n.kind == A::Kind::Delve || n.kind == A::Kind::Slay) && n.site) return n.site;
+            if (n.kind == A::Kind::Have && n.prop < A::kProps && a.propSite[n.prop]) return a.propSite[n.prop];
+            return 0;
+        }
+
+        // Where the journal points for such a step: the master (alive, or the body that still carries what is to be
+        // found), else the heart of the place. The heart of many places (every Dwemer ruin looked at, 2026-11-19:
+        // Mzinchaleft, Nchuand-Zel, Kagrenzel) is no reference of the game until its part of the place is loaded:
+        // until then the way leads to the place itself, by its marker on the map, and once the player is inside
+        // the journal's own words lead on (a marker out of doors would point back at the way in).
+        RE::TESForm* PlaceMarker(const A::Arc& a, const A::Node& n, std::uint8_t site) {
+            const auto s = static_cast<std::size_t>(site - 1u);
+            auto* boss = a.siteBoss[s] ? RE::TESForm::LookupByID<RE::Actor>(a.siteBoss[s]) : nullptr;
+            // What is to be found is on the master, alive or dead: the marker is on the body, wherever the fight
+            // ended (played at White River Watch: the chief fell five hundred units from his room, and the marker
+            // for "take the stone from him" pointed at the empty room). Held by the marker alias, the body also
+            // stays in the world until it has been searched.
+            if (boss && n.kind == A::Kind::Have && !boss->IsDeleted() && !boss->IsDisabled()) return boss;
+            if (boss && !boss->IsDead() && n.kind != A::Kind::Delve) return boss;
+            if (auto* heart = a.siteAnchor[s] ? RE::TESForm::LookupByID(a.siteAnchor[s]) : nullptr) return heart;
+            auto* location = RE::TESForm::LookupByID<RE::BGSLocation>(a.site[s]);
+            auto* player = RE::PlayerCharacter::GetSingleton();
+            for (auto* at = player ? player->GetCurrentLocation() : nullptr; at; at = at->parentLoc) {
+                if (at == location) return nullptr;
+            }
+            auto onTheMap = location ? std::as_const(location->worldLocMarker).get() : RE::NiPointer<RE::TESObjectREFR>();
+            return onTheMap.get();
+        }
+
+        // In the game right now: its cell is attached. (A marker has no 3D of its own, so "3D loaded" misses some.)
+        bool InTheWorldNow(RE::TESObjectREFR* ref) {
+            auto* cell = ref ? ref->GetParentCell() : nullptr;
+            return cell && cell->IsAttached();
+        }
+    }
+
     RE::Actor* ArcBridge::Company(std::uint32_t id) const {
         std::scoped_lock lock(m_mutex);
         const auto* a = m_book.Find(id);
@@ -1116,7 +1155,7 @@ namespace IntelEngine {
             for (std::size_t s = 0; s < A::kSites; ++s) {
                 if (!a->site[s]) continue;
                 auto* anchor = a->siteAnchor[s] ? RE::TESForm::LookupByID<RE::TESObjectREFR>(a->siteAnchor[s]) : nullptr;
-                if (anchor && anchor->Is3DLoaded()) {
+                if (InTheWorldNow(anchor)) {
                     auto* anchorCell = anchor->GetParentCell();
                     const bool sameSpace = anchorCell && cell && (anchorCell->IsInteriorCell() ? anchorCell == cell
                                                                                               : anchor->GetWorldspace() == player->GetWorldspace());
@@ -1236,10 +1275,36 @@ namespace IntelEngine {
                          spot.ref->GetFormID(), NameOf(a->cast[hider]));
         }
         if (tale) {
+            // A heart that came into the game only now (its part of the place was loaded): the story's master is
+            // put there at once. The script places (PlaceBosses, out of the player's sight where that can be helped)
+            // and sets the journal's marker anew; asked again every look until it is done.
+            for (std::size_t s = 0; s < A::kSites; ++s) {
+                if (!a->site[s] || (a->siteState[s] & 1u)) continue;
+                bool needed = false;
+                for (const auto& step : a->graph) needed = needed || (step.kind == A::Kind::Slay && step.site == s + 1);
+                for (const auto p : a->propSite) needed = needed || p == s + 1;
+                auto* anchor = a->siteAnchor[s] ? RE::TESForm::LookupByID<RE::TESObjectREFR>(a->siteAnchor[s]) : nullptr;
+                if (needed && InTheWorldNow(anchor)) bits |= 1 << 14;
+            }
+            // The journal's marker for a step out in the world moves with what is in the game (the place on the map,
+            // nothing while inside, the heart, the master, the body): said to the script when it has moved.
+            if (a->node < nodes.size()) {
+                if (const auto site = SiteOfStep(*a, nodes[a->node])) {
+                    auto* marker = PlaceMarker(*a, nodes[a->node], site);
+                    const RE::FormID now = marker ? marker->GetFormID() : 0u;
+                    if (!pending.siteMarkerKnown || now != pending.siteMarker) {
+                        if (pending.siteMarkerKnown) bits |= 1 << 14;
+                        pending.siteMarkerKnown = true;
+                        pending.siteMarker = now;
+                    }
+                } else {
+                    pending.siteMarkerKnown = false;
+                }
+            }
             for (std::size_t s = 0; s < A::kSites; ++s) {
                 if (!a->site[s] || !(a->siteState[s] & 1u) || (a->siteState[s] & 2u)) continue;
                 auto* anchor = a->siteAnchor[s] ? RE::TESForm::LookupByID<RE::TESObjectREFR>(a->siteAnchor[s]) : nullptr;
-                if (!anchor || !anchor->Is3DLoaded()) continue;
+                if (!InTheWorldNow(anchor)) continue;
                 // The place's heart is loaded: a place the player emptied before gets company for its new master.
                 a->siteState[s] |= 2u;
                 auto* location = RE::TESForm::LookupByID<RE::BGSLocation>(a->site[s]);
@@ -1988,17 +2053,10 @@ namespace IntelEngine {
         }
         if (name == "marker" && a->pattern == A::Pattern::Tale) {
             // A place out in the world: its boss while it lives, else its heart. A prop a boss carries: the boss.
-            std::uint8_t site = 0;
-            if ((n.kind == A::Kind::Delve || n.kind == A::Kind::Slay) && n.site) site = n.site;
-            if (n.kind == A::Kind::Have && n.prop < A::kProps && a->propSite[n.prop]) site = a->propSite[n.prop];
             if (n.kind == A::Kind::Have && n.prop < A::kProps && (a->propAmbush & (1u << n.prop)) && a->thug[0]) {
                 if (auto* leader = RE::TESForm::LookupByID(a->thug[0])) return leader;
             }
-            if (site) {
-                auto* boss = a->siteBoss[site - 1u] ? RE::TESForm::LookupByID<RE::Actor>(a->siteBoss[site - 1u]) : nullptr;
-                if (boss && !boss->IsDead() && n.kind != A::Kind::Delve) return boss;
-                return a->siteAnchor[site - 1u] ? RE::TESForm::LookupByID(a->siteAnchor[site - 1u]) : nullptr;
-            }
+            if (const auto site = SiteOfStep(*a, n)) return PlaceMarker(*a, n, site);
         }
         if (name == "marker") {
             // Finding a prop: the marker goes to where it is hidden once it is there; else to the node's person.

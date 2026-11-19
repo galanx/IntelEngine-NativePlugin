@@ -302,6 +302,14 @@ static void CloserAndApart() {
     const auto bytes = Serialize(book);
     Book back;
     Require(Deserialize(bytes, back) && back.Find(id)->graph[0].edges[0].effect == Effect::Closer, "the new effects survive the co-save");
+    // A story between the two of them is not paid, whatever the author wrote, and the offer names no reward.
+    auto hearts = Town();
+    hearts.heart = true;
+    const auto h = Tales::Compile(j, hearts);
+    Require(h.ok && h.arc.gold == 0 && !h.arc.ends[0].pay, "a story of the heart promises no gold");
+    Require(h.arc.graph[0].edges[0].effect == Effect::Closer && h.arc.graph[0].edges[0].effect2 == Effect::None, "and pays none at its ending");
+    Require(OfferPrompt(h.arc).find("Reward") == std::string::npos && OfferPrompt(r.arc).find("Reward: {gold} gold.") != std::string::npos,
+            "the offer says so");
     j["steps"][0]["options"][0]["effect"] = "closer";
     Require(Tales::Compile(j, Town()).errors.find("missing a person") != std::string::npos, "closer to whom");
     j["steps"][0]["options"][0]["effect"] = "closer p9";
