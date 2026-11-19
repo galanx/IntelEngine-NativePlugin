@@ -536,6 +536,12 @@ namespace IntelEngine {
     std::uint32_t ArcBridge::PlanFor(RE::Actor* asker, int pattern, bool hereOnly) {
         auto* player = RE::PlayerCharacter::GetSingleton();
         if (!asker || !player) return 0;
+        // A tale is being written for this town: a story planned now would take its people from under it (the
+        // director planned a theft with Arcadia while Heimskr's tale, with her in it, was being written, 2026-11-19).
+        if (m_taleBusy.load() && pattern == 0) {
+            logger::info("Arcs: no arc for {}: a tale is being written", asker->GetDisplayFullName());
+            return 0;
+        }
         const float now = NowDays();
         std::string why;
         if (hereOnly) {
@@ -986,7 +992,7 @@ namespace IntelEngine {
             // (the user, 2026-11-18: "Only if the player doesnt respond for a long time, the npc gets bored and walks
             // off"). Jon Battle-Born walked home in the middle of being asked about a goblet (2026-11-19).
             if (n.who && n.kind != A::Kind::Wait && n.kind != A::Kind::Have && f.with[n.who] && f.spoke[n.who] && !f.dead[n.who] &&
-                !pending.lingering) {
+                !pending.lingering && RealSeconds() >= pending.lingerHold) {
                 pending.lingering = true;
                 bits |= 1 << 6;
                 logger::info("Arcs: #{} {} stays with the player while they talk (step {})", id, NameOf(a->cast[n.who]), static_cast<int>(a->node));
@@ -1164,7 +1170,10 @@ namespace IntelEngine {
 
     void ArcBridge::LingerOver(std::uint32_t id) {
         std::scoped_lock lock(m_mutex);
-        if (auto it = m_pending.find(id); it != m_pending.end()) it->second.lingering = false;
+        if (auto it = m_pending.find(id); it != m_pending.end()) {
+            it->second.lingering = false;
+            it->second.lingerHold = RealSeconds() + 20.0f;   // a refusal (a scene) or a talk just over: not at once again
+        }
     }
 
     bool ArcBridge::FetchProp(std::uint32_t id, int prop) {

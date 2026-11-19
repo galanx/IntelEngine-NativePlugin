@@ -150,6 +150,7 @@ namespace IntelEngine {
             float judgedAt = -1.0f;      // real seconds of the last reading
             float visitAt = -1.0f;       // game days: the step's person was last sent to the player
             bool lingering = false;      // the step's person stays with the player while they talk (the script's)
+            float lingerHold = -1.0f;    // real seconds: not asked to linger again before this (refused or let go)
         };
         void TaleTalk(std::uint32_t id, const Arcs::Arc& a, Pending& pending, const Arcs::Facts& f);   // lock held
         void SendTale(std::shared_ptr<void> request, int attempt, std::string fix, std::string previous);   // any thread
