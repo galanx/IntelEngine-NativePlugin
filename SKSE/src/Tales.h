@@ -150,7 +150,10 @@ namespace IntelEngine::Tales {
         A::Arc& a = r.arc;
         a.pattern = A::Pattern::Tale;
         a.title = Words(Str(tale, "title"), 60);
-        a.genre = Lower(Words(Str(tale, "genre"), 24));
+        a.genre = Lower(Words(Str(tale, "genre"), 60));
+        // One word or two for the ledger ("mystery of the heart, with a family secret" -> "mystery of the heart").
+        if (const auto cut = a.genre.find_first_of(",;(/"); cut != std::string::npos) a.genre = Trim(a.genre.substr(0, cut));
+        if (a.genre.size() > 32) a.genre.resize(32);
         a.premise = Words(Str(tale, "premise"), 600);
         if (a.title.size() < 3) fail("title: missing");
         if (a.premise.empty()) fail("premise: missing");

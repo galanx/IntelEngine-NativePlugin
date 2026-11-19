@@ -914,8 +914,11 @@ namespace IntelEngine {
                     const bool want = tale ? (r != A::RAsker || (a->node < nodes.size() && nodes[a->node].who == r)) : r == A::RCulprit;
                     if (a->cast[r] && want) wanted |= 1u << r;
                 }
+                const auto scanStart = std::chrono::steady_clock::now();
                 pending.homeOf = wanted ? HomeOfCast(cell, *a, wanted) : 0;
                 pending.homeHere = !tale && pending.homeOf == A::RCulprit;
+                const double scanMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - scanStart).count();
+                if (scanMs > 0.1) logger::info("Arcs: #{} whose home is {:08X}: {} ({:.2f} ms)", id, cell->GetFormID(), pending.homeOf, scanMs);
             }
         }
         if (a->scene) {

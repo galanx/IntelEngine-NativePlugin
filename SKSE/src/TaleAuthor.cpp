@@ -255,6 +255,7 @@ namespace IntelEngine {
                 logger::warn("Tales: the tale asked for {:.0f} s ago never came; asking anew", real - g_requestAt);
                 m_taleBusy.store(false);
             } else {
+                logger::info("Tales: no tale for {}: another tale is being written", asker->GetDisplayFullName());
                 return false;
             }
         }
@@ -264,7 +265,10 @@ namespace IntelEngine {
             return false;
         }
         const Folk* me = FolkOf(asker->GetFormID());
-        if (!me) return false;
+        if (!me) {
+            logger::info("Tales: no tale for {}: not one of the townsfolk with a town", asker->GetDisplayFullName());
+            return false;
+        }
         // A town's story comes to a player who is in that town, from someone who has not asked for anything lately.
         {
             auto* player = RE::PlayerCharacter::GetSingleton();
@@ -283,7 +287,10 @@ namespace IntelEngine {
         std::vector<std::string> recentGenres;
         {
             std::scoped_lock lock(m_mutex);
-            if (m_book.Count(A::Phase::Planned) > 0 || m_book.Count(A::Phase::Open) >= A::kMaxOpen) return false;
+            if (m_book.Count(A::Phase::Planned) > 0 || m_book.Count(A::Phase::Open) >= A::kMaxOpen) {
+                logger::info("Tales: no tale for {}: another story is on its way or two are open", asker->GetDisplayFullName());
+                return false;
+            }
             // What was told already (newest first): never again.
             for (auto it = m_book.all.rbegin(); it != m_book.all.rend() && told.size() < 10; ++it) {
                 if (it->ending == A::Ending::Lapsed) continue;
@@ -527,6 +534,17 @@ namespace IntelEngine {
             if (!actor || !Usable(actor, 0, why)) {
                 logger::info("Tales: {} is no longer free ({})", NameOf(a.cast[r]), why);
                 return fallback("the cast is no longer free");
+            }
+        }
+        if (attempt < 9) {
+            auto* player = RE::PlayerCharacter::GetSingleton();
+            auto* cell = player ? player->GetParentCell() : nullptr;
+            auto* here = player ? TownOfLoc(cell && cell->GetLocation() ? cell->GetLocation() : player->GetCurrentLocation()) : nullptr;
+            if (!here || here->GetFormID() != request->town) {
+                logger::info("Tales: \"{}\" is not told: the player left {} while it was written", a.title, NameOf(request->town));
+                g_request.reset();
+                m_taleBusy.store(false);
+                return;
             }
         }
         a.place = request->town;
