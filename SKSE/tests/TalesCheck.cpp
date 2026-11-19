@@ -376,7 +376,7 @@ static void Adventure() {
     Require(back.Find(id)->bossName[0] == "Grelka the Silent" && back.Find(id)->graph[1].site == 1 && back.Find(id)->propSite[0] == 1, "whole");
     // A save made before ambushes (record version 4: no ambush block) still loads.
     auto v4 = bytes;
-    v4.resize(v4.size() - (3 * 4 + 2 + 1) - 3);   // the ambush block, and the three bytes of someone held (version 7)
+    v4.resize(v4.size() - (3 * 4 + 2 + 1) - 3 - 14);   // the ambush block, the three bytes of someone held (version 7), the fourteen of remains (8)
     Book older;
     Require(Deserialize(v4, older, 4) && older.Find(id)->bossName[0] == "Grelka the Silent", "a record of version 4 loads");
 
@@ -451,7 +451,7 @@ static void Ambush() {
     // A save of record version 5 (ambushes, before stalkers) loads as it was.
     Book five;
     auto v5 = bytes;
-    v5.resize(v5.size() - 3);   // before someone could be held (version 7)
+    v5.resize(v5.size() - 3 - 14);   // before someone could be held (version 7) or remains examined (8)
     Require(Deserialize(v5, five, 5) && five.Find(id)->graph[0].kind == Kind::Ambush, "a record of version 5 loads");
 
     const auto errorsOf = [](json x) { return Tales::Compile(x, Town()).errors; };
@@ -559,6 +559,115 @@ static Tales::Pool TownThatHolds() {
     return pool;
 }
 
+// A hunt for what is killing people: witnesses, what was left of a victim outside the place, then what did it.
+static json Hunted() {
+    return json::parse(R"({
+      "title": "What Walks by Embershard", "genre": "mystery",
+      "premise": "Hulda sent the hunter up to the mine with a message for the chief, and has kept quiet about it since he was found dead.",
+      "people": [
+        {"who": "p0", "part": "the one who asks", "truth": "A hunter I knew was found dead by the old mine. Nobody will say what did it."},
+        {"who": "p2", "part": "the one who sent him", "truth": "I sent him up there with a message. I never thought they would kill him for it."}
+      ],
+      "offer": {"words": "Ysolda comes to {player}, shaken.", "ask": "Find out what killed him.",
+                "journal": "Ysolda asked me to find out what killed the hunter.", "reward": 150, "days": 3},
+      "steps": [
+        {"id": "s1", "do": "talk", "with": "p2", "goal": "Ask Hulda what she knows of the hunter",
+         "outcomes": [{"if": "Hulda says he went up to the mine", "then": "s2", "journal": "Hulda said he went up to the mine."},
+                      {"if": "Hulda says nothing", "then": "s2", "journal": "Hulda told me nothing."}]},
+        {"id": "s2", "do": "examine", "place": "d2", "what": "a hunter", "goal": "Look at what was left of the hunter",
+         "clue": "He was cut down with plain steel, from behind. His purse and his boots are gone.", "then": "s3",
+         "journal": "Cut down with steel and robbed: men did this, not beasts."},
+        {"id": "s3", "do": "slay", "place": "d2", "boss": "Grelka the Silent", "goal": "Kill Grelka the Silent", "then": "s4", "journal": "Grelka is dead."},
+        {"id": "s4", "do": "choose", "with": "p2", "goal": "Face Hulda with it", "question": "What now?",
+         "options": [{"say": "The guard will hear of this.", "then": "end:good", "journal": "I told the guard."},
+                     {"say": "It stays between us.", "then": "end:other", "journal": "I kept it to myself."}]}
+      ],
+      "endings": {"good": {"journal": "It is known what killed him.", "rumor": "", "pay": true},
+                  "bad": {"journal": "Nobody knows what killed him.", "rumor": "", "pay": false},
+                  "other": {"journal": "It stays quiet.", "rumor": "", "pay": true}}
+    })");
+}
+
+static void Mystery() {
+    const auto r = Tales::Compile(Hunted(), TownThatHolds());
+    if (!r.ok) std::cerr << r.errors;
+    Require(r.ok, "a hunt for what is killing people compiles");
+    const Arc& a = r.arc;
+    const Node& look = a.graph[1];
+    Require(look.kind == Kind::Examine && look.site == 1 && look.prop == 0 && look.who == RNone && look.marker == RNone, "the step that looks at what was left");
+    Require(a.clueWhat[0] == RemainsHunter && a.clueSite[0] == 1 && a.clueState[0] == ClueToPlace && a.clueRef[0] == 0 && a.clueWhat[1] == 0,
+            "what lies there, and outside which place");
+    Require(look.question.find("plain steel") != std::string::npos, "what is seen there is kept for the player");
+    Require(look.why.empty(), "a dead one the story does not name carries no name");
+    {
+        json named = Hunted();
+        named["steps"][1]["name"] = "Torvald";
+        const auto rn = Tales::Compile(named, TownThatHolds());
+        Require(rn.ok && rn.arc.graph[1].why == "Torvald", "the name the story gives the dead one goes with the step");
+    }
+    Book book;
+    const auto id = book.Plan(a, 1.0f);
+    book.Accept(id, 1.0f);
+    Arc& t = *book.Find(id);
+    Facts f;
+    f.with[3] = f.spoke[3] = true;
+    f.turn = 0;
+    Advance(t, f, 1.1f);
+    Require(t.node == 1, "the talk in town leads out to what was found");
+    Require(!Advance(t, Facts{}, 1.2f).any(), "not done until it has been looked at");
+    Facts seen;
+    seen.examined[0] = true;
+    const auto done = Advance(t, seen, 1.3f);
+    Require(t.node == 2 && done.done.size() == 1 && done.line.find("men did this") != std::string::npos, "looked at: the clue is the player's, and the hunt is next");
+    // Through the co-save.
+    t.clueRef[0] = 0xFF001234;
+    t.clueState[0] = CluePlaced;
+    const auto bytes = Serialize(book);
+    Book back;
+    Require(Deserialize(bytes, back), "what was left survives the co-save");
+    const Arc& b = *back.Find(id);
+    Require(b.clueWhat[0] == RemainsHunter && b.clueSite[0] == 1 && b.clueRef[0] == 0xFF001234 && b.clueState[0] == CluePlaced && b.graph[1].kind == Kind::Examine, "whole");
+    Book seven;
+    auto v7 = bytes;
+    v7.resize(v7.size() - 14);
+    Require(!Deserialize(v7, seven, 7), "a step that examines read as version 7 is refused, not misread");
+    auto wrong = bytes;
+    wrong[wrong.size() - 1] = 7;   // no such state
+    Require(!Deserialize(wrong, seven), "a state that does not exist is refused");
+
+    const auto errorsOf = [](json x, Tales::Pool pool) { return Tales::Compile(x, pool).errors; };
+    json j = Hunted();
+    j["steps"][1].erase("clue");
+    Require(errorsOf(j, TownThatHolds()).find("what is seen on the remains") != std::string::npos, "a clue is something seen");
+    j = Hunted();
+    j["steps"][1]["what"] = "a dragon";
+    Require(errorsOf(j, TownThatHolds()).find("a hunter, a cow, a horse, a goat or a deer") != std::string::npos, "only what the game can lay there");
+    j = Hunted();
+    j["steps"][2]["do"] = "delve";
+    j["steps"][2].erase("boss");
+    Require(errorsOf(j, TownThatHolds()).find("a later step is a \"slay\" there") != std::string::npos, "what did it is met at that place");
+    j = Hunted();
+    j["steps"][2]["place"] = "d1";
+    Require(errorsOf(j, TownThatHolds()).find("a later step is a \"slay\" there") != std::string::npos, "at that place, not at another");
+    j = Hunted();
+    auto closed = TownThatHolds();
+    for (auto& s : closed.sites) s.outside = false;
+    Require(errorsOf(j, closed).find("nothing can be left outside") != std::string::npos, "only where there is ground outside it");
+    auto barred = TownThatHolds();
+    barred.barred = 1u << static_cast<unsigned>(Kind::Examine);
+    Require(errorsOf(Hunted(), barred).find("no \"examine\" in this story") != std::string::npos, "not in every story");
+    auto hunt = TownThatHolds();
+    hunt.mustExamine = true;
+    Require(Tales::Compile(Hunted(), hunt).ok, "a hunt asked for, and it is one");
+    Require(errorsOf(Taken(), hunt).find("a hunt for what is killing people") != std::string::npos, "and nothing else");
+    // The depth every story is held to counts it as an act out in the world.
+    auto deep = TownThatHolds();
+    deep.depth = true;
+    const auto rd = Tales::Compile(Hunted(), deep);
+    if (!rd.ok) std::cerr << rd.errors;
+    Require(rd.ok, "a hunt among people, with a choice after it, is deep enough");
+}
+
 static void Captive() {
     const auto r = Tales::Compile(Taken(), TownThatHolds());
     if (!r.ok) std::cerr << r.errors;
@@ -641,10 +750,10 @@ static void Captive() {
             back.Find(id)->graph[2].kind == Kind::Free, "whole");
     Book six;
     auto v6 = bytes;
-    v6.resize(v6.size() - 3);
+    v6.resize(v6.size() - 3 - 14);   // without the three bytes of someone held, and the fourteen of the remains after them
     Require(!Deserialize(v6, six, 6), "a step that frees someone read as version 6 is refused, not misread");
     auto wrong = bytes;
-    wrong[wrong.size() - 1] = 9;   // no such state
+    wrong[wrong.size() - 1 - 14] = 9;   // no such state
     Require(!Deserialize(wrong, six), "a state that does not exist is refused");
 
     const auto errorsOf = [](json x, Tales::Pool pool) { return Tales::Compile(x, pool).errors; };
@@ -802,6 +911,7 @@ int main() {
         Ambush();
         Stalk();
         Captive();
+        Mystery();
         Depth();
         LongWords();
         Refusals();

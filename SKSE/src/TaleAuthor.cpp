@@ -304,6 +304,28 @@ namespace IntelEngine {
                 default: return "something";
             }
         }
+        // What the place's kind leaves on those it kills: facts for the writer, so that what the player finds on a
+        // victim is true of what waits inside (a mystery that can be worked out, never one made up afterwards).
+        // Nothing the eye would contradict: the body that lies there is whole and clothed (the game's own dead), so
+        // these are wounds under the clothes, colour, smell and what clings to it, never a limb torn off (the first
+        // hunt the model wrote said so of a body that lay there in one piece, 2026-11-19).
+        const char* SiteSigns(std::uint8_t kind, bool spider) {
+            switch (kind) {
+                case Tales::SiteDwemer: return "burns and clean deep cuts as from hot blades, a smell of oil and scorched metal, nothing eaten, nothing taken";
+                case Tales::SiteFalmer: return "small black arrowheads of chitin broken off in the flesh, wounds gone dark with poison, drag marks toward a hole in the ground, taken at night";
+                case Tales::SiteCrypt: return "hewn with old heavy blades, the wounds rimed with frost, grave dust on the clothes, nothing eaten, nothing taken";
+                case Tales::SiteBandits: return "cut down with plain steel or shot with common arrows, purse and boots gone, no bite marks";
+                case Tales::SiteDen:
+                    return spider ? "two great puncture wounds gone black with venom, the flesh shrunken as if sucked dry, shreds of thick web clinging to the clothes"
+                                  : "great bite wounds, the ribs stove in, claw marks three fingers wide, a rank animal stink";
+                case Tales::SiteVampires: return "two small punctures at the throat, the body pale and bloodless, hardly any blood on the ground, taken at night";
+                case Tales::SiteNecromancers: return "no wound to speak of, the skin grey and cold as if long dead, ritual marks cut into the chest, black candle wax nearby";
+                case Tales::SiteForsworn: return "hacked with weapons of bone and flint, ritual cuts under the ribs, a charm of briar and feathers left on the chest";
+                case Tales::SiteHagraven: return "raked open by long talons, black feathers stuck in the blood, a stink of rot, bones and twigs bound into a fetish nearby";
+                case Tales::SiteGiants: return "every bone on one side broken as by a single great blow, thrown a long way from the road, footprints a stride long, nothing eaten";
+                default: return "";
+            }
+        }
 
         // Where the player's journal points now: no story may send the player into those places.
         std::unordered_set<RE::FormID> ObjectiveLocations() {
@@ -335,6 +357,7 @@ namespace IntelEngine {
             Tales::Pool pool;
             RE::FormID asker = 0;
             RE::FormID town = 0;
+            std::uint32_t seed = 0;        // the story's own number, fixed before it is written (which master a den has)
             bool afar = false;             // the director's: the asker comes to the player wherever the player is
             bool otherHold = false;        // ... from another hold
             bool heart = false;            // a story of the heart between the asker and the player (Hearts.h)
@@ -456,6 +479,7 @@ namespace IntelEngine {
         auto request = std::make_shared<Request>();
         request->asker = asker->GetFormID();
         request->town = me->town;
+        request->seed = A::detail::Mix(request->asker, static_cast<std::uint32_t>(NowDays() * 1440.0f));
         request->afar = afar;
         request->otherHold = taleSeed && taleSeed->otherHold;
         // ---- the people: the asker, then those of the town the game ties to them, then the town's known faces
@@ -679,12 +703,19 @@ namespace IntelEngine {
                 site.location = n.p.location;
                 site.anchor = n.p.anchor;
                 site.kind = n.kind;
+                // Ground under the open sky by its way in (its marker on the map): where what was left of a victim
+                // can lie to be found.
+                site.outside = location && std::as_const(location->worldLocMarker).get().get() != nullptr;
                 request->pool.sites.push_back(site);
+                // Which master a den has (the same sum ArcBridge::Form "bossbase" makes): known before a word is written.
+                const bool spider = A::detail::Mix(request->seed, site.location) % 2u != 0u;
                 nlohmann::json j;
                 j["key"] = site.key;
                 j["name"] = site.name;
                 j["what"] = SiteWhat(n.kind);
-                j["heart"] = SiteHeart(n.kind);
+                j["heart"] = n.kind == Tales::SiteDen ? (spider ? "a giant frostbite spider" : "a troll") : SiteHeart(n.kind);
+                j["signs"] = SiteSigns(n.kind, spider);
+                j["outside"] = site.outside;
                 j["far"] = n.distance < 15000.0f ? "close by" : n.distance < 40000.0f ? "half a day's walk" : "far across the hold";
                 j["cleared"] = location && location->IsCleared();
                 j["holds"] = Tales::SiteHolds(n.kind);
@@ -756,6 +787,7 @@ namespace IntelEngine {
             if (used(bit(A::Kind::Brawl), 2)) barred |= bit(A::Kind::Brawl);
             if (used(bit(A::Kind::Stalk), 3)) barred |= bit(A::Kind::Stalk);
             if (used(bit(A::Kind::Free), 3)) barred |= bit(A::Kind::Free);   // someone held: once in four stories
+            if (used(bit(A::Kind::Examine), 1)) barred |= bit(A::Kind::Examine);   // a hunt for what kills: never two running
             if (recentBeats.size() >= 2 && (recentBeats[0] & place) && (recentBeats[1] & place)) barred |= place;
             if (barred & place) {
                 request->pool.sites.clear();
@@ -786,6 +818,27 @@ namespace IntelEngine {
         }
         request->pool.barred = barred;
         request->pool.depth = written.empty();
+        // A hunt for what is killing people: on offer when a place near has ground outside it for what was left of a
+        // victim. Asked for (a rumor of deaths, the test hook), it is that or nothing.
+        {
+            const auto examine = 1u << static_cast<unsigned>(A::Kind::Examine);
+            const bool ground = std::any_of(request->pool.sites.begin(), request->pool.sites.end(), [](const Tales::Site& s) { return s.outside; });
+            const bool mayHunt = ground && !(barred & examine) && heartLean.empty();
+            const bool hunt = taleSeed && taleSeed->kind == "mystery";
+            if (hunt && !mayHunt) {
+                logger::info("Tales: no hunt for {}: {}", asker->GetDisplayFullName(),
+                             !ground ? "no place near with ground outside it" : "the last story was one, or this one is of the heart");
+                return false;
+            }
+            ctx["bar_examine"] = !mayHunt;
+            if (!mayHunt) request->pool.barred |= examine;
+            request->pool.mustExamine = hunt;
+            ctx["must_mystery"] = hunt;
+            if (hunt) {
+                request->pool.mustPlace = false;
+                ctx["must_place"] = false;
+            }
+        }
         // Someone held at a place: on offer when a place that keeps prisoners is near and someone of the town may be
         // held. A rescue asked for (the old dungeon master's quest of that name) is a story about exactly that, or
         // nothing: no rescue without a place and a person the game can carry it out with.
@@ -965,7 +1018,7 @@ namespace IntelEngine {
         a.place = request->town;
         if (request->otherHold) a.flags |= A::Flag::CameFar;
         if (request->heart) a.flags |= A::Flag::Heart;
-        a.seed = A::detail::Mix(request->asker, static_cast<std::uint32_t>(NowDays() * 1440.0f));
+        a.seed = request->seed;
         g_request.reset();
         m_taleBusy.store(false);
         const bool onTheRoad = (a.flags & A::Flag::CameFar) != 0;
@@ -1023,7 +1076,7 @@ namespace IntelEngine {
     }
 
     void ArcBridge::LogOutline(const A::Arc& a) {
-        static constexpr const char* kKinds[] = {"?", "talk", "find", "give", "choose", "brawl", "go", "visit", "wait", "delve", "slay", "ambush", "stalk", "free"};
+        static constexpr const char* kKinds[] = {"?", "talk", "find", "give", "choose", "brawl", "go", "visit", "wait", "delve", "slay", "ambush", "stalk", "free", "examine"};
         static constexpr const char* kWhens[] = {"?", "done", "option 1", "option 2", "option 3", "picked", "dead", "has", "won", "lost",
                                                  "handed", "persuaded", "said 1", "said 2", "said 3", "waited", "found already"};
         for (std::size_t i = 0; i < a.graph.size(); ++i) {

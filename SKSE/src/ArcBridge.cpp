@@ -625,6 +625,14 @@ namespace IntelEngine {
             return 0;
         }
 
+        // The ground outside a place: its marker on the map, which the game's own makers put by its way in. What a
+        // story leaves to be found outside a place lies by it.
+        RE::TESObjectREFR* OutsideOf(const A::Arc& a, std::uint8_t site) {
+            if (!site || site > A::kSites) return nullptr;
+            auto* location = RE::TESForm::LookupByID<RE::BGSLocation>(a.site[site - 1u]);
+            return location ? std::as_const(location->worldLocMarker).get().get() : nullptr;
+        }
+
         // Where the journal points for such a step: the master (alive, or the body that still carries what is to be
         // found), else the heart of the place. The heart of many places (every Dwemer ruin looked at, 2026-11-19:
         // Mzinchaleft, Nchuand-Zel, Kagrenzel) is no reference of the game until its part of the place is loaded:
@@ -729,6 +737,11 @@ namespace IntelEngine {
         const bool tale = a.pattern == A::Pattern::Tale;
         const auto refOf = [](RE::FormID id) { return id ? RE::TESForm::LookupByID<RE::TESObjectREFR>(id) : nullptr; };
         if (tale) {
+            // What is to be looked at closely: on it once it lies there; until then the place on the map it lies by.
+            if (n.kind == A::Kind::Examine && n.prop < A::kClues) {
+                if (auto* lies = refOf(a.clueRef[n.prop]); a.clueState[n.prop] != A::ClueToPlace && Points(lies)) return lies;
+                return OutsideOf(a, n.site);
+            }
             // What the leader of an ambush carries: on the leader, standing or fallen.
             if (n.kind == A::Kind::Have && n.prop < A::kProps && (a.propAmbush & (1u << n.prop)) && a.thug[0]) {
                 if (auto* leader = refOf(a.thug[0]); Points(leader)) return leader;
@@ -914,13 +927,30 @@ namespace IntelEngine {
         // Read without a lock by the crosshair's text (NpcActivateText, further down), which the game asks for on its
         // own thread of play whenever the player looks at someone; written under the bridge's lock.
         std::array<std::atomic<RE::FormID>, 4> g_bound{};
+        // And what lies outside a place to be looked at closely and has not been yet (the same reader).
+        std::array<std::atomic<RE::FormID>, 4> g_clues{};
 
         void RefreshBound(const A::Book& book) {
-            std::size_t k = 0;
+            std::size_t k = 0, c = 0;
             for (const auto& a : book.all) {
-                if (k < g_bound.size() && A::IsOpen(a) && a.captive && a.captiveState == A::CaptiveBound) g_bound[k++].store(a.cast[a.captive]);
+                if (!A::IsOpen(a)) continue;
+                if (k < g_bound.size() && a.captive && a.captiveState == A::CaptiveBound) g_bound[k++].store(a.cast[a.captive]);
+                for (std::size_t i = 0; i < A::kClues; ++i) {
+                    if (c < g_clues.size() && a.clueWhat[i] && a.clueState[i] == A::CluePlaced && a.clueRef[i]) g_clues[c++].store(a.clueRef[i]);
+                }
             }
             for (; k < g_bound.size(); ++k) g_bound[k].store(0);
+            for (; c < g_clues.size(); ++c) g_clues[c].store(0);
+        }
+
+        // The step of a tale that looks at clue `k`, if the story has not been past it yet: only then is anything
+        // laid out there for it.
+        bool ClueWanted(const A::Arc& a, std::size_t k) {
+            const auto nodes = A::NodesOf(a);
+            for (std::size_t i = 0; i < nodes.size(); ++i) {
+                if (nodes[i].kind == A::Kind::Examine && nodes[i].prop == k) return !(a.visited & (1u << i));
+            }
+            return false;
         }
     }
 
@@ -1308,7 +1338,11 @@ namespace IntelEngine {
                 // Dead only once it was seen alive in a loaded cell, or found dead at the heart by the player: an actor
                 // placed in an unloaded camp reads as dead or vanishes before anyone got there (Vargr the Red, 2026-11-19).
                 const bool loadedAlive = boss && boss->Is3DLoaded() && !boss->IsDead();
-                if (loadedAlive) pending.bossSeenAlive[s] = true;
+                // Seen alive is kept with the story (bit 3 of the place's state), not only for this session: a master
+                // killed away from the heart of its place, a save, a load, and the kill counted for nothing until the
+                // player had been down to the heart (the user asked what happens when it dies before its step).
+                if (loadedAlive) a->siteState[s] |= 8u;
+                if (a->siteState[s] & 8u) pending.bossSeenAlive[s] = true;
                 const std::int8_t state = !a->siteBoss[s] ? 0 : !boss ? 3 : boss->IsDead() ? 2 : loadedAlive ? 1 : 0;
                 if (state != pending.bossState[s]) {
                     pending.bossState[s] = state;
@@ -1324,6 +1358,23 @@ namespace IntelEngine {
         // whichever step the story was on at the time: the step that frees them is done the moment the story comes to
         // it, and nobody is left kneeling in their bonds beside the one who came for them.
         if (tale && a->captive) f.captiveReached = a->captiveState >= A::CaptiveFreed;
+        // What was left of a victim outside a place: looked at once is looked at, whichever step was current then
+        // (the player's hand on it, Activated). One that has gone again (the game clears its dead away) is laid anew
+        // while the story still wants it.
+        if (tale) {
+            for (std::size_t k = 0; k < A::kClues; ++k) {
+                if (!a->clueWhat[k]) continue;
+                if (a->clueState[k] == A::CluePlaced) {
+                    auto* lies = a->clueRef[k] ? RE::TESForm::LookupByID<RE::TESObjectREFR>(a->clueRef[k]) : nullptr;
+                    if (!lies || lies->IsDeleted() || lies->IsDisabled()) {
+                        logger::info("Arcs: #{} what lay outside {} is gone: laid anew when the player is next there", id, NameOf(a->site[a->clueSite[k] - 1u]));
+                        a->clueState[k] = A::ClueToPlace;
+                        a->clueRef[k] = 0;
+                    }
+                }
+                f.examined[k] = a->clueState[k] == A::ClueSeen;
+            }
+        }
         // A tale's ambush: its men are down, each dead or gone from the game, and at least one fell (they are placed
         // beside the player, in loaded ground: a death there is a real one).
         const bool ambushStep = tale && a->node < nodes.size() && nodes[a->node].kind == A::Kind::Ambush;
@@ -1448,6 +1499,12 @@ namespace IntelEngine {
                 for (const auto p : a->propSite) needed = needed || p == s + 1;
                 auto* anchor = a->siteAnchor[s] ? RE::TESForm::LookupByID<RE::TESObjectREFR>(a->siteAnchor[s]) : nullptr;
                 if (needed && InTheWorldNow(anchor)) bits |= 1 << 14;
+            }
+            // What is to be looked at outside a place and does not lie there yet: laid now that the ground by its way
+            // in is in the game (the script's PlaceClues; asked again every look until it is done).
+            for (std::size_t k = 0; k < A::kClues; ++k) {
+                if (!a->clueWhat[k] || a->clueState[k] != A::ClueToPlace || !ClueWanted(*a, k)) continue;
+                if (InTheWorldNow(OutsideOf(*a, a->clueSite[k]))) bits |= 1 << 14;
             }
             // Someone held there and still away: they are put at the heart of the place now that it is in the game
             // (the script's PlaceCaptive; asked again every look until it is done).
@@ -1686,19 +1743,21 @@ namespace IntelEngine {
         // name of a message of IntelEngine.esp (IntelEngine_CutLoose, esp/EspBuilder), so a translation of the plugin
         // file translates it. Asked whenever the player looks at someone: four numbers compared, no lock.
         std::string g_cutLoose = "Cut loose";
+        std::string g_examine = "Examine";   // on what was left of a victim, where the game would say "Search"
 
         struct NpcActivateText {
             static bool thunk(RE::TESNPC* base, RE::TESObjectREFR* ref, RE::BSString& text) {
                 const bool shown = func(base, ref, text);
                 if (!shown || !ref) return shown;
                 const RE::FormID id = ref->GetFormID();
-                bool held = false;
-                for (const auto& one : g_bound) held = held || one.load(std::memory_order_relaxed) == id;
-                if (!held) return shown;
+                const std::string* word = nullptr;
+                for (const auto& one : g_bound) if (one.load(std::memory_order_relaxed) == id) word = &g_cutLoose;
+                for (const auto& one : g_clues) if (one.load(std::memory_order_relaxed) == id) word = &g_examine;
+                if (!word) return shown;
                 // The game writes "<word>\n<name>": the name is kept as it stands.
                 const char* was = text.c_str();
                 const char* name = was ? std::strchr(was, '\n') : nullptr;
-                std::string now = g_cutLoose;
+                std::string now = *word;
                 if (name) {
                     now += name;
                 } else {
@@ -1720,12 +1779,27 @@ namespace IntelEngine {
     // In the middle of a fight too, at the player's own risk: the one freed still cannot die and is still left alone
     // by the people of the place until they part from the player (the script's UnholdCaptive, keepSafe).
     void ArcBridge::Activated(RE::Actor* actor) {
-        if (!actor || actor->IsDead() || actor->IsDisabled()) return;
-        std::uint32_t freed = 0;
+        if (!actor || actor->IsDisabled()) return;
+        std::uint32_t freed = 0, looked = 0;
+        std::size_t clue = 0;
         {
             std::scoped_lock lock(m_mutex);
             for (auto& a : m_book.all) {
-                if (!A::IsOpen(a) || !a.captive || a.captiveState != A::CaptiveBound || a.cast[a.captive] != actor->GetFormID()) continue;
+                if (!A::IsOpen(a)) continue;
+                // What was left of a victim: the player kneels by it and looks closely. Theirs from now on, whichever
+                // step the story is on (a player who comes on it first has still seen what they saw).
+                for (std::size_t k = 0; k < A::kClues && !looked; ++k) {
+                    if (!a.clueWhat[k] || a.clueState[k] != A::CluePlaced || a.clueRef[k] != actor->GetFormID()) continue;
+                    a.clueState[k] = A::ClueSeen;
+                    const auto nodes = A::NodesOf(a);
+                    const bool asked = a.node < nodes.size() && nodes[a.node].kind == A::Kind::Examine && nodes[a.node].prop == k;
+                    logger::info("Arcs: #{} the player looks closely at what was left outside {}{}", a.id, NameOf(a.site[a.clueSite[k] - 1u]),
+                                 asked ? "" : " (before the story asked for it)");
+                    looked = a.id;
+                    clue = k;
+                }
+                if (looked) break;
+                if (actor->IsDead() || !a.captive || a.captiveState != A::CaptiveBound || a.cast[a.captive] != actor->GetFormID()) continue;
                 a.captiveState = A::CaptiveFreed;
                 const auto nodes = A::NodesOf(a);
                 const bool asked = a.node < nodes.size() && nodes[a.node].kind == A::Kind::Free;
@@ -1734,14 +1808,14 @@ namespace IntelEngine {
                 freed = a.id;
                 break;
             }
-            if (freed) RefreshBound(m_book);
+            if (freed || looked) RefreshBound(m_book);
         }
-        if (!freed) return;
+        if (!freed && !looked) return;
         if (auto* source = SKSE::GetModCallbackEventSource()) {
             SKSE::ModCallbackEvent event{};
-            event.eventName = "IntelEngine_ArcUntie";
-            event.strArg = "";
-            event.numArg = static_cast<float>(freed);
+            event.eventName = freed ? "IntelEngine_ArcUntie" : "IntelEngine_ArcClue";
+            event.strArg = freed ? "" : std::to_string(clue).c_str();
+            event.numArg = static_cast<float>(freed ? freed : looked);
             event.sender = actor;
             source->SendEvent(&event);
         }
@@ -1772,6 +1846,9 @@ namespace IntelEngine {
                 auto* message = data->LookupForm<RE::BGSMessage>(0x58E5, "IntelEngine.esp");
                 const char* word = message ? message->GetFullName() : nullptr;
                 if (word && *word) g_cutLoose = word;
+                auto* look = data->LookupForm<RE::BGSMessage>(0x58E6, "IntelEngine.esp");
+                const char* lookWord = look ? look->GetFullName() : nullptr;
+                if (lookWord && *lookWord) g_examine = lookWord;
                 logger::info("Arcs: the crosshair's word for someone held bound: \"{}\"{}", g_cutLoose, message ? "" : " (no such message in IntelEngine.esp)");
             }
             REL::Relocation<std::uintptr_t> npc{RE::VTABLE_TESNPC[0]};
@@ -1868,6 +1945,34 @@ namespace IntelEngine {
         a->siteBoss[s] = boss ? boss->GetFormID() : 0u;
         logger::info("Arcs: #{} {} waits at the heart of {} ({:08X})", id, a->bossName[s].empty() ? std::string("its master") : a->bossName[s],
                      NameOf(a->site[s]), a->siteBoss[s]);
+    }
+
+    RE::TESBoundObject* ArcBridge::RemainsBase(std::uint8_t what) {
+        auto* data = RE::TESDataHandler::GetSingleton();
+        const auto form = [&](RE::FormID id) -> RE::TESBoundObject* {
+            auto* f = data ? data->LookupForm(id, "Skyrim.esm") : nullptr;
+            return f ? f->As<RE::TESBoundObject>() : nullptr;
+        };
+        switch (what) {
+            case A::RemainsHunter: return form(0x73FBF);   // EncHunterNordM: a man, so the writer's "he" is true
+            case A::RemainsCow: return form(0x23A90);      // EncCow
+            case A::RemainsHorse: return form(0x68D5B);    // EncHorseBrown
+            case A::RemainsGoat: return form(0x4359C);     // EncGoatDomestic
+            case A::RemainsDeer: return form(0xCF89D);     // EncDeer
+            default: return nullptr;
+        }
+    }
+
+    void ArcBridge::CluePlaced(std::uint32_t id, int clue, RE::TESObjectREFR* lies) {
+        std::scoped_lock lock(m_mutex);
+        auto* a = m_book.Find(id);
+        if (!a || clue < 0 || clue >= static_cast<int>(A::kClues) || !lies) return;
+        const auto k = static_cast<std::size_t>(clue);
+        if (!a->clueWhat[k] || a->clueState[k] != A::ClueToPlace) return;
+        a->clueRef[k] = lies->GetFormID();
+        a->clueState[k] = A::CluePlaced;
+        logger::info("Arcs: #{} what was left of a victim lies outside {} ({:08X})", id, NameOf(a->site[a->clueSite[k] - 1u]), a->clueRef[k]);
+        RefreshBound(m_book);
     }
 
     void ArcBridge::Captive(std::uint32_t id, int state) {
@@ -2262,6 +2367,16 @@ namespace IntelEngine {
         if (name == "captiveanchor") {
             return a->captive && a->captiveSite && a->siteAnchor[a->captiveSite - 1u] ? RE::TESForm::LookupByID(a->siteAnchor[a->captiveSite - 1u]) : nullptr;
         }
+        if (name.starts_with("clue")) {
+            // What is to be looked at outside a place: "cluebase<k>" who or what to lay there (only while it does not
+            // lie there and the story still wants it), "clueanchor<k>" the ground it lies by, "clue<k>" itself.
+            const bool base = name.starts_with("cluebase"), anchor = name.starts_with("clueanchor");
+            const auto k = static_cast<std::size_t>(std::atoi(name.c_str() + (base ? 8 : anchor ? 10 : 4)));
+            if (k >= A::kClues || !a->clueWhat[k]) return nullptr;
+            if (anchor) return OutsideOf(*a, a->clueSite[k]);
+            if (base) return a->clueState[k] == A::ClueToPlace && ClueWanted(*a, k) ? RemainsBase(a->clueWhat[k]) : nullptr;
+            return a->clueRef[k] ? RE::TESForm::LookupByID(a->clueRef[k]) : nullptr;
+        }
         if (name.starts_with("bossbase") || name.starts_with("siteanchor") || name.starts_with("gangbase")) {
             // The master a place of the story needs (its own kind), and where its heart is; "gangbase<k>" the company
             // of the place a look asked for (PlaceGang).
@@ -2277,7 +2392,9 @@ namespace IntelEngine {
             bool needed = false;
             for (const auto& n : a->graph) needed = needed || (n.kind == A::Kind::Slay && n.site == s + 1);
             for (const auto p : a->propSite) needed = needed || p == s + 1;
-            return needed ? BossBase(a->siteKind[s], a->seed + static_cast<std::uint32_t>(s)) : nullptr;
+            // Which of a kind's masters (a den's spider or troll) follows from the story and the place alone, so that
+            // the writer could be told before a word was written (TaleAuthor: the place's "heart" and "signs").
+            return needed ? BossBase(a->siteKind[s], A::detail::Mix(a->seed, a->site[s])) : nullptr;
         }
         if (name == "thugsender") {
             for (const auto& step : nodes) {
@@ -2381,6 +2498,22 @@ namespace IntelEngine {
         }
         if (name == "thugname") return a->thugName;
         if (name == "captiveplace") return a->captive && a->captiveSite ? NameOf(a->site[a->captiveSite - 1u]) : std::string();
+        if (name.starts_with("cluename")) {
+            // The name the story gives the dead one ("Torvald"), for the body to carry; empty when it gives none.
+            const auto k = static_cast<std::size_t>(std::atoi(name.c_str() + 8));
+            for (const auto& step : A::NodesOf(*a)) {
+                if (step.kind == A::Kind::Examine && step.prop == k) return step.why;
+            }
+            return {};
+        }
+        if (name.starts_with("cluetext")) {
+            // What the player sees on what was left there (the writer's words, from the place's own signs).
+            const auto k = static_cast<std::size_t>(std::atoi(name.c_str() + 8));
+            for (const auto& step : A::NodesOf(*a)) {
+                if (step.kind == A::Kind::Examine && step.prop == k) return Fill(step.question, *a);
+            }
+            return {};
+        }
         if (name == "thugwhy") {
             // What the men know of their errand (a fact in their bios): who paid them, and for what.
             for (const auto& n : A::NodesOf(*a)) {
@@ -2731,6 +2864,7 @@ namespace IntelEngine {
         std::scoped_lock lock(m_mutex);
         g_homeDoors.clear();
         for (auto& held : g_bound) held.store(0);
+        for (auto& lies : g_clues) lies.store(0);
         m_book = A::Book{};
         m_pending.clear();
         // A save without arcs (made before them, or before this mod) still gets its look: every arc rumor is of another
@@ -2790,6 +2924,17 @@ namespace IntelEngine {
         }
         void ArcGangPlaced(RE::StaticFunctionTag*, std::int32_t id) { ArcBridge::GetSingleton()->GangPlaced(U(id)); }
         void ArcCaptive(RE::StaticFunctionTag*, std::int32_t id, std::int32_t state) { ArcBridge::GetSingleton()->Captive(U(id), state); }
+        void ArcCluePlaced(RE::StaticFunctionTag*, std::int32_t id, std::int32_t clue, RE::TESObjectREFR* lies) {
+            ArcBridge::GetSingleton()->CluePlaced(U(id), clue, lies);
+        }
+        // A hunt asked for (a rumor of deaths; the test hook): a story of the town about what is killing people near
+        // it, with what was left of a victim to look at and what did it to face, or nothing.
+        bool ArcRequestHunt(RE::StaticFunctionTag*, RE::Actor* giver) {
+            if (!giver) return false;
+            ArcBridge::TaleSeed seed;
+            seed.kind = "mystery";
+            return ArcBridge::GetSingleton()->RequestTale(giver, {}, &seed);
+        }
         // A rescue asked for by the old dungeon master or the dashboard: a story of the town about someone held at a
         // place near it, written and run like any other tale, or nothing.
         bool ArcRequestRescue(RE::StaticFunctionTag*, RE::Actor* giver) {
@@ -2889,6 +3034,8 @@ namespace IntelEngine {
         a_vm->RegisterFunction("ArcBossPlaced", script, ArcBossPlaced); ++count;
         a_vm->RegisterFunction("ArcGangPlaced", script, ArcGangPlaced); ++count;
         a_vm->RegisterFunction("ArcCaptive", script, ArcCaptive); ++count;
+        a_vm->RegisterFunction("ArcCluePlaced", script, ArcCluePlaced); ++count;
+        a_vm->RegisterFunction("ArcRequestHunt", script, ArcRequestHunt); ++count;
         a_vm->RegisterFunction("ArcRequestRescue", script, ArcRequestRescue); ++count;
         a_vm->RegisterFunction("ArcThugPlaced", script, ArcThugPlaced); ++count;
         a_vm->RegisterFunction("ArcAmbushDone", script, ArcAmbushDone); ++count;

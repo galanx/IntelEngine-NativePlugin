@@ -28,11 +28,11 @@ PEOPLE = [
 BASE = {
     "player_name": "Ada", "player_sex": "woman", "player_race": "Breton", "player_level": 12, "town": "Whiterun", "hold": "Whiterun Hold",
     "asker": "p0", "asker_name": "Ysolda", "people": PEOPLE, "items": ["Silver Ring", "Lute (home only)"],
-    "places": [{"key": "d1", "name": "Halted Stream Camp", "what": "a bandit camp", "heart": "a bandit chief", "far": "close by", "cleared": False, "holds": True},
-               {"key": "d2", "name": "Shimmermist Cave", "what": "a Falmer hive and a Dwemer hall", "heart": "a Dwarven centurion", "far": "half a day's walk", "cleared": True, "holds": False}],
+    "places": [{"key": "d1", "name": "Halted Stream Camp", "what": "a bandit camp", "heart": "a bandit chief", "far": "close by", "cleared": False, "holds": True, "outside": True, "signs": "cut down with plain steel, purse and boots gone"},
+               {"key": "d2", "name": "Shimmermist Cave", "what": "a Falmer hive and a Dwemer hall", "heart": "a Dwarven centurion", "far": "half a day's walk", "cleared": True, "holds": False, "outside": False, "signs": "burns and clean deep cuts"}],
     "quests": ["Dragon Rising: Kill the dragon"], "told": ["crime: The Quiet Ledger - a ledger that lied"], "lean": "debt", "reward": 150,
     "bar_ambush": False, "bar_brawl": True, "bar_stalk": False, "bar_places": False, "asker_knows": "met",
-    "must_place": False, "must_captive": False, "bar_captive": False,
+    "must_place": False, "must_captive": False, "bar_captive": False, "bar_examine": False, "must_mystery": False,
 }
 
 
@@ -55,6 +55,8 @@ CASES = {
     "out into the world": (case(must_place=True), {"has": ["This story leads out into the world", "one act of a story"], "not": [HEART, TAKEN]}),
     "a rescue": (case(must_captive=True, lean="adventure"), {"has": [TAKEN, "who is held at one of the places below", '"do": "free"', "Close to Ysolda.", "close to Ysolda (nobody asks a stranger"], "not": [HEART]}),
     "nobody held this time": (case(bar_captive=True), {"has": ['"delve":'], "not": ['"free": someone of the story', TAKEN]}),
+    "a hunt": (case(must_mystery=True, lean="mystery"), {"has": ["# Something is killing near", '"examine": what was left of a victim', "leaves these signs on those it kills"], "not": [TAKEN]}),
+    "no hunt this time": (case(bar_examine=True), {"has": ['"delve":'], "not": ['"examine": what was left of a victim', "leaves these signs on those it kills", "# Something is killing near"]}),
     "staying in town": (case(bar_places=True, bar_captive=True), {"has": ["This story stays among people"], "not": ['"delve":', '"free": someone of the story', "one act of a story", TAKEN]}),
     "a stranger asks": (case(asker_knows="stranger"), {"has": ["a stranger taking a chance on a stranger"], "not": [HEART]}),
     "courtship": (case(lean="courtship", heart_lean="courtship", heart="To Ada: a close confidant, and there is more than friendship in it. Ada has not yet answered what they feel."),

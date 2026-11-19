@@ -79,6 +79,10 @@ namespace IntelEngine {
         void BossPlaced(std::uint32_t id, int site, RE::Actor* boss);
         /** The script moved the one held at a place on (Arcs::CaptiveState: away, bound at the heart, gone home). */
         void Captive(std::uint32_t id, int state);
+        /** The script laid what is to be looked at outside a place (null: it could not). */
+        void CluePlaced(std::uint32_t id, int clue, RE::TESObjectREFR* lies);
+        /** Who or what a story lays outside a place to be looked at (Arcs::Remains): the game's own people and beasts. */
+        static RE::TESBoundObject* RemainsBase(std::uint8_t what);
         /** The script placed the company a look asked for. */
         void GangPlaced(std::uint32_t id);
         /** The script placed one of an ambush's men (k = 0 leads). */

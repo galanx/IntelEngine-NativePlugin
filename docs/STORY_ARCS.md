@@ -744,3 +744,79 @@ counted only while the story stood on the step that asked for it.
     Whiterun's gate with a word of her own.
 - Not played: a search of a home before and after the thing is put there; someone the current step is about
   switched off (their door); an engine quest whose marker moves; cutting someone loose in the middle of a fight.
+
+## A hunt for what is killing people: remains to examine (2026-11-19, late)
+
+The user's measure for the dungeon master's stories: "If our story arc rivals witcher 3 quests where an npc hears
+about some kind of monster or ghost and the player explores to find the cause of deaths and mysteries like in the
+witcher, then we have a perfect system". The shape of such a contract is a genre (someone who wants it found out,
+witnesses who saw part of it and may be wrong, what was left of a victim, working out what did it, facing it, and
+what that overturns among people). Nothing of the Witcher's own is used, and no quest of the game is retold.
+
+What the engine had: the asker, talks the judge reads, a place out in the world with a master of the place's own
+kind, a thing on the master's body, people-steps after the place, a choice, endings that last. What it lacked: a
+clue in the world. That is this piece.
+
+### The step `"examine"` (Arcs.h `Kind::Examine` 14, `Remains`, `ClueState`, `kClues` 2, co-save 8)
+- `{"do": "examine", "place": "dX", "what": "a hunter" | "a cow" | "a horse" | "a goat" | "a deer", "name": "Torvald",
+  "clue": "what is seen on it"}`. What was left of a victim lies outside the place; the player looks at it closely.
+- **Fair by construction.** The writer is given, for every place, the signs its kind leaves on those it kills
+  (`SiteSigns`, TaleAuthor.cpp: a vampire's two punctures and bloodless pallor, a troll's bites and stove-in ribs,
+  a bandit's plain steel and the missing purse...), and writes the clue from them. The compiler requires a `slay`
+  at that same place after the `examine`, so what did it is what lives there. Which master a den has (a spider or
+  a troll) is fixed before a word is written: the story's number is drawn when the story is asked for
+  (`Request::seed`), and `Form "bossbase"` picks by `Mix(seed, place)`, the same sum the writer was told by.
+- The signs never say what the eye would contradict: the body that lies there is whole and clothed, so they speak
+  of wounds, colour, smell and what clings to it, never of anything torn off (the first hunt the model wrote said
+  "limbs torn off" of a body in one piece).
+- A place qualifies when it has ground under the open sky by its way in: its marker on the map
+  (`Site::outside`, `OutsideOf`).
+
+### In the game
+- **Laid** by the script (`PlaceClues`, on the same signal 14 that places a master) once the marker's cell is in the
+  game and the story has not been past the step (`ClueWanted`): the game's own hunter (a man: `EncHunterNordM`) or a
+  beast, put right at the marker (where a traveller arrives, so it is ground one can stand on), killed only once
+  it is really there (`Is3DLoaded`, then `KillSilent`), named as the story names the dead one. While the player
+  stands within 2500 units it waits (eight looks at most). One that the game has cleared away is laid anew.
+- **Examined** by the player's own hand: activation is blocked, the crosshair says "Examine" (the same hook as "Cut
+  loose"; the word is the message `IntelEngine_Examine` [0058E6]), `ArcBridge::Activated` makes it Seen and sends
+  `IntelEngine_ArcClue`, and the script shows what is seen in IntelEngine's own window ("What you see"; "Search
+  the body" / "Stand up", Esc stands up). The game's plain message box showed no words at all in the test profile.
+  After that the body is searched like any other.
+- **Done early is done**: looked at before the story asked (the player came on it first), the step is done the
+  moment the story comes to it.
+- **The marker**: on the remains once they lie there, until then on the place on the map (`MarkerOf`).
+- **When it is told**: on offer in any story whose places have ground outside; never two hunts running; asked for
+  outright by `ArcRequestHunt` (`TaleSeed::kind == "mystery"`, `Pool::mustExamine`, the prompt's "Something is
+  killing near ..."), which is what a rumor of deaths will call. Test hook: `IntelEngine_Arcs.DebugHunt(asker)`.
+
+### Two things the play showed about every story
+- **The journal said the same thing again and again.** Each time a marker moved or something was laid in the
+  world, the step was shown anew, and the objective came up on the screen once more (the user: "The quest title
+  appeared multiple times"). The marker now moves without a word (`MoveMarker`; the compass follows the alias by
+  itself: seen, the arrow went from the cave's marker onto the body with nothing announced). The engine's quests
+  the same.
+- **A master killed before its step** (the user: "What would have happened if the vampire got killed before
+  talking to Elrindir"): the kill counts the moment the story comes to that step, and the steps before it are
+  still asked for, because who sent the dead man there and what his body shows are still worth knowing. "Seen
+  alive" is now kept with the story (`siteState` bit 3): killed away from the heart of its place, then a save and
+  a load, the kill had counted for nothing until the player went down to the heart.
+
+### Played (test profile)
+- A hand-written hunt, offer to ending: Anoriath does not believe wolves killed a hunter; the body by Broken Fang
+  Cave ("Examine / Hunter"; the window: two small wounds at the throat, white as tallow); looked at before anyone
+  was asked, and the step done at once when the story came to it; the cave fought through on foot to its master;
+  the choice; the reward handed over; the rumor in the hold.
+- **A hunt the dungeon master wrote itself**, first attempt ("The Hunter Who Knew the Wood"): a seer who saw "a
+  great shape, bent low and dragging something", an innkeeper who heard a boast, the remains outside Graywinter
+  Watch with a troll's signs, the troll, a brother who had sent the hunters there for the troll's fat to clear a
+  debt, and three ways to tell it. Played through both witnesses and the examination; the asker held back while a
+  witness stood by the player, and brought it when they next met.
+- Not played: the model-written hunt's kill and ending; a beast as the remains; remains cleared away and laid
+  anew; the body's name (added after the play).
+
+### Still to come for a hunt to stand beside the best of them
+- Naming what did it from the clues, with something gained for being right (the fitting potion or poison).
+- Things that only show themselves at night, and a ghost with a grievance.
+- A scene by the town (where the dead were found), tracks leading from it, more than bodies to look at.
+- The hook: a rumor of deaths heard at an inn, leading to the one who will pay to have it found out.

@@ -85,7 +85,18 @@ namespace IntelEngine::Tales {
         std::uint32_t location = 0;
         std::uint32_t anchor = 0;     // its boss room
         std::uint8_t kind = SiteNone;
+        bool outside = true;          // it has a marker under the open sky, where something can be left to be found
     };
+
+    // What was left of a victim, as the author names it ("a hunter", "a cow"): the game's own people and beasts.
+    inline std::uint8_t RemainsOf(const std::string& what) {
+        static constexpr std::pair<const char*, std::uint8_t> kNames[] = {
+            {"hunter", A::RemainsHunter}, {"cow", A::RemainsCow}, {"horse", A::RemainsHorse}, {"goat", A::RemainsGoat}, {"deer", A::RemainsDeer}};
+        for (const auto& [word, kind] : kNames) {
+            if (what.find(word) != std::string::npos) return kind;
+        }
+        return A::RemainsNone;
+    }
 
     struct Pool {
         std::vector<Person> people;   // people[0] is the asker
@@ -106,6 +117,7 @@ namespace IntelEngine::Tales {
         bool depth = false;
         bool mustPlace = false;     // this one leads out into the world (the last ones stayed in town)
         bool mustCaptive = false;   // this one is about someone held at a place (a rescue was asked for)
+        bool mustExamine = false;   // this one is a hunt for what is killing people: remains to look at, then what did it
     };
 
     struct Result {
@@ -570,6 +582,7 @@ namespace IntelEngine::Tales {
         };
         std::vector<Step> built(steps.size());
         int ambushes = 0;   // one ambush a story (its men are the arc's own)
+        std::size_t clues = 0;   // things to examine, each with its own slot of the arc
         for (std::size_t i = 0; i < steps.size(); ++i) {
             const auto& s = steps[i];
             auto& st = built[i];
@@ -683,6 +696,31 @@ namespace IntelEngine::Tales {
                     if (!name.empty()) a.bossName[n.site - 1u] = name;
                 }
                 st.edges.push_back({A::If::Done, branch(s, i, where)});
+            } else if (kind == "examine") {
+                // What was left of a victim lies outside a place: looked at closely it tells what did it, and what did
+                // it is what lives in that place (the engine knows its kind; the writer was given its signs). So the
+                // mystery is fair by construction, and the same place has a "slay" further on (checked below).
+                n.kind = A::Kind::Examine;
+                n.site = siteOf(Str(s, "place"), where);
+                const auto what = RemainsOf(Lower(Str(s, "what")));
+                if (!what) fail(where + ": \"what\" lies there: a hunter, a cow, a horse, a goat or a deer");
+                n.question = Words(Str(s, "clue"), A::kMaxText);
+                n.why = Words(Str(s, "name"), 40);   // the dead one's name in the story, when it gives one (the body carries it)
+                if (n.question.empty()) fail(where + ": \"clue\": what is seen on the remains, in a sentence or two, from that place's signs");
+                if (n.site) {
+                    for (const auto& ps : pool.sites) {
+                        if (ps.location == a.site[n.site - 1u] && !ps.outside) fail(where + ": nothing can be left outside " + ps.name + " (it has no way in under the open sky)");
+                    }
+                }
+                if (clues >= A::kClues) {
+                    fail(where + ": at most " + std::to_string(A::kClues) + " things to examine in a story");
+                } else if (what && n.site) {
+                    n.prop = static_cast<std::uint8_t>(clues);
+                    a.clueWhat[clues] = what;
+                    a.clueSite[clues] = n.site;
+                    ++clues;
+                }
+                st.edges.push_back({A::If::Done, branch(s, i, where)});
             } else if (kind == "free") {
                 // Someone held at a place: found there and cut loose by the player. (The engine keeps them alive and in their bonds
                 // until then, and the people of the place leave them be.)
@@ -737,7 +775,7 @@ namespace IntelEngine::Tales {
                 n.waitHours = static_cast<float>(std::clamp(Int(s, "hours", 12), 1, 72));
                 st.edges.push_back({A::If::Done, branch(s, i, where)});
             } else {
-                fail(where + ": \"do\" must be talk, find, give, choose, visit, wait, brawl, go, delve, slay, free, ambush or stalk");
+                fail(where + ": \"do\" must be talk, find, give, choose, visit, wait, brawl, go, delve, slay, free, examine, ambush or stalk");
             }
             if (static_cast<unsigned>(n.kind) != 0 && (pool.barred & (1u << static_cast<unsigned>(n.kind)))) {
                 fail(where + ": no \"" + kind + "\" in this story (a story told lately had one): tell this one another way");
@@ -863,6 +901,42 @@ namespace IntelEngine::Tales {
             fail("people: this story is about someone held at one of the places: give one of the people \"held\": \"dX\", and free them in a step");
         }
         // A rescue is asked for by someone to whom the one taken belongs: never a stranger for no reason.
+        // ---- what was left of a victim: what did it waits at that same place, and the story comes to it
+        std::size_t examines = 0;
+        for (std::size_t i = 0; i < steps.size(); ++i) {
+            if (kindOf(i) != A::Kind::Examine) continue;
+            const auto& clue = built[i].node;
+            if (!reach[i]) {
+                // A step that is never reached leaves nothing lying out there.
+                if (clue.prop < A::kClues && a.clueSite[clue.prop] == clue.site) a.clueWhat[clue.prop] = a.clueSite[clue.prop] = 0;
+                continue;
+            }
+            ++examines;
+            std::vector<bool> seen(steps.size(), false);
+            std::vector<std::size_t> ahead{i};
+            bool met = false;
+            while (!ahead.empty() && !met) {
+                const auto at = ahead.back();
+                ahead.pop_back();
+                for (const int to : leads[at]) {
+                    if (to < 0) continue;
+                    const auto next = static_cast<std::size_t>(to);
+                    if (seen[next]) continue;
+                    seen[next] = true;
+                    if (kindOf(next) == A::Kind::Slay && built[next].node.site == clue.site) {
+                        met = true;
+                        break;
+                    }
+                    ahead.push_back(next);
+                }
+            }
+            if (!met && clue.site) {
+                fail("step " + Str(steps[i], "id") + ": what did this is what lives in that place: a later step is a \"slay\" there");
+            }
+        }
+        if (pool.mustExamine && !examines) {
+            fail("steps: this story is a hunt for what is killing people: a step \"examine\" (what was left of a victim, outside one of the places), then the \"slay\" there");
+        }
         if (pool.mustCaptive && a.captive) {
             const auto* held = personOf(static_cast<A::Role>(a.captive));
             if (held && !held->close) {
@@ -878,7 +952,7 @@ namespace IntelEngine::Tales {
             };
             const auto outThere = [&](std::size_t i) {
                 const auto k = kindOf(i);
-                return k == A::Kind::Delve || k == A::Kind::Slay || k == A::Kind::Free;
+                return k == A::Kind::Delve || k == A::Kind::Slay || k == A::Kind::Free || k == A::Kind::Examine;
             };
             std::set<int> endingsReached;
             bool anyPlace = false;
