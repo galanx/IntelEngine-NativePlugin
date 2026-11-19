@@ -998,7 +998,7 @@ namespace IntelEngine {
                 !pending.lingering && RealSeconds() >= pending.lingerHold) {
                 pending.lingering = true;
                 bits |= 1 << 6;
-                logger::info("Arcs: #{} {} stays with the player while they talk (step {})", id, NameOf(a->cast[n.who]), static_cast<int>(a->node));
+                logger::info("Arcs: #{} {} is talking with the player: asked to stay near (step {})", id, NameOf(a->cast[n.who]), static_cast<int>(a->node));
             }
             // A visit: the step's person is sent to the player (again after a couple of game hours if they could not
             // come); when they are already here the script has them speak up.
@@ -1175,7 +1175,7 @@ namespace IntelEngine {
         std::scoped_lock lock(m_mutex);
         if (auto it = m_pending.find(id); it != m_pending.end()) {
             it->second.lingering = false;
-            it->second.lingerHold = RealSeconds() + 20.0f;   // a refusal (a scene) or a talk just over: not at once again
+            it->second.lingerHold = RealSeconds() + 60.0f;   // a refusal (a scene) or a talk just over: not at once again
         }
     }
 

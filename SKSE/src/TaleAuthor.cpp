@@ -613,10 +613,17 @@ namespace IntelEngine {
         if (a.node >= a.graph.size()) return;
         const auto& n = a.graph[a.node];
         if (n.kind != A::Kind::Talk || !n.who || n.turns[0].empty() || pending.judging || pending.turn >= 0) return;
-        if (f.with[n.who] && f.spoke[n.who]) pending.talked = true;
-        if (!pending.talked) return;
         auto* speech = SpeechTracker::GetSingleton();
         const RE::FormID who = a.cast[n.who];
+        // A new exchange since the last reading: the player said something after it, and the person answered after
+        // that. Heimskr, preaching on, was read every two seconds on one greeting (2026-11-19).
+        const float now = RealNow();
+        const float playerSaid = speech->SecondsSincePlayerSpoke();
+        const float theyEnded = speech->SecondsSinceSpeechEnded(who);
+        const float playerAt = playerSaid >= 0.0f ? now - playerSaid : -1.0f;
+        const float theirAt = theyEnded >= 0.0f ? now - theyEnded : -1.0f;
+        if (f.with[n.who] && f.spoke[n.who] && playerAt > pending.judgedAt && theirAt > playerAt) pending.talked = true;
+        if (!pending.talked) return;
         if (speech->IsSpeechPending(who)) return;
         const float theirs = speech->SecondsSinceSpeechEnded(who);
         const float players = speech->SecondsSincePlayerSpoke();
