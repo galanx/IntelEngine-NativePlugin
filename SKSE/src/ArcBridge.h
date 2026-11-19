@@ -70,6 +70,8 @@ namespace IntelEngine {
         /** A tale's "give": the stamped prop goes from wherever it was put to the player. False when it was never put
          *  anywhere yet (the script then makes it in the player's hands). */
         bool FetchProp(std::uint32_t id, int prop);
+        /** The script let the step's person go (silence, the player left, the step moved on). */
+        void LingerOver(std::uint32_t id);
         /** A tale's steps and branches, one log line each (when planned and after a load). */
         static void LogOutline(const Arcs::Arc& a);
         /** The script put prop `prop` at this reference (a container, or the floor beside it). */
@@ -147,6 +149,7 @@ namespace IntelEngine {
             int nones = 0;               // readings that found no outcome yet
             float judgedAt = -1.0f;      // real seconds of the last reading
             float visitAt = -1.0f;       // game days: the step's person was last sent to the player
+            bool lingering = false;      // the step's person stays with the player while they talk (the script's)
         };
         void TaleTalk(std::uint32_t id, const Arcs::Arc& a, Pending& pending, const Arcs::Facts& f);   // lock held
         void SendTale(std::shared_ptr<void> request, int attempt, std::string fix, std::string previous);   // any thread

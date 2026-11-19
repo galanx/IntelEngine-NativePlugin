@@ -893,6 +893,7 @@ namespace IntelEngine {
             pending.judging = false;
             pending.nones = 0;
             pending.visitAt = -1.0f;
+            pending.lingering = false;
         }
         auto* cell = player->GetParentCell();
         const bool tale = a->pattern == A::Pattern::Tale;
@@ -981,6 +982,15 @@ namespace IntelEngine {
         }
         if (a->node < nodes.size() && !change.any()) {
             const auto& n = nodes[a->node];
+            // The step's person has started talking with the player: they stay with the player until the talk is over
+            // (the user, 2026-11-18: "Only if the player doesnt respond for a long time, the npc gets bored and walks
+            // off"). Jon Battle-Born walked home in the middle of being asked about a goblet (2026-11-19).
+            if (n.who && n.kind != A::Kind::Wait && n.kind != A::Kind::Have && f.with[n.who] && f.spoke[n.who] && !f.dead[n.who] &&
+                !pending.lingering) {
+                pending.lingering = true;
+                bits |= 1 << 6;
+                logger::info("Arcs: #{} {} stays with the player while they talk (step {})", id, NameOf(a->cast[n.who]), static_cast<int>(a->node));
+            }
             // A visit: the step's person is sent to the player (again after a couple of game hours if they could not
             // come); when they are already here the script has them speak up.
             if (n.kind == A::Kind::Visit && n.who && !f.dead[n.who] && !(f.with[n.who] && f.spoke[n.who]) &&
@@ -1152,6 +1162,11 @@ namespace IntelEngine {
         return true;
     }
 
+    void ArcBridge::LingerOver(std::uint32_t id) {
+        std::scoped_lock lock(m_mutex);
+        if (auto it = m_pending.find(id); it != m_pending.end()) it->second.lingering = false;
+    }
+
     bool ArcBridge::FetchProp(std::uint32_t id, int prop) {
         auto* player = RE::PlayerCharacter::GetSingleton();
         std::scoped_lock lock(m_mutex);
@@ -1196,6 +1211,19 @@ namespace IntelEngine {
         if (name == "price") return static_cast<int>(a->price ? a->price : a->gold);
         if (name == "bondwith") return pending != m_pending.end() ? pending->second.bondWith : 0;
         if (name == "effectprop") return pending != m_pending.end() ? pending->second.effectProp : 0;
+        if (name == "quiet") {
+            // Seconds since the step's person or the player last spoke (the talk between them going quiet).
+            if (a->node >= nodes.size() || !nodes[a->node].who) return 9999;
+            auto* speech = SpeechTracker::GetSingleton();
+            const RE::FormID who = a->cast[nodes[a->node].who];
+            if (speech->IsSpeechPending(who)) return 0;
+            const float theirs = speech->SecondsSinceSpeechEnded(who);
+            const float players = speech->SecondsSincePlayerSpoke();
+            float quiet = 9999.0f;
+            if (theirs >= 0.0f) quiet = std::min(quiet, theirs);
+            if (players >= 0.0f) quiet = std::min(quiet, players);
+            return static_cast<int>(quiet);
+        }
         if (name == "pattern") return static_cast<int>(a->pattern);
         if (name == "slot") return a->slot == 0xFF ? -1 : a->slot;
         if (name == "node") return a->node;
@@ -1630,6 +1658,7 @@ namespace IntelEngine {
             if (slot >= 0) ArcBridge::GetSingleton()->SetHolders(static_cast<std::uint8_t>(slot), tale, close);
         }
         bool ArcRequestTale(RE::StaticFunctionTag*, RE::Actor* asker) { return ArcBridge::GetSingleton()->RequestTale(asker); }
+        void ArcLingerOver(RE::StaticFunctionTag*, std::int32_t id) { ArcBridge::GetSingleton()->LingerOver(U(id)); }
         bool ArcFetchProp(RE::StaticFunctionTag*, std::int32_t id, std::int32_t prop) { return ArcBridge::GetSingleton()->FetchProp(U(id), prop); }
         // Test hook: a tale written by hand (a JSON file at an absolute path), cast from the asker's town like any other.
         bool ArcDebugTaleFile(RE::StaticFunctionTag*, RE::Actor* asker, RE::BSFixedString path) {
@@ -1665,6 +1694,7 @@ namespace IntelEngine {
         a_vm->RegisterFunction("ArcDebugCast", script, ArcDebugCast); ++count;
         a_vm->RegisterFunction("ArcSetHolders", script, ArcSetHolders); ++count;
         a_vm->RegisterFunction("ArcRequestTale", script, ArcRequestTale); ++count;
+        a_vm->RegisterFunction("ArcLingerOver", script, ArcLingerOver); ++count;
         a_vm->RegisterFunction("ArcFetchProp", script, ArcFetchProp); ++count;
         a_vm->RegisterFunction("ArcDebugTaleFile", script, ArcDebugTaleFile); ++count;
     }
