@@ -219,11 +219,13 @@ with "The Golden Claw"; the tale written was "The Bard Who Sold the Wrong Song".
 **Taking their leave.** A story visitor used to stand beside the player for the rest of the visit (three minutes, more
 while anyone talked) whatever the answer had been. Now `IntelEngine_Arcs.OnAskerArrived`, once the answer is given
 and the asker has said their word to it, calls `StoryEngine.VisitOver`: the linger ends as soon as `TalkOver` holds
-(no line of theirs pending, their last one 6 s ago, the player silent for 12 s; by SkyrimNet's account of speech, not
+(no line of theirs pending, their last one 8 s ago, the player silent for 16 s; by SkyrimNet's account of speech, not
 by the dialogue target, which many people carry for minutes), and `Core.WalkBack` sends them at a walk to the spot
 they set out from (`RememberWhereFrom` moves their own marker there at dispatch), or home when that spot is beside the
 player; tracked like every walk home (`CheckWalkHomeActors`). An asker the first step is with stays. A tale's visitor
-leaves the same way when their step is done.
+leaves the same way when their step is done. The walk's package comes off the moment they are within 400 units of
+that spot: the story engine keeps its 3 s tick while anyone is on such a walk (`Core.WalkHomePending`). Before, the
+check ran with the hourly sweep only, and Faendal stood rooted at his spot for two and a half minutes.
 
 **A quiet stretch.** `Arcs.h`: `Book::LastBeat` (the last offer made or answered, or ending; a plan dropped unseen is
 no beat) and `QuietFor`. No tale is requested and no pattern planned within `kQuietHours` (6) of it, whoever asks and
@@ -231,7 +233,11 @@ why (the director's reasons and the test hooks too; before, only the pacer kept 
 offer already owed (deferred, or on the road from afar) waits out `kQuietHoursOwed` (1).
 
 **Not in front of the people it is about.** `ArcBridge::Company(id)`: someone of the story other than its asker who
-stands within 500 units of the player (followers are not counted). With such a person there the offer is not sent
+stands within earshot of the player (followers are not counted). Earshot is SkyrimNet's own interaction distance
+(`interaction.maxDistance`, 1600 units by default; `IntelEngine_Arcs.Watch` reads it about once a minute and tells the
+DLL, `ArcEarshot`, never less than 500 for whisper mode): whoever is within it hears a line and may answer. A first
+guess of 500 units was far too small: Alvor, 900 units off at his forge, answered Faendal's talk about his arrowheads
+with a full confession before the player had asked him anything. With such a person there the offer is not sent
 (`SendOffer`, the deferred and far-comer loops); a visitor already on the way turns back when within 1400 units
 (`StoryEngine.HeldBackByCompany`, also asked at the moment of arrival), walks back, and the story waits until the two
 are apart (`ArcOfferHeldBack`; a far-comer tries again within the hour).
@@ -239,12 +245,33 @@ are apart (`ArcOfferHeldBack`; a far-comer tries again within the hour).
 Long texts are cut where they read whole (`Tales.h Words`): at the last full sentence, else the last clause, else a
 word with "...". An asker's plea in the offer box read "...because I cannot go near him... Reward: 155 gold".
 
-Played on foot: Faendal comes at 77 units a second (a walk) at the first approach and again at the next meeting; lets
-it be when the player leaves for Whiterun; Sven's model-written tale offered as from a stranger, Embry questioned by
-text and the talk read. Offline: `ArcsCheck` (the quiet stretch), `RunArrivalDeliveryBytecodeCheck` ("visit over":
-stays while anyone speaks, then walks back; nowhere to go = stays), `TalesCheck LongWords`. **Not yet seen in game:**
-taking leave, the quiet stretch and holding back for company (the PC's active Windows session was not the test's when
-they were built).
+**The reward changes hands in person.** A tale whose paying ending is reached away from its asker used to end there,
+and "Faendal gave you 60 gold" came up with Faendal four thousand units away. The compiler (`Tales.h`, after the
+reachability pass) now writes one step more for each such ending: back to the asker, journal objective "Tell <asker>
+how it ended", marker on them (`A::IsWayBack`: a talk with the asker that prepares no outcomes). Its edges: told
+(with the asker and a recent exchange) = the ending the story had reached, paid; the asker dead = that ending, unpaid
+(not "the asker died": the story was over); 72 game hours without going back (`If::Waited`) = that ending, unpaid.
+Entering it gives the arc four more days. A step with the asker (talk, give, visit, choose) pays on the spot as
+before. `"effect": "pay"` on a branch that goes on to another step away from the asker is refused with the reason
+(the author gets its one retry); twelve steps and a way back do not fit, and the error says how many do.
+
+**Truths say the thing itself.** A hand-written test tale gave Sven the truth "I will tell {player} what I did when I
+find the nerve"; the dialogue model filled "what I did" with the forged letter of the game's own quest. The author's
+prompt now asks for the deed itself in every truth ("what was done, with what, to whom, when"), because whoever
+speaks for a person fills a gap with the nearest thing known of them.
+
+Played on foot, 2026-11-19 (three runs in Riverwood, hand-written tales, the test character walked by the game's
+pathfinding): Faendal comes at 77 units a second at every approach; refused, he says his word, leaves 31 to 33 s
+after the answer and walks back to the spot he set out from, where his day goes on at once; accepted, the same after
+29 s; a second story asked for right after is refused four ways (model-written, with a reason, from a file, a
+pattern); with Sven beside the player in the inn the offer about Sven is not sent and stays unsent while Faendal is
+at home, and goes out the next morning when the two meet out of Sven's hearing; with Alvor in the cast, Faendal sets
+out, the player goes to stand with Alvor, and Faendal turns round 1300 units out and walks back, then comes again
+once the player stands apart; Sven comes for his visit step and leaves 23 s after the tale ends; "Tell Faendal how it
+ended" with the marker on him, and the gold handed over at two steps' distance after being told. Offline:
+`ArcsCheck` (the quiet stretch), `TalesCheck` (`PaidInPerson`, `LongWords`), `RunArrivalDeliveryBytecodeCheck`
+("visit over": stays while anyone speaks, then walks back; nowhere to go = stays). Not seen in game: the 72 hours
+without going back, the asker dying on the way back (both offline only), whisper mode's shorter earshot.
 
 ## 1. Principles
 

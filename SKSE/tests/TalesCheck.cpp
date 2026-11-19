@@ -172,7 +172,108 @@ static void BrawlAndWaitAndDeath() {
     Facts came;
     came.with[2] = came.spoke[2] = true;
     Advance(v, came, 3.3f);
-    Require(v.ending == Ending::Done, "he came and talked: done");
+    Require(v.phase == Phase::Open && v.node == 2 && IsWayBack(v, v.graph[2]), "he came and talked: back to Ysolda for the reward");
+}
+
+static void PaidInPerson() {
+    // The reward changes hands in person. A tale that ends away from its asker (here: Brenuin comes and owns up) gets
+    // one step more: back to Ysolda, who hears how it ended and pays ("Faendal gave you 60 gold" with Faendal four
+    // thousand units away, test game 2026-11-19).
+    json w = Sample();
+    w["steps"] = json::parse(R"([{"id": "a", "do": "wait", "hours": 6, "goal": "Give Brenuin a few hours", "then": "b"},
+                                  {"id": "b", "do": "visit", "with": "p1", "goal": "Brenuin comes to you", "then": "end:good", "journal": "He came."}])");
+    const auto r = Tales::Compile(w, Town());
+    Require(r.ok && r.arc.graph.size() == 3, "one step more than the author wrote");
+    Require(r.notes.find("paid in person") != std::string::npos, "and a note says so");
+    const Node& back = r.arc.graph[2];
+    Require(back.kind == Kind::Talk && back.who == RAsker && back.marker == RAsker && back.objective == kTaleObjective + 2 &&
+                back.goal == "Tell {1} how it ended" && back.turns[0].empty(),
+            "the way back: a talk with the asker, marked in the journal, nothing for the judge");
+    Require(r.arc.graph[1].edges[1].when == If::Done && r.arc.graph[1].edges[1].next == 2 && r.arc.graph[1].edges[1].ending == Ending::None &&
+                r.arc.graph[1].edges[1].effect == Effect::None && r.arc.graph[1].edges[1].line == "He came.",
+            "the visit leads there with its own journal line, and pays nothing yet");
+    const auto atTheWayBack = [&](Book& book) -> Arc& {
+        const auto id = book.Plan(r.arc, 3.0f);
+        book.Accept(id, 3.0f);
+        Arc& t = *book.Find(id);
+        Advance(t, Facts{}, 3.26f);
+        Facts came;
+        came.with[2] = came.spoke[2] = true;
+        const auto c = Advance(t, came, 3.3f);
+        Require(t.phase == Phase::Open && t.node == 2 && c.effect == Effect::None && c.ending == Ending::None, "on the way back, unpaid");
+        return t;
+    };
+    {
+        Book book;
+        Arc& t = atTheWayBack(book);
+        Require(t.deadline >= 3.3f + 4.0f, "the way back keeps its own days");
+        Facts near;
+        near.with[RAsker] = true;
+        Require(!Advance(t, near, 3.4f).any(), "standing by the asker is not yet telling them");
+        near.spoke[RAsker] = true;
+        const auto c = Advance(t, near, 3.5f);
+        Require(t.phase == Phase::Ended && t.ending == Ending::Done && c.effect == Effect::PayGold && c.effectRole == RAsker, "told: the good ending, paid by the asker");
+        Require(t.heard[RAsker].find("came back and told me") != std::string::npos, "the asker remembers being told");
+        Require(TaleClosing(t) == "The ring is home.", "the ending is the one the story had reached");
+        // Through the co-save.
+        const auto bytes = Serialize(book);
+        Book again;
+        Require(Deserialize(bytes, again) && Serialize(again) == bytes, "a way back survives the co-save");
+    }
+    {
+        // Never gone back: after three days the story ends as it had, unpaid.
+        Book book;
+        Arc& t = atTheWayBack(book);
+        Require(!Advance(t, Facts{}, 3.3f + 2.9f).any(), "two days on: still waiting");
+        const auto c = Advance(t, Facts{}, 3.3f + 3.05f);
+        Require(t.phase == Phase::Ended && t.ending == Ending::Done && c.effect == Effect::None &&
+                    c.line.find("never went back") != std::string::npos,
+                "never gone back: the same ending, no gold");
+    }
+    {
+        // The asker dies before hearing of it: the same ending, no gold, and not "the asker died" (the story was over).
+        Book book;
+        Arc& t = atTheWayBack(book);
+        Facts dead;
+        dead.dead[RAsker] = true;
+        const auto c = Advance(t, dead, 3.4f);
+        Require(t.phase == Phase::Ended && t.ending == Ending::Done && c.effect == Effect::None && c.line.find("died before") != std::string::npos,
+                "the asker dead on the way back: the story's own ending, unpaid");
+    }
+    // A story that ends with the asker needs no way back (the sample: the ring is given to Ysolda herself).
+    Require(Tales::Compile(Sample(), Town()).arc.graph.size() == 5, "ending with the asker: nothing added");
+    // "pay" written on a branch to an ending that does not pay by itself: the same way back, for that ending.
+    json bad = Sample();
+    bad["steps"][4]["lost"]["effect"] = "pay";
+    const auto rb = Tales::Compile(bad, Town());
+    Require(rb.ok && rb.arc.graph.size() == 6 && IsWayBack(rb.arc, rb.arc.graph[5]) && rb.arc.graph[5].edges[1].ending == Ending::Failed &&
+                rb.arc.graph[5].edges[1].effect == Effect::PayGold,
+            "a paid bad ending away from the asker goes by the asker too");
+    bool direct = false;
+    for (const auto& e : rb.arc.graph[4].edges) if (e.when == If::Lost) direct = e.next == 5 && e.effect == Effect::None && e.ending == Ending::None;
+    Require(direct, "the brawl lost leads to the way back, unpaid until then");
+    // In the middle of a story the asker cannot pay from afar either.
+    json mid = Sample();
+    mid["steps"][1]["effect"] = "pay";   // found in Brenuin's home: Ysolda is not there
+    Require(Tales::Compile(mid, Town()).errors.find("they pay in person") != std::string::npos, "no gold from afar in the middle of a story");
+    mid = Sample();
+    mid["steps"][3]["effect"] = "pay";   // the ring given to Ysolda herself
+    Require(Tales::Compile(mid, Town()).ok, "paid on a step with the asker is fine");
+    // Twelve steps and a way back do not fit: the author is told how many do.
+    json longTale = Sample();
+    json steps = json::array();
+    for (int i = 0; i < 12; ++i) {
+        json s = json::parse(R"({"do": "wait", "hours": 1, "goal": "Wait"})");
+        s["id"] = "w" + std::to_string(i);
+        s["then"] = i == 11 ? std::string("end:good") : "w" + std::to_string(i + 1);
+        steps.push_back(s);
+    }
+    longTale["steps"] = steps;
+    longTale["items"] = json::array();
+    Require(Tales::Compile(longTale, Town()).errors.find("at most 11 here") != std::string::npos, "the way back needs a step of its own");
+    steps.erase(steps.begin());
+    longTale["steps"] = steps;
+    Require(Tales::Compile(longTale, Town()).ok, "eleven steps and the way back fit");
 }
 
 static void HandsOver() {
@@ -455,6 +556,7 @@ int main() {
     try {
         CompilesAndRuns();
         BrawlAndWaitAndDeath();
+        PaidInPerson();
         HandsOver();
         Adventure();
         Ambush();

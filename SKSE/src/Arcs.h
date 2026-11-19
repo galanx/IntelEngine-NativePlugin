@@ -470,6 +470,7 @@ namespace IntelEngine::Arcs {
             case If::Handed: case If::Done:
                 if (n.kind == Kind::Give) return "{player} brought it and gave it to me.";
                 if (n.kind == Kind::Visit) return "I went to {player} about it, and we talked.";
+                if (n.kind == Kind::Talk) return "{player} came back and told me how it ended, and I paid what I had promised.";
                 return {};
             default: (void)f; return {};
         }
@@ -487,6 +488,15 @@ namespace IntelEngine::Arcs {
         }
     }
 
+    // The reward changes hands in person (the user's test game, 2026-11-19: "Faendal gave you 60 gold" with Faendal
+    // four thousand units away, the tale having ended in a talk with Sven). A tale whose paying ending is reached
+    // away from its asker gets one step more, written by the compiler (Tales.h): back to the asker, who hears how it
+    // ended and pays. It is a talk with the asker that prepares no outcomes; the author's own talks always have some.
+    constexpr float kWayBackHours = 72.0f;   // never gone back: the story ends as it had, unpaid
+    inline bool IsWayBack(const Arc& a, const Node& n) {
+        return a.pattern == Pattern::Tale && n.kind == Kind::Talk && n.who == RAsker && n.turns[0].empty();
+    }
+
     inline Change Advance(Arc& a, const Facts& facts, float now) {
         Change c;
         if (a.phase != Phase::Open) return c;
@@ -500,11 +510,13 @@ namespace IntelEngine::Arcs {
             a.since = now;
             c.ending = e;
         };
-        if (f.dead[RAsker]) {
+        const Node& n = nodes[a.node];
+        // On the way back for the reward the story has already ended as it did: the asker's death only costs the pay
+        // (the step's own edge).
+        if (f.dead[RAsker] && !IsWayBack(a, n)) {
             end(Ending::AskerDied);
             return c;
         }
-        const Node& n = nodes[a.node];
         for (const auto& e : n.edges) {
             if (e.when == If{} || !EdgeHolds(a, n, e, f)) continue;
             a.visited |= 1u << a.node;
@@ -539,6 +551,8 @@ namespace IntelEngine::Arcs {
                 end(e.ending);
             } else if (e.next != kNoNode && e.next < nodes.size()) {
                 a.node = e.next;
+                // The way back keeps its own days, whatever was left of the tale's.
+                if (IsWayBack(a, nodes[a.node])) a.deadline = std::max(a.deadline, now + (kWayBackHours + 24.0f) / 24.0f);
             }
             return c;
         }
