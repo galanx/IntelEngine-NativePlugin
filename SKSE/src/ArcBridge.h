@@ -70,6 +70,16 @@ namespace IntelEngine {
         /** A tale's "give": the stamped prop goes from wherever it was put to the player. False when it was never put
          *  anywhere yet (the script then makes it in the player's hands). */
         bool FetchProp(std::uint32_t id, int prop);
+        static RE::TESBoundObject* BossBase(std::uint8_t kind, std::uint32_t seed);
+
+        static RE::TESBoundObject* GangBase(std::uint8_t kind, std::uint32_t seed);
+        /** The script placed a place's master (Papyrus' PlaceAtMe resolves the game's leveled lists). */
+        void BossPlaced(std::uint32_t id, int site, RE::Actor* boss);
+        /** The script placed the company a look asked for. */
+        void GangPlaced(std::uint32_t id);
+        /** Whether a place out in the world is free for a story: no quest of the game still needs it, none of the
+         *  player's objectives points into it, no other story or quest of IntelEngine's is set there. */
+        bool SiteFree(RE::BGSLocation* location, const std::unordered_set<RE::FormID>& objectiveLocations, std::string& why) const;
         /** The script let the step's person go (silence, the player left, the step moved on). */
         void LingerOver(std::uint32_t id);
         /** A tale's steps and branches, one log line each (when planned and after a load). */
@@ -151,6 +161,9 @@ namespace IntelEngine {
             float visitAt = -1.0f;       // game days: the step's person was last sent to the player
             bool lingering = false;      // the step's person stays with the player while they talk (the script's)
             float lingerHold = -1.0f;    // real seconds: not asked to linger again before this (refused or let go)
+            std::array<std::int8_t, Arcs::kSites> bossState{};   // last seen: 0 unknown, 1 alive and loaded, 2 dead, 3 gone
+            std::array<bool, Arcs::kSites> bossSeenAlive{};      // the boss was loaded and alive once (its death then counts)
+            std::uint8_t gangSite = 0;                           // a place (index + 1) whose company the script is to place
         };
         void TaleTalk(std::uint32_t id, const Arcs::Arc& a, Pending& pending, const Arcs::Facts& f);   // lock held
         void SendTale(std::shared_ptr<void> request, int attempt, std::string fix, std::string previous);   // any thread
@@ -189,6 +202,8 @@ namespace IntelEngine {
         std::unordered_map<std::uint32_t, Pending> m_pending;
         std::vector<Folk> m_folk;
         std::unordered_map<RE::FormID, std::vector<RE::FormID>> m_journalAliases;   // actor base -> quests naming it
+        std::unordered_map<RE::FormID, std::vector<RE::FormID>> m_questPlaces;      // location -> quests that put something there
+
         bool m_catalogued = false;
 
     public:

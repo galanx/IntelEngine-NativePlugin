@@ -93,6 +93,26 @@ namespace IntelEngine {
         std::string LinesFor(RE::Actor* actor) const;
         /** One line for the dungeon master's candidate list, empty when none. */
         std::string BusinessLine(RE::FormID actor) const;
+        /** The places of the catalogue (dungeons with a boss room), for story arcs. */
+        struct PlaceView {
+            RE::FormID location = 0;
+            RE::FormID anchor = 0;
+            RE::FormID hold = 0;
+            RE::NiPoint3 at{};
+            bool hasAt = false;
+        };
+        std::vector<PlaceView> Places() const {
+            std::scoped_lock lock(m_mutex);
+            std::vector<PlaceView> out;
+            out.reserve(m_places.size());
+            for (const auto& p : m_places) out.push_back({p.location, p.anchor, p.hold, p.at, p.hasAt});
+            return out;
+        }
+        /** Whether a quest of IntelEngine's is set at this place now. */
+        bool PlaceInUse(RE::FormID location) const {
+            std::scoped_lock lock(m_mutex);
+            return m_book.PlaceInUse(location);
+        }
         /** The plain jewellery of the load order (story arcs steal it too). */
         std::vector<RE::FormID> Keepsakes() const {
             std::scoped_lock lock(m_mutex);

@@ -47,6 +47,7 @@ public static class Program
         if (args.Length >= 3 && args[0] == "findloc") return FindLoc(args[1], args[2]);
         if (args.Length >= 3 && args[0] == "questdump") return QuestDump(args[1], args[2]);
         if (args.Length >= 3 && args[0] == "finditem") return FindItem(args[1], args[2]);
+        if (args.Length >= 3 && args[0] == "findnpc") return FindNpc(args[1], args[2]);
         Console.Error.WriteLine("usage: info <esp> | build <esp in> <output folder>");
         return 2;
     }
@@ -586,6 +587,18 @@ public static class Program
             if ((cell.EditorID ?? "").Contains(part, StringComparison.OrdinalIgnoreCase))
                 Console.WriteLine($"{cell.FormKey.ID:X8} {cell.EditorID} '{cell.Name?.String}' persistent={cell.Persistent.Count}" +
                                   string.Concat(cell.Persistent.Take(6).Select(r => $" {r.FormKey.ID:X8}")));
+        return 0;
+    }
+
+    // Leveled and plain actors by editor ID part (test help: which of the game's creatures a story may spawn).
+    static int FindNpc(string path, string part)
+    {
+        using var mod = SkyrimMod.CreateFromBinaryOverlay(path, SkyrimRelease.SkyrimSE);
+        foreach (var l in mod.LeveledNpcs)
+            if ((l.EditorID ?? "").Contains(part, StringComparison.OrdinalIgnoreCase)) Console.WriteLine($"LVLN {l.FormKey.ID:X8} {l.EditorID}");
+        foreach (var n in mod.Npcs)
+            if ((n.EditorID ?? "").Contains(part, StringComparison.OrdinalIgnoreCase) && (n.EditorID ?? "").StartsWith("Enc"))
+                Console.WriteLine($"NPC_ {n.FormKey.ID:X8} {n.EditorID} '{n.Name?.String}'");
         return 0;
     }
 

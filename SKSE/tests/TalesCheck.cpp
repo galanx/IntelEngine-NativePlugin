@@ -23,6 +23,9 @@ static Tales::Pool Town() {
         {"p3", "Uthgerd", 0x103, false, true, true},
     };
     pool.items = {{"Silver Ring", 0x500}, {"Iron Dagger", 0x501}};
+    pool.sites = {{"d1", "Mzinchaleft", 0x700, 0x701, Tales::SiteDwemer},
+                  {"d2", "Embershard Mine", 0x710, 0x711, Tales::SiteBandits},
+                  {"d3", "Bleakwind Basin", 0x720, 0x721, Tales::SiteGiants}};
     pool.gold = 150;
     return pool;
 }
@@ -195,6 +198,49 @@ static void HandsOver() {
     Require(Tales::Compile(j, Town()).errors.find("names no item") != std::string::npos, "only the tale's own items");
 }
 
+static void Adventure() {
+    // Into a Dwemer ruin for what a bandit chief carries off there, then home.
+    json j = Sample();
+    j["items"] = json::parse(R"([{"id": "i1", "item": "Silver Ring", "name": "Ysolda's Ring", "hidden": "at", "of": "Embershard Mine"}])");
+    j["steps"] = json::parse(R"([
+      {"id": "a", "do": "delve", "place": "d1", "goal": "Search Mzinchaleft for Brenuin", "then": "b", "journal": "I went deep into Mzinchaleft."},
+      {"id": "b", "do": "slay", "place": "d2", "boss": "Grelka the Silent", "goal": "Kill Grelka in Embershard Mine", "then": "c", "journal": "Grelka is dead."},
+      {"id": "c", "do": "find", "item": "i1", "goal": "Take the ring from Grelka", "then": "e", "journal": "I have the ring."},
+      {"id": "e", "do": "give", "item": "i1", "to": "p0", "goal": "Give Ysolda her ring", "then": "end:good", "journal": "Ysolda has it."}])");
+    auto r = Tales::Compile(j, Town());
+    if (!r.ok) std::cerr << r.errors;
+    Require(r.ok, "an adventure compiles");
+    const Arc& a = r.arc;
+    // Places take slots in the order they are first named: the ring's (Embershard) before the first step's.
+    Require(a.site[0] == 0x710 && a.siteAnchor[0] == 0x711 && a.site[1] == 0x700 && a.siteKind[1] == Tales::SiteDwemer, "places take slots in order");
+    Require(a.bossName[0] == "Grelka the Silent" && a.propSite[0] == 1, "the boss is named and carries the ring");
+    Require(a.graph[0].kind == Kind::Delve && a.graph[0].site == 2 && a.graph[1].kind == Kind::Slay && a.graph[1].site == 1, "delve and slay");
+    Book book;
+    const auto id = book.Plan(a, 1.0f);
+    book.Accept(id, 1.0f);
+    Arc& t = *book.Find(id);
+    Facts f;
+    Require(!Advance(t, f, 1.1f).any(), "nothing before the depths");
+    f.atDepths[1] = true;
+    Advance(t, f, 1.2f);
+    Require(t.node == 1, "the depths reached");
+    Facts dead;
+    dead.bossDead[0] = true;
+    Advance(t, dead, 1.3f);
+    Require(t.node == 2, "the boss dead");
+    // Through the co-save.
+    const auto bytes = Serialize(book);
+    Book back;
+    Require(Deserialize(bytes, back), "places survive the co-save");
+    Require(back.Find(id)->bossName[0] == "Grelka the Silent" && back.Find(id)->graph[1].site == 1 && back.Find(id)->propSite[0] == 1, "whole");
+
+    j["steps"][0]["place"] = "Blackreach";
+    Require(Tales::Compile(j, Town()).errors.find("no place of the list") != std::string::npos, "only the places offered");
+    j["steps"][0]["place"] = "d3";
+    j["steps"][1]["place"] = "d1";   // a third place: Embershard (the ring), Bleakwind Basin, Mzinchaleft
+    Require(Tales::Compile(j, Town()).errors.find("at most 2 places") != std::string::npos, "two places at most");
+}
+
 static void Refusals() {
     const auto errorsOf = [](json j) { return Tales::Compile(j, Town()).errors; };
     json j = Sample();
@@ -243,6 +289,7 @@ int main() {
         CompilesAndRuns();
         BrawlAndWaitAndDeath();
         HandsOver();
+        Adventure();
         Refusals();
     } catch (const std::exception& e) {
         std::cerr << "TalesCheck FAILED: " << e.what() << "\n";

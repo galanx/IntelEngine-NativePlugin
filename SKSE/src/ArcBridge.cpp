@@ -6,8 +6,10 @@
 #include "LocationResolver.h"
 #include "NPCIndex.h"
 #include "QuestBridge.h"
+#include "Papyrus.h"
 #include "SkyrimNetAPI.h"
 #include "SpeechTracker.h"
+#include "Tales.h"
 
 #include <chrono>
 #include <filesystem>
@@ -306,6 +308,7 @@ namespace IntelEngine {
         // Who the quests of the journal name (forced references and unique actors): a culprit is never one of them while
         // that quest is not done, so no story takes away someone a quest the player has not finished still needs.
         std::unordered_map<RE::FormID, std::vector<RE::FormID>> named;
+        std::unordered_map<RE::FormID, std::vector<RE::FormID>> places;
         std::size_t aliasCount = 0;
         if (auto* data = RE::TESDataHandler::GetSingleton()) {
             for (auto* quest : data->GetFormArray<RE::TESQuest>()) {
@@ -323,6 +326,18 @@ namespace IntelEngine {
                         auto* actor = forced ? forced->As<RE::Actor>() : nullptr;
                         npc = actor ? actor->GetActorBase() : nullptr;
                     }
+                    // Where a quest of the game put one of its own references (the Golden Claw in Bleak Falls
+                    // Barrow, a quest's giver in their hall): that place, and the places it lies in, belong to it.
+                    if (fill == RE::BGSBaseAlias::FILL_TYPE::kForced) {
+                        auto forced = refAlias->fillData.forced.forcedRef.get();
+                        auto* where = forced ? forced->GetCurrentLocation() : nullptr;
+                        int depth = 0;
+                        for (auto* loc = where; loc && depth < 4; loc = loc->parentLoc, ++depth) {
+                            if (loc->HasKeywordString("LocTypeHold") || loc->HasKeywordString("LocTypeCity") || loc->HasKeywordString("LocTypeTown")) break;
+                            auto& quests = places[loc->GetFormID()];
+                            if (std::find(quests.begin(), quests.end(), quest->GetFormID()) == quests.end()) quests.push_back(quest->GetFormID());
+                        }
+                    }
                     if (!npc) continue;
                     auto& list = named[npc->GetFormID()];
                     if (std::find(list.begin(), list.end(), quest->GetFormID()) == list.end()) list.push_back(quest->GetFormID());
@@ -333,11 +348,12 @@ namespace IntelEngine {
         const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
         std::string towns;
         for (const auto& [town, count] : perTown) towns += (towns.empty() ? "" : ", ") + PlaceName(town) + " " + std::to_string(count);
-        logger::info("Arcs: {} townsfolk with a home ({}), {} actors named by {} aliases of journal quests, {:.1f} ms", folk.size(), towns,
-                     named.size(), aliasCount, ms);
+        logger::info("Arcs: {} townsfolk with a home ({}), {} actors named by {} aliases of journal quests, {} places quests put something in, {:.1f} ms",
+                     folk.size(), towns, named.size(), aliasCount, places.size(), ms);
         std::scoped_lock lock(m_mutex);
         m_folk = std::move(folk);
         m_journalAliases = std::move(named);
+        m_questPlaces = std::move(places);
     }
 
     const ArcBridge::Folk* ArcBridge::FolkOf(RE::FormID ref) const {
@@ -941,6 +957,34 @@ namespace IntelEngine {
                 f.handed[prop] = true;
             }
         }
+        // A tale's places out in the world: the player at a place's heart, its boss dead.
+        if (tale) {
+            for (std::size_t s = 0; s < A::kSites; ++s) {
+                if (!a->site[s]) continue;
+                auto* anchor = a->siteAnchor[s] ? RE::TESForm::LookupByID<RE::TESObjectREFR>(a->siteAnchor[s]) : nullptr;
+                if (anchor && anchor->Is3DLoaded()) {
+                    auto* anchorCell = anchor->GetParentCell();
+                    const bool sameSpace = anchorCell && cell && (anchorCell->IsInteriorCell() ? anchorCell == cell
+                                                                                              : anchor->GetWorldspace() == player->GetWorldspace());
+                    const float reach = anchorCell && anchorCell->IsInteriorCell() ? 1800.0f : 2500.0f;
+                    f.atDepths[s] = sameSpace && anchor->GetPosition().GetDistance(player->GetPosition()) < reach;
+                }
+                auto* boss = a->siteBoss[s] ? RE::TESForm::LookupByID<RE::Actor>(a->siteBoss[s]) : nullptr;
+                // Dead only once it was seen alive in a loaded cell, or found dead at the heart by the player: an actor
+                // placed in an unloaded camp reads as dead or vanishes before anyone got there (Vargr the Red, 2026-11-19).
+                const bool loadedAlive = boss && boss->Is3DLoaded() && !boss->IsDead();
+                if (loadedAlive) pending.bossSeenAlive[s] = true;
+                const std::int8_t state = !a->siteBoss[s] ? 0 : !boss ? 3 : boss->IsDead() ? 2 : loadedAlive ? 1 : 0;
+                if (state != pending.bossState[s]) {
+                    pending.bossState[s] = state;
+                    logger::info("Arcs: #{} the master of {}: {}", id, NameOf(a->site[s]),
+                                 state == 1 ? "alive, here" : state == 2 ? "dead" : state == 3 ? "gone from the game" : "not here yet");
+                }
+                if (!a->siteBoss[s]) f.bossDead[s] = f.atDepths[s];                       // none could be placed: reaching it is enough
+                else if (!boss) f.bossDead[s] = f.atDepths[s];                            // gone: the heart reached is the end of it
+                else f.bossDead[s] = boss->IsDead() && (pending.bossSeenAlive[s] || f.atDepths[s]);
+            }
+        }
         if (tale) TaleTalk(id, *a, pending, f);
         const auto change = A::Advance(*a, f, now);
         pending.answer = -1;
@@ -988,6 +1032,34 @@ namespace IntelEngine {
             bits |= 1 << 24;
             logger::info("Arcs: #{} '{}' goes {} {:08X} in {}'s home", id, a->propName[p], spot.floor ? "beside" : "into",
                          spot.ref->GetFormID(), NameOf(a->cast[hider]));
+        }
+        if (tale) {
+            for (std::size_t s = 0; s < A::kSites; ++s) {
+                if (!a->site[s] || !(a->siteState[s] & 1u) || (a->siteState[s] & 2u)) continue;
+                auto* anchor = a->siteAnchor[s] ? RE::TESForm::LookupByID<RE::TESObjectREFR>(a->siteAnchor[s]) : nullptr;
+                if (!anchor || !anchor->Is3DLoaded()) continue;
+                // The place's heart is loaded: a place the player emptied before gets company for its new master.
+                a->siteState[s] |= 2u;
+                auto* location = RE::TESForm::LookupByID<RE::BGSLocation>(a->site[s]);
+                if (!location || !location->IsCleared()) continue;
+                // The script places them (PlaceGang): the game's leveled lists are resolved by Papyrus' PlaceAtMe only.
+                if (!pending.gangSite) {
+                    pending.gangSite = static_cast<std::uint8_t>(s + 1);
+                    logger::info("Arcs: #{} {} had been cleared: company comes back with its new master", id, NameOf(a->site[s]));
+                }
+            }
+            if (pending.gangSite) bits |= 1 << 7;   // asked again every look until the script says it is done
+            // A prop the boss carries goes into their pack once they are loaded (an unloaded actor's pack never got it).
+            for (std::size_t p = 0; p < A::kProps && pending.plantProp < 0; ++p) {
+                if (!a->propSite[p] || a->propAt[p] || !a->propBase[p]) continue;
+                auto* boss = RE::TESForm::LookupByID<RE::Actor>(a->siteBoss[a->propSite[p] - 1u]);
+                if (!boss || !boss->Is3DLoaded()) continue;
+                pending.plantAt = boss->GetFormID();
+                pending.plantProp = static_cast<int>(p);
+                pending.plantFloor = false;
+                bits |= 1 << 24;
+                logger::info("Arcs: #{} '{}' goes into the pack of {}", id, a->propName[p], NameOf(boss->GetFormID()));
+            }
         }
         if (a->node < nodes.size() && !change.any()) {
             const auto& n = nodes[a->node];
@@ -1179,6 +1251,85 @@ namespace IntelEngine {
         }
     }
 
+    // The game's own creatures for a place's heart and its company, by what lives there (Tales::SiteKind).
+    RE::TESBoundObject* ArcBridge::BossBase(std::uint8_t kind, std::uint32_t seed) {
+        auto* data = RE::TESDataHandler::GetSingleton();
+        const auto form = [&](RE::FormID id) -> RE::TESBoundObject* {
+            auto* f = data ? data->LookupForm(id, "Skyrim.esm") : nullptr;
+            return f ? f->As<RE::TESBoundObject>() : nullptr;
+        };
+        switch (kind) {
+            case Tales::SiteDwemer: return form(0x10F9B9);                              // Dwarven centurion
+            case Tales::SiteFalmer: return form(0x5238F);                               // Falmer chief (leveled)
+            case Tales::SiteCrypt: return form(0xDD9D8);                                // draugr overlord, no dragon priest
+            case Tales::SiteBandits: return form(seed % 3u == 0u ? 0x1A340 : 0x1A341);  // a bandit chief
+            case Tales::SiteDen: return form(seed % 2u ? 0x23AAB : 0x23ABA);           // giant frostbite spider, troll
+            case Tales::SiteVampires: return form(0x339A9);                             // vampire (leveled boss)
+            case Tales::SiteNecromancers: return form(seed % 2u ? 0xE106D : 0xE2217);  // necromancer
+            case Tales::SiteForsworn: return form(0x442FD);                             // Forsworn shaman
+            case Tales::SiteHagraven: return form(0x640C0);                             // hagraven
+            case Tales::SiteGiants: return form(0x30529);                               // giant
+            default: return nullptr;
+        }
+    }
+
+    RE::TESBoundObject* ArcBridge::GangBase(std::uint8_t kind, std::uint32_t seed) {
+        auto* data = RE::TESDataHandler::GetSingleton();
+        const auto form = [&](RE::FormID id) -> RE::TESBoundObject* {
+            auto* f = data ? data->LookupForm(id, "Skyrim.esm") : nullptr;
+            return f ? f->As<RE::TESBoundObject>() : nullptr;
+        };
+        switch (kind) {
+            case Tales::SiteDwemer: return form(seed % 2u ? 0x10EC90 : 0x10EC8F);       // Dwarven spider, sphere
+            case Tales::SiteFalmer: return form(0x1E786);
+            case Tales::SiteCrypt: return Papyrus::LookupLeveledActor("LvlDraugrMeleeAllMale");
+            case Tales::SiteBandits: return Papyrus::LookupLeveledActor(seed % 2u ? "LvlBanditMissile" : "LvlBanditMeleeAny");
+            case Tales::SiteDen: return form(0x41FB6);                                  // frostbite spiders
+            case Tales::SiteVampires: return form(0x33973);
+            case Tales::SiteNecromancers: return form(0x1091C9);
+            default: return nullptr;                                                    // they keep no company
+        }
+    }
+
+    void ArcBridge::BossPlaced(std::uint32_t id, int site, RE::Actor* boss) {
+        std::scoped_lock lock(m_mutex);
+        auto* a = m_book.Find(id);
+        if (!a || site < 0 || site >= static_cast<int>(A::kSites)) return;
+        const auto s = static_cast<std::size_t>(site);
+        a->siteState[s] |= 1u;
+        a->siteBoss[s] = boss ? boss->GetFormID() : 0u;
+        logger::info("Arcs: #{} {} waits at the heart of {} ({:08X})", id, a->bossName[s].empty() ? std::string("its master") : a->bossName[s],
+                     NameOf(a->site[s]), a->siteBoss[s]);
+    }
+
+    void ArcBridge::GangPlaced(std::uint32_t id) {
+        std::scoped_lock lock(m_mutex);
+        if (auto it = m_pending.find(id); it != m_pending.end()) it->second.gangSite = 0;
+    }
+
+    bool ArcBridge::SiteFree(RE::BGSLocation* location, const std::unordered_set<RE::FormID>& objectiveLocations, std::string& why) const {
+        if (!location) return why = "no place", false;
+        if (objectiveLocations.contains(location->GetFormID())) return why = "a quest of the player's leads there", false;
+        if (const auto it = m_questPlaces.find(location->GetFormID()); it != m_questPlaces.end()) {
+            for (const auto questId : it->second) {
+                auto* quest = RE::TESForm::LookupByID<RE::TESQuest>(questId);
+                if (quest && !quest->IsCompleted()) {
+                    const char* name = quest->GetFullName();
+                    return why = std::string("a quest of the game still needs it (") + (name && *name ? name : "a quest") + ")", false;
+                }
+            }
+        }
+        if (QuestBridge::GetSingleton()->PlaceInUse(location->GetFormID())) return why = "a quest of IntelEngine's is set there", false;
+        std::scoped_lock lock(m_mutex);
+        for (const auto& a : m_book.all) {
+            if (!A::IsLive(a)) continue;
+            for (const auto s : a.site) {
+                if (s == location->GetFormID()) return why = "another story is set there", false;
+            }
+        }
+        return true;
+    }
+
     bool ArcBridge::FetchProp(std::uint32_t id, int prop) {
         auto* player = RE::PlayerCharacter::GetSingleton();
         std::scoped_lock lock(m_mutex);
@@ -1223,6 +1374,7 @@ namespace IntelEngine {
         if (name == "price") return static_cast<int>(a->price ? a->price : a->gold);
         if (name == "bondwith") return pending != m_pending.end() ? pending->second.bondWith : 0;
         if (name == "effectprop") return pending != m_pending.end() ? pending->second.effectProp : 0;
+        if (name == "gangsite") return pending != m_pending.end() ? pending->second.gangSite - 1 : -1;
         if (name == "quiet") {
             // Seconds since the step's person or the player last spoke (the talk between them going quiet).
             if (a->node >= nodes.size() || !nodes[a->node].who) return 9999;
@@ -1282,6 +1434,23 @@ namespace IntelEngine {
         if (name == "suspect3") return actor(A::RSuspect3);
         if (name.starts_with("role")) return actor(static_cast<std::size_t>(std::atoi(name.c_str() + 4)));
         if (name == "place") return a->place ? RE::TESForm::LookupByID(a->place) : nullptr;
+        if (name.starts_with("bossbase") || name.starts_with("siteanchor") || name.starts_with("gangbase")) {
+            // The master a place of the story needs (its own kind), and where its heart is; "gangbase<k>" the company
+            // of the place a look asked for (PlaceGang).
+            const auto pending = m_pending.find(id);
+            std::size_t s = static_cast<std::size_t>(std::atoi(name.c_str() + (name.starts_with("gangbase") ? 8 : name.starts_with("bossbase") ? 8 : 10)));
+            if (name.starts_with("gangbase")) {
+                if (pending == m_pending.end() || !pending->second.gangSite) return nullptr;
+                return GangBase(a->siteKind[pending->second.gangSite - 1u], static_cast<std::uint32_t>(s) + a->seed);
+            }
+            if (s >= A::kSites || !a->site[s]) return nullptr;
+            if (name.starts_with("siteanchor")) return a->siteAnchor[s] ? RE::TESForm::LookupByID(a->siteAnchor[s]) : nullptr;
+            if (a->siteState[s] & 1u) return nullptr;   // placed already
+            bool needed = false;
+            for (const auto& n : a->graph) needed = needed || (n.kind == A::Kind::Slay && n.site == s + 1);
+            for (const auto p : a->propSite) needed = needed || p == s + 1;
+            return needed ? BossBase(a->siteKind[s], a->seed + static_cast<std::uint32_t>(s)) : nullptr;
+        }
         if (name.starts_with("pocket")) {
             // Who carries a prop from the start: a tale's pocket, the murder's gem with the killer.
             const auto p = static_cast<std::size_t>(std::atoi(name.c_str() + 6));
@@ -1312,6 +1481,17 @@ namespace IntelEngine {
             A::Role to = A::RNone;
             std::uint8_t prop = 0;
             return HandOverOf(n, to, prop) ? actor(to) : nullptr;
+        }
+        if (name == "marker" && a->pattern == A::Pattern::Tale) {
+            // A place out in the world: its boss while it lives, else its heart. A prop a boss carries: the boss.
+            std::uint8_t site = 0;
+            if ((n.kind == A::Kind::Delve || n.kind == A::Kind::Slay) && n.site) site = n.site;
+            if (n.kind == A::Kind::Have && n.prop < A::kProps && a->propSite[n.prop]) site = a->propSite[n.prop];
+            if (site) {
+                auto* boss = a->siteBoss[site - 1u] ? RE::TESForm::LookupByID<RE::Actor>(a->siteBoss[site - 1u]) : nullptr;
+                if (boss && !boss->IsDead() && n.kind != A::Kind::Delve) return boss;
+                return a->siteAnchor[site - 1u] ? RE::TESForm::LookupByID(a->siteAnchor[site - 1u]) : nullptr;
+            }
         }
         if (name == "marker") {
             // Finding a prop: the marker goes to where it is hidden once it is there; else to the node's person.
@@ -1368,6 +1548,10 @@ namespace IntelEngine {
             return p < A::kProps ? a->propName[p] : std::string();
         }
         if (name == "story") return Fill(a->story, *a);
+        if (name.starts_with("bossname")) {
+            const auto s = static_cast<std::size_t>(std::atoi(name.c_str() + 8));
+            return s < A::kSites ? a->bossName[s] : std::string();
+        }
         if (name == "closing") return a->phase == A::Phase::Ended ? Fill(A::TaleClosing(*a), *a) : std::string();
         const auto nodes = A::NodesOf(*a);
         if (a->node >= nodes.size()) return {};
@@ -1671,6 +1855,10 @@ namespace IntelEngine {
         }
         bool ArcRequestTale(RE::StaticFunctionTag*, RE::Actor* asker) { return ArcBridge::GetSingleton()->RequestTale(asker); }
         void ArcLingerOver(RE::StaticFunctionTag*, std::int32_t id) { ArcBridge::GetSingleton()->LingerOver(U(id)); }
+        void ArcBossPlaced(RE::StaticFunctionTag*, std::int32_t id, std::int32_t site, RE::Actor* boss) {
+            ArcBridge::GetSingleton()->BossPlaced(U(id), site, boss);
+        }
+        void ArcGangPlaced(RE::StaticFunctionTag*, std::int32_t id) { ArcBridge::GetSingleton()->GangPlaced(U(id)); }
         bool ArcFetchProp(RE::StaticFunctionTag*, std::int32_t id, std::int32_t prop) { return ArcBridge::GetSingleton()->FetchProp(U(id), prop); }
         // Test hook: a tale written by hand (a JSON file at an absolute path), cast from the asker's town like any other.
         bool ArcDebugTaleFile(RE::StaticFunctionTag*, RE::Actor* asker, RE::BSFixedString path) {
@@ -1707,6 +1895,8 @@ namespace IntelEngine {
         a_vm->RegisterFunction("ArcSetHolders", script, ArcSetHolders); ++count;
         a_vm->RegisterFunction("ArcRequestTale", script, ArcRequestTale); ++count;
         a_vm->RegisterFunction("ArcLingerOver", script, ArcLingerOver); ++count;
+        a_vm->RegisterFunction("ArcBossPlaced", script, ArcBossPlaced); ++count;
+        a_vm->RegisterFunction("ArcGangPlaced", script, ArcGangPlaced); ++count;
         a_vm->RegisterFunction("ArcFetchProp", script, ArcFetchProp); ++count;
         a_vm->RegisterFunction("ArcDebugTaleFile", script, ArcDebugTaleFile); ++count;
     }

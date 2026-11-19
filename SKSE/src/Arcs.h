@@ -46,6 +46,7 @@ namespace IntelEngine::Arcs {
     };
     constexpr std::size_t kRoles = 8;
     constexpr std::size_t kProps = 3;
+    constexpr std::size_t kSites = 2;   // a tale's places out in the world (dungeons, ruins, camps)
 
     enum class Kind : std::uint8_t {
         Talk = 1,    // the player is with `who` while they speak
@@ -56,6 +57,8 @@ namespace IntelEngine::Arcs {
         Reach = 6,   // the player is where `who` lives (or died)
         Visit = 7,   // `who` comes to the player (the engine sends them), and they talk
         Wait = 8,    // time passes: `waitHours` game hours on this step
+        Delve = 9,   // the player reaches the depths of place `site` (its boss room)
+        Slay = 10,   // the boss of place `site` is dead
     };
 
     enum class Phase : std::uint8_t { Planned = 0, Open = 1, Ended = 2 };
@@ -165,6 +168,7 @@ namespace IntelEngine::Arcs {
         std::string question;                  // Choose: the popup's question
         std::array<std::string, 3> turns{};    // Talk: what each prepared outcome would be (for the judge)
         float waitHours = 0.0f;                // Wait: how long
+        std::uint8_t site = 0;                 // Delve, Slay: the place, index + 1 (0 = none)
     };
 
     // ------------------------------------------------------------------ the patterns
@@ -295,6 +299,8 @@ namespace IntelEngine::Arcs {
         int brawl = 0;                     // 1 won, -1 lost, 0 none yet
         int turn = -1;                     // a talk's outcome as the judge read the conversation, -1 = none yet
         float hoursHere = 0.0f;            // game hours on this step (Advance fills it in)
+        std::array<bool, kSites> atDepths{};   // the player is in the boss room of the place
+        std::array<bool, kSites> bossDead{};   // the place's boss is dead
     };
 
     constexpr std::size_t kMaxText = 200;
@@ -351,6 +357,14 @@ namespace IntelEngine::Arcs {
         std::string story;                             // the story so far (the journal's log), first person
         std::uint32_t price = 0;                       // what the player pays when an answer costs gold, 0 = the reward
         float days = 0.0f;                             // how long it stands once taken on (0 = the pattern's)
+        // ---- a tale's places out in the world (record version 4)
+        std::array<std::uint32_t, kSites> site{};       // the place (a location), 0 = none
+        std::array<std::uint32_t, kSites> siteAnchor{}; // its boss room (a reference)
+        std::array<std::uint32_t, kSites> siteBoss{};   // the boss put there for the story, 0 = none (yet)
+        std::array<std::uint8_t, kSites> siteKind{};    // what lives there (Tales::SiteKind), chooses the boss
+        std::array<std::string, kSites> bossName{};     // the boss's name in the story ("Grelka the Silent"), may be empty
+        std::array<std::uint8_t, kSites> siteState{};   // bit 0 the boss is placed, bit 1 its company placed
+        std::array<std::uint8_t, kProps> propSite{};    // the place (index + 1) whose boss carries a prop, 0 = none
     };
 
     inline bool IsOpen(const Arc& a) { return a.phase == Phase::Open; }
@@ -399,6 +413,8 @@ namespace IntelEngine::Arcs {
                     case Kind::Reach: return f.atScene;
                     case Kind::Visit: return f.with[n.who] && f.spoke[n.who];
                     case Kind::Wait: return f.hoursHere >= n.waitHours;
+                    case Kind::Delve: return n.site >= 1 && n.site <= kSites && f.atDepths[n.site - 1u];
+                    case Kind::Slay: return n.site >= 1 && n.site <= kSites && f.bossDead[n.site - 1u];
                     default: return false;
                 }
             case If::Option0: return f.answer == 0;
@@ -980,7 +996,7 @@ namespace IntelEngine::Arcs {
     // ------------------------------------------------------------------ save data (co-save record 'IEAR')
 
     constexpr std::uint32_t kRecordType = 'IEAR';
-    constexpr std::uint32_t kRecordVersion = 3;   // 2: tales (their graphs and words); 3: a visit's why. 1 and 2 still load
+    constexpr std::uint32_t kRecordVersion = 4;   // 2: tales; 3: a visit's why; 4: places out in the world. Older ones load
 
     namespace detail {
         template <class T>
@@ -1032,6 +1048,7 @@ namespace IntelEngine::Arcs {
             PutText(out, n.question);
             for (const auto& turn : n.turns) PutText(out, turn);
             Put(out, n.waitHours);
+            Put(out, n.site);
             std::uint8_t edges = 0;
             for (const auto& e : n.edges) edges = static_cast<std::uint8_t>(edges + (e.when != If{} ? 1 : 0));
             Put(out, edges);
@@ -1064,7 +1081,7 @@ namespace IntelEngine::Arcs {
                 !Get(in, at, n.logStage) || !Get(in, at, n.extendDays)) {
                 return false;
             }
-            if (kind < 1 || kind > static_cast<std::uint8_t>(Kind::Wait) || who >= kRoles || marker >= kRoles || n.prop >= kProps) return false;
+            if (kind < 1 || kind > static_cast<std::uint8_t>(Kind::Slay) || who >= kRoles || marker >= kRoles || n.prop >= kProps) return false;
             n.kind = static_cast<Kind>(kind);
             n.who = static_cast<Role>(who);
             n.marker = static_cast<Role>(marker);
@@ -1076,7 +1093,9 @@ namespace IntelEngine::Arcs {
             }
             if (!GetText(in, at, n.goal) || (version >= 3 && !GetText(in, at, n.why)) || !GetText(in, at, n.question)) return false;
             for (auto& turn : n.turns) if (!GetText(in, at, turn)) return false;
-            if (!Get(in, at, n.waitHours) || !Get(in, at, edges) || edges > n.edges.size() || !std::isfinite(n.waitHours)) return false;
+            if (!Get(in, at, n.waitHours) || !std::isfinite(n.waitHours)) return false;
+            if (version >= 4 && (!Get(in, at, n.site) || n.site > kSites)) return false;
+            if (!Get(in, at, edges) || edges > n.edges.size()) return false;
             for (std::uint8_t i = 0; i < edges; ++i) {
                 auto& e = n.edges[i];
                 std::uint8_t when = 0, role = 0, ending = 0, effect = 0, effectRole = 0, skip = 0, effect2 = 0, effect2Role = 0, bondWith = 0;
@@ -1168,13 +1187,23 @@ namespace IntelEngine::Arcs {
             detail::PutLong(out, a.story);
             detail::Put(out, a.price);
             detail::Put(out, a.days);
+            // ---- version 4: places out in the world
+            for (std::size_t s = 0; s < kSites; ++s) {
+                detail::Put(out, a.site[s]);
+                detail::Put(out, a.siteAnchor[s]);
+                detail::Put(out, a.siteBoss[s]);
+                detail::Put(out, a.siteKind[s]);
+                detail::PutText(out, a.bossName[s]);
+                detail::Put(out, a.siteState[s]);
+            }
+            for (const auto p : a.propSite) detail::Put(out, p);
         }
         return out;
     }
 
     // All or nothing. Version 1 records (before tales) load as they were.
     inline bool Deserialize(std::span<const std::uint8_t> in, Book& book, std::uint32_t version = kRecordVersion) {
-        if (version < 1 || version > 3) return false;
+        if (version < 1 || version > 4) return false;
         std::size_t at = 0;
         Book read;
         std::uint8_t lastPattern = 0;
@@ -1234,6 +1263,17 @@ namespace IntelEngine::Arcs {
                 }
                 if (!detail::GetLong(in, at, a.story) || !detail::Get(in, at, a.price) || !detail::Get(in, at, a.days) || !std::isfinite(a.days)) {
                     return false;
+                }
+            }
+            if (version >= 4) {
+                for (std::size_t s = 0; s < kSites; ++s) {
+                    if (!detail::Get(in, at, a.site[s]) || !detail::Get(in, at, a.siteAnchor[s]) || !detail::Get(in, at, a.siteBoss[s]) ||
+                        !detail::Get(in, at, a.siteKind[s]) || !detail::GetText(in, at, a.bossName[s]) || !detail::Get(in, at, a.siteState[s])) {
+                        return false;
+                    }
+                }
+                for (auto& p : a.propSite) {
+                    if (!detail::Get(in, at, p) || p > kSites) return false;
                 }
             }
             const bool tale = pattern == static_cast<std::uint8_t>(Pattern::Tale);

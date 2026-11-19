@@ -50,8 +50,35 @@ namespace IntelEngine::Tales {
         bool pocket = true;       // may be carried in someone's pack (nothing they might put on or wield)
     };
 
+    // What lives in a place, and so who waits at its heart: the boss is always the place's own kind (a centurion in a
+    // Dwemer ruin, an overlord in a Nordic tomb), never the author's choice.
+    enum SiteKind : std::uint8_t {
+        SiteNone = 0,
+        SiteDwemer = 1,       // a Dwemer ruin: a Dwarven centurion
+        SiteFalmer = 2,       // a Falmer hive: a Falmer chief
+        SiteCrypt = 3,        // a Nordic tomb: a draugr overlord
+        SiteBandits = 4,      // a bandit camp, a fort, a mine held by bandits: a bandit chief
+        SiteDen = 5,          // a beast's den, a cave: a giant frostbite spider or a troll
+        SiteVampires = 6,     // a vampire lair: a vampire
+        SiteNecromancers = 7, // a necromancer's lair: a necromancer
+        SiteForsworn = 8,     // a Forsworn camp: a Forsworn shaman
+        SiteHagraven = 9,     // a hagraven nest: a hagraven
+        SiteGiants = 10,      // a giant's camp: a giant
+    };
+    constexpr std::uint8_t kSiteKinds = 10;
+
+    // A place out in the world the story may lead to.
+    struct Site {
+        std::string key;              // "d1"
+        std::string name;
+        std::uint32_t location = 0;
+        std::uint32_t anchor = 0;     // its boss room
+        std::uint8_t kind = SiteNone;
+    };
+
     struct Pool {
         std::vector<Person> people;   // people[0] is the asker
+        std::vector<Site> sites;      // places near the town (never one a quest of the game still needs)
         std::vector<Item> items;
         std::uint32_t gold = 150;     // the reward the engine would offer (the author may move it within limits)
     };
@@ -222,6 +249,7 @@ namespace IntelEngine::Tales {
 
         // ---- the props
         std::map<std::string, std::uint8_t> propOf;
+        std::vector<std::pair<std::uint8_t, std::string>> pendingSites;   // props carried by a place's boss
         if (tale.contains("items") && tale["items"].is_array()) {
             for (const auto& it : tale["items"]) {
                 if (propOf.size() >= A::kProps) {
@@ -242,6 +270,12 @@ namespace IntelEngine::Tales {
                 a.propName[p] = Words(Str(it, "name"), 60);
                 if (a.propName[p].empty()) a.propName[p] = base->name;
                 const auto hidden = Lower(Str(it, "hidden"));
+                if (hidden == "at" || hidden == "place" || hidden == "dungeon") {
+                    // Carried by the boss of a place out in the world (resolved once the places are known).
+                    pendingSites.emplace_back(p, Str(it, "of"));
+                    propOf[id] = p;
+                    continue;
+                }
                 const A::Role holder = person(Str(it, "of"), "items");
                 if (holder == A::RAsker) fail("items: nothing is hidden with " + pool.people[0].key + " (who asks)");
                 if (hidden == "home") {
@@ -252,11 +286,40 @@ namespace IntelEngine::Tales {
                     if (!base->pocket) fail("items: a " + base->name + " is never carried hidden in a pocket; hide it at home");
                     a.propPocket[p] = holder;
                 } else {
-                    fail("items: hidden must be \"home\" or \"pocket\"");
+                    fail("items: hidden must be \"home\", \"pocket\" or \"at\" (a place)");
                 }
                 propOf[id] = p;
             }
         }
+
+        // ---- the places out in the world: given a slot when first named (a step, an item)
+        std::map<std::string, std::uint8_t> siteSlot;   // site key -> index + 1 in the arc
+        const auto siteOf = [&](const std::string& raw, const std::string& where) -> std::uint8_t {
+            auto key = Lower(Trim(raw));
+            if (key.starts_with("in ")) key = Trim(key.substr(3));
+            const Site* found = nullptr;
+            for (const auto& s : pool.sites) {
+                if (Lower(s.key) == key || Lower(s.name) == key) found = &s;
+            }
+            if (!found) {
+                fail(where + ": \"" + raw + "\" is no place of the list");
+                return 0;
+            }
+            const auto k = Lower(found->key);
+            if (const auto it = siteSlot.find(k); it != siteSlot.end()) return it->second;
+            if (siteSlot.size() >= A::kSites) {
+                fail(where + ": at most " + std::to_string(A::kSites) + " places out in the world");
+                return 0;
+            }
+            const auto slot = static_cast<std::uint8_t>(siteSlot.size() + 1);
+            siteSlot[k] = slot;
+            a.site[slot - 1u] = found->location;
+            a.siteAnchor[slot - 1u] = found->anchor;
+            a.siteKind[slot - 1u] = found->kind;
+            return slot;
+        };
+
+        for (const auto& [p, where] : pendingSites) a.propSite[p] = siteOf(where, "items");
 
         // ---- the offer
         const auto& offer = tale.contains("offer") ? tale["offer"] : nlohmann::json::object();
@@ -516,12 +579,22 @@ namespace IntelEngine::Tales {
                 n.who = key.empty() ? A::RNone : person(key, where.c_str());
                 if (const auto* who = personOf(n.who); who && !who->hasHome) fail(where + ": " + who->key + " has no home to go to");
                 st.edges.push_back({A::If::Done, branch(s, i, where)});
+            } else if (kind == "delve" || kind == "slay") {
+                // Into a place out in the world: to its depths, or to kill what waits there (the place's own kind of
+                // boss; the author only names it).
+                n.kind = kind == "delve" ? A::Kind::Delve : A::Kind::Slay;
+                n.site = siteOf(Str(s, "place"), where);
+                if (kind == "slay" && n.site) {
+                    const auto name = Words(Str(s, "boss"), 50);
+                    if (!name.empty()) a.bossName[n.site - 1u] = name;
+                }
+                st.edges.push_back({A::If::Done, branch(s, i, where)});
             } else if (kind == "wait") {
                 n.kind = A::Kind::Wait;
                 n.waitHours = static_cast<float>(std::clamp(Int(s, "hours", 12), 1, 72));
                 st.edges.push_back({A::If::Done, branch(s, i, where)});
             } else {
-                fail(where + ": \"do\" must be talk, find, give, choose, visit, wait, brawl or go");
+                fail(where + ": \"do\" must be talk, find, give, choose, visit, wait, brawl, go, delve or slay");
             }
             if (n.kind != A::Kind::Have && n.kind != A::Kind::Wait && n.marker == A::RNone) n.marker = n.who;
         }

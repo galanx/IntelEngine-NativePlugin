@@ -16,6 +16,7 @@
 
 #include <chrono>
 #include <map>
+#include <optional>
 #include <thread>
 
 #include <nlohmann/json.hpp>
@@ -228,6 +229,82 @@ namespace IntelEngine {
             return out;
         }
 
+        // What lives in a place, read from its location's keywords (any language, any modlist that keeps them).
+        std::uint8_t SiteKindOf(RE::BGSLocation* location) {
+            int depth = 0;
+            for (auto* loc = location; loc && depth < 2; loc = loc->parentLoc, ++depth) {
+                if (loc->HasKeywordString("LocTypeDragonLair")) return Tales::SiteNone;   // dragons: not yet
+                if (loc->HasKeywordString("LocTypeDwarvenAutomatons")) return Tales::SiteDwemer;
+                if (loc->HasKeywordString("LocTypeFalmerHive")) return Tales::SiteFalmer;
+                if (loc->HasKeywordString("LocTypeDraugrCrypt")) return Tales::SiteCrypt;
+                if (loc->HasKeywordString("LocTypeVampireLair")) return Tales::SiteVampires;
+                if (loc->HasKeywordString("LocTypeWarlockLair")) return Tales::SiteNecromancers;
+                if (loc->HasKeywordString("LocTypeForswornCamp")) return Tales::SiteForsworn;
+                if (loc->HasKeywordString("LocTypeHagravenNest")) return Tales::SiteHagraven;
+                if (loc->HasKeywordString("LocTypeGiantCamp")) return Tales::SiteGiants;
+                if (loc->HasKeywordString("LocTypeAnimalDen")) return Tales::SiteDen;
+                if (loc->HasKeywordString("LocTypeBanditCamp") || loc->HasKeywordString("LocTypeMilitaryFort") ||
+                    loc->HasKeywordString("LocTypeMine")) {
+                    return Tales::SiteBandits;
+                }
+            }
+            return Tales::SiteNone;
+        }
+        const char* SiteWhat(std::uint8_t kind) {
+            switch (kind) {
+                case Tales::SiteDwemer: return "a Dwemer ruin";
+                case Tales::SiteFalmer: return "a Falmer hive";
+                case Tales::SiteCrypt: return "an old Nordic tomb";
+                case Tales::SiteBandits: return "a bandit hideout";
+                case Tales::SiteDen: return "a cave, a beast's den";
+                case Tales::SiteVampires: return "a vampire lair";
+                case Tales::SiteNecromancers: return "a necromancer's lair";
+                case Tales::SiteForsworn: return "a Forsworn camp";
+                case Tales::SiteHagraven: return "a hagraven's nest";
+                case Tales::SiteGiants: return "a giant's camp";
+                default: return "a place";
+            }
+        }
+        const char* SiteHeart(std::uint8_t kind) {
+            switch (kind) {
+                case Tales::SiteDwemer: return "a Dwarven centurion";
+                case Tales::SiteFalmer: return "a Falmer chief";
+                case Tales::SiteCrypt: return "a draugr overlord";
+                case Tales::SiteBandits: return "a bandit chief";
+                case Tales::SiteDen: return "a giant frostbite spider or a troll";
+                case Tales::SiteVampires: return "a vampire";
+                case Tales::SiteNecromancers: return "a necromancer";
+                case Tales::SiteForsworn: return "a Forsworn shaman";
+                case Tales::SiteHagraven: return "a hagraven";
+                case Tales::SiteGiants: return "a giant";
+                default: return "something";
+            }
+        }
+
+        // Where the player's journal points now: no story may send the player into those places.
+        std::unordered_set<RE::FormID> ObjectiveLocations() {
+            std::unordered_set<RE::FormID> out;
+            auto* player = RE::PlayerCharacter::GetSingleton();
+            if (!player) return out;
+            for (auto& instance : player->GetPlayerRuntimeData().objectives) {
+                auto* objective = instance.Objective;
+                auto* quest = objective ? objective->ownerQuest : nullptr;
+                if (!quest || instance.InstanceState != RE::QUEST_OBJECTIVE_STATE::kDisplayed || !objective->targets) continue;
+                for (std::uint32_t i = 0; i < objective->numTargets; ++i) {
+                    auto* target = objective->targets[i];
+                    if (!target) continue;
+                    auto ref = quest->GetAliasedRef(target->alias).get();
+                    auto* where = ref ? ref->GetCurrentLocation() : nullptr;
+                    int depth = 0;
+                    for (auto* loc = where; loc && depth < 4; loc = loc->parentLoc, ++depth) {
+                        if (loc->HasKeywordString("LocTypeHold")) break;
+                        out.insert(loc->GetFormID());
+                    }
+                }
+            }
+            return out;
+        }
+
         // What the author is asked for, with the town, its people and what came before.
         struct Request {
             std::string context;           // the JSON the prompt renders
@@ -394,6 +471,61 @@ namespace IntelEngine {
             return false;
         }
         request->pool.items = ItemChoices();
+
+        // ---- places out in the world in the town's hold, the nearest first, at most two of a kind
+        nlohmann::json places = nlohmann::json::array();
+        {
+            const auto blocked = ObjectiveLocations();
+            auto* townLoc = RE::TESForm::LookupByID<RE::BGSLocation>(me->town);
+            auto* townHold = HoldOfLoc(townLoc);
+            auto townMarker = townLoc ? std::as_const(townLoc->worldLocMarker).get() : RE::NiPointer<RE::TESObjectREFR>();
+            const auto townAt = townMarker ? std::optional<RE::NiPoint3>(townMarker->GetPosition()) : std::nullopt;
+            struct Near {
+                QuestBridge::PlaceView p;
+                std::uint8_t kind;
+                float distance;
+            };
+            std::vector<Near> nearby;
+            int refused = 0;
+            for (const auto& p : QuestBridge::GetSingleton()->Places()) {
+                if (!townHold || p.hold != townHold->GetFormID()) continue;
+                auto* location = RE::TESForm::LookupByID<RE::BGSLocation>(p.location);
+                const auto kind = SiteKindOf(location);
+                if (kind == Tales::SiteNone) continue;
+                std::string why;
+                if (!SiteFree(location, blocked, why)) {
+                    ++refused;
+                    continue;
+                }
+                const float distance = townAt && p.hasAt ? townAt->GetDistance(p.at) : 1.0e9f;
+                nearby.push_back({p, kind, distance});
+            }
+            std::sort(nearby.begin(), nearby.end(), [](const Near& x, const Near& y) { return x.distance < y.distance; });
+            std::map<std::uint8_t, int> perKind;
+            for (const auto& n : nearby) {
+                if (request->pool.sites.size() >= 8) break;
+                if (++perKind[n.kind] > 2) continue;
+                auto* location = RE::TESForm::LookupByID<RE::BGSLocation>(n.p.location);
+                const char* name = location ? location->GetFullName() : nullptr;
+                if (!name || !*name) continue;
+                Tales::Site site;
+                site.key = "d" + std::to_string(request->pool.sites.size() + 1);
+                site.name = name;
+                site.location = n.p.location;
+                site.anchor = n.p.anchor;
+                site.kind = n.kind;
+                request->pool.sites.push_back(site);
+                nlohmann::json j;
+                j["key"] = site.key;
+                j["name"] = site.name;
+                j["what"] = SiteWhat(n.kind);
+                j["heart"] = SiteHeart(n.kind);
+                j["far"] = n.distance < 15000.0f ? "close by" : n.distance < 40000.0f ? "half a day's walk" : "far across the hold";
+                j["cleared"] = location && location->IsCleared();
+                places.push_back(j);
+            }
+            if (refused) logger::info("Tales: {} place(s) of the hold left out: a quest of the game or of the player's needs them", refused);
+        }
         auto* player = RE::PlayerCharacter::GetSingleton();
         request->pool.gold = A::RewardGold(A::Pattern::Thief, player ? player->GetLevel() : 10);
 
@@ -423,6 +555,7 @@ namespace IntelEngine {
         nlohmann::json items = nlohmann::json::array();
         for (const auto& i : request->pool.items) items.push_back(i.pocket ? i.name : i.name + " (home only)");
         ctx["items"] = items;
+        ctx["places"] = places;
         ctx["quests"] = PlayerQuests();
         ctx["told"] = told;
         ctx["lean"] = lean;
@@ -432,14 +565,16 @@ namespace IntelEngine {
         m_taleBusy.store(true);
         g_requestAt = real;
         g_request = request;
-        logger::info("Tales: asking for a tale of {} in {} ({} people, {} items, leaning {}, {} told before; {:.2f} ms)", request->pool.people[0].name,
-                     NameOf(me->town), request->pool.people.size(), request->pool.items.size(), lean, told.size(),
+        logger::info("Tales: asking for a tale of {} in {} ({} people, {} places, {} items, leaning {}, {} told before; {:.2f} ms)",
+                     request->pool.people[0].name, NameOf(me->town), request->pool.people.size(), request->pool.sites.size(),
+                     request->pool.items.size(), lean, told.size(),
                      std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count());
         if (!written.empty()) {
             std::string who;
             for (const auto& p : request->pool.people) {
                 if (p.canJail || p.canBrawl) who += " " + p.name + (p.canJail ? " [jail]" : "") + (p.canBrawl ? " [brawl]" : "") + ";";
             }
+            for (const auto& s : request->pool.sites) who += " place " + s.key + " " + s.name + " (" + SiteWhat(s.kind) + ");";
             logger::info("Tales: test pool:{}", who);
             TaleWritten(request, 9, written);   // a test's own tale: checked and planned at once, no second asking, no fallback
             return true;
@@ -589,13 +724,13 @@ namespace IntelEngine {
     }
 
     void ArcBridge::LogOutline(const A::Arc& a) {
-        static constexpr const char* kKinds[] = {"?", "talk", "find", "give", "choose", "brawl", "go", "visit", "wait"};
+        static constexpr const char* kKinds[] = {"?", "talk", "find", "give", "choose", "brawl", "go", "visit", "wait", "delve", "slay"};
         static constexpr const char* kWhens[] = {"?", "done", "option 1", "option 2", "option 3", "picked", "dead", "has", "won", "lost",
                                                  "handed", "persuaded", "said 1", "said 2", "said 3", "waited"};
         for (std::size_t i = 0; i < a.graph.size(); ++i) {
             const auto& n = a.graph[i];
             std::string line = "Tales: #" + std::to_string(a.id) + " step " + std::to_string(i) + " " +
-                               kKinds[std::min<std::size_t>(static_cast<std::size_t>(n.kind), 8)] + " " + NameOf(n.who ? a.cast[n.who] : 0) +
+                               kKinds[std::min<std::size_t>(static_cast<std::size_t>(n.kind), 10)] + " " + NameOf(n.who ? a.cast[n.who] : 0) +
                                ": " + n.goal + " |";
             for (const auto& e : n.edges) {
                 if (e.when == A::If{}) continue;
