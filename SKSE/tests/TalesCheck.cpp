@@ -252,7 +252,11 @@ static void Ambush() {
     j["items"] = json::parse(R"([{"id": "i1", "item": "Silver Ring", "name": "Ysolda's Ring", "hidden": "ambush"}])");
     j["steps"] = json::parse(R"([
       {"id": "a", "do": "ambush", "by": "p3", "why": "keep {player} from asking questions in Riverwood", "leader": "Krev the Knife",
-       "goal": "Take the road to Riverwood", "then": "b", "journal": "Hired men waited for me on the road."},
+       "goal": "Take the road to Riverwood", "then": "b", "journal": "Hired men waited for me on the road.",
+       "lost": {"then": "end:bad", "journal": "They beat me down and took the letter."},
+       "outcomes": [{"if": "the leader takes 150 gold from {player} and hands over what Uthgerd gave him", "then": "c",
+                     "journal": "I bought them off.", "effect": "give i1"},
+                    {"if": "the leader takes gold to walk away", "then": "end:bad", "journal": "I paid them to go.", "effect": "player pays 150"}]},
       {"id": "b", "do": "find", "item": "i1", "goal": "Search the leader's body", "then": "c", "journal": "He had Ysolda's ring."},
       {"id": "c", "do": "give", "item": "i1", "to": "p0", "goal": "Give Ysolda her ring", "then": "end:good", "journal": "Ysolda has it."}])");
     auto r = Tales::Compile(j, Town());
@@ -261,7 +265,10 @@ static void Ambush() {
     const Arc& a = r.arc;
     const auto& n = a.graph[0];
     Require(n.kind == Kind::Ambush && n.who != RNone && a.cast[n.who] == 0x103, "the ambush, sent by Uthgerd");
-    Require(n.marker == RNone && n.edges[0].when == If::Done, "no marker on who sent them, and their death changes nothing");
+    Require(n.marker == RNone && n.edges[0].when == If::Lost && n.edges[1].when == If::Done, "no marker on who sent them, and their death changes nothing");
+    Require(n.edges[2].when == If::Said0 && n.edges[2].effect == Effect::GiveItem && n.edges[2].next == 2 && !n.turns[0].empty(), "talked out of it: the leader hands it over");
+    Require(n.edges[3].when == If::Said1 && n.edges[3].effect == Effect::PlayerPays && n.edges[3].effectRole == RNone && a.price == 150,
+            "bought off: the gold goes to the men's leader");
     Require(a.thugName == "Krev the Knife" && a.propAmbush == 1 && a.graph[1].marker == RNone, "the leader is named and carries the ring");
     Book book;
     const auto id = book.Plan(a, 1.0f);
@@ -270,6 +277,24 @@ static void Ambush() {
     Facts f;
     f.dead[n.who] = true;
     Require(!Advance(t, f, 1.1f).any(), "nothing before the men are down, whoever else died");
+    {
+        // Beaten: the story goes on (here it ends badly), nobody reloads.
+        Book lostBook;
+        const auto lostId = lostBook.Plan(a, 1.0f);
+        lostBook.Accept(lostId, 1.0f);
+        Facts beaten;
+        beaten.brawl = -1;
+        const auto change = Advance(*lostBook.Find(lostId), beaten, 1.1f);
+        Require(change.ending == Ending::Failed && change.line == "They beat me down and took the letter.", "beaten is the story's own turn");
+        // Talked out of it: the judge's reading of the talk with the leader.
+        Book talkBook;
+        const auto talkId = talkBook.Plan(a, 1.0f);
+        talkBook.Accept(talkId, 1.0f);
+        Facts talked;
+        talked.turn = 0;
+        const auto settled = Advance(*talkBook.Find(talkId), talked, 1.1f);
+        Require(talkBook.Find(talkId)->node == 2 && settled.effect == Effect::GiveItem && settled.effectProp == 0, "talked out of it: on to the hand-over");
+    }
     f.ambushOver = true;
     Advance(t, f, 1.2f);
     Require(t.node == 1, "the men are down");
@@ -282,6 +307,9 @@ static void Ambush() {
             "whole");
     Book untouched;
     Require(!Deserialize(bytes, untouched, 4), "an ambush step read as version 4 is refused, not misread");
+    // A save of record version 5 (ambushes, before stalkers) loads as it was.
+    Book five;
+    Require(Deserialize(bytes, five, 5) && five.Find(id)->graph[0].kind == Kind::Ambush, "a record of version 5 loads");
 
     const auto errorsOf = [](json x) { return Tales::Compile(x, Town()).errors; };
     json two = j;
@@ -292,12 +320,62 @@ static void Ambush() {
     json noWhy = j;
     noWhy["steps"][0].erase("why");
     Require(errorsOf(noWhy).find("needs \"why\"") != std::string::npos, "the men know what they were paid for");
+    // A beat told lately is not on offer: the compiler refuses it whatever the author wrote.
+    auto quiet = Town();
+    quiet.barred = 1u << static_cast<unsigned>(Kind::Ambush);
+    Require(Tales::Compile(j, quiet).errors.find("no \"ambush\" in this story") != std::string::npos, "an ambush is not told back to back");
+    quiet.barred = 1u << static_cast<unsigned>(Kind::Brawl);
+    Require(Tales::Compile(j, quiet).ok, "what is not held back is told as written");
+    json noLost = j;
+    noLost["steps"][0].erase("lost");
+    Require(errorsOf(noLost).find("needs \"lost\"") != std::string::npos, "a beaten player has a way on");
+    json three = j;
+    three["steps"][0]["outcomes"].push_back(three["steps"][0]["outcomes"][0]);
+    Require(errorsOf(three).find("at most two outcomes") != std::string::npos, "two outcomes of talk at most");
+    json payNobody = j;
+    payNobody["steps"][2]["effect"] = "player pays 150";
+    Require(!errorsOf(payNobody).empty(), "gold with no receiver only goes to the men's leader");
     json noStep = j;
     noStep["steps"][0] = json::parse(R"({"id": "a", "do": "wait", "hours": 5, "goal": "Wait", "then": "b"})");
     Require(errorsOf(noStep).find("needs a step that is an ambush") != std::string::npos, "an item on the leader needs an ambush");
     json nobody = j;
     nobody["steps"][0].erase("by");
     Require(Tales::Compile(nobody, Town()).ok && Tales::Compile(nobody, Town()).arc.graph[0].who == RNone, "sent by nobody known yet");
+}
+
+static void Stalk() {
+    // Uthgerd shadows the player, then says what she came to say.
+    json j = Sample();
+    j["items"] = json::array();
+    j["steps"] = json::parse(R"([
+      {"id": "a", "do": "stalk", "by": "p3", "why": "Uthgerd has trailed {player} since the gate, a warning on her lips", "goal": "Find out who is following me",
+       "then": "b", "journal": "It was Uthgerd."},
+      {"id": "b", "do": "talk", "with": "p3", "goal": "Hear Uthgerd out", "outcomes": [{"if": "Uthgerd tells what she knows", "then": "end:good", "journal": "She told me."}]}])");
+    auto r = Tales::Compile(j, Town());
+    if (!r.ok) std::cerr << r.errors;
+    Require(r.ok, "a stalk compiles");
+    const Arc& a = r.arc;
+    Require(a.graph[0].kind == Kind::Stalk && a.cast[a.graph[0].who] == 0x103 && a.graph[0].marker == RNone && !a.graph[0].why.empty(), "who shadows, why, no marker");
+    Require(a.graph[0].edges[0].when == If::Dead && a.graph[0].edges[1].when == If::Done, "their death ends it; caught, they talk");
+    Book book;
+    const auto id = book.Plan(a, 1.0f);
+    book.Accept(id, 1.0f);
+    Arc& t = *book.Find(id);
+    Facts f;
+    f.with[a.graph[0].who] = true;
+    Require(!Advance(t, f, 1.1f).any(), "near is not yet met");
+    f.spoke[a.graph[0].who] = true;
+    Advance(t, f, 1.2f);
+    Require(t.node == 1, "caught and spoken to");
+    const auto bytes = Serialize(book);
+    Book back, old;
+    Require(Deserialize(bytes, back) && back.Find(id)->graph[0].kind == Kind::Stalk, "a stalk survives the co-save");
+    Require(!Deserialize(bytes, old, 5), "a stalk step read as version 5 is refused, not misread");
+    j["steps"][0]["by"] = "p0";
+    Require(Tales::Compile(j, Town()).errors.find("does not shadow") != std::string::npos, "the asker came openly");
+    j["steps"][0]["by"] = "p3";
+    j["steps"][0].erase("why");
+    Require(Tales::Compile(j, Town()).errors.find("needs \"why\"") != std::string::npos, "a reason to follow");
 }
 
 static void Refusals() {
@@ -350,6 +428,7 @@ int main() {
         HandsOver();
         Adventure();
         Ambush();
+        Stalk();
         Refusals();
     } catch (const std::exception& e) {
         std::cerr << "TalesCheck FAILED: " << e.what() << "\n";

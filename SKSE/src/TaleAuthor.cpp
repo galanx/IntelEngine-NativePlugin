@@ -382,6 +382,7 @@ namespace IntelEngine {
         }
         std::vector<std::string> told;
         std::vector<std::string> recentGenres;
+        std::vector<std::uint32_t> recentBeats;   // the step kinds (bit per kind) of the stories the player took on, newest first
         {
             std::scoped_lock lock(m_mutex);
             if (m_book.Count(A::Phase::Planned) > 0 || m_book.Count(A::Phase::Open) >= A::kMaxOpen) {
@@ -391,6 +392,11 @@ namespace IntelEngine {
             // What was told already (newest first): never again.
             for (auto it = m_book.all.rbegin(); it != m_book.all.rend() && told.size() < 10; ++it) {
                 if (it->ending == A::Ending::Lapsed) continue;
+                if (it->phase != A::Phase::Planned && it->ending != A::Ending::Declined) {
+                    std::uint32_t beats = 0;
+                    for (const auto& n : A::NodesOf(*it)) beats |= 1u << static_cast<unsigned>(n.kind);
+                    recentBeats.push_back(beats);
+                }
                 if (it->pattern == A::Pattern::Tale) {
                     told.push_back(it->genre + ": " + it->title + " - " + it->premise);
                     recentGenres.push_back(it->genre);
@@ -576,6 +582,41 @@ namespace IntelEngine {
         nlohmann::json items = nlohmann::json::array();
         for (const auto& i : request->pool.items) items.push_back(i.pocket ? i.name : i.name + " (home only)");
         ctx["items"] = items;
+        // Heavy beats are not told back to back: an ambush at most once in four stories, a brawl once in three, and
+        // after two stories that led out into the world the next stays among people. The engine holds to it (the
+        // compiler refuses them), whatever the author would like.
+        std::uint32_t barred = 0;
+        if (written.empty()) {
+            const auto bit = [](A::Kind k) { return 1u << static_cast<unsigned>(k); };
+            const auto used = [&](std::uint32_t mask, std::size_t last) {
+                for (std::size_t i = 0; i < std::min(last, recentBeats.size()); ++i) if (recentBeats[i] & mask) return true;
+                return false;
+            };
+            const std::uint32_t place = bit(A::Kind::Delve) | bit(A::Kind::Slay);
+            if (used(bit(A::Kind::Ambush), 3)) barred |= bit(A::Kind::Ambush);
+            if (used(bit(A::Kind::Brawl), 2)) barred |= bit(A::Kind::Brawl);
+            if (used(bit(A::Kind::Stalk), 3)) barred |= bit(A::Kind::Stalk);
+            if (recentBeats.size() >= 2 && (recentBeats[0] & place) && (recentBeats[1] & place)) barred |= place;
+            if (barred & place) {
+                request->pool.sites.clear();
+                places = nlohmann::json::array();
+            }
+            if (barred) {
+                logger::info("Tales: held back this time (told lately):{}{}{}{}", (barred & bit(A::Kind::Ambush)) ? " ambush" : "",
+                             (barred & bit(A::Kind::Brawl)) ? " brawl" : "", (barred & bit(A::Kind::Stalk)) ? " stalk" : "",
+                             (barred & place) ? " places out in the world" : "");
+            }
+            ctx["bar_ambush"] = (barred & bit(A::Kind::Ambush)) != 0;
+            ctx["bar_brawl"] = (barred & bit(A::Kind::Brawl)) != 0;
+            ctx["bar_stalk"] = (barred & bit(A::Kind::Stalk)) != 0;
+            ctx["bar_places"] = (barred & place) != 0;
+        } else {
+            ctx["bar_ambush"] = false;
+            ctx["bar_brawl"] = false;
+            ctx["bar_stalk"] = false;
+            ctx["bar_places"] = false;
+        }
+        request->pool.barred = barred;
         ctx["places"] = places;
         ctx["quests"] = PlayerQuests();
         ctx["told"] = told;
@@ -763,7 +804,7 @@ namespace IntelEngine {
     }
 
     void ArcBridge::LogOutline(const A::Arc& a) {
-        static constexpr const char* kKinds[] = {"?", "talk", "find", "give", "choose", "brawl", "go", "visit", "wait", "delve", "slay", "ambush"};
+        static constexpr const char* kKinds[] = {"?", "talk", "find", "give", "choose", "brawl", "go", "visit", "wait", "delve", "slay", "ambush", "stalk"};
         static constexpr const char* kWhens[] = {"?", "done", "option 1", "option 2", "option 3", "picked", "dead", "has", "won", "lost",
                                                  "handed", "persuaded", "said 1", "said 2", "said 3", "waited"};
         for (std::size_t i = 0; i < a.graph.size(); ++i) {
@@ -796,7 +837,11 @@ namespace IntelEngine {
         const float theyEnded = speech->SecondsSinceSpeechEnded(who);
         const float playerAt = playerSaid >= 0.0f ? now - playerSaid : -1.0f;
         const float theirAt = theyEnded >= 0.0f ? now - theyEnded : -1.0f;
-        if (f.with[n.who] && f.spoke[n.who] && playerAt > pending.judgedAt && theirAt > playerAt) pending.talked = true;
+        // The player's FIRST line since the last reading is what the person's answer is measured against: a player
+        // character who goes on talking unprompted (SkyrimNet voices the player's own remarks in some setups) moved
+        // "the player's last line" past every answer, and Brannoc's two answers were never read (2026-11-19).
+        if (pending.askedAt < 0.0f && playerAt > pending.judgedAt) pending.askedAt = playerAt;
+        if (f.with[n.who] && f.spoke[n.who] && pending.askedAt >= 0.0f && theirAt > pending.askedAt) pending.talked = true;
         if (!pending.talked) return;
         if (speech->IsSpeechPending(who)) return;
         const float theirs = speech->SecondsSinceSpeechEnded(who);
@@ -806,10 +851,73 @@ namespace IntelEngine {
         pending.talked = false;
         pending.judging = true;
         pending.judgedAt = RealNow();
+        pending.askedAt = -1.0f;
         // Never forced: a talk turns only when the conversation really came to one of its outcomes (an ignored line
         // or idle chatter forced into "the closest outcome" would move the story on a matter never spoken of). The
         // author prepares a refusal among the outcomes; a person who will not engage is that outcome, or the time runs out.
         SendJudge(id, a.node, who, n.goal, n.turns, false);
+    }
+
+    bool ArcBridge::Parley(std::uint32_t id, const A::Arc& a, Pending& pending, const A::Node& n, float nearest, std::string& why) {
+        auto* speech = SpeechTracker::GetSingleton();
+        const RE::FormID who = a.thug[0];
+        const float real = RealNow();
+        // A menu or the chat box holds everything (typing an answer takes time), and a moment after it closes.
+        if (auto* ui = RE::UI::GetSingleton(); ui && ui->GameIsPaused()) {
+            pending.parleyHold = real + 6.0f;
+            return false;
+        }
+        const float since = real - pending.parleyAt;
+        const float theirEnded = speech->SecondsSinceSpeechEnded(who);   // < 0: never spoke
+        const bool line = speech->IsSpeechPending(who);
+        const bool spoke = theirEnded >= 0.0f && real - theirEnded >= pending.parleyAt;
+        const float playerSaid = speech->SecondsSincePlayerSpoke();
+        const float playerAt = playerSaid >= 0.0f ? real - playerSaid : -1.0f;
+        const bool answered = playerAt > pending.parleyAt;
+        if (nearest > 2500.0f) return why = "the player walked off", true;
+        if (!spoke) {
+            // The line waits its turn behind others (eighteen seconds once, behind the player character's own
+            // remarks); when it never comes there is no word, then.
+            if ((!line && since > 25.0f) || since > 45.0f) return why = "the leader's word never came", true;
+            return false;
+        }
+        if (line || real < pending.parleyHold) return false;
+        if (n.turns[0].empty()) {
+            // Nothing they would settle for: the word was a threat, and they act on it.
+            if (theirEnded >= 2.0f) return why = "the leader has had the word", true;
+            return false;
+        }
+        if (!answered) {
+            if (theirEnded >= 12.0f) return why = "the player gave no answer", true;
+            return false;
+        }
+        if (since > 180.0f) return why = "the talk went on too long", true;
+        if (pending.judging || pending.turn >= 0) return false;   // being read, or settled (the look's step takes it)
+        // A talk is on: read like a talk step's, once per exchange (the player said something since the last
+        // reading and the leader answered it), when both have gone quiet.
+        const float theirAt = real - theirEnded;
+        if (pending.askedAt < 0.0f && playerAt > pending.judgedAt) pending.askedAt = playerAt;
+        if (pending.askedAt >= 0.0f && theirAt > pending.askedAt) pending.talked = true;
+        if (pending.talked) {
+            if (theirEnded < kQuietSeconds || playerSaid < kQuietSeconds) return false;
+            pending.talked = false;
+            pending.judging = true;
+            pending.judgedAt = real;
+            pending.askedAt = -1.0f;
+            SendJudge(id, a.node, who, "The leader of men hired to waylay " + PlayerName() + " has stopped " + PlayerName() + " on the road. " +
+                      Fill("They were paid to: " + n.why, a), n.turns, false);
+            return false;
+        }
+        // Nothing settled yet. After the leader's last line the word is the player's, for a good while (reading it,
+        // thinking, opening the chat box: Brannoc attacked four seconds after his own counter-offer, 2026-11-19);
+        // after the player's it is the leader's. Three readings that came to nothing, and they have had enough.
+        if (pending.nones >= 3) return why = "the talk came to nothing", true;
+        if (playerAt > theirAt) {
+            if (playerSaid >= 25.0f) return why = "the leader had no answer for the player", true;
+            return false;
+        }
+        if (theirEnded >= 20.0f) return why = "the player had no more to say", true;
+        return false;
     }
 
     void ArcBridge::SendJudge(std::uint32_t id, std::uint8_t node, RE::FormID who, std::string goal, std::array<std::string, 3> turns, bool force) {

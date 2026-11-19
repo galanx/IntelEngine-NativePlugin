@@ -11,7 +11,7 @@
 //   "people": [ {"who": "p0", "part": "the one who asks", "truth": "first person: what I know, want, hide, say"}, ... ],
 //   "items":  [ {"id": "i1", "item": "<a name of the item list>", "name": "Ysolda's Silver Ring", "hidden": "home"|"pocket"|"at"|"ambush", "of": "p3"} ],
 //   "offer":  {"words": "what drives the asker to come", "ask": "what the player is asked", "journal": "first line", "reward": 150, "days": 3},
-//   "steps":  [ {"id": "s1", "do": "talk|find|give|choose|visit|wait|brawl|go|delve|slay|ambush", ...}, ... ],
+//   "steps":  [ {"id": "s1", "do": "talk|find|give|choose|visit|wait|brawl|go|delve|slay|ambush|stalk", ...}, ... ],
 //   "endings": {"good": {...}, "bad": {...}, "other": {...}}   each {"journal", "rumor", "pay", "memories": {"p0": "..."}}
 // }
 // A branch ("then") names a step id or "end:good", "end:bad", "end:other"; an "effect" is one of "jail pX", "leave pX",
@@ -81,6 +81,9 @@ namespace IntelEngine::Tales {
         std::vector<Site> sites;      // places near the town (never one a quest of the game still needs)
         std::vector<Item> items;
         std::uint32_t gold = 150;     // the reward the engine would offer (the author may move it within limits)
+        // Step kinds (bit per Arcs::Kind) not on offer for this tale: a story told lately had one, and the next ones
+        // are told another way (the user, 2026-11-19: never "here we go again... again someone ambushing").
+        std::uint32_t barred = 0;
     };
 
     struct Result {
@@ -391,6 +394,7 @@ namespace IntelEngine::Tales {
             }
             return static_cast<int>(it->second);
         };
+        bool payLeader = false;   // while an ambush's outcomes of talk are read: gold may go to the men's leader
         struct Branch {
             int to = -2;
             int prop = -1;   // GiveItem: which prop
@@ -454,6 +458,12 @@ namespace IntelEngine::Tales {
                 }
                 b.effect = A::Effect::GiveItem;
                 b.prop = it->second;
+            } else if (words[0] == "player" && words.size() == 3 && words[1] == "pays" && payLeader) {
+                // "player pays 150" in an ambush's outcome of talk: to the leader of the men.
+                const int amount = std::atoi(words.back().c_str());
+                if (amount < 1 || amount > 2000) fail(where + ": the player pays between 1 and 2000 gold");
+                b.price = static_cast<std::uint32_t>(std::clamp(amount, 1, 2000));
+                b.effect = A::Effect::PlayerPays;
             } else if (words[0] == "player" && words.size() >= 4 && words[1] == "pays") {
                 // "player pays p3 50": the last word is the gold, what lies between is the person.
                 b.effectRole = person(rest(2).substr(0, rest(2).size() - words.back().size() - 1), where.c_str());
@@ -605,16 +615,52 @@ namespace IntelEngine::Tales {
                 n.why = Words(Str(s, "why"), 200);
                 if (n.why.empty()) fail(where + ": an ambush needs \"why\": what the men were paid to do");
                 a.thugName = Words(Str(s, "leader"), 50);
+                // Beaten is no reload: the men leave with what they came for, and the story goes on from there.
+                if (!s.contains("lost") || !s["lost"].is_object()) {
+                    fail(where + ": an ambush needs \"lost\": {\"then\", \"journal\"}, where the story goes when the men beat {player} down and leave");
+                } else {
+                    st.edges.push_back({A::If::Lost, branch(s["lost"], i, where + " lost")});
+                }
+                st.edges.push_back({A::If::Done, branch(s, i, where)});
+                // Talked out of it: what the men would settle for, read from the real talk with their leader.
+                if (s.contains("outcomes")) {
+                    const auto& outcomes = s["outcomes"];
+                    if (!outcomes.is_array() || outcomes.size() > 2) {
+                        fail(where + ": an ambush has at most two outcomes of talk");
+                    } else {
+                        payLeader = true;
+                        for (std::size_t k = 0; k < outcomes.size(); ++k) {
+                            n.turns[k] = Words(Str(outcomes[k], "if"), 200);
+                            if (n.turns[k].empty()) fail(where + ": outcome " + std::to_string(k + 1) + " has no \"if\"");
+                            st.edges.push_back({static_cast<A::If>(static_cast<int>(A::If::Said0) + static_cast<int>(k)),
+                                                branch(outcomes[k], i, where + " outcome " + std::to_string(k + 1))});
+                        }
+                        payLeader = false;
+                    }
+                }
+            } else if (kind == "stalk") {
+                // Someone of the story shadows the player out of doors, and talks once caught or come forward.
+                n.kind = A::Kind::Stalk;
+                n.who = with("by");
+                if (n.who == A::RAsker) fail(where + ": the one who asks does not shadow {player}; they came openly");
+                n.why = Words(Str(s, "why"), 200);
+                if (n.why.empty()) fail(where + ": a stalk needs \"why\": what makes them follow and what they dare not say");
                 st.edges.push_back({A::If::Done, branch(s, i, where)});
             } else if (kind == "wait") {
                 n.kind = A::Kind::Wait;
                 n.waitHours = static_cast<float>(std::clamp(Int(s, "hours", 12), 1, 72));
                 st.edges.push_back({A::If::Done, branch(s, i, where)});
             } else {
-                fail(where + ": \"do\" must be talk, find, give, choose, visit, wait, brawl, go, delve, slay or ambush");
+                fail(where + ": \"do\" must be talk, find, give, choose, visit, wait, brawl, go, delve, slay, ambush or stalk");
+            }
+            if (static_cast<unsigned>(n.kind) != 0 && (pool.barred & (1u << static_cast<unsigned>(n.kind)))) {
+                fail(where + ": no \"" + kind + "\" in this story (a story told lately had one): tell this one another way");
             }
             // No marker on the one who sent an ambush: the men are not where they are.
-            if (n.kind != A::Kind::Have && n.kind != A::Kind::Wait && n.kind != A::Kind::Ambush && n.marker == A::RNone) n.marker = n.who;
+            // Nor on someone shadowing the player: where they are is theirs to keep.
+            if (n.kind != A::Kind::Have && n.kind != A::Kind::Wait && n.kind != A::Kind::Ambush && n.kind != A::Kind::Stalk && n.marker == A::RNone) {
+                n.marker = n.who;
+            }
         }
         if (!err.empty()) return r;
 

@@ -90,6 +90,45 @@ Bought") whose author was told Delphine and Gerdur belong to quests of their own
 Test hooks: `IntelEngine_Arcs.DebugTale(asker)` (asks the model), `DebugTaleFile(asker, absolute path)` (a tale
 written by hand; people by name; no fallback); the log has each tale as written and its outline.
 
+### The ambush (2026-11-19)
+
+Step `"ambush"`: someone of the tale (`"by"`, optional) has paid men to waylay the player. `Kind::Ambush`, the men in
+`Arc::thug` (the game's own Hired Thugs, one below level 6, two below 12, else three), the leader's name and what he
+carries (`"hidden": "ambush"`) in the arc; co-save IEAR v5.
+
+Three ways on, all the author's: `"then"` (the men are dead), `"lost"` (required: the player is beaten down, never
+killed; the men take what they came for and leave), and up to two `"outcomes"` of talk with the leader (what the men
+would settle for; `"player pays N"` goes to the leader, `"give iN"` has him hand over what he carries).
+
+How it plays, each rule found by playing it:
+- Only out in the wilds (outdoors, no town, farm, inn or home), twenty seconds into the wilds and a quarter of a game
+  hour into the step, never during another fight or within the quest gate.
+- The men wait on the road itself (navmesh preferred triangles), on a stretch the player cannot see; they are made
+  behind the player and moved there unseen. No such stretch twice running: they come after the player from behind.
+  First version put them on any hidden ground, and they stood in the woods by the river.
+- They always come to the player: when the player nears, after a minute of the player not coming their way, and
+  whenever they are not on the player any more (a wolf drew two of them into the river once). The fight, the bodies
+  and what the leader carries are where the player stands.
+- The leader has the word first (a narration; SkyrimNet gives the line from what the men know: who paid, for what,
+  what they would settle for). `ArcBridge::Parley` then waits: no line within 25 s (others queue ahead), no answer
+  within 10 s of it, a talk that came to nothing (read by the judge once per exchange, like a talk step), the player
+  walking off, or an offer the player's purse cannot cover: they fall on the player. A menu or the chat box holds the
+  clock.
+- While they are on the player, the player is essential (only if the tale has `"lost"`, only if nothing else already
+  keeps the player alive): going down is the `lost` branch. The player comes round six seconds after the men left
+  and is mortal again. Two level 6 men killed a level 1 character in twenty seconds before this.
+- "Fighting" means a man's combat target is the player or a teammate; anything else is a distraction.
+- The player far away, indoors or in a town: the men are taken out of the world unseen and come again six game
+  hours later. Men who stood down walk back toward whoever sent them and are removed once unseen.
+- The leader's body is held by the script until the tale ends and is the marker of the step that searches it.
+
+Variety (`Tales::Pool::barred`): an ambush in any of the last three stories the player took on, a brawl in either of
+the last two, or places out in the world in both of the last two, and that beat is not on offer: the prompt does not
+show it and `Compile` refuses it.
+
+Tests are walked, not teleported: `IntelEngine_Quests.DebugWalkTo(ref, run)` moves the player by the game's own
+pathfinding (`Scripts/intelengine/ambush_setup.sh`, `ambush_meet.sh`).
+
 ## 1. Principles
 
 1. **Truth first.** Code decides what happens and makes it true in the game (people, items, bodies, places) before

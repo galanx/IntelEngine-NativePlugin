@@ -61,6 +61,7 @@ namespace IntelEngine::Arcs {
         Delve = 9,   // the player reaches the depths of place `site` (its boss room)
         Slay = 10,   // the boss of place `site` is dead
         Ambush = 11, // hired men sent by `who` (may be none) fall on the player out in the wilds: they are dead
+        Stalk = 12,  // `who` shadows the player out of doors until caught or coming forward, and they talk
     };
 
     enum class Phase : std::uint8_t { Planned = 0, Open = 1, Ended = 2 };
@@ -419,6 +420,7 @@ namespace IntelEngine::Arcs {
                     case Kind::Give: return f.handed[n.prop];
                     case Kind::Reach: return f.atScene;
                     case Kind::Visit: return f.with[n.who] && f.spoke[n.who];
+                    case Kind::Stalk: return f.with[n.who] && f.spoke[n.who];
                     case Kind::Wait: return f.hoursHere >= n.waitHours;
                     case Kind::Delve: return n.site >= 1 && n.site <= kSites && f.atDepths[n.site - 1u];
                     case Kind::Slay: return n.site >= 1 && n.site <= kSites && f.bossDead[n.site - 1u];
@@ -1004,7 +1006,7 @@ namespace IntelEngine::Arcs {
     // ------------------------------------------------------------------ save data (co-save record 'IEAR')
 
     constexpr std::uint32_t kRecordType = 'IEAR';
-    constexpr std::uint32_t kRecordVersion = 5;   // 2: tales; 3: a visit's why; 4: places out in the world; 5: ambushes. Older ones load
+    constexpr std::uint32_t kRecordVersion = 6;   // 2: tales; 3: a visit's why; 4: places out in the world; 5: ambushes; 6: stalkers. Older ones load
 
     namespace detail {
         template <class T>
@@ -1089,7 +1091,7 @@ namespace IntelEngine::Arcs {
                 !Get(in, at, n.logStage) || !Get(in, at, n.extendDays)) {
                 return false;
             }
-            const auto lastKind = static_cast<std::uint8_t>(version >= 5 ? Kind::Ambush : Kind::Slay);
+            const auto lastKind = static_cast<std::uint8_t>(version >= 6 ? Kind::Stalk : version >= 5 ? Kind::Ambush : Kind::Slay);
             if (kind < 1 || kind > lastKind || who >= kRoles || marker >= kRoles || n.prop >= kProps) return false;
             n.kind = static_cast<Kind>(kind);
             n.who = static_cast<Role>(who);
@@ -1216,7 +1218,7 @@ namespace IntelEngine::Arcs {
 
     // All or nothing. Version 1 records (before tales) load as they were.
     inline bool Deserialize(std::span<const std::uint8_t> in, Book& book, std::uint32_t version = kRecordVersion) {
-        if (version < 1 || version > 5) return false;
+        if (version < 1 || version > 6) return false;
         std::size_t at = 0;
         Book read;
         std::uint8_t lastPattern = 0;
