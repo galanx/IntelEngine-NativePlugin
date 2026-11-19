@@ -1963,6 +1963,24 @@ namespace IntelEngine {
         }
     }
 
+    RE::TESForm* ArcBridge::RemedyFor(std::uint8_t kind, bool spider) {
+        auto* data = RE::TESDataHandler::GetSingleton();
+        const auto form = [&](RE::FormID id) -> RE::TESForm* { return data ? data->LookupForm(id, "Skyrim.esm") : nullptr; };
+        switch (kind) {
+            case Tales::SiteDwemer: return form(0x39B4A);                          // Resist Fire: a centurion's steam
+            case Tales::SiteFalmer: return form(0x65A64);                          // Cure Poison: their arrows
+            case Tales::SiteCrypt: return form(0x39B8A);                           // Resist Frost: an overlord's voice
+            case Tales::SiteBandits: return form(0x3EADF);                         // Healing: plain steel
+            case Tales::SiteDen: return form(spider ? 0x65A64 : 0x96598);          // Cure Poison; a scroll of Firebolt (a troll burns)
+            case Tales::SiteVampires: return form(0xAE723);                        // Cure Disease: what their bite carries
+            case Tales::SiteNecromancers: return form(0x39E52);                    // Resist Magic
+            case Tales::SiteForsworn: return form(0x39E52);                        // Resist Magic: the shaman's spells
+            case Tales::SiteHagraven: return form(0x39B4A);                        // Resist Fire: her fire
+            case Tales::SiteGiants: return form(0x3EADF);                          // Healing: nothing else helps
+            default: return nullptr;
+        }
+    }
+
     void ArcBridge::CluePlaced(std::uint32_t id, int clue, RE::TESObjectREFR* lies) {
         std::scoped_lock lock(m_mutex);
         auto* a = m_book.Find(id);
@@ -2366,6 +2384,12 @@ namespace IntelEngine {
         if (name == "captive") return a->captive ? actor(a->captive) : nullptr;
         if (name == "captiveanchor") {
             return a->captive && a->captiveSite && a->siteAnchor[a->captiveSite - 1u] ? RE::TESForm::LookupByID(a->siteAnchor[a->captiveSite - 1u]) : nullptr;
+        }
+        if (name.starts_with("remedy")) {
+            // What helps against what lives in place <s> of the story: given by whoever is told rightly what did it.
+            const auto s = static_cast<std::size_t>(std::atoi(name.c_str() + 6));
+            if (s >= A::kSites || !a->site[s]) return nullptr;
+            return RemedyFor(a->siteKind[s], A::detail::Mix(a->seed, a->site[s]) % 2u != 0u);
         }
         if (name.starts_with("clue")) {
             // What is to be looked at outside a place: "cluebase<k>" who or what to lay there (only while it does not

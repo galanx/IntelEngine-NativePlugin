@@ -445,6 +445,7 @@ namespace IntelEngine {
         std::vector<std::string> recentGenres;
         std::vector<std::uint32_t> recentBeats;   // the step kinds (bit per kind) of the stories the player took on, newest first
         bool recentHeart = false;                 // one of the last two stories, or one still open, was of the heart
+        std::vector<RE::FormID> restedPlaces;     // where the last stories led: those places rest a while
         int heartLooked = 0;
         {
             std::scoped_lock lock(m_mutex);
@@ -456,6 +457,20 @@ namespace IntelEngine {
                 logger::info("Tales: no tale for {}: a story came to the player or ended {:.1f} hours ago (quiet for {:.0f})",
                              asker->GetDisplayFullName(), (now - last) * 24.0f, A::kQuietHours);
                 return false;
+            }
+            // Where the last four stories led out into the world: not there again so soon (the user, 2026-11-20:
+            // "what would happen if you clear the broken fang cave but another quest makes you go to the same place
+            // later"). The cave just emptied, with a new master in it a day later, is the dungeon master repeating
+            // itself; and a master a story left alive there would get a second one beside it.
+            {
+                int looked = 0;
+                for (auto it = m_book.all.rbegin(); it != m_book.all.rend() && looked < 4; ++it) {
+                    if (it->ending == A::Ending::Lapsed) continue;
+                    ++looked;
+                    for (const auto site : it->site) {
+                        if (site) restedPlaces.push_back(site);
+                    }
+                }
             }
             // What was told already (newest first): never again.
             for (auto it = m_book.all.rbegin(); it != m_book.all.rend() && told.size() < 10; ++it) {
@@ -689,11 +704,20 @@ namespace IntelEngine {
             std::sort(nearby.begin(), nearby.end(), [](const Near& x, const Near& y) { return x.distance < y.distance; });
             std::map<std::uint8_t, int> perKind;
             std::vector<std::string> offered;   // a place is offered once, however many records carry its name
+            // A place a story led to lately rests, as long as two others are near enough to choose from (a town
+            // with one cave by it keeps its cave).
+            const auto rests = [&](const Near& n) { return std::find(restedPlaces.begin(), restedPlaces.end(), n.p.location) != restedPlaces.end(); };
+            const auto fresh = std::count_if(nearby.begin(), nearby.end(), [&](const Near& n) { return !rests(n); });
+            int rested = 0;
             for (const auto& n : nearby) {
                 if (request->pool.sites.size() >= 8) break;
                 auto* location = RE::TESForm::LookupByID<RE::BGSLocation>(n.p.location);
                 const char* name = location ? location->GetFullName() : nullptr;
                 if (!name || !*name) continue;
+                if (fresh >= 2 && rests(n)) {
+                    ++rested;
+                    continue;
+                }
                 if (std::find(offered.begin(), offered.end(), name) != offered.end()) continue;
                 if (++perKind[n.kind] > 2) continue;
                 offered.emplace_back(name);
@@ -722,6 +746,7 @@ namespace IntelEngine {
                 places.push_back(j);
             }
             if (refused) logger::info("Tales: {} place(s) of the hold left out: a quest of the game or of the player's needs them", refused);
+            if (rested) logger::info("Tales: {} place(s) rest: a story led there lately", rested);
         }
         auto* player = RE::PlayerCharacter::GetSingleton();
         request->pool.gold = A::RewardGold(A::Pattern::Thief, player ? player->GetLevel() : 10);

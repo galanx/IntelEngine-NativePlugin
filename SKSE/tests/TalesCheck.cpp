@@ -660,6 +660,72 @@ static void Mystery() {
     hunt.mustExamine = true;
     Require(Tales::Compile(Hunted(), hunt).ok, "a hunt asked for, and it is one");
     Require(errorsOf(Taken(), hunt).find("a hunt for what is killing people") != std::string::npos, "and nothing else");
+    // Naming what did it: a choice whose true answer the engine knows, worth a remedy from the one who hears it.
+    {
+        json n = Hunted();
+        n["steps"][1]["then"] = "s2b";
+        n["steps"].insert(n["steps"].begin() + 2, json::parse(R"({"id": "s2b", "do": "name", "place": "d2", "with": "p2",
+            "goal": "Tell Hulda what killed him", "question": "So what killed him?",
+            "truth": "Men with steel. The ones at the mine.", "others": ["Wolves, as the guard says.", "A bear come down from the hills."],
+            "right": {"then": "s3", "journal": "I told Hulda it was the men at the mine."},
+            "wrong": {"then": "s3", "journal": "I told Hulda what I thought. She did not look as if she believed it."}})"));
+        const auto rn = Tales::Compile(n, TownThatHolds());
+        if (!rn.ok) std::cerr << rn.errors;
+        Require(rn.ok, "a hunt in which the player names what did it compiles");
+        const Node& name = rn.arc.graph[2];
+        Require(name.kind == Kind::Choose && name.who == 2 && name.site == 1 && name.question == "So what killed him?", "to the engine it is a choice, by that place");
+        int truthAt = -1, remedies = 0, plain = 0;
+        for (int k = 0; k < 3; ++k) {
+            if (name.options[static_cast<std::size_t>(k)].find("Men with steel") != std::string::npos) truthAt = k;
+        }
+        Require(truthAt >= 0, "the true answer is among the three");
+        for (const auto& e : name.edges) {
+            if (e.when != If::Option0 && e.when != If::Option1 && e.when != If::Option2) continue;
+            const int k = static_cast<int>(e.when) - static_cast<int>(If::Option0);
+            if (k == truthAt) {
+                Require(e.effect == Effect::Remedy && e.effectRole == 2 && e.prop == 0 && e.next == 3 && e.line.find("men at the mine") != std::string::npos,
+                        "the truth: the one who hears it gives what they have against it");
+                ++remedies;
+            } else {
+                Require(e.effect == Effect::None && e.next == 3 && e.line.find("did not look as if") != std::string::npos, "a wrong answer costs the help, nothing else");
+                ++plain;
+            }
+        }
+        Require(remedies == 1 && plain == 2, "one truth, two that are not");
+        Require(Tales::Compile(n, TownThatHolds()).arc.graph[2].options == name.options, "the same story lays its answers out the same way");
+        Book nb;
+        const auto nid = nb.Plan(rn.arc, 1.0f);
+        nb.Accept(nid, 1.0f);
+        Arc& na = *nb.Find(nid);
+        na.node = 2;
+        Facts say;
+        say.with[2] = say.spoke[2] = true;
+        say.answer = truthAt;
+        const auto told = Advance(na, say, 1.1f);
+        Require(na.node == 3 && told.effect == Effect::Remedy && told.effectProp == 0 && told.effectRole == 2, "named rightly: the remedy for that place is given");
+        const auto bytes2 = Serialize(nb);
+        Book nback;
+        Require(Deserialize(bytes2, nback), "a remedy on a branch survives the co-save");
+
+        const auto errorsOf2 = [](json x) { return Tales::Compile(x, TownThatHolds()).errors; };
+        json e1 = n;
+        e1["steps"][2].erase("truth");
+        Require(errorsOf2(e1).find("the answer that is true") != std::string::npos, "a truth is needed");
+        json e2 = n;
+        e2["steps"][2]["others"] = json::array({"Wolves."});
+        Require(errorsOf2(e2).find("two answers that are false") != std::string::npos, "and two that are false");
+        json e3 = n;
+        e3["steps"][0]["outcomes"][0]["then"] = "s2b";
+        e3["steps"][0]["outcomes"][1]["then"] = "s2b";
+        e3["steps"][2]["right"]["then"] = "s2";
+        e3["steps"][2]["wrong"]["then"] = "s2";
+        e3["steps"][1]["then"] = "s3";
+        Require(errorsOf2(e3).find("once its victim has been looked at") != std::string::npos, "named only after looking");
+        json e4 = n;
+        e4["steps"][3]["do"] = "delve";
+        e4["steps"][3].erase("boss");
+        Require(errorsOf2(e4).find("\"slay\" there") != std::string::npos, "and faced after it is named");
+    }
     // The depth every story is held to counts it as an act out in the world.
     auto deep = TownThatHolds();
     deep.depth = true;

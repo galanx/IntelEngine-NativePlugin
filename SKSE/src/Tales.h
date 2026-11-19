@@ -24,6 +24,7 @@
 #include <cctype>
 #include <cstring>
 #include <map>
+#include <functional>
 #include <set>
 #include <string>
 #include <vector>
@@ -579,6 +580,7 @@ namespace IntelEngine::Tales {
             A::Node node;
             std::vector<std::pair<A::If, Branch>> edges;   // in the order they are looked at
             int persuadeOption = -1;
+            bool naming = false;   // a choice that names what killed someone (the step "name"): its place is node.site
         };
         std::vector<Step> built(steps.size());
         int ambushes = 0;   // one ambush a story (its men are the arc's own)
@@ -696,6 +698,47 @@ namespace IntelEngine::Tales {
                     if (!name.empty()) a.bossName[n.site - 1u] = name;
                 }
                 st.edges.push_back({A::If::Done, branch(s, i, where)});
+            } else if (kind == "name") {
+                // The player tells someone what did it, having looked at what was left: the true answer and two that
+                // people of the story believe or would rather believe, in an order nobody can learn by heart. The
+                // truth is the engine's (what lives in that place); the one who hears it gives what they have against
+                // it. Being wrong costs that help and nothing else: the story goes on either way. To the engine it is
+                // a choice like any other.
+                n.kind = A::Kind::Choose;
+                n.who = with("with");
+                n.site = siteOf(Str(s, "place"), where);
+                st.naming = true;
+                n.question = Words(Str(s, "question"), 160);
+                if (n.question.empty()) n.question = "What did this?";
+                const auto truth = Words(Str(s, "truth"), 140);
+                const auto& others = s.contains("others") ? s["others"] : nlohmann::json();
+                std::array<std::string, 2> wrong;
+                if (others.is_array() && others.size() == 2) {
+                    for (std::size_t k = 0; k < 2; ++k) wrong[k] = others[k].is_string() ? Words(others[k].get<std::string>(), 140) : std::string();
+                }
+                if (truth.empty()) fail(where + ": \"truth\": the answer that is true (what lives in that place)");
+                if (wrong[0].empty() || wrong[1].empty()) fail(where + ": \"others\": two answers that are false, which people of the story believe");
+                if (!s.contains("right") || !s["right"].is_object() || !s.contains("wrong") || !s["wrong"].is_object()) {
+                    fail(where + ": \"right\" and \"wrong\", each with \"then\" and \"journal\"");
+                } else {
+                    // Where the truth stands among the three follows from the words themselves.
+                    std::size_t sum = 0;
+                    for (const unsigned char c : truth + wrong[0] + Str(s, "id")) sum = sum * 31u + c;
+                    const std::size_t at = sum % 3u;
+                    std::size_t w = 0;
+                    for (std::size_t k = 0; k < 3; ++k) {
+                        const bool isTruth = k == at;
+                        n.options[k] = isTruth ? truth : wrong[w++];
+                        const auto when = static_cast<A::If>(static_cast<int>(A::If::Option0) + static_cast<int>(k));
+                        auto b = branch(isTruth ? s["right"] : s["wrong"], i, where + (isTruth ? " right" : " wrong"));
+                        if (isTruth && b.effect == A::Effect::None && n.who != A::RNone && n.site) {
+                            b.effect = A::Effect::Remedy;
+                            b.effectRole = n.who;
+                            b.prop = static_cast<int>(n.site) - 1;
+                        }
+                        st.edges.push_back({when, b});
+                    }
+                }
             } else if (kind == "examine") {
                 // What was left of a victim lies outside a place: looked at closely it tells what did it, and what did
                 // it is what lives in that place (the engine knows its kind; the writer was given its signs). So the
@@ -775,7 +818,7 @@ namespace IntelEngine::Tales {
                 n.waitHours = static_cast<float>(std::clamp(Int(s, "hours", 12), 1, 72));
                 st.edges.push_back({A::If::Done, branch(s, i, where)});
             } else {
-                fail(where + ": \"do\" must be talk, find, give, choose, visit, wait, brawl, go, delve, slay, free, examine, ambush or stalk");
+                fail(where + ": \"do\" must be talk, find, give, choose, visit, wait, brawl, go, delve, slay, free, examine, name, ambush or stalk");
             }
             if (static_cast<unsigned>(n.kind) != 0 && (pool.barred & (1u << static_cast<unsigned>(n.kind)))) {
                 fail(where + ": no \"" + kind + "\" in this story (a story told lately had one): tell this one another way");
@@ -934,6 +977,36 @@ namespace IntelEngine::Tales {
                 fail("step " + Str(steps[i], "id") + ": what did this is what lives in that place: a later step is a \"slay\" there");
             }
         }
+        // ---- naming what did it: after having looked at what was left by that place, and before facing it there
+        for (std::size_t i = 0; i < steps.size(); ++i) {
+            if (!reach[i] || !built[i].naming || !built[i].node.site) continue;
+            const auto site = built[i].node.site;
+            const auto reaches = [&](std::size_t from, const std::function<bool(std::size_t)>& wanted) {
+                std::vector<bool> seen(steps.size(), false);
+                std::vector<std::size_t> ahead{from};
+                while (!ahead.empty()) {
+                    const auto at = ahead.back();
+                    ahead.pop_back();
+                    for (const int to : leads[at]) {
+                        if (to < 0) continue;
+                        const auto next = static_cast<std::size_t>(to);
+                        if (seen[next]) continue;
+                        seen[next] = true;
+                        if (wanted(next)) return true;
+                        ahead.push_back(next);
+                    }
+                }
+                return false;
+            };
+            bool looked = false;
+            for (std::size_t j = 0; j < steps.size(); ++j) {
+                if (reach[j] && kindOf(j) == A::Kind::Examine && built[j].node.site == site && reaches(j, [&](std::size_t x) { return x == i; })) looked = true;
+            }
+            if (!looked) fail("step " + Str(steps[i], "id") + ": what did it can be named once its victim has been looked at: an \"examine\" by that place comes before");
+            if (!reaches(i, [&](std::size_t x) { return kindOf(x) == A::Kind::Slay && built[x].node.site == site; })) {
+                fail("step " + Str(steps[i], "id") + ": it is named before it is faced: a later step is the \"slay\" there");
+            }
+        }
         if (pool.mustExamine && !examines) {
             fail("steps: this story is a hunt for what is killing people: a step \"examine\" (what was left of a victim, outside one of the places), then the \"slay\" there");
         }
@@ -1069,7 +1142,7 @@ namespace IntelEngine::Tales {
                 A::Edge edge;
                 edge.when = when;
                 if (when == A::If::Persuaded) edge.prop = static_cast<std::uint8_t>(st.persuadeOption);
-                else if (b.effect == A::Effect::GiveItem && b.prop >= 0) edge.prop = static_cast<std::uint8_t>(b.prop);
+                else if ((b.effect == A::Effect::GiveItem || b.effect == A::Effect::Remedy) && b.prop >= 0) edge.prop = static_cast<std::uint8_t>(b.prop);
                 const bool goesBack = paysAway(i, b);
                 if (b.to >= 0) {
                     edge.next = static_cast<std::uint8_t>(newIndex[static_cast<std::size_t>(b.to)]);
