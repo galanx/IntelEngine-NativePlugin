@@ -311,6 +311,7 @@ namespace IntelEngine {
             Tales::Pool pool;
             RE::FormID asker = 0;
             RE::FormID town = 0;
+            bool afar = false;             // the director's: the asker comes to the player wherever the player is
             std::vector<RE::FormID> bios;  // whose bio summaries the worker adds (file reads stay off the game thread)
         };
         std::shared_ptr<Request> g_request;   // the tale being written (one at a time)
@@ -322,7 +323,8 @@ namespace IntelEngine {
 
     // ------------------------------------------------------------------ the request
 
-    bool ArcBridge::RequestTale(RE::Actor* asker, const std::string& written) {
+    bool ArcBridge::RequestTale(RE::Actor* asker, const std::string& written, const TaleSeed* taleSeed) {
+        const bool afar = taleSeed && taleSeed->fromAfar;
         // `written`: a tale given as JSON (test hook ArcDebugTaleFile) instead of one asked of the model.
         if (!asker || (written.empty() && !SkyrimNetAPI::SendCustomPromptToLLM)) return false;
         const float real = RealNow();
@@ -342,12 +344,30 @@ namespace IntelEngine {
             return false;
         }
         const Folk* me = FolkOf(asker->GetFormID());
+        Folk away;   // someone the director chose who has no home in a town (a former follower, a wanderer)
+        if (!me && afar) {
+            auto* where = TownOfLoc(asker->GetCurrentLocation());
+            auto* player = RE::PlayerCharacter::GetSingleton();
+            if (!where && player) where = TownOfLoc(player->GetCurrentLocation());
+            if (where) {
+                away.ref = asker->GetFormID();
+                away.base = asker->GetActorBase() ? asker->GetActorBase()->GetFormID() : 0;
+                away.town = where->GetFormID();
+                me = &away;
+            }
+        }
         if (!me) {
             logger::info("Tales: no tale for {}: not one of the townsfolk with a town", asker->GetDisplayFullName());
             return false;
         }
-        // A town's story comes to a player who is in that town, from someone who has not asked for anything lately.
-        {
+        // A town's story comes to a player who is in that town, from someone who has not asked for anything lately. One
+        // the director chose for a reason of their own comes to the player wherever the player is.
+        if (afar) {
+            if (written.empty() && AskedWithin(asker->GetFormID(), 7.0f)) {
+                logger::info("Tales: no tale for {}: they asked the player for something lately", asker->GetDisplayFullName());
+                return false;
+            }
+        } else {
             auto* player = RE::PlayerCharacter::GetSingleton();
             auto* cell = player ? player->GetParentCell() : nullptr;
             auto* here = player ? TownOfLoc(cell && cell->GetLocation() ? cell->GetLocation() : player->GetCurrentLocation()) : nullptr;
@@ -384,6 +404,7 @@ namespace IntelEngine {
         auto request = std::make_shared<Request>();
         request->asker = asker->GetFormID();
         request->town = me->town;
+        request->afar = afar;
         // ---- the people: the asker, then those of the town the game ties to them, then the town's known faces
         struct Candidate {
             const Folk* folk;
@@ -560,6 +581,24 @@ namespace IntelEngine {
         ctx["told"] = told;
         ctx["lean"] = lean;
         ctx["reward"] = request->pool.gold;
+        if (taleSeed && !taleSeed->why.empty()) {
+            // The candidate analyser's view of them: the reason this story begins now must come from it.
+            std::string why = taleSeed->why;
+            if (why.size() > 3000) {
+                std::size_t n = 3000;
+                while (n > 0 && (static_cast<unsigned char>(why[n]) & 0xC0) == 0x80) --n;
+                why.resize(n);
+            }
+            ctx["why"] = why;
+            ctx["kind"] = taleSeed->kind;
+        }
+        if (afar && player) {
+            auto* cell = player->GetParentCell();
+            auto* loc = cell && cell->GetLocation() ? cell->GetLocation() : player->GetCurrentLocation();
+            std::string where = loc && loc->GetFullName() ? loc->GetFullName() : "";
+            if (loc && loc->HasKeywordString("LocTypePlayerHouse")) where += " (" + PlayerName() + "'s own home)";
+            ctx["player_where"] = where;
+        }
         request->context = ctx.dump();
 
         m_taleBusy.store(true);
@@ -671,7 +710,7 @@ namespace IntelEngine {
                 return fallback("the cast is no longer free");
             }
         }
-        if (attempt < 9) {
+        if (attempt < 9 && !request->afar) {
             auto* player = RE::PlayerCharacter::GetSingleton();
             auto* cell = player ? player->GetParentCell() : nullptr;
             auto* here = player ? TownOfLoc(cell && cell->GetLocation() ? cell->GetLocation() : player->GetCurrentLocation()) : nullptr;

@@ -251,6 +251,35 @@ namespace IntelEngine::StoryDirector {
                 g_lastChosen = chosen.formId;
                 g_lastChosenDay = GameDays();
             }
+            // A person with a real reason of their own to come, ask or send word: their tale, written around that very
+            // reason (their memories, unfinished business, their life, as the analyser read them), and they come to the
+            // player wherever the player is, at home too. The user, 2026-11-19: no one-off visit decided by one big
+            // prompt; everything a story. Hostile moments keep their own path until tales have them.
+            if (chosen.kind == "quest" || chosen.kind == "seek_player" || chosen.kind == "message") {
+                std::string why;
+                {
+                    const auto ctx = nlohmann::json::parse(session->contexts[index], nullptr, false);
+                    why = ctx.is_object() ? ctx.value("candidate", std::string()) : std::string();
+                }
+                auto asked = std::make_shared<std::promise<bool>>();
+                auto future = asked->get_future();
+                const RE::FormID giverId = chosen.formId;
+                const std::string kind = chosen.kind;
+                if (auto* task = SKSE::GetTaskInterface()) {
+                    task->AddTask([asked, giverId, why, kind]() {
+                        auto* giver = RE::TESForm::LookupByID<RE::Actor>(giverId);
+                        ArcBridge::TaleSeed seed{why, kind, true};
+                        asked->set_value(giver && ArcBridge::GetSingleton()->RequestTale(giver, {}, &seed));
+                    });
+                    if (future.wait_for(std::chrono::seconds(5)) == std::future_status::ready && future.get()) {
+                        logger::info("[Director] {} acts: a tale grows from their {} reason ({}); its offer follows", chosen.name,
+                                     kLevels[std::clamp(chosen.level, 0, 5)], chosen.kind);
+                        session->done("");
+                        return;
+                    }
+                }
+                logger::info("[Director] no tale for {} now: the moment goes the old way", chosen.name);
+            }
             // 4.0 quests (docs/QUESTS.md): a quest moment is planned by the engine first, every step a fact of the game;
             // the 3.8 writer path runs only when no quest fits this person now (rescues, faction quests).
             const bool venture = chosen.kind == "road_encounter" && LivingWorldBridge::GetSingleton()->HasOwnLife(chosen.formId);
