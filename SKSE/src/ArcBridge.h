@@ -109,7 +109,14 @@ namespace IntelEngine {
         /** Asks the dungeon master for a tale with this asker (main thread). False when none can be asked for now (one
          *  at a time, no model, nobody to cast); the answer plans the arc and sends IntelEngine_ArcOffer, or falls back
          *  to a pattern. */
-        bool RequestTale(RE::Actor* asker, const std::string& written = {});
+        /** Why a tale begins now when the director chose its asker: their own situation as the candidate analyser saw it
+         *  (memories, unfinished business, their life), and that they come to the player wherever the player is. */
+        struct TaleSeed {
+            std::string why;
+            std::string kind;
+            bool fromAfar = false;
+        };
+        bool RequestTale(RE::Actor* asker, const std::string& written = {}, const TaleSeed* seed = nullptr);
         /** Plans a compiled tale (main thread). 0 = refused. */
         std::uint32_t PlanTale(Arcs::Arc a);
         /** The judge's reading of a talk (any thread): which prepared outcome it was, -1 none yet. */

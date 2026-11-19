@@ -1859,6 +1859,11 @@ namespace IntelEngine {
             ArcBridge::GetSingleton()->BossPlaced(U(id), site, boss);
         }
         void ArcGangPlaced(RE::StaticFunctionTag*, std::int32_t id) { ArcBridge::GetSingleton()->GangPlaced(U(id)); }
+        // Test hook: a tale as the director asks for one (a reason of the asker's own, coming from afar).
+        bool ArcRequestTaleWhy(RE::StaticFunctionTag*, RE::Actor* asker, RE::BSFixedString why) {
+            ArcBridge::TaleSeed seed{why.c_str() ? why.c_str() : "", "seek_player", true};
+            return ArcBridge::GetSingleton()->RequestTale(asker, {}, &seed);
+        }
         bool ArcFetchProp(RE::StaticFunctionTag*, std::int32_t id, std::int32_t prop) { return ArcBridge::GetSingleton()->FetchProp(U(id), prop); }
         // Test hook: a tale written by hand (a JSON file at an absolute path), cast from the asker's town like any other.
         bool ArcDebugTaleFile(RE::StaticFunctionTag*, RE::Actor* asker, RE::BSFixedString path) {
@@ -1897,6 +1902,7 @@ namespace IntelEngine {
         a_vm->RegisterFunction("ArcLingerOver", script, ArcLingerOver); ++count;
         a_vm->RegisterFunction("ArcBossPlaced", script, ArcBossPlaced); ++count;
         a_vm->RegisterFunction("ArcGangPlaced", script, ArcGangPlaced); ++count;
+        a_vm->RegisterFunction("ArcRequestTaleWhy", script, ArcRequestTaleWhy); ++count;
         a_vm->RegisterFunction("ArcFetchProp", script, ArcFetchProp); ++count;
         a_vm->RegisterFunction("ArcDebugTaleFile", script, ArcDebugTaleFile); ++count;
     }
