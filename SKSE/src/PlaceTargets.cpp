@@ -1,4 +1,5 @@
 #include "PlaceTargets.h"
+#include "Safe.h"
 
 #include "LocationResolver.h"
 #include "SkyrimNetAPI.h"
@@ -40,7 +41,10 @@ namespace IntelEngine::PlaceTargets {
                     door = ref;
                     return RE::BSContainer::ForEachResult::kStop;
                 }
-                if (!any && !ref->As<RE::Actor>()) any = ref;
+                // Persistent only: the trip keeps its target as a linked reference, and a temporary one is freed when
+                // its cell unloads (the maintainer's finding with his own Named Places, 2026-11-17: a crash in the
+                // travel package after the player had left the cell).
+                if (!any && !ref->As<RE::Actor>() && ref->IsPersistent()) any = ref;
                 return RE::BSContainer::ForEachResult::kContinue;
             });
             return door ? door : any;
@@ -91,11 +95,12 @@ namespace IntelEngine::PlaceTargets {
         float bestDistance = FLT_MAX;
         for (const auto& entry : places) {
             if (!entry.is_object()) continue;
-            const auto name = entry.value("name", std::string());
-            const auto owner = entry.value<std::uint32_t>("ownerLocation", 0);
+            // SkyrimNet's list is another mod's data: a field of the wrong kind reads as nothing (Safe.h), it never throws.
+            const auto name = Safe::Text(entry, "name");
+            const auto owner = static_cast<std::uint32_t>(Safe::Number(entry, "ownerLocation"));
             if (!Names(wanted, name, LocationName(owner))) continue;
-            Found f{name, entry.value<std::uint32_t>("space", 0),
-                    {entry.value("x", 0.0f), entry.value("y", 0.0f), entry.value("z", 0.0f)}};
+            Found f{name, static_cast<std::uint32_t>(Safe::Number(entry, "space")),
+                    {static_cast<float>(Safe::Number(entry, "x")), static_cast<float>(Safe::Number(entry, "y")), static_cast<float>(Safe::Number(entry, "z"))}};
             if (f.space == 0) continue;
             const int rank = f.space == npcSpace ? 0 : f.space == playerSpace ? 1 : 2;
             // "The kitchen" is the kitchen of the building they are in, not any kitchen someone named.

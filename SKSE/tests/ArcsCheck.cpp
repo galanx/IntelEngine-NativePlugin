@@ -279,7 +279,7 @@ static void SaveData() {
     Book untouched = back;
     Require(!Deserialize(bad, untouched), "a short record is refused");
     Require(untouched.all.size() == back.all.size(), "a refused record leaves the book as it was");
-    Require(!Deserialize(bytes, untouched, 7), "an unknown version is refused");
+    Require(!Deserialize(bytes, untouched, 8), "an unknown version is refused");
 
     // A save made before tales (record version 1: no tale block) still loads, every pattern arc as it was.
     std::vector<std::uint8_t> v1;

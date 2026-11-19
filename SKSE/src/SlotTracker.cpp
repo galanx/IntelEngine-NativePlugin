@@ -225,7 +225,7 @@ namespace IntelEngine {
             slots.push_back(slot);
         }
 
-        return slots.dump();
+        return slots.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
     }
 
     void SlotTracker::ClearAll() {

@@ -122,6 +122,7 @@ template<class... T> void error(T&&...) {}
         "nlohmann::json FactionPolitics::FactionToJsonFromSnapshot(",
     )
     (work / "PoliticalFeedMethods.inc").write_text(
+        "#include \"VanillaWar.h\"\n"   # WarPossible asks the game's own civil war
         "namespace IntelEngine {\n" + "\n".join(method(source, s) for s in signatures) +
         "\nvoid FactionPolitics::WritePoliticalStateFile() {}\n}\n", encoding="utf-8")
     context_start = source.index("        auto pe = PoliticalEngineBridge::GetSingleton()->Context();")

@@ -530,7 +530,12 @@ namespace IntelEngine {
                     if (tracker->HasCoSaveData() && SkyrimNetAPI::SetActorBusy) {
                         for (int i = 0; i < MAX_SLOTS; ++i) {
                             auto slot = tracker->GetSlotDataCopy(i);
-                            if (slot.state != 0 && slot.agentFormID) {
+                            // The same measure as while the game runs (SlotTracker): on the way (1) or coming back
+                            // (3) is busy; arrived and waiting (2, 5, 8) is not. Every slot used to be marked busy
+                            // here, so after a load someone waiting somewhere offered no task actions at all ("the
+                            // deliver-message action simply does not show up").
+                            const bool idle = slot.state == 0 || slot.state == 2 || slot.state == 5 || slot.state == 8;
+                            if (!idle && slot.agentFormID) {
                                 auto reason = SlotTracker::BuildBusyReason(slot.taskType, slot.targetName);
                                 SkyrimNetAPI::SetActorBusy(slot.agentFormID, reason.c_str());
                             }

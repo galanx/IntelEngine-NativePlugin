@@ -241,7 +241,7 @@ namespace IntelEngine {
                     if (evt["data"].is_string()) {
                         eventData = evt["data"].get<std::string>();
                     } else {
-                        eventData = evt["data"].dump();
+                        eventData = evt["data"].dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
                     }
                 }
 
@@ -395,7 +395,7 @@ namespace IntelEngine {
                     if (evt["data"].is_string()) {
                         eventData = evt["data"].get<std::string>();
                     } else {
-                        eventData = evt["data"].dump();
+                        eventData = evt["data"].dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
                     }
                 }
 
@@ -526,7 +526,7 @@ namespace IntelEngine {
 
                 std::string eventData;
                 if (evt.contains("data")) {
-                    eventData = evt["data"].is_string() ? evt["data"].get<std::string>() : evt["data"].dump();
+                    eventData = evt["data"].is_string() ? evt["data"].get<std::string>() : evt["data"].dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
                 }
 
                 std::string text = Truncate(SanitizeForPrompt(

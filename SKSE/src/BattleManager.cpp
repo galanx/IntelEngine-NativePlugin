@@ -372,7 +372,7 @@ namespace IntelEngine {
             suppressBattleBounty_ = true;
         }
 
-        return result.dump();
+        return result.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
     }
 
     void BattleManager::SuppressBountyTick() {
@@ -661,7 +661,7 @@ namespace IntelEngine {
                 expiredInfo["result"] = battleResult;
                 {
                     std::lock_guard<std::mutex> lock(pendingMutex_);
-                    expiredResults_.push_back(expiredInfo.dump());
+                    expiredResults_.push_back(expiredInfo.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace));
                 }
             } catch (const std::exception& e) {
                 logger::error("[BattleManager] Failed to parse expired battle JSON: {}", e.what());
@@ -700,7 +700,7 @@ namespace IntelEngine {
                 j["z"] = pb.z;
                 j["deadline"] = pb.deadline;
                 j["result_json"] = pb.resultJson;
-                return j.dump();
+                return j.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
             }
         }
         return "{}";
@@ -735,7 +735,7 @@ namespace IntelEngine {
             std::lock_guard<std::mutex> lock(mutex_);
             if (!activeBattle_ || activeBattle_->id != battleId) {
                 out["error"] = "no matching active battle";
-                return out.dump();
+                return out.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
             }
             playerSideWas = activeBattle_->playerSide;
             factionA = activeBattle_->factionA;
@@ -923,7 +923,7 @@ namespace IntelEngine {
 
         logger::info("Battle: Finalized — result={}, victor={}, playerSide={}, killsA={}, killsB={}",
             result, victor, playerSideWas, playerKillsA, playerKillsB);
-        return out.dump();
+        return out.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
     }
 
     std::string BattleManager::CalculateReinforcementPositions(float playerX, float playerY, float playerZ,
@@ -940,7 +940,7 @@ namespace IntelEngine {
         if (waveNum <= 1) {
             // Wave 1 uses rally markers, no special positioning
             out["useRallyMarkers"] = true;
-            return out.dump();
+            return out.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
         }
 
         // Direction AWAY from battle center (behind player relative to fight)
@@ -966,7 +966,7 @@ namespace IntelEngine {
         out["spawnBY"] = behindY - perpY;
         out["spawnZ"] = playerZ;
 
-        return out.dump();
+        return out.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
     }
 
     std::string BattleManager::EvaluatePlayerJoin(const std::string& questAutoJoinFaction) {
@@ -976,7 +976,7 @@ namespace IntelEngine {
         std::string factionA, factionB;
         {
             std::lock_guard<std::mutex> lock(mutex_);
-            if (!activeBattle_) return out.dump();
+            if (!activeBattle_) return out.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
             factionA = activeBattle_->factionA;
             factionB = activeBattle_->factionB;
         }
@@ -989,7 +989,7 @@ namespace IntelEngine {
             out["joinFaction"] = questAutoJoinFaction;
             out["displayName"] = fp->GetFactionDisplayName(questAutoJoinFaction);
             out["isQuestJoin"] = true;
-            return out.dump();
+            return out.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
         }
 
         // Political: check standings
@@ -1009,7 +1009,7 @@ namespace IntelEngine {
         }
         // Both high or neither high = spectator (no auto-join)
 
-        return out.dump();
+        return out.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
     }
 
     std::string BattleManager::GetBattleNotification(const std::string& type,
@@ -1108,14 +1108,14 @@ namespace IntelEngine {
 
         if (enemy.empty() || enemy == alliedFaction) {
             out["failReason"] = "no war enemy for " + alliedFaction;
-            return out.dump();
+            return out.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
         }
 
         {
             std::lock_guard<std::mutex> lock(mutex_);
             if (activeBattle_) {
                 out["failReason"] = "battle system busy";
-                return out.dump();
+                return out.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
             }
         }
 
@@ -1124,7 +1124,7 @@ namespace IntelEngine {
 
         out["canStart"] = true;
         out["enemyFaction"] = enemy;
-        return out.dump();
+        return out.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
     }
 
     std::string BattleManager::CalculateMidBattleState(float scheduledTime, float currentTime) {
@@ -1146,7 +1146,7 @@ namespace IntelEngine {
         out["soldiersPerSide"] = soldiersPerSide;
         out["moraleLoss"] = moraleLoss;
         out["casualties"] = casualties;
-        return out.dump();
+        return out.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
     }
 
     std::string BattleManager::GetPollAction(const std::string& stateJson) {
@@ -1155,7 +1155,7 @@ namespace IntelEngine {
 
         if (stateJson.empty() || stateJson == "{}") {
             out["action"] = "battle_end_external";
-            return out.dump();
+            return out.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
         }
 
         try {
@@ -1164,21 +1164,21 @@ namespace IntelEngine {
                 out["action"] = "battle_end";
                 out["result"] = j.value("result", "draw");
                 out["victor"] = j.value("victor", "");
-                return out.dump();
+                return out.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
             }
 
             // Check wave spawn triggers
             if (j.contains("spawn_wave")) {
                 out["action"] = "spawn_wave";
                 out["waveNum"] = j["spawn_wave"].get<int>();
-                return out.dump();
+                return out.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
             }
         } catch (const std::exception& e) {
             logger::error("GetPollAction: JSON parse error: {}", e.what());
             out["action"] = "error";
         }
 
-        return out.dump();
+        return out.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
     }
 
     void BattleManager::ResetBattleState() {
@@ -1312,7 +1312,7 @@ namespace IntelEngine {
         out["x"] = locX + offsetX;
         out["y"] = locY + offsetY;
         out["z"] = locZ;
-        return out.dump();
+        return out.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
     }
 
     std::string BattleManager::ExecuteFullBattleSpawn(const std::string& questAutoJoinFaction,
@@ -1323,7 +1323,7 @@ namespace IntelEngine {
 
         if (!player) {
             out["error"] = "player is null";
-            return out.dump();
+            return out.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
         }
 
         // --- Step 1: Determine factions from active battle ---
@@ -1332,7 +1332,7 @@ namespace IntelEngine {
             std::lock_guard<std::mutex> lock(mutex_);
             if (!activeBattle_) {
                 out["error"] = "no active battle";
-                return out.dump();
+                return out.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
             }
             factionA = activeBattle_->factionA;
             factionB = activeBattle_->factionB;
@@ -1422,7 +1422,7 @@ namespace IntelEngine {
             for (auto* b : soldiersB) { if (b) b->Disable(); }
             out["success"] = false;
             out["error"] = "one side failed to spawn";
-            return out.dump();
+            return out.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
         }
 
         // --- Step 5: Add soldiers to ESP battle factions ---
@@ -1487,7 +1487,7 @@ namespace IntelEngine {
             logger::error("ExecuteFullBattleSpawn: FAILED to resolve battle factions from IntelEngine.esp!");
             out["success"] = false;
             out["error"] = "battle factions not found in IntelEngine.esp";
-            return out.dump();
+            return out.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
         }
 
         // --- Step 5b: Hostile standing check ---
@@ -1554,7 +1554,7 @@ namespace IntelEngine {
         out["sideAFormIds"] = sideAIds;
         out["sideBFormIds"] = sideBIds;
 
-        return out.dump();
+        return out.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
     }
 
     // =========================================================================
@@ -1741,7 +1741,7 @@ namespace IntelEngine {
 
         if (!player || count <= 0) {
             out["error"] = "invalid args";
-            return out.dump();
+            return out.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
         }
 
         std::string factionA, factionB, playerSide, sideAFaction;
@@ -1749,7 +1749,7 @@ namespace IntelEngine {
             std::lock_guard<std::mutex> lock(mutex_);
             if (!activeBattle_) {
                 out["error"] = "no active battle";
-                return out.dump();
+                return out.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
             }
             factionA = activeBattle_->factionA;
             factionB = activeBattle_->factionB;
@@ -1763,7 +1763,7 @@ namespace IntelEngine {
         auto [battleFactionA, battleFactionB] = ResolveBattleFactions();
         if (!battleFactionA || !battleFactionB) {
             out["error"] = "battle factions not found";
-            return out.dump();
+            return out.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
         }
 
         // Use the same side normalization as the initial spawn:
@@ -1790,7 +1790,7 @@ namespace IntelEngine {
                 for (auto* a : soldiersA) { if (a) a->Disable(); }
                 for (auto* b : soldiersB) { if (b) b->Disable(); }
                 out["error"] = "battle ended during spawn";
-                return out.dump();
+                return out.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
             }
         }
 
@@ -1822,7 +1822,7 @@ namespace IntelEngine {
         out["sideAFormIds"] = sideAIds;
         out["sideBFormIds"] = sideBIds;
 
-        return out.dump();
+        return out.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
     }
 
     // =========================================================================
@@ -1855,7 +1855,7 @@ namespace IntelEngine {
         out["formIds"] = formIds;
         out["count"] = static_cast<int>(formIds.size());
         out["alive"] = alive;
-        return out.dump();
+        return out.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
     }
 
     int BattleManager::CountDeadSoldiers(const std::string& side) const {

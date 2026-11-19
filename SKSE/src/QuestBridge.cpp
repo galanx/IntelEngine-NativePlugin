@@ -1,4 +1,5 @@
 #include "QuestBridge.h"
+#include "Safe.h"
 
 #include "ArcBridge.h"
 #include "CellAnalyzer.h"
@@ -339,7 +340,7 @@ namespace IntelEngine {
         if (tmpl == Q::Template::Keepsake) {
             q.item = m_keepsakes[Q::detail::Mix(seed, 53u) % m_keepsakes.size()];
             const std::string itemName = ItemNames::Display(NameOf(q.item));
-            q.stamp = Q::ShortName(giver->GetDisplayFullName()) + "'s " + itemName;
+            q.stamp = Q::ShortName(Safe::Name(giver->GetDisplayFullName())) + "'s " + itemName;
         }
         if (tmpl == Q::Template::Bounty) {
             // Named now so the giver can say who; the sex is the foe's, known once placed (SetFoe may rename).
@@ -733,8 +734,8 @@ namespace IntelEngine {
             if (!entries.is_array()) return;
             int withdrawn = 0;
             for (const auto& entry : entries) {
-                const auto label = entry.value("display_name", std::string());
-                const int id = entry.value("id", 0);
+                const auto label = Safe::Text(entry, "display_name");
+                const int id = Safe::Int(entry, "id");
                 if (id <= 0) continue;
                 bool stale = false;
                 if (label.starts_with(kRumorLabel)) {

@@ -1,4 +1,5 @@
 #include "LivingWorldBridge.h"
+#include "Safe.h"
 #include "QuestBridge.h"
 #include "ArcBridge.h"
 
@@ -366,7 +367,7 @@ namespace IntelEngine {
         std::string followers;
         for (auto* actor : serving) {
             if (!followers.empty()) followers += ", ";
-            followers += actor->GetDisplayFullName();
+            followers += Safe::Name(actor->GetDisplayFullName());
         }
         std::scoped_lock lock(m_mutex);
         if (followers != m_lastFollowers) {
@@ -809,8 +810,8 @@ namespace IntelEngine {
         Replace(text, "{parked}", parked);
         Replace(text, "{player}", player);
         Replace(text, "{place}", PlaceName(life.place));
-        Replace(text, "{companion}", companion ? companion->GetDisplayFullName() : "a companion");
-        Replace(text, "{name}", actor ? actor->GetDisplayFullName() : "someone");
+        Replace(text, "{companion}", companion ? Safe::Name(companion->GetDisplayFullName(), "a companion") : "a companion");
+        Replace(text, "{name}", actor ? Safe::Name(actor->GetDisplayFullName(), "someone") : "someone");
         Replace(text, "{ago}", LivingWorld::Ago(NowDays() - life.parkedSince));
         return text;
     }
@@ -818,7 +819,7 @@ namespace IntelEngine {
     void LivingWorldBridge::WriteStep(const Order& order) {
         // m_mutex is held: gather the texts now, write them on a worker (SkyrimNet embeds and stores them).
         auto* playerRef = RE::PlayerCharacter::GetSingleton();
-        const std::string player = playerRef ? playerRef->GetDisplayFullName() : "";
+        const std::string player = playerRef ? Safe::Name(playerRef->GetDisplayFullName()) : "";
         struct Write {
             RE::FormID actor = 0;
             std::string memory;
@@ -853,7 +854,7 @@ namespace IntelEngine {
                 if (!holdName.empty() && std::find(holds.begin(), holds.end(), holdName) == holds.end()) holds.push_back(holdName);
             }
             auto* actor = RE::TESForm::LookupByID<RE::Actor>(order.actor);
-            const std::string name = actor ? actor->GetDisplayFullName() : "";
+            const std::string name = actor ? Safe::Name(actor->GetDisplayFullName()) : "";
             for (std::size_t i = 0; i < holds.size(); ++i) {
                 condition += (i ? " or " : "(");
                 condition += "get_intelengine_hold(actorUUID) == \"" + Escape(holds[i]) + "\"";
@@ -914,8 +915,8 @@ namespace IntelEngine {
             if (!entries.is_array()) return;
             int withdrawn = 0;
             for (const auto& entry : entries) {
-                const auto label = entry.value("display_name", std::string());
-                const int id = entry.value("id", 0);
+                const auto label = Safe::Text(entry, "display_name");
+                const int id = Safe::Int(entry, "id");
                 if (id <= 0 || !label.starts_with(kRumorLabel) || known.contains(id)) continue;
                 if (SkyrimNetAPI::RemoveWorldKnowledge(id)) ++withdrawn;
             }
@@ -934,7 +935,7 @@ namespace IntelEngine {
             const char* line = LivingWorld::OwnLifeLine(life);
             if (!*line) return {};
             auto* player = RE::PlayerCharacter::GetSingleton();
-            return "## My own life lately\n" + Fill(line, life, player ? player->GetDisplayFullName() : "");
+            return "## My own life lately\n" + Fill(line, life, player ? Safe::Name(player->GetDisplayFullName()) : "");
         }
         return {};
     }
@@ -1049,7 +1050,7 @@ namespace IntelEngine {
             const char* line = LivingWorld::DirectorLifeLine(life);
             if (!*line) return {};
             auto* player = RE::PlayerCharacter::GetSingleton();
-            return Fill(line, life, player ? player->GetDisplayFullName() : "");
+            return Fill(line, life, player ? Safe::Name(player->GetDisplayFullName()) : "");
         }
         return {};
     }

@@ -28,9 +28,11 @@ PEOPLE = [
 BASE = {
     "player_name": "Ada", "player_sex": "woman", "player_race": "Breton", "player_level": 12, "town": "Whiterun", "hold": "Whiterun Hold",
     "asker": "p0", "asker_name": "Ysolda", "people": PEOPLE, "items": ["Silver Ring", "Lute (home only)"],
-    "places": [{"key": "d1", "name": "Halted Stream Camp", "what": "a bandit camp", "heart": "a bandit chief", "far": "close by", "cleared": False}],
+    "places": [{"key": "d1", "name": "Halted Stream Camp", "what": "a bandit camp", "heart": "a bandit chief", "far": "close by", "cleared": False, "holds": True},
+               {"key": "d2", "name": "Shimmermist Cave", "what": "a Falmer hive and a Dwemer hall", "heart": "a Dwarven centurion", "far": "half a day's walk", "cleared": True, "holds": False}],
     "quests": ["Dragon Rising: Kill the dragon"], "told": ["crime: The Quiet Ledger - a ledger that lied"], "lean": "debt", "reward": 150,
     "bar_ambush": False, "bar_brawl": True, "bar_stalk": False, "bar_places": False, "asker_knows": "met",
+    "must_place": False, "must_captive": False, "bar_captive": False,
 }
 
 
@@ -45,8 +47,15 @@ def case(**changes):
 
 
 HEART = "# Between Ysolda and Ada"   # the section's heading (a rule further down names the section in quotes)
+TAKEN = "# Someone has been taken"
 CASES = {
-    "an ordinary story": (case(), {"has": ["# The people you may use", "Lean toward debt", "Jon Battle-Born"], "not": [HEART, "With Ada:"]}),
+    "an ordinary story": (case(), {"has": ["# The people you may use", "Lean toward debt", "Jon Battle-Born", "Halted Stream Camp, a bandit camp, close by; at its heart: a bandit chief. Someone may be held here.",
+                                           '"free": someone of the story is held at a place', "one act of a story, never the whole of it", "Never an errand"],
+                                   "not": [HEART, "With Ada:", TAKEN, "This story leads out into the world", "a Dwarven centurion. Cleared once already; something new has moved in. Someone may be held here."]}),
+    "out into the world": (case(must_place=True), {"has": ["This story leads out into the world", "one act of a story"], "not": [HEART, TAKEN]}),
+    "a rescue": (case(must_captive=True, lean="adventure"), {"has": [TAKEN, "who is held at one of the places below", '"do": "free"'], "not": [HEART]}),
+    "nobody held this time": (case(bar_captive=True), {"has": ['"delve":'], "not": ['"free": someone of the story', TAKEN]}),
+    "staying in town": (case(bar_places=True, bar_captive=True), {"has": ["This story stays among people"], "not": ['"delve":', '"free": someone of the story', "one act of a story", TAKEN]}),
     "a stranger asks": (case(asker_knows="stranger"), {"has": ["a stranger taking a chance on a stranger"], "not": [HEART]}),
     "courtship": (case(lean="courtship", heart_lean="courtship", heart="To Ada: a close confidant, and there is more than friendship in it. Ada has not yet answered what they feel."),
                   {"has": [HEART, "Something has begun between them", "With Ada: To Ada: a close confidant", '"effect": "closer p0"',

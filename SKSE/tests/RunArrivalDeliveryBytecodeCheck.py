@@ -364,6 +364,13 @@ class VM:
         if method == "ArcReachOf": return 0
         # Nobody a story is about stands beside the modeled player (no visitor holds back for company).
         if method == "ArcCompany": return None
+        # 4.0: nobody modeled here is in a scene or the target of an objective the player has open (such a person
+        # takes no task: Core.IsUnsuitableTaskAgent), nor one of the game's drivers and ferrymen.
+        if method == "LivingWorldQuestHolds": return False
+        # 4.0: a follower sent on a task loses what makes them follow by name (SkyrimNet's FollowPlayer package,
+        # SeverActions' casual follow) instead of every mod's package overrides. The modeled actors have neither.
+        if method == "HasPackage": return 0
+        if method == "StopCasualFollow": return False
         raise ValueError(f"unmodeled external call {script}.{method}({args!r})")
 
     def run(self, script, name, code, env):

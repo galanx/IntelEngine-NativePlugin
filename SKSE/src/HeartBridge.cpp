@@ -1,6 +1,7 @@
 // IntelEngine: what stands between the player and someone, read from the game (HeartBridge.h, Hearts.h).
 
 #include "HeartBridge.h"
+#include "Safe.h"
 
 #include "LivingWorldBridge.h"
 
@@ -36,13 +37,14 @@ namespace IntelEngine::HeartBridge {
         // The rank in a faction, -1 when not a member.
         int RankIn(RE::Actor* actor, RE::TESFaction* faction) {
             if (!actor || !faction) return -1;
+            // The game's own record is looked at first, then what has changed since (joined, left, promoted): the
+            // last word counts, and a rank below nothing means they have left.
             int rank = -1;
             actor->VisitFactions([&](RE::TESFaction* f, std::int8_t r) {
-                if (f != faction) return false;
-                rank = std::max<int>(0, r);
-                return true;
+                if (f == faction) rank = r;
+                return false;
             });
-            return rank;
+            return rank < 0 ? -1 : rank;
         }
 
         // The game's own rank between the two: 4 lover .. 0 acquaintance .. -4 archnemesis.

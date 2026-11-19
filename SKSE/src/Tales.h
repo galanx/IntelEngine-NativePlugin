@@ -9,9 +9,10 @@
 // {
 //   "title": "...", "genre": "crime", "premise": "the hidden truth",
 //   "people": [ {"who": "p0", "part": "the one who asks", "truth": "first person: what I know, want, hide, say"}, ... ],
+//               one of them may carry "held": "d1": taken to that place before the story begins, and freed in a step
 //   "items":  [ {"id": "i1", "item": "<a name of the item list>", "name": "Ysolda's Silver Ring", "hidden": "home"|"pocket"|"at"|"ambush", "of": "p3"} ],
 //   "offer":  {"words": "what drives the asker to come", "ask": "what the player is asked", "journal": "first line", "reward": 150, "days": 3},
-//   "steps":  [ {"id": "s1", "do": "talk|find|give|choose|visit|wait|brawl|go|delve|slay|ambush|stalk", ...}, ... ],
+//   "steps":  [ {"id": "s1", "do": "talk|find|give|choose|visit|wait|brawl|go|delve|slay|free|ambush|stalk", ...}, ... ],
 //   "endings": {"good": {...}, "bad": {...}, "other": {...}}   each {"journal", "rumor", "pay", "memories": {"p0": "..."}}
 // }
 // A branch ("then") names a step id or "end:good", "end:bad", "end:other"; an "effect" is one of "jail pX", "leave pX",
@@ -41,6 +42,8 @@ namespace IntelEngine::Tales {
         bool hasHome = false;     // a home of their own (something can be hidden there, the player can go there)
         bool canJail = false;     // may be taken by the guard or leave town for a while
         bool canBrawl = false;    // would settle something with fists
+        bool canHold = false;     // may be held at a place when the story begins (the town can do without them for a
+                                  // while, and they are nowhere the player could see them go)
     };
 
     // What a prop may be: an item of the game, by its name.
@@ -67,6 +70,13 @@ namespace IntelEngine::Tales {
     };
     constexpr std::uint8_t kSiteKinds = 10;
 
+    // Who keeps prisoners. The game's own faction for a dungeon's prisoners is a friend of each of these, so someone
+    // held is left alone by the people of the place. A ruin's machines, a tomb's dead and a beast hold nobody.
+    inline bool SiteHolds(std::uint8_t kind) {
+        return kind == SiteBandits || kind == SiteNecromancers || kind == SiteVampires || kind == SiteForsworn ||
+               kind == SiteHagraven || kind == SiteFalmer;
+    }
+
     // A place out in the world the story may lead to.
     struct Site {
         std::string key;              // "d1"
@@ -88,6 +98,13 @@ namespace IntelEngine::Tales {
         // wrote. (Played 2026-11-19: Ysolda promised "155 gold the moment we're done" for being helped over a fear
         // of her own heart.)
         bool heart = false;
+        // A story asked of the model is held to what makes one worth living (a test's own tale is not): ways that end
+        // differently, and a place out in the world as one act among people, never the whole of it (the user,
+        // 2026-11-19: "going deep into the ruins and killing a boss can be part of a larger story, not a flat fetch
+        // quest").
+        bool depth = false;
+        bool mustPlace = false;     // this one leads out into the world (the last ones stayed in town)
+        bool mustCaptive = false;   // this one is about someone held at a place (a rescue was asked for)
     };
 
     struct Result {
@@ -227,6 +244,7 @@ namespace IntelEngine::Tales {
             return key;
         };
         std::map<std::string, A::Role> roleOf;
+        std::vector<std::pair<A::Role, std::string>> pendingHeld;   // who is held, and where (resolved with the places)
         const auto& people = tale.contains("people") ? tale["people"] : nlohmann::json();
         if (!people.is_array() || people.size() < 2) fail("people: at least the asker and one other person");
         std::size_t nextRole = 2;
@@ -260,6 +278,7 @@ namespace IntelEngine::Tales {
                 a.roleName[role] = Words(Str(*p, "part"), 60);
                 a.truth[role] = Words(Str(*p, "truth"), kMaxTruth);
                 if (a.truth[role].empty()) fail("people: " + key + " has no truth");
+                if (const auto held = Str(*p, "held"); !held.empty() && Lower(held) != "no" && Lower(held) != "none") pendingHeld.emplace_back(role, held);
             }
         }
         const auto person = [&](const std::string& raw, const char* where) -> A::Role {
@@ -355,6 +374,32 @@ namespace IntelEngine::Tales {
         };
 
         for (const auto& [p, where] : pendingSites) a.propSite[p] = siteOf(where, "items");
+
+        // ---- someone held at a place when the story begins (taken there unseen before the asker comes)
+        for (const auto& [role, where] : pendingHeld) {
+            const auto* who = personOf(role);
+            const std::string name = who ? who->key : std::string("someone");
+            if (a.captive) {
+                fail("people: only one person is held in a story");
+                break;
+            }
+            if (role == A::RAsker) {
+                fail("people: " + name + " (who asks) is not the one held: they come to {player}");
+                continue;
+            }
+            if (who && !who->canHold) {
+                fail("people: " + name + " cannot be held anywhere (the town cannot do without them, or they stand where {player} sees them): choose someone whose line says they may be held");
+                continue;
+            }
+            const auto slot = siteOf(where, "people: held");
+            if (!slot) continue;
+            if (!SiteHolds(a.siteKind[slot - 1u])) {
+                fail("people: nobody is held at " + where + ": what lives there keeps no prisoners; choose a place whose line says someone may be held there");
+                continue;
+            }
+            a.captive = static_cast<std::uint8_t>(role);
+            a.captiveSite = slot;
+        }
 
         // ---- the offer
         const auto& offer = tale.contains("offer") ? tale["offer"] : nlohmann::json::object();
@@ -637,6 +682,15 @@ namespace IntelEngine::Tales {
                     if (!name.empty()) a.bossName[n.site - 1u] = name;
                 }
                 st.edges.push_back({A::If::Done, branch(s, i, where)});
+            } else if (kind == "free") {
+                // Someone held at a place: reached there, and free. (The engine keeps them alive and in their bonds
+                // until then, and the people of the place leave them be.)
+                n.kind = A::Kind::Free;
+                n.who = with(Str(s, "who").empty() && !Str(s, "with").empty() ? "with" : "who");
+                if (!a.captive) fail(where + ": nobody of the story is held anywhere (\"held\": \"dX\" on one of the people)");
+                else if (n.who != A::RNone && n.who != static_cast<A::Role>(a.captive)) fail(where + ": the one to free is the one who is held");
+                n.site = a.captiveSite;
+                st.edges.push_back({A::If::Done, branch(s, i, where)});
             } else if (kind == "ambush") {
                 // Hired men on the player's road, sent by someone of the story ("by"; left out when nobody knows yet).
                 if (ambushes++ > 0) fail(where + ": one ambush in a story");
@@ -682,7 +736,7 @@ namespace IntelEngine::Tales {
                 n.waitHours = static_cast<float>(std::clamp(Int(s, "hours", 12), 1, 72));
                 st.edges.push_back({A::If::Done, branch(s, i, where)});
             } else {
-                fail(where + ": \"do\" must be talk, find, give, choose, visit, wait, brawl, go, delve, slay, ambush or stalk");
+                fail(where + ": \"do\" must be talk, find, give, choose, visit, wait, brawl, go, delve, slay, free, ambush or stalk");
             }
             if (static_cast<unsigned>(n.kind) != 0 && (pool.barred & (1u << static_cast<unsigned>(n.kind)))) {
                 fail(where + ": no \"" + kind + "\" in this story (a story told lately had one): tell this one another way");
@@ -734,6 +788,103 @@ namespace IntelEngine::Tales {
             newIndex[i] = static_cast<int>(kept++);
         }
         if (kept > A::kMaxTaleNodes) fail("steps: at most " + std::to_string(A::kMaxTaleNodes));
+        if (!err.empty()) return r;
+
+        // ---- someone held: a step of the story frees them, and nothing is done with them before it
+        const auto kindOf = [&](std::size_t i) { return built[i].node.kind; };
+        if (a.captive) {
+            const auto captive = static_cast<A::Role>(a.captive);
+            const auto* held = personOf(captive);
+            const std::string name = held ? held->key : std::string("someone");
+            bool freed = false;
+            for (std::size_t i = 0; i < steps.size(); ++i) freed = freed || (reach[i] && kindOf(i) == A::Kind::Free);
+            if (!freed) fail("steps: " + name + " is held and no step frees them ({\"do\": \"free\", \"who\": \"" + name + "\"})");
+            // What can be reached without passing the step that frees them.
+            std::vector<bool> early(steps.size(), false);
+            std::vector<std::size_t> open;
+            if (kindOf(0) != A::Kind::Free) {
+                early[0] = true;
+                open.push_back(0);
+            }
+            while (!open.empty()) {
+                const auto at = open.back();
+                open.pop_back();
+                for (const int to : leads[at]) {
+                    const auto next = static_cast<std::size_t>(to);
+                    if (to >= 0 && !early[next] && kindOf(next) != A::Kind::Free) {
+                        early[next] = true;
+                        open.push_back(next);
+                    }
+                }
+            }
+            for (std::size_t i = 0; i < steps.size(); ++i) {
+                if (!early[i]) continue;
+                const auto& n = built[i].node;
+                const bool theirs = n.who == captive || (n.kind == A::Kind::Have && n.prop < A::kProps && a.propPocket[n.prop] == a.captive);
+                if (theirs) fail("step " + Str(steps[i], "id") + ": " + name + " is held until a step frees them: nothing is done with them before that");
+            }
+        } else if (std::any_of(built.begin(), built.end(), [](const Step& st) { return st.node.kind == A::Kind::Free; })) {
+            fail("steps: a step frees someone, and nobody of the story is held");
+        }
+        if (pool.mustCaptive && !a.captive) {
+            fail("people: this story is about someone held at one of the places: give one of the people \"held\": \"dX\", and free them in a step");
+        }
+
+        // ---- what makes a story worth living, held to by the engine (stories asked of the model only)
+        if (pool.depth) {
+            const auto among = [&](std::size_t i) {
+                const auto k = kindOf(i);
+                return k == A::Kind::Talk || k == A::Kind::Choose || k == A::Kind::Visit || k == A::Kind::Stalk || k == A::Kind::Brawl;
+            };
+            const auto outThere = [&](std::size_t i) {
+                const auto k = kindOf(i);
+                return k == A::Kind::Delve || k == A::Kind::Slay || k == A::Kind::Free;
+            };
+            std::set<int> endingsReached;
+            bool anyPlace = false;
+            int amongPeople = 0;
+            for (std::size_t i = 0; i < steps.size(); ++i) {
+                if (!reach[i]) continue;
+                for (const auto& [when, b] : built[i].edges) if (b.to < 0) endingsReached.insert(b.to);
+                anyPlace = anyPlace || outThere(i);
+                amongPeople += among(i) ? 1 : 0;
+            }
+            if (endingsReached.size() < 2) {
+                fail("steps: every way through this story leads to the same ending: give {player} a real choice, or a talk that can go two ways, and let those ways end differently (end:good, end:bad, end:other)");
+            }
+            if (pool.mustPlace && !anyPlace) {
+                fail("steps: this story leads out into the world: one of the places listed must be part of it (\"delve\", \"slay\", or someone \"held\" there and a step \"free\")");
+            }
+            if (anyPlace) {
+                if (amongPeople < 2) {
+                    fail("steps: a place out in the world is one act of a story, never the whole of it: at least two steps among people (talk, choose, visit) besides it");
+                }
+                // What is found or done out there must change something among the people: no place step from which
+                // only fetching and handing over follow.
+                for (std::size_t i = 0; i < steps.size(); ++i) {
+                    if (!reach[i] || !outThere(i)) continue;
+                    std::vector<bool> seen(steps.size(), false);
+                    std::vector<std::size_t> open{i};
+                    seen[i] = true;
+                    bool leadsOn = false;
+                    while (!open.empty() && !leadsOn) {
+                        const auto at = open.back();
+                        open.pop_back();
+                        for (const int to : leads[at]) {
+                            const auto next = static_cast<std::size_t>(to);
+                            if (to < 0 || seen[next]) continue;
+                            seen[next] = true;
+                            if (among(next)) leadsOn = true;
+                            open.push_back(next);
+                        }
+                    }
+                    if (!leadsOn) {
+                        fail("step " + Str(steps[i], "id") + ": the story ends at the place, with nothing but fetching and handing over after it: what {player} finds or does there must lead on to a talk or a choice among the people (who is faced with it, what is decided)");
+                        break;
+                    }
+                }
+            }
+        }
         if (!err.empty()) return r;
 
         // ---- the reward changes hands in person: an ending that pays, reached on a step that is not with the asker,
