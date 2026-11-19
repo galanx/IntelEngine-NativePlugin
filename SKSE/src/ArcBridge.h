@@ -199,6 +199,8 @@ namespace IntelEngine {
             std::array<std::int8_t, Arcs::kSites> bossState{};   // last seen: 0 unknown, 1 alive and loaded, 2 dead, 3 gone
             std::array<bool, Arcs::kSites> bossSeenAlive{};      // the boss was loaded and alive once (its death then counts)
             std::uint8_t gangSite = 0;                           // a place (index + 1) whose company the script is to place
+            RE::FormID siteMarker = 0;                           // where the journal last pointed for a step out in the world
+            bool siteMarkerKnown = false;
             // A tale's ambush: what the script is asked to do (1 place, 2 strike, 3 call off), and when it may be asked.
             std::uint8_t ambushDo = 0;
             float ambushHold = -1.0f;    // real seconds: not placed again before this

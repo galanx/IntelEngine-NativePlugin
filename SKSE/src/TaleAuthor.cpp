@@ -247,6 +247,13 @@ namespace IntelEngine {
 
         // What lives in a place, read from its location's keywords (any language, any modlist that keeps them).
         std::uint8_t SiteKindOf(RE::BGSLocation* location) {
+            // Only what the game itself treats as a place to fight one's way through. A town's working mine carries
+            // the mine keyword and nothing else: Quicksilver Mine in Dawnstar and Left Hand Mine, with their miners
+            // at work, were on offer as "bandit hideouts", their heart a miner called Lond (seen 2026-11-19). A
+            // story would have put a bandit chief among them.
+            if (!location || !(location->HasKeywordString("LocTypeDungeon") || location->HasKeywordString("LocTypeClearable"))) {
+                return Tales::SiteNone;
+            }
             int depth = 0;
             for (auto* loc = location; loc && depth < 2; loc = loc->parentLoc, ++depth) {
                 if (loc->HasKeywordString("LocTypeDragonLair")) return Tales::SiteNone;   // dragons: not yet
@@ -637,17 +644,24 @@ namespace IntelEngine {
                     ++refused;
                     continue;
                 }
+                // The heart of many places is no reference of the game until its part of the place is loaded (every
+                // Dwemer ruin looked at; Mzinchaleft's lies in its second hall). Such a place is offered all the
+                // same: its master is put there when the player gets that far, and until then the journal leads to
+                // the place itself (ArcBridge: PlaceMarker, the watch's signal 14).
                 const float distance = townAt && p.hasAt ? townAt->GetDistance(p.at) : 1.0e9f;
                 nearby.push_back({p, kind, distance});
             }
             std::sort(nearby.begin(), nearby.end(), [](const Near& x, const Near& y) { return x.distance < y.distance; });
             std::map<std::uint8_t, int> perKind;
+            std::vector<std::string> offered;   // a place is offered once, however many records carry its name
             for (const auto& n : nearby) {
                 if (request->pool.sites.size() >= 8) break;
-                if (++perKind[n.kind] > 2) continue;
                 auto* location = RE::TESForm::LookupByID<RE::BGSLocation>(n.p.location);
                 const char* name = location ? location->GetFullName() : nullptr;
                 if (!name || !*name) continue;
+                if (std::find(offered.begin(), offered.end(), name) != offered.end()) continue;
+                if (++perKind[n.kind] > 2) continue;
+                offered.emplace_back(name);
                 Tales::Site site;
                 site.key = "d" + std::to_string(request->pool.sites.size() + 1);
                 site.name = name;
@@ -691,6 +705,7 @@ namespace IntelEngine {
             if (!heartLean.empty()) {
                 lean = Hearts::LeanWord(wants);
                 request->heart = true;
+                request->pool.heart = true;
                 logger::info("Tales: {} and the player: a story of the heart ({})", asker->GetDisplayFullName(), lean);
             }
         }

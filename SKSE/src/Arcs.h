@@ -848,7 +848,7 @@ namespace IntelEngine::Arcs {
         }
     }
     inline std::string OfferPrompt(const Arc& a) {
-        if (a.pattern == Pattern::Tale) return a.offerAsk + " Reward: {gold} gold.";
+        if (a.pattern == Pattern::Tale) return a.gold ? a.offerAsk + " Reward: {gold} gold." : a.offerAsk;
         switch (a.pattern) {
             case Pattern::Thief: return "Someone stole {item0}. {asker} asks you to find the thief and bring it back. Reward: {gold} gold.";
             case Pattern::Feud:
