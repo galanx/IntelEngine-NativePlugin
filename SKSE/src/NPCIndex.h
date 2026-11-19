@@ -503,7 +503,8 @@ namespace IntelEngine {
             std::string location;
             std::string archetype;
             std::string bio;
-            std::string npcHold;       // settlement (city/town) or hold fallback
+            std::string npcHold;       // the hold (the settlement only where no hold is known)
+            std::string npcSettlement; // the city or town, when they are in one
             std::string factionName;   // pre-resolved political faction display name (empty if none)
             std::string eligibleTypes; // story types this candidate may be used for (GetEligibleStoryTypes)
             bool        isFemale      = false;

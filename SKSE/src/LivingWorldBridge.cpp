@@ -34,10 +34,27 @@ namespace IntelEngine {
             return kind;
         }
 
+        // Another mod's scene with the player in it (OStim), told by the script from that mod's own events: real
+        // seconds until which it counts as running. It ends with the scene's end event, a load, or half an hour.
+        std::atomic<double> g_sceneBusyUntil{0.0};
+        double RealNowSeconds() {
+            return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+        }
+
+        // In the middle of a scene: one of the game's that the player is part of, or another mod's. Nobody walks in
+        // on that, at any level of the living world ("is this a bad time to say bandits are getting close to
+        // Falkreath?", in the middle of an OStim scene).
+        bool InScene() {
+            auto* player = RE::PlayerCharacter::GetSingleton();
+            if (player && player->GetCurrentScene()) return true;
+            return RealNowSeconds() < g_sceneBusyUntil.load();
+        }
+
         // A bad moment for an ordinary visit: a fight, a conversation, a scene, a menu over the game.
         bool BadMoment() {
             auto* player = RE::PlayerCharacter::GetSingleton();
             if (player && player->IsInCombat()) return true;
+            if (InScene()) return true;
             if (auto* ui = RE::UI::GetSingleton()) {
                 if (ui->GameIsPaused()) return true;
                 for (const auto menu : {"Dialogue Menu"sv, "OstimSceneMenu"sv, "Sleep/Wait Menu"sv, "BarterMenu"sv}) {
@@ -105,6 +122,11 @@ namespace IntelEngine {
 
     bool LivingWorldBridge::IsBadMoment() { return BadMoment(); }
 
+    void LivingWorldBridge::SetSceneBusy(bool busy) {
+        g_sceneBusyUntil.store(busy ? RealNowSeconds() + 1800.0 : 0.0);
+        logger::info("LivingWorld: another mod's scene with the player {}", busy ? "has begun: nobody comes until it is over" : "is over");
+    }
+
     bool LivingWorldBridge::MayOfferForStory(RE::Actor* actor) const {
         const auto settings = GetSettings();
         if (settings.level == LivingWorld::WorldLevel::Classic || !actor) return true;
@@ -150,6 +172,11 @@ namespace IntelEngine {
 
     bool LivingWorldBridge::MayDeliver(int seam, bool urgent) {
         const auto settings = GetSettings();
+        // Nobody walks into a scene, at the Classic level either (the one thing changed there).
+        if (InScene()) {
+            logger::info("LivingWorld: held back: the player is in the middle of a scene");
+            return false;
+        }
         if (settings.level == LivingWorld::WorldLevel::Classic) return true;  // today's behaviour, untouched
         if (seam < 0 || seam > static_cast<int>(LivingWorld::Seam::InCombat)) seam = 0;
         LivingWorld::Situation at;
@@ -378,6 +405,7 @@ namespace IntelEngine {
     }
 
     void LivingWorldBridge::Revert() {
+        g_sceneBusyUntil.store(0.0);
         std::scoped_lock lock(m_mutex);
         m_lives.clear();
         m_state = LivingWorld::DirectorState{};

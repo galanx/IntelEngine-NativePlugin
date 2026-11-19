@@ -121,6 +121,7 @@ namespace IntelEngine::Papyrus {
     RE::BSFixedString LivingWorldDescribe(RE::StaticFunctionTag*, RE::Actor*);
     bool LivingWorldMayMove(RE::StaticFunctionTag*, RE::Actor*, RE::BSFixedString);
     bool LivingWorldQuestHolds(RE::StaticFunctionTag*, RE::Actor*);
+    void LivingWorldSceneBusy(RE::StaticFunctionTag*, bool);
     RE::TESObjectREFR* ResolveSkyrimNetPlace(RE::StaticFunctionTag*, RE::Actor*, RE::BSFixedString);
     float SkyrimNetPlaceOffset(RE::StaticFunctionTag*, RE::Actor*, std::int32_t);
     RE::TESForm* ResolveItemByName(RE::StaticFunctionTag*, RE::BSFixedString);
@@ -513,6 +514,7 @@ namespace IntelEngine::Papyrus {
         a_vm->RegisterFunction("LivingWorldDescribe", SCRIPT_NAME, LivingWorldDescribe); ++count;
         a_vm->RegisterFunction("LivingWorldMayMove", SCRIPT_NAME, LivingWorldMayMove); ++count;
         a_vm->RegisterFunction("LivingWorldQuestHolds", SCRIPT_NAME, LivingWorldQuestHolds); ++count;
+        a_vm->RegisterFunction("LivingWorldSceneBusy", SCRIPT_NAME, LivingWorldSceneBusy); ++count;
         a_vm->RegisterFunction("ResolveSkyrimNetPlace", SCRIPT_NAME, ResolveSkyrimNetPlace); ++count;
         a_vm->RegisterFunction("SkyrimNetPlaceOffset", SCRIPT_NAME, SkyrimNetPlaceOffset); ++count;
         a_vm->RegisterFunction("ResolveItemByName", SCRIPT_NAME, ResolveItemByName); ++count;
@@ -2650,6 +2652,8 @@ namespace IntelEngine::Papyrus {
     bool LivingWorldMayMove(RE::StaticFunctionTag*, RE::Actor* npc, RE::BSFixedString storyType) {
         return LivingWorldBridge::GetSingleton()->MayMoveForStory(npc, storyType.c_str() ? storyType.c_str() : "");
     }
+
+    void LivingWorldSceneBusy(RE::StaticFunctionTag*, bool busy) { LivingWorldBridge::SetSceneBusy(busy); }
 
     // Held by the game right now, whatever the settings say: a scene they are part of, or a quest of the player's whose
     // shown objective points at them. (Neloth was walked off by a travel task in the middle of his own quest.)
