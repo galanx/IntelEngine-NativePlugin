@@ -93,8 +93,10 @@ namespace IntelEngine::Arcs {
         Befriend = 7,    // the role and `bondWith` become friends (the game's relationship rank)
         Estrange = 8,    // the role and `bondWith` become rivals
         GiveItem = 9,    // the role hands prop `prop` (the edge's) to the player, from wherever it is
+        Closer = 10,     // the role and the player grow closer by a step (the game's own rank, within friendship: Hearts.h)
+        Apart = 11,      // the role and the player grow apart by a step
     };
-    constexpr std::uint8_t kEffects = 9;
+    constexpr std::uint8_t kEffects = 11;
 
     enum class If : std::uint8_t {
         Done = 1,     // the node's own fact holds
@@ -190,6 +192,7 @@ namespace IntelEngine::Arcs {
         constexpr std::uint32_t Refused = 1u << 10;       // the rival would not be talked round
         constexpr std::uint32_t CameFar = 1u << 11;       // the asker came to the player from another hold (rare: counted)
         constexpr std::uint32_t Deferred = 1u << 12;      // the asker could not reach the player (gone): at the next meeting
+        constexpr std::uint32_t Heart = 1u << 13;         // a story of the heart between the asker and the player (never two running)
     }
 
     struct PatternDef {

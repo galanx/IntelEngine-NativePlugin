@@ -163,6 +163,7 @@ set(SOURCES
     src/QuestBridge.cpp
     src/ArcBridge.cpp
     src/TaleAuthor.cpp
+    src/HeartBridge.cpp
     src/StoryDirector.cpp
     src/SettingsBridge.cpp
     src/AsyncDispatch.cpp
@@ -213,6 +214,8 @@ add_executable(QuestsCheck EXCLUDE_FROM_ALL tests/QuestsCheck.cpp)
 target_include_directories(QuestsCheck PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 add_executable(ArcsCheck EXCLUDE_FROM_ALL tests/ArcsCheck.cpp)
 target_include_directories(ArcsCheck PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+add_executable(HeartsCheck EXCLUDE_FROM_ALL tests/HeartsCheck.cpp)
+target_include_directories(HeartsCheck PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 add_executable(TalesCheck EXCLUDE_FROM_ALL tests/TalesCheck.cpp)
 target_include_directories(TalesCheck PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(TalesCheck PRIVATE nlohmann_json::nlohmann_json)

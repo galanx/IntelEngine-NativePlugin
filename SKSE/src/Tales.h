@@ -470,6 +470,11 @@ namespace IntelEngine::Tales {
                 b.bondWith = person(y, where.c_str());
                 if (b.effectRole == b.bondWith) fail(where + ": " + words[0] + " needs two different people");
                 b.effect = words[0] == "befriend" ? A::Effect::Befriend : A::Effect::Estrange;
+            } else if (words[0] == "closer" || words[0] == "apart") {
+                // "closer p2": that person and {player} grow closer by a step; "apart p2": they cool toward {player}.
+                if (words.size() < 2) return missing();
+                b.effectRole = person(rest(1), where.c_str());
+                b.effect = words[0] == "closer" ? A::Effect::Closer : A::Effect::Apart;
             } else if (words[0] == "give") {
                 // "give i1": the step's person hands the item over (a confession, a bargain): it reaches the player.
                 if (words.size() < 2) return missing();

@@ -1,4 +1,5 @@
 #include "ArcBridge.h"
+#include "HeartBridge.h"
 
 #include "CellAnalyzer.h"
 #include "ItemNames.h"
@@ -2394,6 +2395,7 @@ namespace IntelEngine {
     }
 
     void ArcBridge::Revert() {
+        HeartBridge::Forget();
         std::scoped_lock lock(m_mutex);
         m_book = A::Book{};
         m_pending.clear();
@@ -2461,6 +2463,12 @@ namespace IntelEngine {
         void ArcOfferLater(RE::StaticFunctionTag*, std::int32_t id) { ArcBridge::GetSingleton()->OfferLater(U(id)); }
         void ArcOfferDeferred(RE::StaticFunctionTag*, std::int32_t id) { ArcBridge::GetSingleton()->OfferDeferred(U(id)); }
         RE::Actor* ArcCompany(RE::StaticFunctionTag*, std::int32_t id) { return ArcBridge::GetSingleton()->Company(U(id)); }
+        // What only scripts can read of someone's heart (other mods keep it in script storage): Hearts.h, HeartBridge.
+        void ArcHeart(RE::StaticFunctionTag*, RE::Actor* who, std::int32_t sparked, std::int32_t stance, std::int32_t withChild,
+                      bool childIsPlayers, std::int32_t children, bool playersChild) {
+            if (who) HeartBridge::Told(who->GetFormID(), sparked, stance, withChild, childIsPlayers, children, playersChild);
+        }
+        std::int32_t ArcRankAfter(RE::StaticFunctionTag*, std::int32_t rank, bool closer) { return Hearts::RankAfter(rank, closer); }
         void ArcEarshot(RE::StaticFunctionTag*, float units) {
             // Whisper mode shrinks SkyrimNet's distance to a couple of steps: someone that near still stands there.
             const float earshot = std::isfinite(units) && units > 0.0f ? std::clamp(units, 500.0f, 3000.0f) : kEarshotDefault;
@@ -2542,6 +2550,8 @@ namespace IntelEngine {
         a_vm->RegisterFunction("ArcOfferDeferred", script, ArcOfferDeferred); ++count;
         a_vm->RegisterFunction("ArcCompany", script, ArcCompany); ++count;
         a_vm->RegisterFunction("ArcEarshot", script, ArcEarshot); ++count;
+        a_vm->RegisterFunction("ArcHeart", script, ArcHeart); ++count;
+        a_vm->RegisterFunction("ArcRankAfter", script, ArcRankAfter); ++count;
         a_vm->RegisterFunction("ArcOfferHeldBack", script, ArcOfferHeldBack); ++count;
         a_vm->RegisterFunction("ArcHurries", script, ArcHurries); ++count;
         a_vm->RegisterFunction("ArcReachOf", script, ArcReachOf); ++count;

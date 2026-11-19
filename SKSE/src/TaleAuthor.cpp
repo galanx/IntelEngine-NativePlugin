@@ -6,6 +6,7 @@
 
 #include "AsyncDispatch.h"
 #include "DialogueTracker.h"
+#include "HeartBridge.h"
 #include "ItemIndex.h"
 #include "ItemNames.h"
 #include "LivingWorldBridge.h"
@@ -328,6 +329,7 @@ namespace IntelEngine {
             RE::FormID town = 0;
             bool afar = false;             // the director's: the asker comes to the player wherever the player is
             bool otherHold = false;        // ... from another hold
+            bool heart = false;            // a story of the heart between the asker and the player (Hearts.h)
             std::vector<RE::FormID> bios;  // whose bio summaries the worker adds (file reads stay off the game thread)
         };
         std::shared_ptr<Request> g_request;   // the tale being written (one at a time)
@@ -411,6 +413,8 @@ namespace IntelEngine {
         std::vector<std::string> told;
         std::vector<std::string> recentGenres;
         std::vector<std::uint32_t> recentBeats;   // the step kinds (bit per kind) of the stories the player took on, newest first
+        bool recentHeart = false;                 // one of the last two stories, or one still open, was of the heart
+        int heartLooked = 0;
         {
             std::scoped_lock lock(m_mutex);
             if (m_book.Count(A::Phase::Planned) > 0 || m_book.Count(A::Phase::Open) >= A::kMaxOpen) {
@@ -425,6 +429,7 @@ namespace IntelEngine {
             // What was told already (newest first): never again.
             for (auto it = m_book.all.rbegin(); it != m_book.all.rend() && told.size() < 10; ++it) {
                 if (it->ending == A::Ending::Lapsed) continue;
+                if ((heartLooked++ < 2 || A::IsOpen(*it)) && (it->flags & A::Flag::Heart)) recentHeart = true;
                 if (it->phase != A::Phase::Planned && it->ending != A::Ending::Declined) {
                     std::uint32_t beats = 0;
                     for (const auto& n : A::NodesOf(*it)) beats |= 1u << static_cast<unsigned>(n.kind);
@@ -501,6 +506,11 @@ namespace IntelEngine {
             if (person.canBrawl) can.push_back("would settle a matter with fists");
             j["may"] = can;
             j["ties"] = TiesOf(npc);
+            // What stands between them and the player, as the game and its mods keep it: fact for the author, so no
+            // story gives the player's wife another love or reopens what the player turned down.
+            if (auto* whoRef = RE::TESForm::LookupByID<RE::Actor>(f.ref)) {
+                if (const auto heart = HeartBridge::WordsFor(whoRef); !heart.empty()) j["heart"] = heart;
+            }
             // Who holds office in the hold (the jarl, the steward) has a part in Skyrim's own story: a tale may bring a
             // matter before them, never make them the guilty one (the first model-written politics tale made the
             // jarl's steward a secret smuggler, 2026-11-19).
@@ -591,6 +601,7 @@ namespace IntelEngine {
                 j["home"] = where.empty() ? std::string("away, living a life of their own") : "away, at " + where + " now";
                 j["may"] = nlohmann::json::array();
                 j["ties"] = TiesOf(base);
+                if (const auto heart = HeartBridge::WordsFor(companion); !heart.empty()) j["heart"] = heart;
                 j["old"] = c.life.empty() ? std::string("They parted from " + PlayerName() + " a while ago.") : c.life;
                 request->pool.people.push_back(person);
                 request->bios.push_back(c.actor);
@@ -663,7 +674,26 @@ namespace IntelEngine {
         for (const auto* g : kGenres) {
             if (std::find(recentGenres.begin(), recentGenres.begin() + std::min<std::size_t>(recentGenres.size(), 5), g) == recentGenres.end()) fresh.push_back(g);
         }
-        const std::string lean = fresh.empty() ? std::string(kGenres[seed % kGenres.size()]) : fresh[seed % fresh.size()];
+        std::string lean = fresh.empty() ? std::string(kGenres[seed % kGenres.size()]) : fresh[seed % fresh.size()];
+        // A story of the heart, when that is what stands between the asker and the player (Hearts.h decides who and
+        // what, from facts): about the two of them, not a favour for a third. Never two such stories running, and
+        // none while one is open.
+        std::string heartLean;
+        if (written.empty() && !recentHeart) {
+            const auto wants = HeartBridge::LeanFor(asker);
+            switch (wants) {
+                case Hearts::Lean::Courtship: heartLean = "courtship"; break;
+                case Hearts::Lean::Together: heartLean = "together"; break;
+                case Hearts::Lean::Family: heartLean = "family"; break;
+                case Hearts::Lean::Affair: heartLean = "affair"; break;
+                default: break;
+            }
+            if (!heartLean.empty()) {
+                lean = Hearts::LeanWord(wants);
+                request->heart = true;
+                logger::info("Tales: {} and the player: a story of the heart ({})", asker->GetDisplayFullName(), lean);
+            }
+        }
 
         nlohmann::json ctx;
         ctx["player_name"] = PlayerName();
@@ -723,6 +753,7 @@ namespace IntelEngine {
         ctx["quests"] = PlayerQuests();
         ctx["told"] = told;
         ctx["lean"] = lean;
+        if (!heartLean.empty()) ctx["heart_lean"] = heartLean;
         ctx["reward"] = request->pool.gold;
         {
             const int knowsPlayer = KnowsPlayer(asker, me->town);
@@ -872,6 +903,7 @@ namespace IntelEngine {
         }
         a.place = request->town;
         if (request->otherHold) a.flags |= A::Flag::CameFar;
+        if (request->heart) a.flags |= A::Flag::Heart;
         a.seed = A::detail::Mix(request->asker, static_cast<std::uint32_t>(NowDays() * 1440.0f));
         g_request.reset();
         m_taleBusy.store(false);
