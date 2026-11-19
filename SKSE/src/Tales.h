@@ -15,7 +15,7 @@
 //   "endings": {"good": {...}, "bad": {...}, "other": {...}}   each {"journal", "rumor", "pay", "memories": {"p0": "..."}}
 // }
 // A branch ("then") names a step id or "end:good", "end:bad", "end:other"; an "effect" is one of "jail pX", "leave pX",
-// "befriend pX pY", "estrange pX pY", "pay", "player pays pX N".
+// "befriend pX pY", "estrange pX pY", "pay", "player pays pX N", "give iN" (the step's person hands the item over).
 
 #include "Arcs.h"
 
@@ -158,6 +158,15 @@ namespace IntelEngine::Tales {
         // ---- the people: p0 is the asker (role 1), the others take roles 2..7 in the order written
         std::map<std::string, const Person*> byKey;
         for (const auto& p : pool.people) byKey[Lower(p.key)] = &p;
+        // A person may be named by key ("p3") or, as models sometimes do, by name ("Brenuin").
+        const auto canon = [&](const std::string& raw) {
+            const auto key = Lower(Trim(raw));
+            if (byKey.contains(key)) return key;
+            for (const auto& p : pool.people) {
+                if (Lower(p.name) == key) return Lower(p.key);
+            }
+            return key;
+        };
         std::map<std::string, A::Role> roleOf;
         const auto& people = tale.contains("people") ? tale["people"] : nlohmann::json();
         if (!people.is_array() || people.size() < 2) fail("people: at least the asker and one other person");
@@ -165,11 +174,11 @@ namespace IntelEngine::Tales {
         if (people.is_array()) {
             // The asker first, whatever order they were written in.
             std::vector<const nlohmann::json*> order;
-            for (const auto& p : people) if (Lower(Str(p, "who")) == Lower(pool.people[0].key)) order.push_back(&p);
-            for (const auto& p : people) if (Lower(Str(p, "who")) != Lower(pool.people[0].key)) order.push_back(&p);
-            if (order.empty() || Lower(Str(*order[0], "who")) != Lower(pool.people[0].key)) fail("people: " + pool.people[0].key + " (who asks) must be one of them");
+            for (const auto& p : people) if (canon(Str(p, "who")) == Lower(pool.people[0].key)) order.push_back(&p);
+            for (const auto& p : people) if (canon(Str(p, "who")) != Lower(pool.people[0].key)) order.push_back(&p);
+            if (order.empty() || canon(Str(*order[0], "who")) != Lower(pool.people[0].key)) fail("people: " + pool.people[0].key + " (who asks) must be one of them");
             for (const auto* p : order) {
-                const auto key = Lower(Str(*p, "who"));
+                const auto key = canon(Str(*p, "who"));
                 const auto found = byKey.find(key);
                 if (found == byKey.end()) {
                     fail("people: \"" + key + "\" is nobody of the list");
@@ -195,7 +204,7 @@ namespace IntelEngine::Tales {
             }
         }
         const auto person = [&](const std::string& raw, const char* where) -> A::Role {
-            const auto key = Lower(Trim(raw));
+            const auto key = canon(raw);
             const auto it = roleOf.find(key);
             if (it == roleOf.end()) {
                 fail(std::string(where) + ": \"" + raw + "\" is not one of the tale's people");
@@ -312,6 +321,7 @@ namespace IntelEngine::Tales {
         };
         struct Branch {
             int to = -2;
+            int prop = -1;   // GiveItem: which prop
             std::string line;
             A::Effect effect = A::Effect::None;
             A::Role effectRole = A::RNone;
@@ -319,34 +329,63 @@ namespace IntelEngine::Tales {
             std::uint32_t price = 0;
         };
         const auto effectOf = [&](const nlohmann::json& j, Branch& b, const std::string& where) {
-            const auto words = Split(Lower(Str(j, "effect")));
+            const auto raw = Lower(Str(j, "effect"));
+            const auto words = Split(raw);
             if (words.empty() || words[0] == "none") return;
-            const auto need = [&](std::size_t n) {
-                if (words.size() < n) fail(where + ": effect \"" + Str(j, "effect") + "\" is missing a person");
-                return words.size() >= n;
+            // What follows the verb: one person ("p3", or a name of several words), or two joined by "and"/"with".
+            const auto rest = [&](std::size_t from) {
+                std::string s;
+                for (std::size_t i = from; i < words.size(); ++i) s += (s.empty() ? "" : " ") + words[i];
+                return s;
             };
+            const auto two = [&](const std::string& s, std::string& x, std::string& y) {
+                for (const char* sep : {" and ", " with ", " & "}) {
+                    if (const auto at = s.find(sep); at != std::string::npos) {
+                        x = s.substr(0, at);
+                        y = s.substr(at + std::strlen(sep));
+                        return true;
+                    }
+                }
+                const auto parts = Split(s);
+                if (parts.size() != 2) return false;
+                x = parts[0];
+                y = parts[1];
+                return true;
+            };
+            const auto missing = [&]() { fail(where + ": effect \"" + Str(j, "effect") + "\" is missing a person"); };
             if (words[0] == "pay") {
                 b.effect = A::Effect::PayGold;
                 b.effectRole = A::RAsker;
             } else if (words[0] == "jail" || words[0] == "leave") {
-                if (!need(2)) return;
-                b.effectRole = person(words[1], where.c_str());
+                if (words.size() < 2) return missing();
+                b.effectRole = person(rest(1), where.c_str());
                 const auto* who = personOf(b.effectRole);
                 if (b.effectRole == A::RAsker || (who && !who->canJail)) {
-                    fail(where + ": " + words[1] + " cannot be " + (words[0] == "jail" ? "taken by the guard" : "sent away"));
+                    fail(where + ": " + rest(1) + " cannot be " + (words[0] == "jail" ? "taken by the guard" : "sent away"));
                     return;
                 }
                 b.effect = words[0] == "jail" ? A::Effect::Jail : A::Effect::Leave;
             } else if (words[0] == "befriend" || words[0] == "estrange") {
-                if (!need(3)) return;
-                b.effectRole = person(words[1], where.c_str());
-                b.bondWith = person(words[2], where.c_str());
+                std::string x, y;
+                if (!two(rest(1), x, y)) return missing();
+                b.effectRole = person(x, where.c_str());
+                b.bondWith = person(y, where.c_str());
                 if (b.effectRole == b.bondWith) fail(where + ": " + words[0] + " needs two different people");
                 b.effect = words[0] == "befriend" ? A::Effect::Befriend : A::Effect::Estrange;
-            } else if (words[0] == "player" && words.size() >= 2 && words[1] == "pays") {
-                if (!need(4)) return;
-                b.effectRole = person(words[2], where.c_str());
-                const int amount = std::atoi(words[3].c_str());
+            } else if (words[0] == "give") {
+                // "give i1": the step's person hands the item over (a confession, a bargain): it reaches the player.
+                if (words.size() < 2) return missing();
+                const auto it = propOf.find(words[1]);
+                if (it == propOf.end()) {
+                    fail(where + ": effect \"" + Str(j, "effect") + "\" names no item of the tale");
+                    return;
+                }
+                b.effect = A::Effect::GiveItem;
+                b.prop = it->second;
+            } else if (words[0] == "player" && words.size() >= 4 && words[1] == "pays") {
+                // "player pays p3 50": the last word is the gold, what lies between is the person.
+                b.effectRole = person(rest(2).substr(0, rest(2).size() - words.back().size() - 1), where.c_str());
+                const int amount = std::atoi(words.back().c_str());
                 if (amount < 1 || amount > 2000) fail(where + ": the player pays between 1 and 2000 gold");
                 b.price = static_cast<std::uint32_t>(std::clamp(amount, 1, 2000));
                 b.effect = A::Effect::PlayerPays;
@@ -412,6 +451,7 @@ namespace IntelEngine::Tales {
             } else if (kind == "visit") {
                 n.kind = A::Kind::Visit;
                 n.who = with("with");
+                n.why = Words(Str(s, "why"), 200);
                 st.edges.push_back({A::If::Done, branch(s, i, where)});
             } else if (kind == "find") {
                 n.kind = A::Kind::Have;
@@ -442,6 +482,7 @@ namespace IntelEngine::Tales {
                         const auto when = static_cast<A::If>(static_cast<int>(A::If::Option0) + static_cast<int>(k));
                         if (Bool(o, "persuade")) {
                             if (st.persuadeOption >= 0) fail(where + ": only one option may need Speech");
+                            if (Lower(Str(o, "effect")).starts_with("give")) fail(oWhere + ": an option that needs Speech cannot hand an item over");
                             st.persuadeOption = static_cast<int>(k);
                             if (n.options[k].find("(Speech)") == std::string::npos) n.options[k] += " (Speech)";
                             st.edges.push_back({A::If::Persuaded, branch(o, i, oWhere)});
@@ -545,6 +586,7 @@ namespace IntelEngine::Tales {
                 A::Edge edge;
                 edge.when = when;
                 if (when == A::If::Persuaded) edge.prop = static_cast<std::uint8_t>(st.persuadeOption);
+                else if (b.effect == A::Effect::GiveItem && b.prop >= 0) edge.prop = static_cast<std::uint8_t>(b.prop);
                 if (b.to >= 0) {
                     edge.next = static_cast<std::uint8_t>(newIndex[static_cast<std::size_t>(b.to)]);
                 } else {
@@ -553,6 +595,7 @@ namespace IntelEngine::Tales {
                 edge.line = b.line;
                 edge.effect = b.effect;
                 edge.effectRole = b.effectRole;
+                if (edge.effect == A::Effect::GiveItem && edge.effectRole == A::RNone) edge.effectRole = n.who;   // who hands it over
                 edge.bondWith = b.bondWith;
                 if (b.price) a.price = std::max(a.price, b.price);
                 // A good or other ending the author marked as paid: the asker pays the reward as the tale closes.
@@ -574,7 +617,10 @@ namespace IntelEngine::Tales {
         }
         // Every prop hidden must be found somewhere, and found before it is given.
         for (std::size_t p = 0; p < propOf.size(); ++p) {
-            const bool found = std::any_of(a.graph.begin(), a.graph.end(), [p](const A::Node& n) { return n.kind == A::Kind::Have && n.prop == p; });
+            const bool found = std::any_of(a.graph.begin(), a.graph.end(), [p](const A::Node& n) {
+                if (n.kind == A::Kind::Have && n.prop == p) return true;
+                return std::any_of(n.edges.begin(), n.edges.end(), [p](const A::Edge& e) { return e.effect == A::Effect::GiveItem && e.prop == p; });
+            });
             if (!found) r.notes += "item " + std::to_string(p) + " is never searched for: it can only turn up by chance\n";
         }
         r.ok = err.empty();

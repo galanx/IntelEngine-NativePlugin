@@ -267,7 +267,48 @@ static void SaveData() {
     Book untouched = back;
     Require(!Deserialize(bad, untouched), "a short record is refused");
     Require(untouched.all.size() == back.all.size(), "a refused record leaves the book as it was");
-    Require(!Deserialize(bytes, untouched, 3), "an unknown version is refused");
+    Require(!Deserialize(bytes, untouched, 4), "an unknown version is refused");
+
+    // A save made before tales (record version 1: no tale block) still loads, every pattern arc as it was.
+    std::vector<std::uint8_t> v1;
+    detail::Put(v1, book.nextId);
+    detail::Put(v1, static_cast<std::uint8_t>(book.lastPattern));
+    detail::Put(v1, book.lastSlot);
+    detail::Put(v1, static_cast<std::uint32_t>(book.all.size()));
+    for (const auto& x : book.all) {
+        detail::Put(v1, x.id);
+        detail::Put(v1, static_cast<std::uint8_t>(x.pattern));
+        detail::Put(v1, static_cast<std::uint8_t>(x.phase));
+        detail::Put(v1, static_cast<std::uint8_t>(x.ending));
+        detail::Put(v1, x.slot);
+        detail::Put(v1, x.node);
+        detail::Put(v1, x.visited);
+        detail::Put(v1, x.flags);
+        for (const auto who : x.cast) detail::Put(v1, who);
+        for (std::size_t p = 0; p < kProps; ++p) {
+            detail::Put(v1, x.propBase[p]);
+            detail::Put(v1, x.propAt[p]);
+            detail::PutText(v1, x.propName[p]);
+        }
+        for (const auto r : x.order) detail::Put(v1, static_cast<std::uint8_t>(r));
+        detail::Put(v1, x.place);
+        detail::Put(v1, x.scene);
+        detail::Put(v1, x.gold);
+        detail::Put(v1, x.paid);
+        detail::Put(v1, x.rumor);
+        detail::Put(v1, x.seed);
+        detail::Put(v1, static_cast<std::uint8_t>(x.accused));
+        detail::Put(v1, x.created);
+        detail::Put(v1, x.opened);
+        detail::Put(v1, x.since);
+        detail::Put(v1, x.deadline);
+        detail::PutText(v1, x.title);
+    }
+    Book old;
+    Require(Deserialize(v1, old, 1), "a record of version 1 loads");
+    const Arc& o = *old.Find(id);
+    Require(o.node == 2 && o.cast == a.cast && o.title == a.title && o.paid == 40 && o.graph.empty(), "and its arc is whole");
+    Require(!Deserialize(v1, untouched, 3), "a version 1 record read as version 3 is refused, not misread");
 }
 
 static void Words() {

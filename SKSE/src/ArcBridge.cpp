@@ -10,6 +10,8 @@
 #include "SpeechTracker.h"
 
 #include <chrono>
+#include <filesystem>
+#include <fstream>
 #include <thread>
 
 #include <nlohmann/json.hpp>
@@ -945,6 +947,7 @@ namespace IntelEngine {
             pending.effect2 = static_cast<int>(change.effect2);
             pending.effect2Role = static_cast<int>(change.effect2Role);
             pending.bondWith = static_cast<int>(change.bondWith);
+            pending.effectProp = static_cast<int>(change.effectProp);
             pending.handed = 0;
             pending.brawl = 0;
             // A new step asks afresh: the hold after an answer was the step's before (Ulfberth's peace popup waited two
@@ -976,7 +979,7 @@ namespace IntelEngine {
             logger::info("Arcs: #{} '{}' goes {} {:08X} in {}'s home", id, a->propName[p], spot.floor ? "beside" : "into",
                          spot.ref->GetFormID(), NameOf(a->cast[hider]));
         }
-        if (a->node < nodes.size()) {
+        if (a->node < nodes.size() && !change.any()) {
             const auto& n = nodes[a->node];
             // A visit: the step's person is sent to the player (again after a couple of game hours if they could not
             // come); when they are already here the script has them speak up.
@@ -984,18 +987,22 @@ namespace IntelEngine {
                 (pending.visitAt < 0.0f || now - pending.visitAt > 2.0f / 24.0f || now < pending.visitAt)) {
                 pending.visitAt = now;
                 bits |= 1 << 5;
+                logger::info("Arcs: #{} {} is to come to the player (step {})", id, NameOf(a->cast[n.who]), static_cast<int>(a->node));
             }
             const float real = RealSeconds();
             if ((n.kind == A::Kind::Choose || n.kind == A::Kind::Brawl) && n.who && f.spoke[n.who] && !f.dead[n.who] &&
                 real >= pending.chooseHold) {
                 pending.chooseHold = real + 30.0f;   // the popup is up; Answer sets the real hold
                 bits |= 1 << 25;
+                logger::info("Arcs: #{} step {}: {} has talked with the player; the decision is offered", id, static_cast<int>(a->node),
+                             NameOf(a->cast[n.who]));
             }
             A::Role to = A::RNone;
             std::uint8_t prop = 0;
             if (HandOverOf(n, to, prop) && f.has[prop] && f.spoke[to] && !f.dead[to] && real >= pending.giveHold && !(bits & (1 << 25))) {
                 pending.giveHold = real + kHoldSeconds;
                 bits |= 1 << 26;
+                logger::info("Arcs: #{} step {}: the hand-over to {} is offered", id, static_cast<int>(a->node), NameOf(a->cast[to]));
             }
         }
         return bits;
@@ -1145,6 +1152,26 @@ namespace IntelEngine {
         return true;
     }
 
+    bool ArcBridge::FetchProp(std::uint32_t id, int prop) {
+        auto* player = RE::PlayerCharacter::GetSingleton();
+        std::scoped_lock lock(m_mutex);
+        auto* a = m_book.Find(id);
+        if (!a || !player || prop < 0 || prop >= static_cast<int>(A::kProps) || !a->propBase[prop]) return false;
+        const auto p = static_cast<std::size_t>(prop);
+        if (FindStamped(player, a->propBase[p], a->propName[p]).object) return true;   // the player has it already
+        auto* at = a->propAt[p] ? RE::TESForm::LookupByID<RE::TESObjectREFR>(a->propAt[p]) : nullptr;
+        if (!at) return false;
+        const auto found = FindStamped(at, a->propBase[p], a->propName[p]);
+        if (!found.object) {
+            logger::info("Arcs: #{} '{}' is no longer where it was put", id, a->propName[p]);
+            return false;
+        }
+        at->RemoveItem(found.object, 1, RE::ITEM_REMOVE_REASON::kStoreInContainer, found.extra, player);
+        a->propAt[p] = player->GetFormID();
+        logger::info("Arcs: #{} '{}' handed to the player from {:08X}", id, a->propName[p], at->GetFormID());
+        return true;
+    }
+
     void ArcBridge::Planted(std::uint32_t id, int prop, RE::TESObjectREFR* at) {
         std::scoped_lock lock(m_mutex);
         auto* a = m_book.Find(id);
@@ -1168,6 +1195,7 @@ namespace IntelEngine {
         if (name == "tale") return a->pattern == A::Pattern::Tale ? 1 : 0;
         if (name == "price") return static_cast<int>(a->price ? a->price : a->gold);
         if (name == "bondwith") return pending != m_pending.end() ? pending->second.bondWith : 0;
+        if (name == "effectprop") return pending != m_pending.end() ? pending->second.effectProp : 0;
         if (name == "pattern") return static_cast<int>(a->pattern);
         if (name == "slot") return a->slot == 0xFF ? -1 : a->slot;
         if (name == "node") return a->node;
@@ -1307,9 +1335,12 @@ namespace IntelEngine {
         if (name == "who") return NameOf(a->cast[n.who]);
         if (name == "goal") return Fill(n.goal, *a);
         if (name == "visitwords") {
-            // What brings the step's person to the player: the step itself, in their part of the story.
-            return Fill("{" + std::to_string(static_cast<int>(n.who)) + "} seeks {player} out, about the matter of \"" + a->title +
-                            "\": " + n.goal, *a);
+            // What brings the step's person to the player, from their own side (the author's "why"); else their part
+            // in the matter, which their own lines tell them.
+            const std::string who = "{" + std::to_string(static_cast<int>(n.who)) + "}";
+            if (!n.why.empty()) return Fill(n.why, *a);
+            return Fill(who + " seeks {player} out to talk about the matter of \"" + a->title + "\", as " + who +
+                            " sees it", *a);
         }
         if (name.starts_with("option")) {
             const auto i = static_cast<std::size_t>(std::atoi(name.c_str() + 6));
@@ -1412,7 +1443,8 @@ namespace IntelEngine {
                 if (full) full->fullName = text.c_str();
             };
             name(m_holders[a.slot][0], Fill(a.story, a));
-            if (a.phase == A::Phase::Ended) name(m_holders[a.slot][1], Fill(A::TaleClosing(a), a));
+            // The journal shows a quest's latest log entry only: the ending carries the whole tale with it.
+            if (a.phase == A::Phase::Ended) name(m_holders[a.slot][1], Fill(a.story + "\n\n" + A::TaleClosing(a), a));
         }
     }
 
@@ -1497,7 +1529,7 @@ namespace IntelEngine {
     }
 
     void ArcBridge::Load(SKSE::SerializationInterface* intfc, std::uint32_t version, std::uint32_t length) {
-        if (version != A::kRecordVersion || length > (1u << 20)) {
+        if (version < 1 || version > A::kRecordVersion || length > (1u << 20)) {   // older records load too
             logger::warn("Arcs: skipping a co-save record of version {} ({} bytes)", version, length);
             return;
         }
@@ -1538,6 +1570,9 @@ namespace IntelEngine {
         m_reconciled = false;
         m_loadedAt = std::chrono::steady_clock::now();
         logger::info("Arcs: loaded {} ({} open)", m_book.all.size(), m_book.Count(A::Phase::Open));
+        for (const auto& a : m_book.all) {
+            if (A::IsLive(a) && a.pattern == A::Pattern::Tale) LogOutline(a);
+        }
     }
 
     void ArcBridge::Revert() {
@@ -1595,6 +1630,17 @@ namespace IntelEngine {
             if (slot >= 0) ArcBridge::GetSingleton()->SetHolders(static_cast<std::uint8_t>(slot), tale, close);
         }
         bool ArcRequestTale(RE::StaticFunctionTag*, RE::Actor* asker) { return ArcBridge::GetSingleton()->RequestTale(asker); }
+        bool ArcFetchProp(RE::StaticFunctionTag*, std::int32_t id, std::int32_t prop) { return ArcBridge::GetSingleton()->FetchProp(U(id), prop); }
+        // Test hook: a tale written by hand (a JSON file at an absolute path), cast from the asker's town like any other.
+        bool ArcDebugTaleFile(RE::StaticFunctionTag*, RE::Actor* asker, RE::BSFixedString path) {
+            std::ifstream file(std::filesystem::path(path.c_str() ? path.c_str() : ""), std::ios::binary);
+            if (!file) {
+                logger::warn("Tales: no test tale at '{}'", path.c_str() ? path.c_str() : "");
+                return false;
+            }
+            const std::string text{std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>()};
+            return ArcBridge::GetSingleton()->RequestTale(asker, text);
+        }
     }
 
     void ArcBridge::Register(RE::BSScript::IVirtualMachine* a_vm, int& count) {
@@ -1619,5 +1665,7 @@ namespace IntelEngine {
         a_vm->RegisterFunction("ArcDebugCast", script, ArcDebugCast); ++count;
         a_vm->RegisterFunction("ArcSetHolders", script, ArcSetHolders); ++count;
         a_vm->RegisterFunction("ArcRequestTale", script, ArcRequestTale); ++count;
+        a_vm->RegisterFunction("ArcFetchProp", script, ArcFetchProp); ++count;
+        a_vm->RegisterFunction("ArcDebugTaleFile", script, ArcDebugTaleFile); ++count;
     }
 }

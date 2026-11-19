@@ -195,6 +195,9 @@ namespace IntelEngine {
         // Things a story may turn on: the town's plain jewellery and a few small valuables and tools. Rings and the
         // like are hidden at home only (an NPC may put them on); the rest may sit in a pocket.
         std::vector<Tales::Item> ItemChoices() {
+            // The load order's items do not change in a session: looked up once.
+            static std::vector<Tales::Item> cached;
+            if (!cached.empty()) return cached;
             std::vector<Tales::Item> out;
             std::vector<std::string> names;
             for (const auto id : QuestBridge::GetSingleton()->Keepsakes()) {
@@ -214,6 +217,7 @@ namespace IntelEngine {
                 const bool wield = object->GetFormType() == RE::FormType::Weapon || object->GetFormType() == RE::FormType::Armor;
                 out.push_back({name, object->GetFormID(), !wield});
             }
+            cached = out;
             return out;
         }
 
@@ -234,9 +238,11 @@ namespace IntelEngine {
 
     // ------------------------------------------------------------------ the request
 
-    bool ArcBridge::RequestTale(RE::Actor* asker) {
-        if (!asker || !SkyrimNetAPI::SendCustomPromptToLLM) return false;
+    bool ArcBridge::RequestTale(RE::Actor* asker, const std::string& written) {
+        // `written`: a tale given as JSON (test hook ArcDebugTaleFile) instead of one asked of the model.
+        if (!asker || (written.empty() && !SkyrimNetAPI::SendCustomPromptToLLM)) return false;
         const float real = RealNow();
+        const auto started = std::chrono::steady_clock::now();
         if (m_taleBusy.load()) {
             if (g_requestAt >= 0.0f && real - g_requestAt > kWriteTimeout) {
                 logger::warn("Tales: the tale asked for {:.0f} s ago never came; asking anew", real - g_requestAt);
@@ -252,6 +258,20 @@ namespace IntelEngine {
         }
         const Folk* me = FolkOf(asker->GetFormID());
         if (!me) return false;
+        // A town's story comes to a player who is in that town, from someone who has not asked for anything lately.
+        {
+            auto* player = RE::PlayerCharacter::GetSingleton();
+            auto* cell = player ? player->GetParentCell() : nullptr;
+            auto* here = player ? TownOfLoc(cell && cell->GetLocation() ? cell->GetLocation() : player->GetCurrentLocation()) : nullptr;
+            if (!here || here->GetFormID() != me->town) {
+                logger::info("Tales: no tale for {}: the player is not in their town", asker->GetDisplayFullName());
+                return false;
+            }
+            if (written.empty() && AskedWithin(asker->GetFormID(), 7.0f)) {
+                logger::info("Tales: no tale for {}: they asked the player for something lately", asker->GetDisplayFullName());
+                return false;
+            }
+        }
         std::vector<std::string> told;
         std::vector<std::string> recentGenres;
         {
@@ -329,14 +349,30 @@ namespace IntelEngine {
             if (person.canBrawl) can.push_back("would settle a matter with fists");
             j["may"] = can;
             j["ties"] = TiesOf(npc);
+            // A quest of the game not done yet that has a part for them (Saadia and the Alik'r): their past and fate
+            // there are that quest's, never a tale's.
+            if (const auto bound = npc ? m_journalAliases.find(npc->GetFormID()) : m_journalAliases.end(); bound != m_journalAliases.end()) {
+                std::string quests;
+                int n = 0;
+                for (const auto questId : bound->second) {
+                    auto* quest = RE::TESForm::LookupByID<RE::TESQuest>(questId);
+                    const char* qname = quest ? quest->GetFullName() : nullptr;
+                    if (!quest || quest->IsCompleted() || !qname || !*qname || quests.find(qname) != std::string::npos) continue;
+                    quests += (quests.empty() ? "" : ", ") + std::string(qname);
+                    if (++n >= 3) break;
+                }
+                if (!quests.empty()) j["quest"] = quests;
+            }
             request->pool.people.push_back(person);
             request->bios.push_back(f.ref);
             people.push_back(j);
             return true;
         };
         if (!add(*me, true)) return false;
+        // A test's own tale may cast anyone free in town; the model is shown the few that fit best.
+        const std::size_t poolSize = written.empty() ? kPoolSize : 64;
         for (const auto& c : others) {
-            if (request->pool.people.size() >= kPoolSize) break;
+            if (request->pool.people.size() >= poolSize) break;
             add(*c.folk, false);
         }
         if (request->pool.people.size() < 3) {
@@ -382,8 +418,18 @@ namespace IntelEngine {
         m_taleBusy.store(true);
         g_requestAt = real;
         g_request = request;
-        logger::info("Tales: asking for a tale of {} in {} ({} people, {} items, leaning {}, {} told before)", request->pool.people[0].name,
-                     NameOf(me->town), request->pool.people.size(), request->pool.items.size(), lean, told.size());
+        logger::info("Tales: asking for a tale of {} in {} ({} people, {} items, leaning {}, {} told before; {:.2f} ms)", request->pool.people[0].name,
+                     NameOf(me->town), request->pool.people.size(), request->pool.items.size(), lean, told.size(),
+                     std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count());
+        if (!written.empty()) {
+            std::string who;
+            for (const auto& p : request->pool.people) {
+                if (p.canJail || p.canBrawl) who += " " + p.name + (p.canJail ? " [jail]" : "") + (p.canBrawl ? " [brawl]" : "") + ";";
+            }
+            logger::info("Tales: test pool:{}", who);
+            TaleWritten(request, 9, written);   // a test's own tale: checked and planned at once, no second asking, no fallback
+            return true;
+        }
         // Bio summaries are files: read on the worker, then sent from there.
         AsyncDispatch::Submit([this, request]() {
             auto ctx = nlohmann::json::parse(request->context, nullptr, false);
@@ -436,9 +482,13 @@ namespace IntelEngine {
         auto request = std::static_pointer_cast<Request>(handle);
         if (g_request != request) return;   // a newer request replaced it (timed out)
         const auto fallback = [&](const char* why) {
-            logger::info("Tales: no tale ({}); the town's story falls back to a pattern", why);
             g_request.reset();
             m_taleBusy.store(false);
+            if (attempt >= 9) {
+                logger::info("Tales: no tale ({})", why);   // a test's own tale: nothing else instead
+                return;
+            }
+            logger::info("Tales: no tale ({}); the town's story falls back to a pattern", why);
             auto* asker = RE::TESForm::LookupByID<RE::Actor>(request->asker);
             if (!asker) return;
             const auto id = PlanFor(asker, 0, true);
@@ -449,6 +499,8 @@ namespace IntelEngine {
         const auto close = text.rfind('}');
         nlohmann::json json;
         if (open != std::string::npos && close != std::string::npos && close > open) json = nlohmann::json::parse(text.substr(open, close - open + 1), nullptr, false);
+        // The tale as written, for the record (one line; the model's own words).
+        logger::info("Tales: the tale as written (attempt {}): {}", attempt + 1, json.is_object() ? json.dump() : text.substr(0, 4000));
         auto result = Tales::Compile(json, request->pool);
         if (!result.ok) {
             logger::info("Tales: the tale (attempt {}) does not hold: {}", attempt + 1, result.errors);
@@ -507,7 +559,27 @@ namespace IntelEngine {
         }
         logger::info("Tales: #{} planned: \"{}\" ({}), {} steps, {} gold;{}", id, planned->title, planned->genre, planned->graph.size(), planned->gold, cast);
         logger::info("Tales: #{} premise: {}", id, planned->premise);
+        LogOutline(*planned);
         return id;
+    }
+
+    void ArcBridge::LogOutline(const A::Arc& a) {
+        static constexpr const char* kKinds[] = {"?", "talk", "find", "give", "choose", "brawl", "go", "visit", "wait"};
+        static constexpr const char* kWhens[] = {"?", "done", "option 1", "option 2", "option 3", "picked", "dead", "has", "won", "lost",
+                                                 "handed", "persuaded", "said 1", "said 2", "said 3", "waited"};
+        for (std::size_t i = 0; i < a.graph.size(); ++i) {
+            const auto& n = a.graph[i];
+            std::string line = "Tales: #" + std::to_string(a.id) + " step " + std::to_string(i) + " " +
+                               kKinds[std::min<std::size_t>(static_cast<std::size_t>(n.kind), 8)] + " " + NameOf(n.who ? a.cast[n.who] : 0) +
+                               ": " + n.goal + " |";
+            for (const auto& e : n.edges) {
+                if (e.when == A::If{}) continue;
+                line += " [" + std::string(kWhens[std::min<std::size_t>(static_cast<std::size_t>(e.when), 15)]) + " -> " +
+                        (e.ending != A::Ending::None ? "end " + std::to_string(static_cast<int>(e.ending)) : "step " + std::to_string(static_cast<int>(e.next))) +
+                        (e.effect != A::Effect::None ? ", effect " + std::to_string(static_cast<int>(e.effect)) : std::string()) + "]";
+            }
+            logger::info("{}", line);
+        }
     }
 
     // ------------------------------------------------------------------ the judge of a talk

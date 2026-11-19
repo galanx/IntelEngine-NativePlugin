@@ -172,6 +172,29 @@ static void BrawlAndWaitAndDeath() {
     Require(v.ending == Ending::Done, "he came and talked: done");
 }
 
+static void HandsOver() {
+    // A talk where the person gives the item up: the effect carries the prop and the giver.
+    json j = Sample();
+    j["steps"][0]["outcomes"][0]["effect"] = "give i1";
+    j["steps"][0]["outcomes"][0]["then"] = "s4";
+    auto r = Tales::Compile(j, Town());
+    Require(r.ok, "a talk that hands the item over compiles");
+    Book book;
+    const auto id = book.Plan(r.arc, 1.0f);
+    book.Accept(id, 1.0f);
+    Arc& t = *book.Find(id);
+    Facts f;
+    f.turn = 0;
+    const auto c = Advance(t, f, 1.1f);
+    Require(c.effect == Effect::GiveItem && c.effectRole == 2 && c.effectProp == 0, "Brenuin hands the ring over");
+    Require(t.graph[t.node].kind == Kind::Give, "then it goes back to Ysolda");
+    j["steps"][2]["options"][0]["effect"] = "give i1";
+    Require(Tales::Compile(j, Town()).errors.find("cannot hand an item over") != std::string::npos, "not on a Speech option");
+    j = Sample();
+    j["steps"][0]["outcomes"][0]["effect"] = "give i7";
+    Require(Tales::Compile(j, Town()).errors.find("names no item") != std::string::npos, "only the tale's own items");
+}
+
 static void Refusals() {
     const auto errorsOf = [](json j) { return Tales::Compile(j, Town()).errors; };
     json j = Sample();
@@ -204,12 +227,22 @@ static void Refusals() {
     j["offer"]["words"] = "The player looks lost.";
     const auto ok = Tales::Compile(j, Town());
     Require(ok.ok && ok.arc.offerWords == "{player} looks lost.", "\"the player\" becomes the player's name");
+    // People named by name, also in effects of several words.
+    j = Sample();
+    j["people"][0]["who"] = "Brenuin";
+    j["steps"][2]["options"][0]["effect"] = "befriend Brenuin and Uthgerd";
+    j["steps"][2]["options"][1]["effect"] = "player pays Uthgerd 50";
+    const auto named = Tales::Compile(j, Town());
+    Require(named.ok && named.arc.cast[2] == 0x101, "a person named by name");
+    Require(named.arc.graph[2].edges[1].effectRole == 2 && named.arc.graph[2].edges[1].bondWith == 3, "befriend two named people");
+    Require(named.arc.price == 50 && named.arc.graph[2].edges[3].effectRole == 3, "the player pays a named person");
 }
 
 int main() {
     try {
         CompilesAndRuns();
         BrawlAndWaitAndDeath();
+        HandsOver();
         Refusals();
     } catch (const std::exception& e) {
         std::cerr << "TalesCheck FAILED: " << e.what() << "\n";
