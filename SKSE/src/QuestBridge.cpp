@@ -897,14 +897,24 @@ namespace IntelEngine {
         if (lower == "item") return form(q->item);
         if (lower == "holder") return form(q->holder ? q->holder : q->foe);
         if (lower == "marker") {
+            // Where the journal points, as the game stands now: asked again on every look (Quests.KeepMarker), since
+            // a player does not keep to the order of the steps and what a marker stood on may be gone by then. The
+            // first of the step's candidates that is in the game: one switched off or gone shows no marker at all.
             const auto steps = Q::StepsOf(q->tmpl);
             if (q->step >= steps.size()) return nullptr;
+            const auto first = [](std::initializer_list<RE::FormID> ids) -> RE::TESForm* {
+                for (const auto id : ids) {
+                    auto* ref = id ? RE::TESForm::LookupByID<RE::TESObjectREFR>(id) : nullptr;
+                    if (ref && !ref->IsDeleted() && !ref->IsDisabled()) return ref;
+                }
+                return nullptr;
+            };
             switch (steps[q->step].marker) {
-                case Q::Role::Giver: return form(q->giver);
-                case Q::Role::Foe: return form(q->foe ? q->foe : q->anchor);
-                case Q::Role::Ally: return form(q->ally);
-                case Q::Role::Holder: return form(q->holder ? q->holder : q->foe ? q->foe : q->anchor);
-                case Q::Role::Anchor: return form(q->anchor);
+                case Q::Role::Giver: return first({q->giver});
+                case Q::Role::Foe: return first({q->foe, q->anchor});
+                case Q::Role::Ally: return first({q->ally, q->anchor});
+                case Q::Role::Holder: return first({q->holder, q->foe, q->anchor});
+                case Q::Role::Anchor: return first({q->anchor});
                 default: return nullptr;
             }
         }

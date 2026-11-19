@@ -585,6 +585,53 @@ static void Captive() {
     reached.captiveReached = true;
     Advance(t, reached, 1.4f);
     Require(t.node == 3, "reached: free, and the talk with them is next");
+    // Found before the story asked: the steps that led there are left, and the step that frees is done at once.
+    {
+        const auto has = [](const Node& n, If when) {
+            return std::any_of(n.edges.begin(), n.edges.end(), [when](const Edge& e) { return e.when == when; });
+        };
+        Require(a.graph[0].edges[0].when == If::Freed && a.graph[0].edges[0].skip && a.graph[0].edges[0].next == 2 &&
+                a.graph[0].edges[1].when == If::Dead, "a step with someone: found already comes before their death");
+        Require(has(a.graph[1], If::Freed) && a.graph[1].edges[0].when == If::Done, "a way down that was gone all the same is done, not left");
+        Require(!has(a.graph[2], If::Freed) && !has(a.graph[3], If::Freed), "nothing to leave at the step that frees, or after it");
+        Book early;
+        const auto eid = early.Plan(a, 1.0f);
+        early.Accept(eid, 1.0f);
+        Arc& e = *early.Find(eid);
+        Facts found;
+        found.captiveReached = true;
+        found.dead[3] = true;   // and the witness nobody needs any more has died
+        const auto left = Advance(e, found, 1.1f);
+        Require(e.node == 2 && left.skipped == 0 && left.done.empty() && left.ending == Ending::None && left.line.empty() && e.heard[3].empty(),
+                "the talk in town is left: not done, no line, nothing for the witness to remember");
+        const auto freed = Advance(e, found, 1.2f);
+        Require(e.node == 3 && freed.done.size() == 1 && freed.done.front() == 2, "and the step that frees is done");
+        Book mid;
+        const auto mid_id = mid.Plan(a, 1.0f);
+        mid.Accept(mid_id, 1.0f);
+        Arc& m = *mid.Find(mid_id);
+        Facts talk;
+        talk.with[3] = talk.spoke[3] = true;
+        talk.turn = 0;
+        Advance(m, talk, 1.1f);
+        Facts both;
+        both.captiveReached = true;
+        both.bossDead[0] = true;
+        const auto down = Advance(m, both, 1.2f);
+        Require(m.node == 2 && down.done.size() == 1 && down.skipped == kNoNode, "the master dead and they free: the step is done");
+        // Two ways of freeing them: which one happened cannot be said, so no shortcut.
+        json two = Taken();
+        json other = two["steps"][2];
+        other["id"] = "s9";
+        two["steps"].push_back(other);
+        two["steps"][0]["outcomes"][1]["then"] = "s9";
+        const auto r2 = Tales::Compile(two, TownThatHolds());
+        if (!r2.ok) std::cerr << r2.errors;
+        Require(r2.ok, "a story with two ways of freeing them compiles");
+        bool any = false;
+        for (const auto& n : r2.arc.graph) any = any || has(n, If::Freed);
+        Require(!any, "two steps that free: no shortcut to either");
+    }
     // Through the co-save, with where they stand.
     t.captiveState = CaptiveBound;
     const auto bytes = Serialize(book);

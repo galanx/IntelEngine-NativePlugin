@@ -638,3 +638,58 @@ side only; nothing political with politics off; drivers and ferrymen never sent;
 once; names as whole words (NameMatch.h); nobody walks into a scene; JSON dumps that cannot throw. The maintainer's
 3.8.3 is merged in.
 
+## The journal's marker, and a player who does not keep to the order (2026-11-19 late night)
+
+The user: "Based on player unpredictability, we may need a more reliable way to resolve the quest markers." The
+marker of a step used to be decided when the step was shown, and for most kinds of step never again; and a fact
+counted only while the story stood on the step that asked for it.
+
+### One answer for the marker, asked on every look (`ArcBridge::MarkerOf`)
+- `ArcForm(id, "marker")` and the watch (`Advance`, every 2 s) ask the same function. When the answer differs from
+  the one before, the script is told (signal 14, the same one a place's heart uses) and sets the alias anew
+  (`ShowStep`). A new step sets its own. What signal 14 also calls (`PlaceBosses`, `PlaceCaptive`) does nothing
+  unless there is something to place: a master is placed once (`siteState` bit 0), someone held only while they
+  are away and their place is in the game.
+- The order: what the step is about, where it is right now (the ambush leader who carries the thing, standing or
+  fallen; for a place its master, the one held, its heart, or the place on the map (`PlaceMarker`); the spot
+  something was hidden at); else where it is to be looked for (the home's door for something hidden in a home that
+  is not put there yet, and for "go to their home"); else the step's person; else, for a person who is not in the
+  game just now, the door of their home.
+- Never a reference that is switched off or deleted (`Points`): such a marker shows nothing.
+- `HomeDoorOf`: a teleport door inside the home cell, the one to the street where there is one. Such doors are
+  persistent, so it is found while the home is not loaded; found once per home and kept until the next load.
+- Before: "search their house" and "go to their house" put the marker on the owner, wherever in town they were.
+
+### Done early is done
+- **The depths of a place**: reached once is reached (`siteState` bit 2, in the co-save with the rest of that
+  byte), whichever step the story was on. Measured from where the game put the place's master when the heart of
+  the place is that master (Halted Stream Camp's chief), not from where a fight has taken him.
+- **Someone held**: free the moment the player stands by them with no fight going on, whichever step is current
+  (`captiveState` goes to Freed in the watch; the script unties them and has them come along as before). The step
+  that frees them is done the moment the story comes to it.
+- **The steps that led there are left** (`If::Freed` = 16, Tales.h `leadsUp`): every step that can only come
+  before the one step that frees them gets a shortcut to that step. It fires when they are free already: the
+  step's objective is taken away (the engine's own `skip`: not completed, no line in the journal, nothing for the
+  step's person to remember), and the story stands at the step that frees, which is done on the next look. It
+  comes before the death of someone the step needed (nobody needs the witness any more) and after anything else
+  that holds at the same moment (a way down that was gone all the same is done, not left). Only where exactly one
+  step frees them: with two ways of freeing (a ransom, a door broken) each writes its own line, and which of them
+  happened cannot be said for the player. A step the story can come back to after the rescue gets no shortcut.
+- Talking with the one freed before the story asks is not judged then: the step that asks for it needs an
+  exchange with them while the story stands on it (`TaleTalk`).
+
+### The engine's own quests (keepsake, bounty, venture)
+- Their steps already counted whenever their fact held (several steps a look). The marker was set only when a
+  step was shown, on whatever the step's role named. `QuestForm(id, "marker")` now takes the first of the step's
+  candidates that is in the game (the holder, the foe, the place's heart), and `Quests.KeepMarker` asks again on
+  every look and sets the alias anew when the answer has changed.
+
+### Checked
+- Offline: `TalesCheck` (the shortcut is compiled where it belongs and nowhere else; found early with the witness
+  dead; the master dead and they free in the same look; two ways of freeing), the whole suite 46 of 46.
+- **Not played yet.** The test PC's screen was in use when this was built, so the test game could not be started.
+  To play, with a hand-written tale (the asker, a witness in town, someone held at a camp, a "go to their home"
+  step): go to the camp and stand by the one held before asking the witness (free at once, "found before the story
+  asked for it" in the log; the talk with the witness gone from the journal); the same after asking; the marker for
+  "go to their home" on a door of that home; a search of a home before and after the thing is put there; someone
+  the current step is about switched off (their door).

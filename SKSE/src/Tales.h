@@ -793,6 +793,11 @@ namespace IntelEngine::Tales {
 
         // ---- someone held: a step of the story frees them, and nothing is done with them before it
         const auto kindOf = [&](std::size_t i) { return built[i].node.kind; };
+        // Steps that only lead up to the one step that frees them (reached before it, never after it), and that step.
+        // A player goes where they like: found and freed before the story came to it, those steps are left, as things
+        // that never happened (FoundEarly below), and the story goes on from the step that frees.
+        std::vector<bool> leadsUp(steps.size(), false);
+        int freeStep = -1;
         if (a.captive) {
             const auto captive = static_cast<A::Role>(a.captive);
             const auto* held = personOf(captive);
@@ -823,6 +828,33 @@ namespace IntelEngine::Tales {
                 const auto& n = built[i].node;
                 const bool theirs = n.who == captive || (n.kind == A::Kind::Have && n.prop < A::kProps && a.propPocket[n.prop] == a.captive);
                 if (theirs) fail("step " + Str(steps[i], "id") + ": " + name + " is held until a step frees them: nothing is done with them before that");
+            }
+            // One step frees them: the shortcut to it is plain. (Two ways of freeing them, the ransom paid or the door
+            // broken, each write their own line: which of them happened cannot be said for the player, so none is taken.)
+            int freeing = 0;
+            for (std::size_t i = 0; i < steps.size(); ++i) {
+                if (reach[i] && kindOf(i) == A::Kind::Free) {
+                    ++freeing;
+                    freeStep = static_cast<int>(i);
+                }
+            }
+            if (freeing != 1) freeStep = -1;
+            if (freeStep >= 0) {
+                // What comes after it: a step the story can come back to once they are free is no step before.
+                std::vector<bool> after(steps.size(), false);
+                open.assign(1, static_cast<std::size_t>(freeStep));
+                while (!open.empty()) {
+                    const auto at = open.back();
+                    open.pop_back();
+                    for (const int to : leads[at]) {
+                        const auto next = static_cast<std::size_t>(to);
+                        if (to >= 0 && !after[next]) {
+                            after[next] = true;
+                            open.push_back(next);
+                        }
+                    }
+                }
+                for (std::size_t i = 0; i < steps.size(); ++i) leadsUp[i] = reach[i] && early[i] && !after[i];
             }
         } else if (std::any_of(built.begin(), built.end(), [](const Step& st) { return st.node.kind == A::Kind::Free; })) {
             fail("steps: a step frees someone, and nobody of the story is held");
@@ -933,6 +965,21 @@ namespace IntelEngine::Tales {
             A::Node n = st.node;
             n.objective = static_cast<std::uint8_t>(A::kTaleObjective + newIndex[i]);
             std::size_t e = 0;
+            // Found and freed already: this step only led there. Its objective goes (it never happened) and the story
+            // stands at the step that frees them, which is done at once. Before the death of someone this step needed
+            // (nobody needs the witness any more), after anything else that holds at the same moment (a way down that
+            // was gone all the same is done, not left).
+            A::Edge foundEarly;
+            foundEarly.when = A::If::Freed;
+            foundEarly.skip = true;
+            const bool needsSomeone = n.who != A::RNone && n.who != A::RAsker && n.kind != A::Kind::Have && n.kind != A::Kind::Wait && n.kind != A::Kind::Ambush;
+            bool shortcut = freeStep >= 0 && leadsUp[i] && newIndex[static_cast<std::size_t>(freeStep)] >= 0 &&
+                            st.edges.size() + (needsSomeone ? 2u : 1u) <= n.edges.size();
+            if (shortcut) foundEarly.next = static_cast<std::uint8_t>(newIndex[static_cast<std::size_t>(freeStep)]);
+            if (shortcut && needsSomeone) {
+                n.edges[e++] = foundEarly;
+                shortcut = false;
+            }
             // Someone the step needs is dead: the tale ends badly (the asker's death is the engine's own ending).
             // The men of an ambush were paid already: who sent them dying changes nothing for them.
             if (n.who != A::RNone && n.who != A::RAsker && n.kind != A::Kind::Have && n.kind != A::Kind::Wait && n.kind != A::Kind::Ambush) {
@@ -982,6 +1029,7 @@ namespace IntelEngine::Tales {
                 }
                 n.edges[e++] = edge;
             }
+            if (shortcut && e < n.edges.size()) n.edges[e++] = foundEarly;
             a.graph.push_back(std::move(n));
         }
         for (std::size_t index = ownSteps; index < kept; ++index) {

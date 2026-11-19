@@ -133,6 +133,12 @@ namespace IntelEngine {
         /** Someone of this story (not its asker) who stands beside the player right now, or null: nobody brings their
             trouble to the player in front of the people it is about. */
         RE::Actor* Company(std::uint32_t id) const;
+        /** Where the journal points for a step, as the game stands right now: the one answer for every kind of step,
+         *  asked on every watch. Never something switched off or gone from the game; nullptr only where nothing is
+         *  to be pointed at. The caller holds the bridge's lock. */
+        RE::TESForm* MarkerOf(const Arcs::Arc& a, const Arcs::Node& n) const;
+        /** A door of the home of one of the townsfolk (inside it; the game leads to it from outside), or nullptr. */
+        RE::TESObjectREFR* HomeDoorOf(RE::FormID actorRef) const;
         /** Whether someone coming to the player has truly been looking for them (and so hurries): close to the
          *  player, or come all the way from another hold. Not someone who merely failed to reach them once. Main
          *  thread. */
@@ -201,8 +207,9 @@ namespace IntelEngine {
             std::array<std::int8_t, Arcs::kSites> bossState{};   // last seen: 0 unknown, 1 alive and loaded, 2 dead, 3 gone
             std::array<bool, Arcs::kSites> bossSeenAlive{};      // the boss was loaded and alive once (its death then counts)
             std::uint8_t gangSite = 0;                           // a place (index + 1) whose company the script is to place
-            RE::FormID siteMarker = 0;                           // where the journal last pointed for a step out in the world
+            RE::FormID siteMarker = 0;                           // where the journal last pointed (any kind of step)
             bool siteMarkerKnown = false;
+            std::uint8_t markerNode = 0xFF;                      // the step that was for
             // A tale's ambush: what the script is asked to do (1 place, 2 strike, 3 call off), and when it may be asked.
             std::uint8_t ambushDo = 0;
             float ambushHold = -1.0f;    // real seconds: not placed again before this
