@@ -79,8 +79,13 @@ remembering it) and "The Ring in the Wrong Stall" (9 steps, first draft refused 
 hand-written tests through `IntelEngine_Arcs.DebugTaleFile` (wait, visit, brawl won, a hand-over by the loser, the
 return; a death mid-tale ending as lost); a v2 save loaded by v3; the pattern thief still running on the same engine;
 the director's own pacing bringing a tale after 2.3 game hours (0.5 ms to cast); the quest gate after a main-quest
-stage. Not seen yet: the Leave effect, a Wait longer than an hour with a visitor coming from afar, the Albanian
-profiles, home visits (not built).
+stage. Later the same night: leaving town and coming back only out of sight (Amren stayed away while the player stood
+in his house), a 24-hour wait and a visitor coming from across town (retried after the story engine's watchdog
+cleared the first trip), a "go" step and a prop planted in the home on entering, a talk read once per exchange (a
+preacher's sermon no longer triggers a reading every two seconds), the step's person lingering while the player
+talks and leaving with a line after a minute of silence, a Riverwood tale with no item at all ("The Rounds He Never
+Bought") whose author was told Delphine and Gerdur belong to quests of their own. Not seen yet: the judge's chat form
+(no decision provider), the Albanian profiles, the full Isekai profile, home visits (not built).
 
 Test hooks: `IntelEngine_Arcs.DebugTale(asker)` (asks the model), `DebugTaleFile(asker, absolute path)` (a tale
 written by hand; people by name; no fallback); the log has each tale as written and its outline.
