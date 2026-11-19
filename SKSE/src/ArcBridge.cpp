@@ -587,7 +587,13 @@ namespace IntelEngine {
     }
 
     namespace {
-        constexpr float kEarshot = 500.0f;   // "stands beside the player"
+        // "Stands with the player" means: hears what is said to the player. That is SkyrimNet's own measure, its
+        // interaction distance (1600 units unless the user changed it; the script tells us, ArcEarshot): whoever is
+        // within it hears a line and may answer it. In the test game of 2026-11-19 Alvor, 900 units off at his forge,
+        // answered Faendal's talk about his arrowheads with a full confession before the player had asked him
+        // anything, and Sven sang 500 units away in the same hall while Faendal would have spoken of him.
+        constexpr float kEarshotDefault = 1600.0f;
+        std::atomic<float> g_earshot{kEarshotDefault};
 
         // Someone of the story other than its asker who stands beside the player (the caller holds the lock, or owns
         // the arc). A follower of the player is not counted: they are always there, and the story would never come.
@@ -601,7 +607,7 @@ namespace IntelEngine {
                 if (!who || who->IsDead() || !who->Is3DLoaded() || who->IsPlayerTeammate()) continue;
                 auto* theirs = who->GetParentCell();
                 if (!theirs || theirs->IsInteriorCell() != cell->IsInteriorCell() || (cell->IsInteriorCell() && theirs != cell)) continue;
-                if (who->GetPosition().GetDistance(player->GetPosition()) <= kEarshot) return who;
+                if (who->GetPosition().GetDistance(player->GetPosition()) <= g_earshot.load()) return who;
             }
             return nullptr;
         }
@@ -2455,6 +2461,13 @@ namespace IntelEngine {
         void ArcOfferLater(RE::StaticFunctionTag*, std::int32_t id) { ArcBridge::GetSingleton()->OfferLater(U(id)); }
         void ArcOfferDeferred(RE::StaticFunctionTag*, std::int32_t id) { ArcBridge::GetSingleton()->OfferDeferred(U(id)); }
         RE::Actor* ArcCompany(RE::StaticFunctionTag*, std::int32_t id) { return ArcBridge::GetSingleton()->Company(U(id)); }
+        void ArcEarshot(RE::StaticFunctionTag*, float units) {
+            // Whisper mode shrinks SkyrimNet's distance to a couple of steps: someone that near still stands there.
+            const float earshot = std::isfinite(units) && units > 0.0f ? std::clamp(units, 500.0f, 3000.0f) : kEarshotDefault;
+            if (std::abs(g_earshot.exchange(earshot) - earshot) > 1.0f) {
+                logger::info("Arcs: whoever of a story stands within {:.0f} units of the player hears what is said there (SkyrimNet's interaction distance)", earshot);
+            }
+        }
         void ArcOfferHeldBack(RE::StaticFunctionTag*, std::int32_t id) {
             auto* bridge = ArcBridge::GetSingleton();
             auto* by = bridge->Company(U(id));
@@ -2528,6 +2541,7 @@ namespace IntelEngine {
         a_vm->RegisterFunction("ArcOfferLater", script, ArcOfferLater); ++count;
         a_vm->RegisterFunction("ArcOfferDeferred", script, ArcOfferDeferred); ++count;
         a_vm->RegisterFunction("ArcCompany", script, ArcCompany); ++count;
+        a_vm->RegisterFunction("ArcEarshot", script, ArcEarshot); ++count;
         a_vm->RegisterFunction("ArcOfferHeldBack", script, ArcOfferHeldBack); ++count;
         a_vm->RegisterFunction("ArcHurries", script, ArcHurries); ++count;
         a_vm->RegisterFunction("ArcReachOf", script, ArcReachOf); ++count;

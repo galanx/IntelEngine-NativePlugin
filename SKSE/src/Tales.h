@@ -727,6 +727,37 @@ namespace IntelEngine::Tales {
         if (kept > A::kMaxTaleNodes) fail("steps: at most " + std::to_string(A::kMaxTaleNodes));
         if (!err.empty()) return r;
 
+        // ---- the reward changes hands in person: an ending that pays, reached on a step that is not with the asker,
+        // goes by one step more, back to the asker (A::IsWayBack). One such step for each ending that needs it.
+        const auto atHand = [](const A::Node& n) {
+            return n.who == A::RAsker &&
+                   (n.kind == A::Kind::Talk || n.kind == A::Kind::Give || n.kind == A::Kind::Visit || n.kind == A::Kind::Choose);
+        };
+        const auto paysAway = [&](std::size_t i, const Branch& b) {
+            return b.to < 0 && !atHand(built[i].node) &&
+                   (b.effect == A::Effect::PayGold || a.ends[static_cast<std::size_t>(-b.to - 1)].pay);
+        };
+        std::array<int, 3> wayBack{-1, -1, -1};
+        const std::size_t ownSteps = kept;
+        for (std::size_t i = 0; i < steps.size(); ++i) {
+            if (newIndex[i] < 0) continue;
+            for (const auto& [when, b] : built[i].edges) {
+                if (b.to >= 0) {
+                    if (b.effect == A::Effect::PayGold && !atHand(built[i].node)) {
+                        fail("step " + Str(steps[i], "id") + ": effect \"pay\" away from the one who asks: they pay in person; put it on a step with them, or let the ending pay");
+                    }
+                    continue;
+                }
+                const auto k = static_cast<std::size_t>(-b.to - 1);
+                if (paysAway(i, b) && wayBack[k] < 0) wayBack[k] = static_cast<int>(kept++);
+            }
+        }
+        if (kept > A::kMaxTaleNodes) {
+            fail("steps: at most " + std::to_string(A::kMaxTaleNodes - (kept - ownSteps)) +
+                 " here: the reward is paid by the one who asks in person, and the way back to them takes a step; end the story with them, or tell it in fewer steps");
+        }
+        if (!err.empty()) return r;
+
         // ---- the graph
         for (std::size_t i = 0; i < steps.size(); ++i) {
             if (newIndex[i] < 0) continue;
@@ -750,19 +781,26 @@ namespace IntelEngine::Tales {
                 edge.when = when;
                 if (when == A::If::Persuaded) edge.prop = static_cast<std::uint8_t>(st.persuadeOption);
                 else if (b.effect == A::Effect::GiveItem && b.prop >= 0) edge.prop = static_cast<std::uint8_t>(b.prop);
+                const bool goesBack = paysAway(i, b);
                 if (b.to >= 0) {
                     edge.next = static_cast<std::uint8_t>(newIndex[static_cast<std::size_t>(b.to)]);
+                } else if (goesBack) {
+                    edge.next = static_cast<std::uint8_t>(wayBack[static_cast<std::size_t>(-b.to - 1)]);
                 } else {
                     edge.ending = b.to == -1 ? A::Ending::Done : b.to == -2 ? A::Ending::Failed : A::Ending::StayedOut;
                 }
                 edge.line = b.line;
                 edge.effect = b.effect;
                 edge.effectRole = b.effectRole;
+                if (goesBack && edge.effect == A::Effect::PayGold) {   // paid on the way back, not here
+                    edge.effect = A::Effect::None;
+                    edge.effectRole = A::RNone;
+                }
                 if (edge.effect == A::Effect::GiveItem && edge.effectRole == A::RNone) edge.effectRole = n.who;   // who hands it over
                 edge.bondWith = b.bondWith;
                 if (b.price) a.price = std::max(a.price, b.price);
                 // A good or other ending the author marked as paid: the asker pays the reward as the tale closes.
-                if (b.to < 0) {
+                if (b.to < 0 && !goesBack) {
                     const auto k = static_cast<std::size_t>(-b.to - 1);
                     if (a.ends[k].pay) {
                         if (edge.effect == A::Effect::None) {
@@ -777,6 +815,37 @@ namespace IntelEngine::Tales {
                 n.edges[e++] = edge;
             }
             a.graph.push_back(std::move(n));
+        }
+        for (std::size_t index = ownSteps; index < kept; ++index) {
+            std::size_t k = 0;
+            while (k < wayBack.size() && wayBack[k] != static_cast<int>(index)) ++k;
+            if (k >= wayBack.size()) continue;
+            const auto ending = k == 0 ? A::Ending::Done : k == 1 ? A::Ending::Failed : A::Ending::StayedOut;
+            A::Node n;
+            n.kind = A::Kind::Talk;
+            n.who = n.marker = A::RAsker;
+            n.objective = static_cast<std::uint8_t>(A::kTaleObjective + index);
+            n.goal = "Tell {1} how it ended";
+            A::Edge dead;
+            dead.when = A::If::Dead;
+            dead.role = A::RAsker;
+            dead.ending = ending;
+            dead.line = "{1} died before I could tell them how it ended.";
+            A::Edge told;
+            told.when = A::If::Done;
+            told.ending = ending;
+            told.effect = A::Effect::PayGold;
+            told.effectRole = A::RAsker;
+            A::Edge never;
+            never.when = A::If::Waited;
+            never.hours = A::kWayBackHours;
+            never.ending = ending;
+            never.line = "I never went back to {1} about it, and the reward stayed where it was.";
+            n.edges[0] = dead;
+            n.edges[1] = told;
+            n.edges[2] = never;
+            a.graph.push_back(std::move(n));
+            r.notes += "the reward is paid in person: a step back to the one who asks was added\n";
         }
         if (a.propAmbush && !std::any_of(a.graph.begin(), a.graph.end(), [](const A::Node& n) { return n.kind == A::Kind::Ambush; })) {
             fail("items: an item the ambush's leader carries needs a step that is an ambush");
