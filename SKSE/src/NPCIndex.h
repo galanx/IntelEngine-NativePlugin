@@ -261,6 +261,10 @@ namespace IntelEngine {
          * @return true if the NPC is allowed to be dispatched
          */
         static bool PassesHoldRestriction(RE::Actor* actor, const std::string& playerHold, int policy);
+        /** How far someone is from the player, for the director's rule on who may come (StoryDirectorPick.h MayCome):
+         *  0 loaded or of the player's own settlement, 1 elsewhere in the same hold, 2 another hold or nobody knows
+         *  where. Main thread. */
+        static std::uint8_t ReachOf(RE::Actor* actor);
 
         /**
          * Check if actor is in PotentialFollowerFaction (can be recruited as follower).
@@ -509,6 +513,8 @@ namespace IntelEngine {
             float       dbScore       = 0.f;   // initial MemoryDB ranking score (0 for randoms/locmates)
             bool        fromMemoryDB  = false;
             bool        hereWithPlayer = false;  // 4.0: right here with the player: a quest only, as a public plea
+            std::uint8_t reach        = 0;     // 0 with the player or in their settlement, 1 the same hold, 2 another hold
+            bool        bonded        = false; // close to the player in the game's own terms (LivingWorldBridge::CloseToPlayer)
         };
 
         /** Outcome of a Story DM dispatch attempt. Recorded entries start as

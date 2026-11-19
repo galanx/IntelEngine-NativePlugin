@@ -95,6 +95,10 @@ namespace IntelEngine {
         /** Tales: former followers living a life of their own whom a story may give a part: alive, not with the
          *  player, on no errand, in no quest of the journal. Where their life has them now (a location, 0 = their
          *  usual place) and their life in a line. Main thread. */
+        /** Close to the player in the game's own terms: once travelled with them, a confidant or more by the game's
+         *  relationships, wed to them, or a confidant in SkyrimNet Relationships when it is installed (read softly).
+         *  Only such a person crosses a hold for the player on less than an urgent matter. Main thread. */
+        bool CloseToPlayer(RE::Actor* actor) const;
         struct OldCompanion {
             RE::FormID actor = 0;
             RE::FormID place = 0;

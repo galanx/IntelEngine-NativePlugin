@@ -1667,6 +1667,16 @@ namespace IntelEngine {
         return false;
     }
 
+    std::uint8_t NPCIndex::ReachOf(RE::Actor* actor) {
+        auto* player = RE::PlayerCharacter::GetSingleton();
+        if (!actor || !player) return 2;
+        if (actor->Is3DLoaded()) return 0;
+        const std::string theirTown = GetActorSettlementName(actor);
+        if (!theirTown.empty() && theirTown == GetActorSettlementName(player)) return 0;
+        const std::string theirHold = GetNPCHoldName(actor);
+        return !theirHold.empty() && theirHold == GetNPCHoldName(player) ? 1 : 2;
+    }
+
     // Check if an NPC passes the hold restriction policy for a given story type.
     // Returns true if the NPC is allowed to be dispatched for this type.
     bool NPCIndex::PassesHoldRestriction(RE::Actor* actor, const std::string& playerHold, int policy) {
@@ -2251,6 +2261,11 @@ namespace IntelEngine {
         a.npcHold      = NPCIndex::GetActorSettlementName(actor);
         if (a.npcHold.empty()) a.npcHold = NPCIndex::GetNPCHoldName(actor);
         if (a.npcHold.empty()) a.npcHold = "Unknown";
+
+        // How far they are from the player, for the director's rule on who may come (StoryDirectorPick.h MayCome):
+        // loaded or of the player's own settlement, the same hold, or another hold. Someone nobody can place is far.
+        a.reach = NPCIndex::ReachOf(actor);
+        a.bonded = LivingWorldBridge::GetSingleton()->CloseToPlayer(actor);
 
         if (auto* base = actor->GetActorBase()) {
             if (base->GetSex() == RE::SEX::kFemale) a.isFemale = true;

@@ -119,7 +119,12 @@ namespace IntelEngine {
             std::string why;
             std::string kind;
             bool fromAfar = false;
+            bool otherHold = false;   // from another hold: counted, so that it stays rare (FarComerLately)
         };
+        /** Someone came to the player from another hold with a story within this many game days. Any thread. */
+        bool FarComerLately(float days) const;
+        /** The offer of someone who came from another hold could not go out now: tried again in an hour. */
+        void OfferLater(std::uint32_t id);
         bool RequestTale(RE::Actor* asker, const std::string& written = {}, const TaleSeed* seed = nullptr);
         /** Plans a compiled tale (main thread). 0 = refused. */
         std::uint32_t PlanTale(Arcs::Arc a);
@@ -172,6 +177,9 @@ namespace IntelEngine {
             float askedAt = -1.0f;       // real seconds: the player's first line since that reading (< 0: none yet)
             float visitAt = -1.0f;       // game days: the step's person was last sent to the player
             float stalkHold = -1.0f;     // real seconds: a stalker is not sent after the player again before this
+            bool tooFar = false;         // the step's visitor or shadow waits: the player is out of the tale's hold (logged once)
+            float offerDue = -1.0f;      // game days: someone on the road from another hold reaches the player then (< 0: not set)
+            bool offerSent = false;      // ... and their offer went out
             bool lingering = false;      // the step's person stays with the player while they talk (the script's)
             float lingerHold = -1.0f;    // real seconds: not asked to linger again before this (refused or let go)
             std::array<std::int8_t, Arcs::kSites> bossState{};   // last seen: 0 unknown, 1 alive and loaded, 2 dead, 3 gone

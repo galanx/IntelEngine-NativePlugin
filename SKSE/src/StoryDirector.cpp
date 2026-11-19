@@ -220,9 +220,10 @@ namespace IntelEngine::StoryDirector {
                 verdicts = session->verdicts;
             }
             for (const auto& v : verdicts) {
-                logger::info("[Director] {}: {} (level {}, expected {:.2f}), kind '{}', rank {:.1f}, may be: {}", v.name,
+                logger::info("[Director] {}: {} (level {}, expected {:.2f}), kind '{}', rank {:.1f}, {}{}, may be: {}", v.name,
                              v.answered ? std::string(kLevels[std::clamp(v.level, 0, 5)]) : std::string("no answer"), v.level,
-                             v.expected, v.kind, v.rank, v.allowed);
+                             v.expected, v.kind, v.rank, v.reach <= 0 ? "here" : v.reach == 1 ? "in the hold" : "in another hold",
+                             v.bonded ? ", close to the player" : "", v.allowed);
             }
             const bool anyAnswer = std::any_of(verdicts.begin(), verdicts.end(), [](const Verdict& v) { return v.answered; });
             if (!anyAnswer) {
@@ -238,6 +239,13 @@ namespace IntelEngine::StoryDirector {
             const int index = Pick(
                 verdicts, [](const std::string& kind) { return NPCIndex::GetSingleton()->StoryTypePickCount(kind); }, quiet);
             if (index < 0) {
+                // Said plainly when distance was what held someone back.
+                for (const auto& v : verdicts) {
+                    if (!v.answered || !Allowed(v) || v.level < kRealLevel || MayCome(v)) continue;
+                    logger::info("[Director] {} has a {} reason but is {}{}: not worth that road; nothing comes of it now", v.name,
+                                 kLevels[std::clamp(v.level, 0, 5)], v.reach == 1 ? "elsewhere in the hold" : "in another hold",
+                                 v.reach >= 2 && !v.farRested ? " (and someone came from afar lately)" : v.bonded ? "" : " and no one close to the player");
+                }
                 logger::info("[Director] nobody has a reason enough to act now: no moment ({:.1f} days quiet)", quietDays);
                 session->done("");
                 return;
@@ -255,7 +263,7 @@ namespace IntelEngine::StoryDirector {
             // reason (their memories, unfinished business, their life, as the analyser read them), and they come to the
             // player wherever the player is, at home too. The user, 2026-11-19: no one-off visit decided by one big
             // prompt; everything a story. Hostile moments keep their own path until tales have them.
-            if (chosen.kind == "quest" || chosen.kind == "seek_player" || chosen.kind == "message") {
+            if (chosen.kind == "quest" || chosen.kind == "seek_player" || chosen.kind == "message" || chosen.kind == "informant") {
                 std::string why;
                 {
                     const auto ctx = nlohmann::json::parse(session->contexts[index], nullptr, false);
@@ -265,10 +273,11 @@ namespace IntelEngine::StoryDirector {
                 auto future = asked->get_future();
                 const RE::FormID giverId = chosen.formId;
                 const std::string kind = chosen.kind;
+                const bool otherHold = chosen.reach >= 2;
                 if (auto* task = SKSE::GetTaskInterface()) {
-                    task->AddTask([asked, giverId, why, kind]() {
+                    task->AddTask([asked, giverId, why, kind, otherHold]() {
                         auto* giver = RE::TESForm::LookupByID<RE::Actor>(giverId);
-                        ArcBridge::TaleSeed seed{why, kind, true};
+                        ArcBridge::TaleSeed seed{why, kind, true, otherHold};
                         asked->set_value(giver && ArcBridge::GetSingleton()->RequestTale(giver, {}, &seed));
                     });
                     if (future.wait_for(std::chrono::seconds(5)) == std::future_status::ready && future.get()) {
@@ -277,6 +286,14 @@ namespace IntelEngine::StoryDirector {
                         session->done("");
                         return;
                     }
+                }
+                // Someone who is not here comes with a story of their own or not at all: never the one-off visit of the
+                // old dungeon master (the user: "people were visiting for the smallest most absurd reasons across the
+                // world").
+                if (chosen.reach >= 1) {
+                    logger::info("[Director] no tale for {} now, and they are not here: nothing comes of it", chosen.name);
+                    session->done("");
+                    return;
                 }
                 logger::info("[Director] no tale for {} now: the moment goes the old way", chosen.name);
             }
@@ -372,6 +389,7 @@ namespace IntelEngine::StoryDirector {
             return;
         }
         const std::string playerName = session->snap.playerName.empty() ? "the traveller" : session->snap.playerName;
+        const bool farRested = !ArcBridge::GetSingleton()->FarComerLately(kFarRestDays);
         std::vector<std::size_t> toAsk;
         for (const auto& candidate : session->pool) {
             Verdict v;
@@ -380,10 +398,17 @@ namespace IntelEngine::StoryDirector {
             v.rank = candidate.score;
             v.allowed = candidate.a->eligibleTypes;
             v.sincePicked = LivingWorldBridge::GetSingleton()->DaysSincePicked(v.formId);
+            v.reach = candidate.a->reach;
+            v.bonded = candidate.a->bonded;
+            v.farRested = farRested;
             const auto kinds = KindsFor(*candidate.a, session->excluded);
             nlohmann::json context;
             context["name"] = v.name;
             context["player_name"] = playerName;
+            // How far they are: the reason has to be worth the road.
+            context["distance"] = v.reach <= 0 ? "is where " + playerName + " is now"
+                                  : v.reach == 1 ? "is elsewhere in the same hold as " + playerName + ", some hours away on the road"
+                                                 : "is in another hold, days of travel away from " + playerName;
             auto list = nlohmann::json::array();
             for (const auto& kind : kinds) {
                 list.push_back({{"key", kind}, {"description", Replace(KindMeaning(kind), "{player}", playerName)}});
