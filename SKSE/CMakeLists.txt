@@ -6,7 +6,7 @@ cmake_minimum_required(VERSION 3.21)
 
 project(
     IntelEngine
-    VERSION 3.8.1
+    VERSION 3.8.3
     DESCRIPTION "Intelligent NPC Task Execution for SkyrimNet"
     LANGUAGES CXX
 )
@@ -201,6 +201,9 @@ add_executable(DashboardUtf8DumpCheck EXCLUDE_FROM_ALL tests/DashboardUtf8DumpCh
 target_link_libraries(DashboardUtf8DumpCheck PRIVATE nlohmann_json::nlohmann_json)
 add_executable(StoryCandidateResolutionCheck EXCLUDE_FROM_ALL tests/StoryCandidateResolutionCheck.cpp)
 target_include_directories(StoryCandidateResolutionCheck PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+add_executable(NamedPlaceMatchCheck EXCLUDE_FROM_ALL tests/NamedPlaceMatchCheck.cpp)
+target_include_directories(NamedPlaceMatchCheck PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(NamedPlaceMatchCheck PRIVATE nlohmann_json::nlohmann_json)
 add_executable(FactionLeaderNameMatchCheck EXCLUDE_FROM_ALL tests/FactionLeaderNameMatchCheck.cpp)
 target_include_directories(FactionLeaderNameMatchCheck PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 add_executable(FormIDStringCheck EXCLUDE_FROM_ALL tests/FormIDStringCheck.cpp)
