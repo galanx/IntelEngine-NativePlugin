@@ -546,7 +546,7 @@ namespace IntelEngine {
         return out;
     }
 
-    std::vector<float> QuestBridge::GroundAhead(float dx, float dy) {
+    std::vector<float> QuestBridge::GroundAhead(float dx, float dy, bool roadOnly) {
         std::vector<float> out;
         auto* player = RE::PlayerCharacter::GetSingleton();
         auto* tes = RE::TES::GetSingleton();
@@ -596,6 +596,7 @@ namespace IntelEngine {
                     if (dot <= 0.0f || dot * dot < 0.5868f * d2) continue;   // within 40 degrees (cos 40 = 0.766)
                     const float d = std::sqrt(d2);
                     const bool road = tri.triangleFlags.any(RE::BSNavmeshTriangle::TriangleFlag::kPreferred);
+                    if (roadOnly && !road) continue;   // an ambush waits on the road itself, never in the woods beside it
                     // (1 - cos) * 3600 is about 20 points a degree up to 40 degrees, without an arc cosine.
                     points.push_back({at, (road ? 0.0f : 2500.0f) + std::abs(d - 4000.0f) * 0.3f + (1.0f - dot / d) * 3600.0f + dz * 2.0f, road});
                 }
@@ -1250,6 +1251,9 @@ namespace IntelEngine {
             std::vector<float> QuestGroundAhead(RE::StaticFunctionTag*, float dx, float dy) {
                 return QuestBridge::GetSingleton()->GroundAhead(dx, dy);
             }
+            std::vector<float> QuestRoadAhead(RE::StaticFunctionTag*, float dx, float dy) {
+                return QuestBridge::GetSingleton()->GroundAhead(dx, dy, true);
+            }
             std::int32_t QuestVentureOf(RE::StaticFunctionTag*, RE::Actor* actor) {
                 return actor ? static_cast<std::int32_t>(QuestBridge::GetSingleton()->VentureOf(actor->GetFormID())) : 0;
             }
@@ -1314,6 +1318,7 @@ namespace IntelEngine {
             a_vm->RegisterFunction("QuestSpotsAhead", script, QuestSpotsAhead); ++count;
             a_vm->RegisterFunction("QuestVentureOf", script, QuestVentureOf); ++count;
             a_vm->RegisterFunction("QuestGroundAhead", script, QuestGroundAhead); ++count;
+            a_vm->RegisterFunction("QuestRoadAhead", script, QuestRoadAhead); ++count;
             a_vm->RegisterFunction("QuestEndPlanned", script, QuestEndPlanned); ++count;
             a_vm->RegisterFunction("QuestAccept", script, QuestAccept); ++count;
             a_vm->RegisterFunction("QuestDecline", script, QuestDecline); ++count;

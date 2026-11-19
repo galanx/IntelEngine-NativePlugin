@@ -184,6 +184,10 @@ namespace IntelEngine {
             float strikeHold = -1.0f;    // real seconds: not told to strike again before this
             int ambushTries = 0;         // placings that found no ground ahead out of sight (then they come from behind)
             std::string ambushWait;      // why the ambush waits now (logged when it changes)
+            float placedAt = -1.0f;      // real seconds: its men were placed (or first seen after a load)
+            bool chasing = false;        // they are coming after the player (not waiting on the road ahead)
+            float callOffHold = -1.0f;   // real seconds: not asked to call them off again before this
+            float comeHold = -1.0f;      // real seconds: not sent after the player again before this
         };
         void TaleTalk(std::uint32_t id, const Arcs::Arc& a, Pending& pending, const Arcs::Facts& f);   // lock held
         /** A tale's ambush step, each look (lock held): when its men are placed, step out, or are called off. */

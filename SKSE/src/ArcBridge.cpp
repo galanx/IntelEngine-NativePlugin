@@ -1415,20 +1415,38 @@ namespace IntelEngine {
             }
             return;
         }
-        // The player has come near and they are not fighting (yet, or any more: they lost the player): they strike.
-        // Fighting already before they stepped out (the player struck first): all of them join at once.
-        if (anyLoaded && ((!fighting && nearest < 2000.0f && real >= pending.strikeHold) || (fighting && !pending.struck))) {
+        // The player has come near and they are not fighting (yet, or any more: they lost the player): they strike,
+        // out in the wilds only (in a town they hold back). Fighting already before they stepped out (the player
+        // struck first): all of them join at once.
+        if (pending.placedAt < 0.0f) pending.placedAt = real;
+        if (anyLoaded && ((!fighting && wilds && nearest < 2000.0f && real >= pending.strikeHold) || (fighting && !pending.struck))) {
             pending.ambushDo = 2;
             pending.strikeHold = real + 15.0f;
             bits |= 1 << 13;
             logger::info("Arcs: #{} the ambush: the player is {:.0f} away, they {}", id, nearest,
-                         fighting ? "join the fight" : pending.struck ? "come at the player again" : "step out");
+                         fighting ? "join the fight" : pending.struck ? "come at the player again" : pending.chasing ? "close in" : "step out");
+            return;
+        }
+        // Not fighting the player and not near: they come to the player, so the fight is where the player stands.
+        // Waiting on the road, once the player has not come their way for a minute (the user, 2026-11-19: the ambusher
+        // stood somewhere in the woods where nobody passed); after they struck, whenever they lost the player or
+        // something drew them off (Brannoc and his man ran after a wolf into the river and never came back).
+        const bool lost = pending.struck && nearest >= 2000.0f;
+        const bool waitedLong = !pending.struck && !pending.chasing && real - pending.placedAt > 60.0f && nearest > 2500.0f;
+        if (anyLoaded && !fighting && wilds && real >= pending.comeHold && (lost || waitedLong)) {
+            pending.ambushDo = 4;
+            pending.comeHold = real + 15.0f;
+            bits |= 1 << 13;
+            logger::info("Arcs: #{} the ambush: {} ({:.0f} away); they come after the player", id,
+                         lost ? "they are not on the player any more" : "the player did not come their way", nearest);
             return;
         }
         // The player got away: out of the fight and far from them (this modlist keeps them loaded 17000 units off,
         // 2026-11-19), or indoors. They are taken out of the world unseen and come again another time.
         auto* cell = player->GetParentCell();
-        const bool away = !fighting && !player->IsInCombat() && (!cell || cell->IsInteriorCell() || nearest > 12000.0f);
+        // In a town too: they do not follow the player in among guards and townsfolk.
+        const bool away = !fighting && !player->IsInCombat() && real >= pending.callOffHold &&
+                          (!cell || cell->IsInteriorCell() || nearest > 12000.0f || (!wilds && !pending.struck));
         {
             const std::string state = std::string(anyLoaded ? "loaded" : "not loaded") + (fighting ? ", fighting the player" : "") +
                                       (player->IsInCombat() ? ", the player in a fight" : "") + (nearest > 12000.0f ? ", far" : "");
@@ -1439,8 +1457,10 @@ namespace IntelEngine {
         }
         if (away) {
             pending.ambushDo = 3;
+            pending.callOffHold = real + 10.0f;
             bits |= 1 << 13;
-            logger::info("Arcs: #{} the ambush: the player got away from {}; they are called off and come again later", id,
+            logger::info("Arcs: #{} the ambush: the player {} {}; they are called off and come again later", id,
+                         !wilds && cell && !cell->IsInteriorCell() ? "reached where people live, away from" : "got away from",
                          leader ? NameOf(leader->GetFormID()) : std::string("its men"));
         }
     }
@@ -1464,22 +1484,36 @@ namespace IntelEngine {
             const bool any = std::any_of(a->thug.begin(), a->thug.end(), [](std::uint32_t t) { return t != 0; });
             if (!any) {
                 ++pending.ambushTries;
-                logger::info("Arcs: #{} the ambush: no ground out of sight on the player's way yet; tried again in a while", id);
+                logger::info("Arcs: #{} the ambush: no stretch of road out of sight on the player's way yet; tried again in a while", id);
+            } else {
+                pending.placedAt = RealSeconds();
+                pending.chasing = false;
             }
         } else if (what == 2) {
             pending.struck = true;
+        } else if (what == 4) {
+            pending.chasing = true;
         } else if (what == 3) {
-            // The living ones were taken out unseen; the dead stay where they fell (and count).
+            // The living ones the script took out unseen are forgotten; the dead stay where they fell (and count); one
+            // still in the player's sight stays until it can go unseen (asked again).
+            bool left = false;
             for (std::size_t k = 0; k < A::kThugs; ++k) {
                 auto* t = a->thug[k] ? RE::TESForm::LookupByID<RE::Actor>(a->thug[k]) : nullptr;
                 if (t && t->IsDead()) continue;
+                if (t && !t->IsDeleted() && !t->IsDisabled()) {
+                    left = true;
+                    continue;
+                }
                 for (std::size_t p = 0; p < A::kProps; ++p) {
                     if ((a->propAmbush & (1u << p)) && a->propAt[p] == a->thug[k]) a->propAt[p] = 0;   // it went with them
                 }
                 a->thug[k] = 0;
             }
-            pending.struck = false;
-            pending.ambushAgain = NowDays() + 0.25f;   // six hours of the game
+            pending.chasing = false;
+            if (!left) {
+                pending.struck = false;
+                pending.ambushAgain = NowDays() + 0.25f;   // six hours of the game
+            }
         }
     }
 
@@ -1558,6 +1592,7 @@ namespace IntelEngine {
         if (name == "gangsite") return pending != m_pending.end() ? pending->second.gangSite - 1 : -1;
         if (name == "ambushdo") return pending != m_pending.end() ? pending->second.ambushDo : 0;
         if (name == "ambushtries") return pending != m_pending.end() ? pending->second.ambushTries : 0;
+        if (name == "ambushchase") return pending != m_pending.end() && pending->second.chasing ? 1 : 0;
         if (name == "struck") return pending != m_pending.end() && pending->second.struck ? 1 : 0;
         if (name == "thugs") {
             // How many come: two for a player still finding their feet, three after.
