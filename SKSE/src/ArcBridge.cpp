@@ -909,12 +909,28 @@ namespace IntelEngine {
         return ok;
     }
 
+    namespace {
+        // Who is held bound right now: the one held of each open story while they are in their bonds (0 = nobody).
+        // Read without a lock by the crosshair's text (NpcActivateText, further down), which the game asks for on its
+        // own thread of play whenever the player looks at someone; written under the bridge's lock.
+        std::array<std::atomic<RE::FormID>, 4> g_bound{};
+
+        void RefreshBound(const A::Book& book) {
+            std::size_t k = 0;
+            for (const auto& a : book.all) {
+                if (k < g_bound.size() && A::IsOpen(a) && a.captive && a.captiveState == A::CaptiveBound) g_bound[k++].store(a.cast[a.captive]);
+            }
+            for (; k < g_bound.size(); ++k) g_bound[k].store(0);
+        }
+    }
+
     std::vector<std::uint32_t> ArcBridge::Lapse() {
         bool reconcile = false;
         std::vector<std::uint32_t> ids;
         {
             std::scoped_lock lock(m_mutex);
             ids = m_book.Lapse(NowDays());
+            RefreshBound(m_book);   // after a load, and after a story that ended with someone still held
             // Someone on the road from another hold reaches the player: their offer goes out now (after a load too:
             // the road is counted from when their story was planned).
             {
@@ -1663,6 +1679,40 @@ namespace IntelEngine {
         };
     }
 
+    namespace {
+        // The crosshair's word on someone a story holds bound: "Cut loose" where the game would say "Talk" (the user,
+        // 2026-11-19: "Yes, relabel"). Skyrim's scripts cannot change that word on a reference, so the game's own
+        // answer for an NPC is taken and its first line replaced, for the one held and nobody else. The word is the
+        // name of a message of IntelEngine.esp (IntelEngine_CutLoose, esp/EspBuilder), so a translation of the plugin
+        // file translates it. Asked whenever the player looks at someone: four numbers compared, no lock.
+        std::string g_cutLoose = "Cut loose";
+
+        struct NpcActivateText {
+            static bool thunk(RE::TESNPC* base, RE::TESObjectREFR* ref, RE::BSString& text) {
+                const bool shown = func(base, ref, text);
+                if (!shown || !ref) return shown;
+                const RE::FormID id = ref->GetFormID();
+                bool held = false;
+                for (const auto& one : g_bound) held = held || one.load(std::memory_order_relaxed) == id;
+                if (!held) return shown;
+                // The game writes "<word>\n<name>": the name is kept as it stands.
+                const char* was = text.c_str();
+                const char* name = was ? std::strchr(was, '\n') : nullptr;
+                std::string now = g_cutLoose;
+                if (name) {
+                    now += name;
+                } else {
+                    const char* display = ref->GetDisplayFullName();
+                    now += '\n';
+                    now += display ? display : "";
+                }
+                text = now.c_str();
+                return shown;
+            }
+            static inline REL::Relocation<decltype(thunk)> func;
+        };
+    }
+
     // Someone a story holds bound is freed by the player's own hand: they walk up and activate them (the user,
     // 2026-11-19: "freeing should be activate"). Coming within a few steps used to free them, wanted or not: sneaking
     // past, or with their captors still standing around. Now nothing happens until the player does it, and then at
@@ -1684,6 +1734,7 @@ namespace IntelEngine {
                 freed = a.id;
                 break;
             }
+            if (freed) RefreshBound(m_book);
         }
         if (!freed) return;
         if (auto* source = SKSE::GetModCallbackEventSource()) {
@@ -1716,6 +1767,15 @@ namespace IntelEngine {
             events->AddEventSink<RE::TESContainerChangedEvent>(&sink);
             events->AddEventSink<RE::TESQuestStageEvent>(&stages);
             events->AddEventSink<RE::TESActivateEvent>(&hands);
+            // The crosshair's word for someone held (once, at the main menu: the plugin files are read by now).
+            if (auto* data = RE::TESDataHandler::GetSingleton()) {
+                auto* message = data->LookupForm<RE::BGSMessage>(0x58E5, "IntelEngine.esp");
+                const char* word = message ? message->GetFullName() : nullptr;
+                if (word && *word) g_cutLoose = word;
+                logger::info("Arcs: the crosshair's word for someone held bound: \"{}\"{}", g_cutLoose, message ? "" : " (no such message in IntelEngine.esp)");
+            }
+            REL::Relocation<std::uintptr_t> npc{RE::VTABLE_TESNPC[0]};
+            NpcActivateText::func = npc.write_vfunc(0x4C, NpcActivateText::thunk);
             listening = true;
         }
     }
@@ -1819,6 +1879,7 @@ namespace IntelEngine {
         static constexpr const char* kStates[] = {"is to be taken", "is away, taken", "is bound at the heart of", "is free", "has gone their own way from"};
         logger::info("Arcs: #{} {} {} {}", id, NameOf(a->cast[a->captive]), kStates[state], a->captiveSite ? NameOf(a->site[a->captiveSite - 1u]) : std::string());
         a->captiveState = static_cast<std::uint8_t>(state);
+        RefreshBound(m_book);
     }
 
     void ArcBridge::AmbushLook(std::uint32_t id, A::Arc& a, Pending& pending, const A::Node& n, float now, int placed) {
@@ -2669,6 +2730,7 @@ namespace IntelEngine {
         HeartBridge::Forget();
         std::scoped_lock lock(m_mutex);
         g_homeDoors.clear();
+        for (auto& held : g_bound) held.store(0);
         m_book = A::Book{};
         m_pending.clear();
         // A save without arcs (made before them, or before this mod) still gets its look: every arc rumor is of another

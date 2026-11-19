@@ -108,6 +108,7 @@ public static class Program
         var arcs = new List<Quest>();
         for (int slot = 0; slot < ArcSlots; ++slot) arcs.Add(AddArcJournalQuest(mod, slot));
         var holders = AddTaleHolders(mod);
+        var cutLoose = AddCutLoose(mod);
         mod.WriteToBinary(output);
         Console.WriteLine($"{ThreadQuest} [{quest.FormKey.ID:X6}]: {quest.Aliases.Count} aliases, {quest.Objectives.Count} objectives -> {output}");
         Console.WriteLine($"{LifeSandbox} [{lifeSandbox.FormKey.ID:X6}], {LivesQuest} [{lives.FormKey.ID:X6}]");
@@ -116,7 +117,26 @@ public static class Program
         Console.WriteLine($"{ArcKeeper} [{arcKeeper.FormKey.ID:X6}], arc journal quests " +
                           string.Join(", ", arcs.Select(q => $"{q.EditorID} [{q.FormKey.ID:X6}]")));
         Console.WriteLine("tale holders " + string.Join(", ", holders.Select(m => $"{m.EditorID} [{m.FormKey.ID:X6}]")));
+        Console.WriteLine($"{CutLoose} [{cutLoose.FormKey.ID:X6}]");
         return 0;
+    }
+
+    // What the player's key does to someone a story holds bound: the crosshair says "Cut loose" where the game would
+    // say "Talk" (IntelEngine_Arcs.psc sets it on them with SetActivateTextOverride while they are bound, and takes
+    // it off again). The game shows a message's title there; the text is the same in case a game version reads that.
+    public const string CutLoose = "IntelEngine_CutLoose";
+
+    static Message AddCutLoose(SkyrimMod mod)
+    {
+        var message = mod.Messages.FirstOrDefault(m => m.EditorID == CutLoose);
+        if (message == null)
+        {
+            message = mod.Messages.AddNew();
+            message.EditorID = CutLoose;
+        }
+        message.Name = "Cut loose";
+        message.Description = "Cut loose";
+        return message;
     }
 
     // ------------------------------------------------------------------ story arcs (docs/STORY_ARCS.md)
