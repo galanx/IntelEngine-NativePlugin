@@ -276,6 +276,38 @@ static void PaidInPerson() {
     Require(Tales::Compile(longTale, Town()).ok, "eleven steps and the way back fit");
 }
 
+static void CloserAndApart() {
+    // A story between Ysolda and the player: where they come closer the bond grows a step, where the player is
+    // unkind it cools. The effects name a person; the engine does the rest (Hearts.h RankAfter, in the script).
+    json j = Sample();
+    j["items"] = json::array();
+    j["steps"] = json::parse(R"([
+      {"id": "a", "do": "choose", "with": "p0", "goal": "Answer Ysolda", "question": "What do you tell her?",
+       "options": [{"say": "Walk with her to the gate at dusk", "then": "end:good", "journal": "We walked.", "effect": "closer p0"},
+                   {"say": "Laugh it off", "then": "end:bad", "journal": "I laughed.", "effect": "apart Ysolda"}]}])");
+    const auto r = Tales::Compile(j, Town());
+    if (!r.ok) std::cerr << r.errors;
+    Require(r.ok, "closer and apart compile");
+    const auto& n = r.arc.graph[0];
+    // The good ending pays (with the asker at hand), so the reward is the second effect.
+    Require(n.edges[0].effect == Effect::Closer && n.edges[0].effectRole == RAsker && n.edges[0].effect2 == Effect::PayGold, "closer, then the reward");
+    Require(n.edges[1].effect == Effect::Apart && n.edges[1].effectRole == RAsker && n.edges[1].effect2 == Effect::None, "apart, by name");
+    Book book;
+    const auto id = book.Plan(r.arc, 1.0f);
+    book.Accept(id, 1.0f);
+    Facts f;
+    f.answer = 1;
+    const auto c = Advance(*book.Find(id), f, 1.1f);
+    Require(c.effect == Effect::Apart && c.effectRole == RAsker && c.ending == Ending::Failed, "the unkind answer cools it");
+    const auto bytes = Serialize(book);
+    Book back;
+    Require(Deserialize(bytes, back) && back.Find(id)->graph[0].edges[0].effect == Effect::Closer, "the new effects survive the co-save");
+    j["steps"][0]["options"][0]["effect"] = "closer";
+    Require(Tales::Compile(j, Town()).errors.find("missing a person") != std::string::npos, "closer to whom");
+    j["steps"][0]["options"][0]["effect"] = "closer p9";
+    Require(!Tales::Compile(j, Town()).ok, "only someone of the story");
+}
+
 static void HandsOver() {
     // A talk where the person gives the item up: the effect carries the prop and the giver.
     json j = Sample();
@@ -557,6 +589,7 @@ int main() {
         CompilesAndRuns();
         BrawlAndWaitAndDeath();
         PaidInPerson();
+        CloserAndApart();
         HandsOver();
         Adventure();
         Ambush();

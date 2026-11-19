@@ -273,6 +273,58 @@ ended" with the marker on him, and the gold handed over at two steps' distance a
 ("visit over": stays while anyone speaks, then walks back; nowhere to go = stays). Not seen in game: the 72 hours
 without going back, the asker dying on the way back (both offline only), whisper mode's shorter earshot.
 
+### Hearts: stories between someone and the player (2026-11-19, built, not yet played)
+
+The user's vision: stories that lead to "pursuing romance, marriage and having kids (if fertility mode installed,
+preferably with ostim), affairs (if ostim is installed)". Until now "romance" was only a genre among townsfolk.
+
+**IntelEngine owns none of that state and writes none of it.** A relationship mod keeps it, or the game does.
+`HeartBridge.cpp` reads it softly (a mod that is not installed reads as nothing):
+
+| What | Where it is read |
+|---|---|
+| How close (tier 0 to 5) | SkyrimNet Relationships' bond faction rank when they are tracked; else the game's own relationship rank |
+| Something of the heart on their side ("sparked"), the player's answer to it | SkyrimNet Relationships' script storage, read by `IntelEngine_Arcs.TellHearts` (four people a look) and told to the DLL (`ArcHeart`). Without that mod: someone the game itself lets the player marry (PotentialMarriageFaction) who is at least a friend, while the player wears an Amulet of Mara (the game's own sign of looking for someone: nobody is courted who did not ask to be) |
+| Betrothed, wed, ended, widowed | SkyrimNet Relationships' marriage faction; the game's PlayerMarriedFaction |
+| Married to someone else | the game's Spouse association |
+| With child, whose | Fertility Mode as SeverActions mirrors it into script storage |
+| Children with the player | Kinship's script storage |
+
+**Who may be part of one** is decided by `Hearts.h` from those facts, never by the model. Hard rules, whatever is
+installed: nobody who is a child or looks or sounds like one (the game's flag, the race, a "Child" voice, under 0.86
+of a grown person's height: a follower mod's child of 0.79 with a child's voice is one); nobody of the player's own
+family; nobody the player turned down; nothing that ended is reopened. `LeanOf` then says what a story between the
+two would be about:
+
+- **courtship**: something has begun (sparked) with a friend or more, answered or not;
+- **a life shared**: lovers, betrothed or wed;
+- **the household**: wed, with a child of the player's on the way or children already;
+- **an affair**: they are married to another, the player has welcomed it, and they are already close. Only where an
+  intimacy mod (OStim) is installed: the user's own condition. Never as a first step.
+
+**When.** In `RequestTale`, when the asker's lean is not None and neither of the last two stories nor an open one was
+of the heart (`Flag::Heart`), the story is about the two of them: `heart_lean` goes to the prompt, which has a section
+for each of the four. Nobody is chosen as asker because of it; the pacer and the director pick as before (someone wed
+to the player or close to them already ranks high there). Switched off with the living world at "Classic".
+
+**What the author is told.** Every person of the pool with something true between them and the player carries a line
+("With <player>: Married to <player>. With child (halfway); the child is <player>'s."), `Hearts::Words`, whether or
+not the story is of the heart, with the rule that it is fact: the player's wife is never given another love, and
+nothing of the heart is written with someone who was turned down or has no line. Someone who must not be part of any
+such story has no line at all.
+
+**What a story changes.** Two new effects, `closer pX` and `apart pX`: the game's own relationship rank between that
+person and the player moves one step (`Hearts::RankAfter`, done by the script), never beyond friendship either way.
+What lies beyond is the player's own doing and the relationship mod's to keep; such a mod hears of the story through
+what both remember of its ending. The prompt requires a kind way to say no at more than one point, words and
+gestures only, and that the story ends at the door.
+
+Offline: `HeartsCheck` (who, what, the hard rules, the words, the rank), `TalesCheck CloserAndApart`,
+`RunTaleAuthorPromptRenderCheck` (the prompt rendered with SkyrimNet's own Inja for nine kinds of request: each of
+the four leans, a spouse in the cast of an ordinary story, a stranger, a reason of their own, a second attempt).
+**Not played in game yet**: nothing of this section. To play: someone tracked by SkyrimNet Relationships with a
+spark, the pacer's story for them, both endings, and that the bond moved.
+
 ## 1. Principles
 
 1. **Truth first.** Code decides what happens and makes it true in the game (people, items, bodies, places) before
