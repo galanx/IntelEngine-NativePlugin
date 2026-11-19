@@ -67,6 +67,11 @@ namespace IntelEngine {
         void Listen();
         /** A quest of the journal moved on: no town story for a while. */
         void QuestMovedOn(RE::TESQuest* quest);
+        /** A tale's "give": the stamped prop goes from wherever it was put to the player. False when it was never put
+         *  anywhere yet (the script then makes it in the player's hands). */
+        bool FetchProp(std::uint32_t id, int prop);
+        /** A tale's steps and branches, one log line each (when planned and after a load). */
+        static void LogOutline(const Arcs::Arc& a);
         /** The script put prop `prop` at this reference (a container, or the floor beside it). */
         void Planted(std::uint32_t id, int prop, RE::TESObjectREFR* at);
 
@@ -92,7 +97,7 @@ namespace IntelEngine {
         /** Asks the dungeon master for a tale with this asker (main thread). False when none can be asked for now (one
          *  at a time, no model, nobody to cast); the answer plans the arc and sends IntelEngine_ArcOffer, or falls back
          *  to a pattern. */
-        bool RequestTale(RE::Actor* asker);
+        bool RequestTale(RE::Actor* asker, const std::string& written = {});
         /** Plans a compiled tale (main thread). 0 = refused. */
         std::uint32_t PlanTale(Arcs::Arc a);
         /** The judge's reading of a talk (any thread): which prepared outcome it was, -1 none yet. */
@@ -124,6 +129,7 @@ namespace IntelEngine {
             int effect2 = 0;
             int effect2Role = 0;
             int bondWith = 0;
+            int effectProp = 0;
             RE::FormID plantAt = 0;
             int plantProp = -1;
             bool plantFloor = false;

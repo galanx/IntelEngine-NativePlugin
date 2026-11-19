@@ -19,6 +19,9 @@
 #include <unordered_map>
 
 namespace IntelEngine::StoryDirector {
+    namespace {
+        constexpr std::uint32_t kTaleWriting = 0xFFFFFFFFu;   // a tale was asked for: its offer comes when it is written
+    }
 
     namespace {
         // Every story type the dungeon master knows (BuildStoryDMRequestJsonCore's list).
@@ -262,6 +265,13 @@ namespace IntelEngine::StoryDirector {
                         // Story arcs first (docs/STORY_ARCS.md): a thief, a feud or a murder among the people of the
                         // town the player is in; else a quest as before.
                         if (!venture) {
+                            // A tale the dungeon master writes for this person's town comes first; its answer brings
+                            // the offer by itself (kTaleWriting tells the wait here that one is on its way).
+                            if (ArcBridge::GetSingleton()->RequestTale(giver)) {
+                                arc->store(true);
+                                planned->set_value(kTaleWriting);
+                                return;
+                            }
                             if (const auto id = ArcBridge::GetSingleton()->PlanFor(giver, 0, true); id != 0) {
                                 arc->store(true);
                                 planned->set_value(id);
@@ -272,7 +282,11 @@ namespace IntelEngine::StoryDirector {
                                                    : QuestBridge::GetSingleton()->PlanFor(giver));
                     });
                     if (future.wait_for(std::chrono::seconds(5)) == std::future_status::ready) {
-                        if (const auto id = future.get(); id != 0) {
+                        if (const auto id = future.get(); id == kTaleWriting) {
+                            logger::info("[Director] {} acts: a tale of their town is being written; its offer follows", chosen.name);
+                            session->done("");
+                            return;
+                        } else if (id != 0) {
                             const bool isArc = arc->load();
                             logger::info("[Director] {} acts: {} #{} planned by the engine; the offer goes out", chosen.name,
                                          isArc ? "story arc" : "quest", id);

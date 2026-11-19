@@ -86,8 +86,9 @@ namespace IntelEngine::Arcs {
         Leave = 6,       // the role leaves town for a while (off-screen, once unseen), then comes home
         Befriend = 7,    // the role and `bondWith` become friends (the game's relationship rank)
         Estrange = 8,    // the role and `bondWith` become rivals
+        GiveItem = 9,    // the role hands prop `prop` (the edge's) to the player, from wherever it is
     };
-    constexpr std::uint8_t kEffects = 8;
+    constexpr std::uint8_t kEffects = 9;
 
     enum class If : std::uint8_t {
         Done = 1,     // the node's own fact holds
@@ -160,6 +161,7 @@ namespace IntelEngine::Arcs {
         std::array<Edge, 6> edges{};           // looked at in order; the first that holds fires
         // A tale's own words (patterns keep theirs in the esp and in the bridge).
         std::string goal;                      // the journal objective
+        std::string why;                       // Visit: what brings the visitor, in their own terms (narration)
         std::string question;                  // Choose: the popup's question
         std::array<std::string, 3> turns{};    // Talk: what each prepared outcome would be (for the judge)
         float waitHours = 0.0f;                // Wait: how long
@@ -372,6 +374,7 @@ namespace IntelEngine::Arcs {
         Role effect2Role = RNone;
         bool stayed = false;     // a branch back to the same step fired (its line is written, nothing completes)
         Role bondWith = RNone;   // Befriend, Estrange: with whom
+        std::uint8_t effectProp = 0;   // GiveItem: which prop
         std::string line;        // a tale's journal line for the branch taken
         bool any() const { return !done.empty() || stayed || skipped != kNoNode || ending != Ending::None || effect != Effect::None; }
     };
@@ -481,10 +484,12 @@ namespace IntelEngine::Arcs {
             // A branch back to the same step (the rival would not be talked round) leaves it neither done nor
             // skipped: the player is still on it.
             const bool stays = e.next == a.node && e.ending == Ending::None;
+            // A step left because someone it needed died is not done: the journal fails it with the tale.
             if (e.skip) c.skipped = a.node;
-            else if (!stays) c.done.push_back(a.node);
+            else if (!stays && e.ending != Ending::Lost) c.done.push_back(a.node);
             c.stayed = stays;
             c.effect = e.effect;
+            c.effectProp = e.effect == Effect::GiveItem ? e.prop : 0;
             c.effectRole = e.effectRole;
             c.log = e.log ? e.log : n.logStage;
             c.effect2 = e.effect2;
@@ -975,7 +980,7 @@ namespace IntelEngine::Arcs {
     // ------------------------------------------------------------------ save data (co-save record 'IEAR')
 
     constexpr std::uint32_t kRecordType = 'IEAR';
-    constexpr std::uint32_t kRecordVersion = 2;   // 2: tales (their graphs and words); 1 still loads
+    constexpr std::uint32_t kRecordVersion = 3;   // 2: tales (their graphs and words); 3: a visit's why. 1 and 2 still load
 
     namespace detail {
         template <class T>
@@ -1023,6 +1028,7 @@ namespace IntelEngine::Arcs {
             for (const auto& o : n.options) PutText(out, o);
             for (const auto r : n.optionRoles) Put(out, static_cast<std::uint8_t>(r));
             PutText(out, n.goal);
+            PutText(out, n.why);
             PutText(out, n.question);
             for (const auto& turn : n.turns) PutText(out, turn);
             Put(out, n.waitHours);
@@ -1052,7 +1058,7 @@ namespace IntelEngine::Arcs {
 
         inline bool ValidEnding(std::uint8_t v) { return v == 0 || (v >= 10 && v <= 20); }
 
-        inline bool GetNode(std::span<const std::uint8_t> in, std::size_t& at, Node& n) {
+        inline bool GetNode(std::span<const std::uint8_t> in, std::size_t& at, Node& n, std::uint32_t version) {
             std::uint8_t kind = 0, who = 0, marker = 0, edges = 0;
             if (!Get(in, at, kind) || !Get(in, at, who) || !Get(in, at, n.prop) || !Get(in, at, n.objective) || !Get(in, at, marker) ||
                 !Get(in, at, n.logStage) || !Get(in, at, n.extendDays)) {
@@ -1068,7 +1074,7 @@ namespace IntelEngine::Arcs {
                 if (!Get(in, at, v) || v >= kRoles) return false;
                 r = static_cast<Role>(v);
             }
-            if (!GetText(in, at, n.goal) || !GetText(in, at, n.question)) return false;
+            if (!GetText(in, at, n.goal) || (version >= 3 && !GetText(in, at, n.why)) || !GetText(in, at, n.question)) return false;
             for (auto& turn : n.turns) if (!GetText(in, at, turn)) return false;
             if (!Get(in, at, n.waitHours) || !Get(in, at, edges) || edges > n.edges.size() || !std::isfinite(n.waitHours)) return false;
             for (std::uint8_t i = 0; i < edges; ++i) {
@@ -1168,7 +1174,7 @@ namespace IntelEngine::Arcs {
 
     // All or nothing. Version 1 records (before tales) load as they were.
     inline bool Deserialize(std::span<const std::uint8_t> in, Book& book, std::uint32_t version = kRecordVersion) {
-        if (version != 1 && version != 2) return false;
+        if (version < 1 || version > 3) return false;
         std::size_t at = 0;
         Book read;
         std::uint8_t lastPattern = 0;
@@ -1205,7 +1211,7 @@ namespace IntelEngine::Arcs {
                 std::uint8_t nodes = 0;
                 if (!detail::Get(in, at, nodes) || nodes > kMaxTaleNodes) return false;
                 a.graph.resize(nodes);
-                for (auto& n : a.graph) if (!detail::GetNode(in, at, n)) return false;
+                for (auto& n : a.graph) if (!detail::GetNode(in, at, n, version)) return false;
                 if (!detail::GetText(in, at, a.genre) || !detail::GetLong(in, at, a.premise) || !detail::GetLong(in, at, a.offerWords) ||
                     !detail::GetText(in, at, a.offerAsk) || !detail::GetLong(in, at, a.opening)) {
                     return false;
