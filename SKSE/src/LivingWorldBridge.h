@@ -6,6 +6,7 @@
 
 #include "LivingWorld.h"
 
+#include <atomic>
 #include <chrono>
 #include <mutex>
 #include <string>
@@ -199,6 +200,16 @@ namespace IntelEngine {
         std::chrono::steady_clock::time_point m_loadedAt{};  // SkyrimNet's timeline check runs after a load
         bool m_reconciled = false;
         std::string m_lastFollowers;                        // who followed at the last look, for the log
+        // Who serves the player is found by asking every actor the game keeps in its process lists, a slice a look
+        // (Track; only that function touches these). A load starts it over (m_scanEpoch, from Revert).
+        std::vector<RE::ActorHandle> m_scanHandles;         // the pass under way
+        std::size_t m_scanAt = 0;
+        std::vector<RE::FormID> m_scanFound;                // teammates found in it so far
+        std::vector<RE::FormID> m_servingIds;               // the last pass that was finished
+        bool m_servingKnown = false;
+        int m_scanCount = 0;                                // how many actors that pass went through
+        std::atomic<std::uint32_t> m_scanEpoch{0};
+        std::uint32_t m_scanEpochSeen = 0;
         std::unordered_map<RE::FormID, std::string> m_whyNot;  // why someone's own life waits, for the log
     };
 }

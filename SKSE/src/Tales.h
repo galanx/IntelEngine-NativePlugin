@@ -684,7 +684,7 @@ namespace IntelEngine::Tales {
                 }
                 st.edges.push_back({A::If::Done, branch(s, i, where)});
             } else if (kind == "free") {
-                // Someone held at a place: reached there, and free. (The engine keeps them alive and in their bonds
+                // Someone held at a place: found there and cut loose by the player. (The engine keeps them alive and in their bonds
                 // until then, and the people of the place leave them be.)
                 n.kind = A::Kind::Free;
                 n.who = with(Str(s, "who").empty() && !Str(s, "with").empty() ? "with" : "who");

@@ -598,8 +598,9 @@ tales written by hand to exercise single steps. Two things followed.
   out; if they still stand in sight when the asker arrives, the offer is dropped. Away until the heart of the place
   is in the game (the same signal 14 that places a master), then put beside it: FIRST made a prisoner of the place
   (Skyrim.esm `dunPrisonerFaction` 000AA784, a friend of every such place's people, so nobody there harms them) and
-  unable to die, THEN moved in, restrained, on their knees (`IdleBoundKneesStart`). Freed when the player stands by
-  them with no fight going on (`Facts::captiveReached`, 300 units). They follow the player (IntelEngine's own follow
+  unable to die, THEN moved in, restrained, on their knees (`IdleBoundKneesStart`). Freed by the player's own hand
+  (they activate them; see "Cut loose by hand" further down; until 2026-11-19 late night, by standing within 300
+  units with no fight going on). They follow the player (IntelEngine's own follow
   package), stay while a step of the story is with them, and part once the player is out of the place under the
   open sky, or after three game hours: they walk home, or are simply home when the player is far ahead. Everything
   put on them comes off at the parting. A story declined, dropped or ended with them still held brings them home
@@ -664,9 +665,19 @@ counted only while the story stood on the step that asked for it.
 - **The depths of a place**: reached once is reached (`siteState` bit 2, in the co-save with the rest of that
   byte), whichever step the story was on. Measured from where the game put the place's master when the heart of
   the place is that master (Halted Stream Camp's chief), not from where a fight has taken him.
-- **Someone held**: free the moment the player stands by them with no fight going on, whichever step is current
-  (`captiveState` goes to Freed in the watch; the script unties them and has them come along as before). The step
-  that frees them is done the moment the story comes to it.
+- **Someone held**: free once the player has cut them loose (below), whichever step is current. The step that
+  frees them is done the moment the story comes to it.
+- **Cut loose by hand** (the user, on seeing the first version free her the moment the player arrived: "Wasnt
+  Ahlam freed a bit prematurely?", then "Yes freeing should be activate"). Coming near no longer frees anyone: it
+  did so for a player sneaking past, and with the captors still standing around. The player walks up and activates
+  the one held. `ArcBridge::Activated` hears it (a sink on the game's `TESActivateEvent`; everything but the
+  player's hand on an actor falls out at once), sets `captiveState` to Freed there and then, and sends the mod
+  event `IntelEngine_ArcUntie`, on which the script runs `WatchCaptives` at once, so the bonds come off without
+  waiting for the next look. While bound, `BlockActivation(true)` keeps the game's own answer to the key (its
+  dialogue menu) away; the event still comes. The crosshair goes on saying "Talk", so the first time the player
+  stands within 500 units of them a notification says "<name> is bound. Activate to cut the bonds." In a fight
+  too, at the player's own risk: the one freed still cannot die and is still left alone by the place's people
+  until they part from the player.
 - **The steps that led there are left** (`If::Freed` = 16, Tales.h `leadsUp`): every step that can only come
   before the one step that frees them gets a shortcut to that step. It fires when they are free already: the
   step's objective is taken away (the engine's own `skip`: not completed, no line in the journal, nothing for the
@@ -694,16 +705,34 @@ counted only while the story stood on the step that asked for it.
 - `FrameCost.h` (`FrameClock`): both looks are now timed where they run, the wait for the bridge's lock included.
   A look of 0.5 ms or more is said at once; the slowest of every 150 is logged ("Arcs: a look at a story: at most
   ... ms of the game's frame in the last 150 runs", "Quests: a look at a quest: ..."). Neither look was timed
-  before, so the first play gives the figure for the whole look, not only for what this added.
+  before.
+- **Measured (test profile, 2026-11-19 late night), and what the timing found that was there before:**
+  - The first look ever timed took 0.64 ms: 0.52 of it was `HomeOfCast` in the Bannered Mare, asking of every
+    reference in the room who owns it, and for each whether each person of the story belongs to the faction that
+    does. Only a bed counts, so only furniture is asked now (and only containers and furniture in `HidingSpot`).
+    After: **at most 0.08 ms in 150 looks**, twice, each over five minutes with the story taken on, the camp
+    entered, the one held cut loose, and Whiterun's street. The door of a home: 0.01 ms, once.
+  - The look at who follows the player (`LivingWorldBridge::Track`, every 10 s) showed 0.94 ms at worst in one
+    session and 0.38 in the next, 0.21 of it going through all 2129 actors of the game's process lists to find the
+    teammates. That grows with the load order. It is now a slice a look, at most 0.12 ms (`kScanMs`), the answer
+    being the last pass finished: **at most 0.26 ms in 30 looks**, the slice done by 0.10. Its log line says where
+    the slowest run's time went. A new follower is known a look or two later; one who left is seen at once.
+  - Not measured: the full Isekai profile (many more actors and references), and a look at an engine quest (none
+    was open).
 - The co-save: one bit of a byte that was there (`siteState`), and the shortcut edges of a story with someone held.
 
 ### Checked
 - Offline: `TalesCheck` (the shortcut is compiled where it belongs and nowhere else; found early with the witness
   dead; the master dead and they free in the same look; two ways of freeing), the whole suite 46 of 46.
-- **Not played yet, and not timed yet.** The test PC's screen was in use when this was built, so the test game
-  could not be started.
-  To play, with a hand-written tale (the asker, a witness in town, someone held at a camp, a "go to their home"
-  step): go to the camp and stand by the one held before asking the witness (free at once, "found before the story
-  asked for it" in the log; the talk with the witness gone from the journal); the same after asking; the marker for
-  "go to their home" on a door of that home; a search of a home before and after the thing is put there; someone
-  the current step is about switched off (their door).
+- **Played the same night** (test profile; a hand-written tale: Nazeem asks after Ahlam, Anoriath saw her go, Halted
+  Stream Camp, "go to Nazeem's house", a choice; the camp entered by console with the bandits blind):
+  - Before asking the witness: standing on top of her does nothing; the key on her, and the log says "cut loose by
+    the player (before the story asked for it)"; she stands and speaks within the moment; two seconds later the
+    talk with the witness is gone from the journal (objective never completed, hidden), "Find Ahlam and set her
+    free" is completed, and "Hear from Ahlam why she came here" is shown with the marker on her. No dialogue menu.
+  - The talk with her read by the judge; "Go to Nazeem's house": the marker on the door of the Drunken Huntsman,
+    where he lodges (found in 0.01 ms), done on walking in; the choice, the ending, the reward.
+  - Left behind at the camp by a player gone ahead, she went her own way; come out with the player, she parted at
+    Whiterun's gate with a word of her own.
+- Not played: a search of a home before and after the thing is put there; someone the current step is about
+  switched off (their door); an engine quest whose marker moves; cutting someone loose in the middle of a fight.

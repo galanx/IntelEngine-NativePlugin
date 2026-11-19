@@ -67,6 +67,8 @@ namespace IntelEngine {
         void Listen();
         /** A quest of the journal moved on: no town story for a while. */
         void QuestMovedOn(RE::TESQuest* quest);
+        /** The player laid hands on someone (activated them): when a story holds them bound, they are cut loose. */
+        void Activated(RE::Actor* actor);
         /** A tale's "give": the stamped prop goes from wherever it was put to the player. False when it was never put
          *  anywhere yet (the script then makes it in the player's hands). */
         bool FetchProp(std::uint32_t id, int prop);

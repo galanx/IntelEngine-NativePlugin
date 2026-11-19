@@ -38,17 +38,31 @@ namespace IntelEngine {
             const char* what;
             double noticeMs;
             std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
+            // Where the time went, for the slowest run: the end of each part in ms from the start (0 = not reached),
+            // and how many actors the look went through.
+            std::array<double, 3> parts{};
+            int actors = 0;
+            double Now() const { return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count(); }
+            void Part(std::size_t i) { parts[i] = Now(); }
             ~FrameCost() {
-                const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+                const double ms = Now();
                 if (ms >= noticeMs) logger::info("LivingWorld: {} took {:.1f} ms of the game's frame", what, ms);
-                // And how long it takes as a rule: the slowest of every 30, now and then.
+                // And how long it takes as a rule: the slowest of every 30, now and then, with where its time went.
                 static int runs = 0;
-                static double slowest = 0.0;
-                slowest = std::max(slowest, ms);
+                static double slowest = -1.0;
+                static std::array<double, 3> slowestParts{};
+                static int slowestActors = 0;
+                if (ms > slowest) {
+                    slowest = ms;
+                    slowestParts = parts;
+                    slowestActors = actors;
+                }
                 if (++runs >= 30) {
-                    logger::info("LivingWorld: {}: at most {:.2f} ms of the game's frame in the last {} runs", what, slowest, runs);
+                    logger::info("LivingWorld: {}: at most {:.2f} ms of the game's frame in the last {} runs (that one: its slice of "
+                                 "{} actors done by {:.2f} ms, SkyrimNet asked by {:.2f} ms, the lock had by {:.2f} ms)",
+                                 what, slowest, runs, slowestActors, slowestParts[0], slowestParts[1], slowestParts[2]);
                     runs = 0;
-                    slowest = 0.0;
+                    slowest = -1.0;
                 }
             }
         };
@@ -338,15 +352,50 @@ namespace IntelEngine {
         if (!m_catalogued) BuildCatalogue();
         FrameCost cost{"a look at who follows and who lives their own life", 2.0};
 
-        // Every loaded actor, all four process tiers: someone just moved in from an unloaded cell is not "high" yet.
+        // Who serves the player: every actor of all four process tiers is asked (someone just moved in from an
+        // unloaded cell is not "high" yet). That is every actor the game keeps in memory, thousands on a big load
+        // order: all 2129 of the test profile at once took 0.21 ms of one frame (2026-11-19, the first time this part
+        // was timed by itself), and more with more mods. So a slice a look, at most kScanMs of the frame, and the
+        // answer is the last pass that was finished. A new follower is known a look or two later; one who has left
+        // is seen at once all the same, because each life is asked directly below.
+        constexpr double kScanMs = 0.12;
+        if (const auto epoch = m_scanEpoch.load(); epoch != m_scanEpochSeen) {
+            m_scanEpochSeen = epoch;
+            m_scanHandles.clear();
+            m_scanFound.clear();
+            m_servingIds.clear();
+            m_scanAt = 0;
+            m_servingKnown = false;
+        }
+        if (m_scanAt >= m_scanHandles.size()) {
+            m_scanHandles.clear();
+            m_scanFound.clear();
+            m_scanAt = 0;
+            if (auto* lists = RE::ProcessLists::GetSingleton()) {
+                for (const auto* tier : {&lists->highActorHandles, &lists->middleHighActorHandles, &lists->middleLowActorHandles,
+                                         &lists->lowActorHandles}) {
+                    for (const auto& handle : *tier) m_scanHandles.push_back(handle);
+                }
+            }
+        }
+        while (m_scanAt < m_scanHandles.size()) {
+            if (auto actor = m_scanHandles[m_scanAt].get(); actor && actor->IsPlayerTeammate()) m_scanFound.push_back(actor->GetFormID());
+            ++m_scanAt;
+            if ((m_scanAt & 63u) == 0 && cost.Now() >= kScanMs) break;
+        }
+        if (m_scanAt >= m_scanHandles.size()) {
+            m_servingIds = m_scanFound;
+            m_scanCount = static_cast<int>(m_scanHandles.size());
+            m_servingKnown = true;
+        }
         std::vector<RE::Actor*> serving;
-        int loaded = 0;
-        ProcessUtils::ForEachLoadedActor([&](RE::Actor* actor) {
-            ++loaded;
-            if (!actor->IsPlayerTeammate()) return false;
+        const int loaded = m_scanCount;
+        for (const auto servingId : m_servingIds) {
+            auto* actor = RE::TESForm::LookupByID<RE::Actor>(servingId);
+            if (!actor || !actor->IsPlayerTeammate()) continue;
             if (Person(actor)) {
                 serving.push_back(actor);
-                return false;
+                continue;
             }
             // A teammate this does not count (a summon, a creature, a child): say why, once per actor and session.
             static std::unordered_set<RE::FormID> explained;
@@ -358,11 +407,13 @@ namespace IntelEngine {
                              actor->GetDisplayFullName(), actor->IsDead(), actor->IsCommandedActor(),
                              race && race->data.flags.any(RE::RACE_DATA::Flag::kChild), npcKeyword && actor->HasKeyword(npcKeyword));
             }
-            return false;
-        });
+        }
+        cost.actors = static_cast<int>(m_scanHandles.size());
+        cost.Part(0);
 
         // Asked before the lock: SkyrimNet's threads call this bridge's decorators while they hold locks of their own.
         const bool writable = SkyrimNetWritable();
+        cost.Part(1);
         const float now = NowDays();
         std::string followers;
         for (auto* actor : serving) {
@@ -370,7 +421,8 @@ namespace IntelEngine {
             followers += Safe::Name(actor->GetDisplayFullName());
         }
         std::scoped_lock lock(m_mutex);
-        if (followers != m_lastFollowers) {
+        cost.Part(2);
+        if (m_servingKnown && followers != m_lastFollowers) {
             logger::info("LivingWorld: following the player now: {} ({} actors loaded)", followers.empty() ? "nobody" : followers, loaded);
             m_lastFollowers = followers;
         }

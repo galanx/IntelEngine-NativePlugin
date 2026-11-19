@@ -1025,7 +1025,7 @@ namespace IntelEngine {
     void ArcBridge::LogOutline(const A::Arc& a) {
         static constexpr const char* kKinds[] = {"?", "talk", "find", "give", "choose", "brawl", "go", "visit", "wait", "delve", "slay", "ambush", "stalk", "free"};
         static constexpr const char* kWhens[] = {"?", "done", "option 1", "option 2", "option 3", "picked", "dead", "has", "won", "lost",
-                                                 "handed", "persuaded", "said 1", "said 2", "said 3", "waited"};
+                                                 "handed", "persuaded", "said 1", "said 2", "said 3", "waited", "found already"};
         for (std::size_t i = 0; i < a.graph.size(); ++i) {
             const auto& n = a.graph[i];
             std::string line = "Tales: #" + std::to_string(a.id) + " step " + std::to_string(i) + " " +
@@ -1033,7 +1033,7 @@ namespace IntelEngine {
                                ": " + n.goal + " |";
             for (const auto& e : n.edges) {
                 if (e.when == A::If{}) continue;
-                line += " [" + std::string(kWhens[std::min<std::size_t>(static_cast<std::size_t>(e.when), 15)]) + " -> " +
+                line += " [" + std::string(kWhens[std::min<std::size_t>(static_cast<std::size_t>(e.when), std::size(kWhens) - 1)]) + " -> " +
                         (e.ending != A::Ending::None ? "end " + std::to_string(static_cast<int>(e.ending)) : "step " + std::to_string(static_cast<int>(e.next))) +
                         (e.effect != A::Effect::None ? ", effect " + std::to_string(static_cast<int>(e.effect)) : std::string()) + "]";
             }
