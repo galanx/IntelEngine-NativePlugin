@@ -185,7 +185,14 @@ namespace IntelEngine {
                     default: kind = "a task"; break;
                 }
                 std::string text = std::string(name) + " (" + kind + ")";
-                if (objective->displayText.c_str() && *objective->displayText.c_str()) text += ": " + std::string(objective->displayText.c_str());
+                std::string goal = objective->displayText.c_str() ? objective->displayText.c_str() : "";
+                // "Talk to <Alias=RiverwoodFriend> in Riverwood": the journal's tags name nobody outside the journal.
+                for (auto open = goal.find('<'); open != std::string::npos; open = goal.find('<')) {
+                    const auto close = goal.find('>', open);
+                    if (close == std::string::npos) break;
+                    goal.replace(open, close - open + 1, "someone");
+                }
+                if (!goal.empty()) text += ": " + goal;
                 out.push_back(text);
                 if (out.size() >= 8) break;
             }
@@ -600,8 +607,10 @@ namespace IntelEngine {
         pending.talked = false;
         pending.judging = true;
         pending.judgedAt = RealNow();
-        // After two readings that found nothing yet, the next one must pick the outcome closest to what was said.
-        SendJudge(id, a.node, who, n.goal, n.turns, pending.nones >= 2);
+        // Never forced: a talk turns only when the conversation really came to one of its outcomes (an ignored line
+        // or idle chatter forced into "the closest outcome" would move the story on a matter never spoken of). The
+        // author prepares a refusal among the outcomes; a person who will not engage is that outcome, or the time runs out.
+        SendJudge(id, a.node, who, n.goal, n.turns, false);
     }
 
     void ArcBridge::SendJudge(std::uint32_t id, std::uint8_t node, RE::FormID who, std::string goal, std::array<std::string, 3> turns, bool force) {
