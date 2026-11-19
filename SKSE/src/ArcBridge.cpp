@@ -660,6 +660,93 @@ namespace IntelEngine {
             auto* cell = ref ? ref->GetParentCell() : nullptr;
             return cell && cell->IsAttached();
         }
+
+        // Something the journal can point at: a reference of the game that is not switched off and not gone.
+        bool Points(RE::TESObjectREFR* ref) { return ref && !ref->IsDeleted() && !ref->IsDisabled(); }
+
+        // A door of an interior that leads out of it: the one to the street where there is one, else any (a room
+        // above an inn's hall). Such doors are persistent, so it is found while the cell is not loaded, and the game
+        // shows the way to it from outside.
+        RE::TESObjectREFR* DoorOf(RE::TESObjectCELL* cell) {
+            RE::TESObjectREFR* any = nullptr;
+            RE::TESObjectREFR* street = nullptr;
+            cell->ForEachReference([&](RE::TESObjectREFR* ref) -> RE::BSContainer::ForEachResult {
+                if (!ref || ref->IsDisabled() || ref->IsDeleted()) return RE::BSContainer::ForEachResult::kContinue;
+                auto* base = ref->GetBaseObject();
+                auto* teleport = base && base->Is(RE::FormType::Door) ? ref->extraList.GetByType<RE::ExtraTeleport>() : nullptr;
+                if (!teleport || !teleport->teleportData) return RE::BSContainer::ForEachResult::kContinue;
+                if (!any) any = ref;
+                auto other = std::as_const(teleport->teleportData->linkedDoor).get();
+                auto* beyond = other ? other->GetSaveParentCell() : nullptr;
+                if (other && !beyond) beyond = other->GetParentCell();
+                if (beyond && !beyond->IsInteriorCell()) {
+                    street = ref;
+                    return RE::BSContainer::ForEachResult::kStop;
+                }
+                return RE::BSContainer::ForEachResult::kContinue;
+            });
+            return street ? street : any;
+        }
+
+        // The door of each home asked for so far (home cell -> door, 0 = it has none): a home's doors do not change,
+        // and finding one means walking the cell's references. Read and written under the bridge's lock.
+        std::unordered_map<RE::FormID, RE::FormID> g_homeDoors;
+    }
+
+    RE::TESObjectREFR* ArcBridge::HomeDoorOf(RE::FormID actorRef) const {
+        const Folk* folk = actorRef ? FolkOf(actorRef) : nullptr;
+        if (!folk || !folk->home) return nullptr;
+        if (const auto known = g_homeDoors.find(folk->home); known != g_homeDoors.end()) {
+            auto* door = known->second ? RE::TESForm::LookupByID<RE::TESObjectREFR>(known->second) : nullptr;
+            return Points(door) ? door : nullptr;
+        }
+        auto* cell = RE::TESForm::LookupByID<RE::TESObjectCELL>(folk->home);
+        auto* door = cell ? DoorOf(cell) : nullptr;
+        g_homeDoors[folk->home] = door ? door->GetFormID() : 0u;
+        return Points(door) ? door : nullptr;
+    }
+
+    // Where the journal points, for every kind of step, as the game stands at this moment. A player does not do things
+    // in the order a story was written in, and people do not stay where a marker was once put: so this is asked on
+    // every watch (Advance), and the script is told whenever the answer has changed (the user, 2026-11-19: "Based on
+    // player unpredictability, we may need a more reliable way to resolve the quest markers"). The order:
+    //   what the step is about, where it is right now (a body that carries the thing, the place's master, the one
+    //   held, the spot something was hidden at, the person to speak with);
+    //   else where that is to be looked for (the home's door for something hidden there or for "go to their home",
+    //   the heart of a place, the place on the map);
+    //   else, for a person who is not in the game just now (sent away, taken, jailed out of sight), their home's door.
+    // Never a reference that is switched off or gone: such a marker shows nothing, and the journal reads as broken.
+    RE::TESForm* ArcBridge::MarkerOf(const A::Arc& a, const A::Node& n) const {
+        const bool tale = a.pattern == A::Pattern::Tale;
+        const auto refOf = [](RE::FormID id) { return id ? RE::TESForm::LookupByID<RE::TESObjectREFR>(id) : nullptr; };
+        if (tale) {
+            // What the leader of an ambush carries: on the leader, standing or fallen.
+            if (n.kind == A::Kind::Have && n.prop < A::kProps && (a.propAmbush & (1u << n.prop)) && a.thug[0]) {
+                if (auto* leader = refOf(a.thug[0]); Points(leader)) return leader;
+            }
+            // A place out in the world: its master, the one held there, its heart, or the place on the map.
+            if (const auto site = SiteOfStep(a, n)) return PlaceMarker(a, n, site);
+            if (n.kind == A::Kind::Have && n.prop < A::kProps) {
+                // Hidden somewhere and put there already: the spot itself.
+                if (auto* at = refOf(a.propAt[n.prop]); at && !at->As<RE::Actor>() && Points(at)) return at;
+                // Hidden in someone's home and not put there yet (it goes in when the player walks in): the home, by
+                // its door. The marker used to sit on the owner, wherever in town they were, while the journal said
+                // to search their house.
+                if (!a.propAt[n.prop] && a.propHome[n.prop]) {
+                    if (auto* door = HomeDoorOf(a.cast[a.propHome[n.prop]])) return door;
+                }
+            }
+            // "Go to their home" is the home, not the person, who may be at the market.
+            if (n.kind == A::Kind::Reach && n.who) {
+                if (auto* door = HomeDoorOf(a.cast[n.who])) return door;
+            }
+        } else if (n.kind == A::Kind::Have && n.prop < A::kProps && a.propAt[n.prop]) {
+            if (auto* at = refOf(a.propAt[n.prop]); at && !at->As<RE::Actor>() && Points(at)) return at;
+        }
+        const RE::FormID person = n.marker != A::RNone ? a.cast[n.marker] : 0u;
+        if (auto* who = refOf(person); Points(who)) return who;
+        // Not in the game just now: where they live, so the journal is not left blank.
+        return person ? HomeDoorOf(person) : nullptr;
     }
 
     RE::Actor* ArcBridge::Company(std::uint32_t id) const {
@@ -1169,8 +1256,21 @@ namespace IntelEngine {
                     const bool sameSpace = anchorCell && cell && (anchorCell->IsInteriorCell() ? anchorCell == cell
                                                                                               : anchor->GetWorldspace() == player->GetWorldspace());
                     const float reach = anchorCell && anchorCell->IsInteriorCell() ? 1800.0f : 2500.0f;
-                    f.atDepths[s] = sameSpace && anchor->GetPosition().GetDistance(player->GetPosition()) < reach;
+                    // The heart of some places is their own master (Halted Stream Camp's chief): where the game put
+                    // him, not where a fight has since taken him (he ran to the way in, and the way in was "the depths").
+                    auto heartAt = anchor->GetPosition();
+                    if (auto* master = anchor->As<RE::Actor>()) {
+                        RE::NiPoint3 pos, rot;
+                        RE::TESForm* where = nullptr;
+                        master->GetEditorLocation2(pos, rot, where, nullptr);
+                        if (where && where == anchorCell) heartAt = pos;
+                    }
+                    f.atDepths[s] = sameSpace && heartAt.GetDistance(player->GetPosition()) < reach;
                 }
+                // Reached once is reached, whichever step the story was on at the time (bit 2 of the place's state,
+                // kept with the story): a player who went down there before the journal asked is not sent down again.
+                if (f.atDepths[s]) a->siteState[s] |= 4u;
+                else if (a->siteState[s] & 4u) f.atDepths[s] = true;
                 auto* boss = a->siteBoss[s] ? RE::TESForm::LookupByID<RE::Actor>(a->siteBoss[s]) : nullptr;
                 // Dead only once it was seen alive in a loaded cell, or found dead at the heart by the player: an actor
                 // placed in an unloaded camp reads as dead or vanishes before anyone got there (Vargr the Red, 2026-11-19).
@@ -1188,10 +1288,21 @@ namespace IntelEngine {
             }
         }
         // Someone held at a place: reached where they are bound, with no fight going on around them.
-        if (tale && a->captive && a->captiveState == A::CaptiveBound) {
-            auto* held = actors[a->captive];
-            f.captiveReached = held && !held->IsDead() && !held->IsDisabled() && held->Is3DLoaded() && held->GetParentCell() == cell &&
-                               held->GetPosition().GetDistance(player->GetPosition()) < 300.0f && !player->IsInCombat();
+        // Free from that moment, whichever step the story is on: a player who walks into the camp before asking around
+        // finds her all the same, and nobody is left kneeling in their bonds beside the one who came for them. The step
+        // that frees them is then done the moment the story comes to it.
+        if (tale && a->captive) {
+            if (a->captiveState == A::CaptiveBound) {
+                auto* held = actors[a->captive];
+                const bool reached = held && !held->IsDead() && !held->IsDisabled() && held->Is3DLoaded() && held->GetParentCell() == cell &&
+                                     held->GetPosition().GetDistance(player->GetPosition()) < 300.0f && !player->IsInCombat();
+                if (reached) {
+                    a->captiveState = A::CaptiveFreed;
+                    const bool asked = a->node < nodes.size() && nodes[a->node].kind == A::Kind::Free;
+                    logger::info("Arcs: #{} {} is free{}", id, NameOf(a->cast[a->captive]), asked ? "" : " (found before the story asked for it)");
+                }
+            }
+            f.captiveReached = a->captiveState >= A::CaptiveFreed;
         }
         // A tale's ambush: its men are down, each dead or gone from the game, and at least one fell (they are placed
         // beside the player, in loaded ground: a death there is a real one).
@@ -1230,13 +1341,6 @@ namespace IntelEngine {
         const auto change = A::Advance(*a, f, now);
         pending.answer = -1;
         std::int32_t bits = 0;
-        // The step that frees someone is done: they are free from here on (the script unties them and has them come
-        // along; WatchCaptives reads the state).
-        if (tale && nodeBefore < nodes.size() && nodes[nodeBefore].kind == A::Kind::Free && f.captiveReached &&
-            a->captiveState == A::CaptiveBound && (a->node != nodeBefore || change.ending != A::Ending::None)) {
-            a->captiveState = A::CaptiveFreed;
-            logger::info("Arcs: #{} {} is free", id, NameOf(a->cast[a->captive]));
-        }
         // The ambush's step was left with men still standing (the player beaten, or they were talked out of it): they
         // stand down and leave.
         if (ambushStep && (a->node != nodeBefore || change.ending != A::Ending::None)) {
@@ -1296,6 +1400,23 @@ namespace IntelEngine {
             logger::info("Arcs: #{} '{}' goes {} {:08X} in {}'s home", id, a->propName[p], spot.floor ? "beside" : "into",
                          spot.ref->GetFormID(), NameOf(a->cast[hider]));
         }
+        // The journal's marker moves with what is in the game, for every kind of step (MarkerOf): the place on the map,
+        // nothing while inside, the heart, the master, the body, the one held; a home's door until what is hidden there
+        // is there; a person, or their door while they are not in the game. Said to the script when it has moved; a
+        // new step sets its own (ShowStep).
+        if (a->node < nodes.size()) {
+            auto* marker = MarkerOf(*a, nodes[a->node]);
+            const RE::FormID now = marker ? marker->GetFormID() : 0u;
+            if (!pending.siteMarkerKnown || pending.markerNode != a->node) {
+                pending.siteMarkerKnown = true;
+                pending.markerNode = a->node;
+                pending.siteMarker = now;
+            } else if (now != pending.siteMarker) {
+                logger::info("Arcs: #{} the journal now points at {:08X} (was {:08X}), step {}", id, now, pending.siteMarker, static_cast<int>(a->node));
+                pending.siteMarker = now;
+                bits |= 1 << 14;
+            }
+        }
         if (tale) {
             // A heart that came into the game only now (its part of the place was loaded): the story's master is
             // put there at once. The script places (PlaceBosses, out of the player's sight where that can be helped)
@@ -1314,21 +1435,6 @@ namespace IntelEngine {
                 const auto s = static_cast<std::size_t>(a->captiveSite - 1u);
                 auto* anchor = a->siteAnchor[s] ? RE::TESForm::LookupByID<RE::TESObjectREFR>(a->siteAnchor[s]) : nullptr;
                 if (InTheWorldNow(anchor)) bits |= 1 << 14;
-            }
-            // The journal's marker for a step out in the world moves with what is in the game (the place on the map,
-            // nothing while inside, the heart, the master, the body): said to the script when it has moved.
-            if (a->node < nodes.size()) {
-                if (const auto site = SiteOfStep(*a, nodes[a->node])) {
-                    auto* marker = PlaceMarker(*a, nodes[a->node], site);
-                    const RE::FormID now = marker ? marker->GetFormID() : 0u;
-                    if (!pending.siteMarkerKnown || now != pending.siteMarker) {
-                        if (pending.siteMarkerKnown) bits |= 1 << 14;
-                        pending.siteMarkerKnown = true;
-                        pending.siteMarker = now;
-                    }
-                } else {
-                    pending.siteMarkerKnown = false;
-                }
             }
             for (std::size_t s = 0; s < A::kSites; ++s) {
                 if (!a->site[s] || !(a->siteState[s] & 1u) || (a->siteState[s] & 2u)) continue;
@@ -2108,21 +2214,7 @@ namespace IntelEngine {
             std::uint8_t prop = 0;
             return HandOverOf(n, to, prop) ? actor(to) : nullptr;
         }
-        if (name == "marker" && a->pattern == A::Pattern::Tale) {
-            // A place out in the world: its boss while it lives, else its heart. A prop a boss carries: the boss.
-            if (n.kind == A::Kind::Have && n.prop < A::kProps && (a->propAmbush & (1u << n.prop)) && a->thug[0]) {
-                if (auto* leader = RE::TESForm::LookupByID(a->thug[0])) return leader;
-            }
-            if (const auto site = SiteOfStep(*a, n)) return PlaceMarker(*a, n, site);
-        }
-        if (name == "marker") {
-            // Finding a prop: the marker goes to where it is hidden once it is there; else to the node's person.
-            if (n.kind == A::Kind::Have && a->propAt[n.prop]) {
-                auto* at = RE::TESForm::LookupByID<RE::TESObjectREFR>(a->propAt[n.prop]);
-                if (at && !at->As<RE::Actor>()) return at;
-            }
-            return actor(n.marker);
-        }
+        if (name == "marker") return MarkerOf(*a, n);   // one answer for the journal, asked anew on every watch
         return nullptr;
     }
 
@@ -2524,6 +2616,7 @@ namespace IntelEngine {
     void ArcBridge::Revert() {
         HeartBridge::Forget();
         std::scoped_lock lock(m_mutex);
+        g_homeDoors.clear();
         m_book = A::Book{};
         m_pending.clear();
         // A save without arcs (made before them, or before this mod) still gets its look: every arc rumor is of another

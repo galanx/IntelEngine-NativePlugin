@@ -115,6 +115,7 @@ namespace IntelEngine::Arcs {
         Said1 = 13,
         Said2 = 14,
         Waited = 15,     // `hours` game hours passed on this step
+        Freed = 16,      // the one held is free already: the player found them before the story came to it
     };
     constexpr int kPersuadeSpeech = 35;
 
@@ -460,6 +461,7 @@ namespace IntelEngine::Arcs {
             case If::Said1: return f.turn == 1;
             case If::Said2: return f.turn == 2;
             case If::Waited: return f.hoursHere >= e.hours;
+            case If::Freed: return f.captiveReached;
         }
         return false;
     }
@@ -1171,7 +1173,7 @@ namespace IntelEngine::Arcs {
                     !GetText(in, at, e.line) || !Get(in, at, e.hours) || !Get(in, at, bondWith)) {
                     return false;
                 }
-                if (when < 1 || when > static_cast<std::uint8_t>(If::Waited) || role >= kRoles || effectRole >= kRoles ||
+                if (when < 1 || when > static_cast<std::uint8_t>(If::Freed) || role >= kRoles || effectRole >= kRoles ||
                     effect2Role >= kRoles || bondWith >= kRoles || effect > kEffects || effect2 > kEffects || !ValidEnding(ending) ||
                     e.prop >= kProps || !std::isfinite(e.hours)) {
                     return false;
