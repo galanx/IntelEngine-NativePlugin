@@ -928,6 +928,7 @@ namespace IntelEngine {
             pending.turn = -1;
             pending.talked = false;
             pending.judging = false;
+            pending.askedAt = -1.0f;
             pending.nones = 0;
             pending.visitAt = -1.0f;
             pending.lingering = false;
@@ -1014,11 +1015,43 @@ namespace IntelEngine {
                 else if (t->IsDead()) ++dead;
             }
             f.ambushOver = thugsPlaced > 0 && dead > 0 && dead + gone == thugsPlaced;
+            // Beaten down (the script keeps the player from dying while the men are on them): the step's "lost".
+            if (pending.struck && player->AsActorState()->IsBleedingOut()) f.brawl = -1;
+            // What the talk settled on costs gold the player may not have: then nothing is settled.
+            if (pending.turn >= 0) {
+                for (const auto& e : nodes[a->node].edges) {
+                    if (static_cast<int>(e.when) != static_cast<int>(A::If::Said0) + pending.turn) continue;
+                    const bool pays = e.effect == A::Effect::PlayerPays || e.effect2 == A::Effect::PlayerPays;
+                    const auto price = static_cast<std::int32_t>(a->price ? a->price : a->gold);
+                    if (pays && player->GetGoldAmount() < price) {
+                        logger::info("Arcs: #{} the ambush: {} gold was offered and the player has {}", id, price, player->GetGoldAmount());
+                        pending.turn = -1;
+                        f.turn = -1;
+                        pending.parleyFight = true;
+                        pending.shortPurse = true;
+                    }
+                }
+            }
         }
+        const std::uint8_t nodeBefore = a->node;
         if (tale) TaleTalk(id, *a, pending, f);
         const auto change = A::Advance(*a, f, now);
         pending.answer = -1;
         std::int32_t bits = 0;
+        // The ambush's step was left with men still standing (the player beaten, or they were talked out of it): they
+        // stand down and leave.
+        if (ambushStep && (a->node != nodeBefore || change.ending != A::Ending::None)) {
+            const bool standing = std::any_of(a->thug.begin(), a->thug.end(), [](std::uint32_t ref) {
+                auto* man = ref ? RE::TESForm::LookupByID<RE::Actor>(ref) : nullptr;
+                return man && !man->IsDeleted() && !man->IsDead();
+            });
+            if (standing) {
+                pending.ambushDo = 6;
+                pending.standWhy = f.brawl < 0 ? 1 : 2;
+                logger::info("Arcs: #{} the ambush: {}; the men stand down and leave", id,
+                             f.brawl < 0 ? "the player is beaten" : "they were talked out of it");
+            }
+        }
         if (change.any()) {
             // The step done, plus one (one step a look at most): bits 0-4.
             if (!change.done.empty()) bits |= (static_cast<std::int32_t>(change.done.front()) + 1) & 0x1F;
@@ -1045,6 +1078,7 @@ namespace IntelEngine {
                          change.ending != A::Ending::None ? ", ended " + std::to_string(static_cast<int>(change.ending)) : std::string());
             if (change.ending != A::Ending::None) {
                 Ended(*a);
+                if (pending.ambushDo) bits |= 1 << 13;
                 return bits;
             }
         }
@@ -1107,7 +1141,7 @@ namespace IntelEngine {
             // The step's person has started talking with the player: they stay with the player until the talk is over
             // (the user, 2026-11-18: "Only if the player doesnt respond for a long time, the npc gets bored and walks
             // off"). Jon Battle-Born walked home in the middle of being asked about a goblet (2026-11-19).
-            if (n.who && n.kind != A::Kind::Wait && n.kind != A::Kind::Have && n.kind != A::Kind::Ambush && f.with[n.who] && f.spoke[n.who] && !f.dead[n.who] &&
+            if (n.who && n.kind != A::Kind::Wait && n.kind != A::Kind::Have && n.kind != A::Kind::Ambush && n.kind != A::Kind::Stalk && f.with[n.who] && f.spoke[n.who] && !f.dead[n.who] &&
                 !pending.lingering && RealSeconds() >= pending.lingerHold) {
                 pending.lingering = true;
                 bits |= 1 << 6;
@@ -1122,6 +1156,27 @@ namespace IntelEngine {
                 logger::info("Arcs: #{} {} is to come to the player (step {})", id, NameOf(a->cast[n.who]), static_cast<int>(a->node));
             }
             const float real = RealSeconds();
+            // Someone shadowing the player: sent after them (the visit's signal; the script sees the step's kind) when
+            // the player is out of doors, in no fight, and not standing next to them already. Tried again every couple
+            // of minutes while it cannot be (another visitor on the way, indoors).
+            if (n.kind == A::Kind::Stalk && n.who && !f.dead[n.who] && !f.with[n.who] && real >= pending.stalkHold && cell &&
+                !cell->IsInteriorCell() && !player->IsInCombat() && !LivingWorldBridge::GetSingleton()->IsBadMoment() &&
+                real >= m_questBusyUntil.load()) {
+                auto* shadow = actors[n.who];
+                const bool inReach = shadow && shadow->Is3DLoaded() && shadow->GetWorldspace() == player->GetWorldspace();
+                const auto to = inReach ? shadow->GetPosition() - player->GetPosition() : RE::NiPoint3{};
+                const float distance = inReach ? std::sqrt(to.x * to.x + to.y * to.y) : 1.0e9f;
+                const bool beside = inReach && distance < 2500.0f;
+                // From behind only: someone who would come at the player from the front, in plain view, is no shadow
+                // (Sven crouched in the gateway the player was walking toward, 2026-11-19). Angle 0 is north, clockwise.
+                const float facing = player->GetAngleZ();
+                const bool ahead = inReach && distance > 1.0f && (to.x * std::sin(facing) + to.y * std::cos(facing)) / distance > 0.17f;
+                if (!beside && !ahead) {
+                    pending.stalkHold = real + 120.0f;
+                    bits |= 1 << 5;
+                    logger::info("Arcs: #{} {} is to shadow the player (step {})", id, NameOf(a->cast[n.who]), static_cast<int>(a->node));
+                }
+            }
             if ((n.kind == A::Kind::Choose || n.kind == A::Kind::Brawl) && n.who && f.spoke[n.who] && !f.dead[n.who] &&
                 real >= pending.chooseHold) {
                 pending.chooseHold = real + 30.0f;   // the popup is up; Answer sets the real hold
@@ -1129,7 +1184,7 @@ namespace IntelEngine {
                 logger::info("Arcs: #{} step {}: {} has talked with the player; the decision is offered", id, static_cast<int>(a->node),
                              NameOf(a->cast[n.who]));
             }
-            if (n.kind == A::Kind::Ambush) AmbushLook(id, *a, pending, now, thugsPlaced, bits);
+            if (n.kind == A::Kind::Ambush) AmbushLook(id, *a, pending, n, now, thugsPlaced);
             A::Role to = A::RNone;
             std::uint8_t prop = 0;
             if (HandOverOf(n, to, prop) && f.has[prop] && f.spoke[to] && !f.dead[to] && real >= pending.giveHold && !(bits & (1 << 25))) {
@@ -1138,6 +1193,7 @@ namespace IntelEngine {
                 logger::info("Arcs: #{} step {}: the hand-over to {} is offered", id, static_cast<int>(a->node), NameOf(a->cast[to]));
             }
         }
+        if (pending.ambushDo) bits |= 1 << 13;   // said again every look until the script has done it
         return bits;
     }
 
@@ -1344,13 +1400,10 @@ namespace IntelEngine {
                      NameOf(a->site[s]), a->siteBoss[s]);
     }
 
-    void ArcBridge::AmbushLook(std::uint32_t id, A::Arc& a, Pending& pending, float now, int placed, std::int32_t& bits) {
+    void ArcBridge::AmbushLook(std::uint32_t id, A::Arc& a, Pending& pending, const A::Node& n, float now, int placed) {
         auto* player = RE::PlayerCharacter::GetSingleton();
         const float real = RealSeconds();
-        if (pending.ambushDo) {
-            bits |= 1 << 13;   // asked again every look until the script says it is done
-            return;
-        }
+        if (pending.ambushDo) return;   // the script has work to do first
         const bool wilds = InTheWilds(player);
         if (!wilds) pending.wildsSince = -1.0f;
         else if (pending.wildsSince < 0.0f) pending.wildsSince = real;
@@ -1379,7 +1432,6 @@ namespace IntelEngine {
             if (!wait.empty()) return;
             pending.ambushDo = 1;
             pending.ambushHold = real + 30.0f;
-            bits |= 1 << 13;
             logger::info("Arcs: #{} the ambush: its men are to wait on the player's way", id);
             return;
         }
@@ -1411,54 +1463,79 @@ namespace IntelEngine {
                 }
                 a.thug = {};
                 pending.struck = false;
+                pending.parleyAt = -1.0f;
                 logger::info("Arcs: #{} the ambush: its men are gone from the game unfought; they come again later", id);
             }
             return;
         }
-        // The player has come near and they are not fighting (yet, or any more: they lost the player): they strike,
-        // out in the wilds only (in a town they hold back). Fighting already before they stepped out (the player
-        // struck first): all of them join at once.
         if (pending.placedAt < 0.0f) pending.placedAt = real;
-        if (anyLoaded && ((!fighting && wilds && nearest < 2000.0f && real >= pending.strikeHold) || (fighting && !pending.struck))) {
-            pending.ambushDo = 2;
-            pending.strikeHold = real + 15.0f;
-            bits |= 1 << 13;
-            logger::info("Arcs: #{} the ambush: the player is {:.0f} away, they {}", id, nearest,
-                         fighting ? "join the fight" : pending.struck ? "come at the player again" : pending.chasing ? "close in" : "step out");
-            return;
-        }
-        // Not fighting the player and not near: they come to the player, so the fight is where the player stands.
-        // Waiting on the road, once the player has not come their way for a minute (the user, 2026-11-19: the ambusher
-        // stood somewhere in the woods where nobody passed); after they struck, whenever they lost the player or
-        // something drew them off (Brannoc and his man ran after a wolf into the river and never came back).
-        const bool lost = pending.struck && nearest >= 2000.0f;
-        const bool waitedLong = !pending.struck && !pending.chasing && real - pending.placedAt > 60.0f && nearest > 2500.0f;
-        if (anyLoaded && !fighting && wilds && real >= pending.comeHold && (lost || waitedLong)) {
-            pending.ambushDo = 4;
-            pending.comeHold = real + 15.0f;
-            bits |= 1 << 13;
-            logger::info("Arcs: #{} the ambush: {} ({:.0f} away); they come after the player", id,
-                         lost ? "they are not on the player any more" : "the player did not come their way", nearest);
-            return;
-        }
-        // The player got away: out of the fight and far from them (this modlist keeps them loaded 17000 units off,
-        // 2026-11-19), or indoors. They are taken out of the world unseen and come again another time.
-        auto* cell = player->GetParentCell();
-        // In a town too: they do not follow the player in among guards and townsfolk.
-        const bool away = !fighting && !player->IsInCombat() && real >= pending.callOffHold &&
-                          (!cell || cell->IsInteriorCell() || nearest > 12000.0f || (!wilds && !pending.struck));
         {
             const std::string state = std::string(anyLoaded ? "loaded" : "not loaded") + (fighting ? ", fighting the player" : "") +
-                                      (player->IsInCombat() ? ", the player in a fight" : "") + (nearest > 12000.0f ? ", far" : "");
+                                      (player->IsInCombat() ? ", the player in a fight" : "") + (nearest > 12000.0f ? ", far" : "") +
+                                      (pending.struck ? ", the fight is on" : pending.parleyAt >= 0.0f ? ", the leader has the word" : "");
             if (state != pending.ambushWait) {
                 pending.ambushWait = state;
                 logger::info("Arcs: #{} the ambush's men: {}", id, state);
             }
         }
+        if (pending.struck) {
+            // The fight is on: whenever they are not on the player (they lost the player, or something drew them off:
+            // Brannoc and his man ran after a wolf into the river and never came back, 2026-11-19) they come again.
+            if (fighting) return;
+            if (anyLoaded && wilds && nearest < 2000.0f && real >= pending.strikeHold) {
+                pending.ambushDo = 5;
+                pending.strikeHold = real + 15.0f;
+                logger::info("Arcs: #{} the ambush: the player is {:.0f} away, they come at the player again", id, nearest);
+                return;
+            }
+            if (anyLoaded && wilds && nearest >= 2000.0f && real >= pending.comeHold) {
+                pending.ambushDo = 4;
+                pending.comeHold = real + 15.0f;
+                logger::info("Arcs: #{} the ambush: they are not on the player any more ({:.0f} away); they come after the player", id, nearest);
+                return;
+            }
+        } else if (fighting) {
+            // The player struck first (or they turned on the player some other way): all of them join, no word.
+            pending.ambushDo = 5;
+            pending.strikeHold = real + 15.0f;
+            logger::info("Arcs: #{} the ambush: the player is {:.0f} away, they join the fight", id, nearest);
+            return;
+        } else if (pending.parleyAt >= 0.0f) {
+            // The leader has the word; the player may answer, and the talk may settle it.
+            std::string why;
+            if (pending.parleyFight) why = "the player cannot pay what was offered";
+            if (pending.parleyFight || Parley(id, a, pending, n, nearest, why)) {
+                pending.ambushDo = 5;
+                pending.strikeHold = real + 15.0f;
+                logger::info("Arcs: #{} the ambush: {}; they fall on the player", id, why);
+            }
+            return;
+        } else {
+            // Not met yet. Near: the leader steps out (or closes in) and has a word, out in the wilds only.
+            if (anyLoaded && wilds && nearest < 2000.0f) {
+                pending.ambushDo = 2;
+                logger::info("Arcs: #{} the ambush: the player is {:.0f} away, they {}", id, nearest, pending.chasing ? "close in" : "step out");
+                return;
+            }
+            // Waiting on the road and the player has not come their way for a minute: they come to the player, so the
+            // meeting is where the player is (the user, 2026-11-19: the ambusher stood somewhere in the woods where
+            // nobody passed).
+            if (anyLoaded && wilds && !pending.chasing && real - pending.placedAt > 60.0f && nearest > 2500.0f && real >= pending.comeHold) {
+                pending.ambushDo = 4;
+                pending.comeHold = real + 15.0f;
+                logger::info("Arcs: #{} the ambush: the player did not come their way ({:.0f} away); they come after the player", id, nearest);
+                return;
+            }
+        }
+        // The player got away: out of the fight and far from them (this modlist keeps them loaded 17000 units off,
+        // 2026-11-19), or indoors, or in a town (they do not follow the player in among guards and townsfolk). They
+        // are taken out of the world unseen and come again another time.
+        auto* cell = player->GetParentCell();
+        const bool away = !fighting && !player->IsInCombat() && real >= pending.callOffHold &&
+                          (!cell || cell->IsInteriorCell() || nearest > 12000.0f || (!wilds && !pending.struck));
         if (away) {
             pending.ambushDo = 3;
             pending.callOffHold = real + 10.0f;
-            bits |= 1 << 13;
             logger::info("Arcs: #{} the ambush: the player {} {}; they are called off and come again later", id,
                          !wilds && cell && !cell->IsInteriorCell() ? "reached where people live, away from" : "got away from",
                          leader ? NameOf(leader->GetFormID()) : std::string("its men"));
@@ -1490,7 +1567,20 @@ namespace IntelEngine {
                 pending.chasing = false;
             }
         } else if (what == 2) {
+            // The leader stepped out and has the word: the player may answer before anything else happens.
+            pending.parleyAt = RealSeconds();
+            pending.judgedAt = pending.parleyAt;
+            pending.askedAt = -1.0f;
+            pending.nones = 0;
+            pending.talked = false;
+            pending.judging = false;
+            pending.turn = -1;
+            pending.parleyFight = false;
+        } else if (what == 5) {
             pending.struck = true;
+            pending.parleyAt = -1.0f;
+            pending.parleyFight = false;
+            pending.shortPurse = false;
         } else if (what == 4) {
             pending.chasing = true;
         } else if (what == 3) {
@@ -1511,6 +1601,7 @@ namespace IntelEngine {
             }
             pending.chasing = false;
             if (!left) {
+                pending.parleyAt = -1.0f;
                 pending.struck = false;
                 pending.ambushAgain = NowDays() + 0.25f;   // six hours of the game
             }
@@ -1593,11 +1684,24 @@ namespace IntelEngine {
         if (name == "ambushdo") return pending != m_pending.end() ? pending->second.ambushDo : 0;
         if (name == "ambushtries") return pending != m_pending.end() ? pending->second.ambushTries : 0;
         if (name == "ambushchase") return pending != m_pending.end() && pending->second.chasing ? 1 : 0;
+        if (name == "ambushend") return pending != m_pending.end() ? pending->second.standWhy : 0;
+        if (name == "ambushshort") return pending != m_pending.end() && pending->second.shortPurse ? 1 : 0;
+        if (name == "ambushlost") {
+            // The story has a way on for a beaten player: only then is the player kept from dying in it.
+            for (const auto& step : nodes) {
+                if (step.kind != A::Kind::Ambush) continue;
+                for (const auto& e : step.edges) if (e.when == A::If::Lost) return 1;
+            }
+            return 0;
+        }
         if (name == "struck") return pending != m_pending.end() && pending->second.struck ? 1 : 0;
         if (name == "thugs") {
-            // How many come: two for a player still finding their feet, three after.
+            // How many come: fitted to the player.
             auto* player = RE::PlayerCharacter::GetSingleton();
-            return player && player->GetLevel() >= 12 ? 3 : 2;
+            // One alone for someone who could not stand against two (the game's Hired Thugs start at level 6: two of
+            // them killed a level 1 test character in twenty seconds, 2026-11-19).
+            const int level = player ? player->GetLevel() : 1;
+            return level >= 12 ? 3 : level >= 6 ? 2 : 1;
         }
         if (name == "quiet") {
             // Seconds since the step's person or the player last spoke (the talk between them going quiet).
@@ -1674,6 +1778,12 @@ namespace IntelEngine {
             for (const auto& n : a->graph) needed = needed || (n.kind == A::Kind::Slay && n.site == s + 1);
             for (const auto p : a->propSite) needed = needed || p == s + 1;
             return needed ? BossBase(a->siteKind[s], a->seed + static_cast<std::uint32_t>(s)) : nullptr;
+        }
+        if (name == "thugsender") {
+            for (const auto& step : nodes) {
+                if (step.kind == A::Kind::Ambush) return actor(step.who ? step.who : static_cast<std::size_t>(A::RAsker));
+            }
+            return nullptr;
         }
         if (name.starts_with("thugbase")) {
             // The game's own Hired Thugs (Skyrim.esm WIThug, WIThugNordM, WIThugCommonerM): leveled to the player,
@@ -1796,7 +1906,14 @@ namespace IntelEngine {
             for (const auto& n : A::NodesOf(*a)) {
                 if (n.kind != A::Kind::Ambush) continue;
                 const std::string by = n.who ? NameOf(a->cast[n.who]) + "'s coin" : std::string("coin");
-                return "took " + by + " to waylay " + PlayerName() + " on the road: " + Fill(n.why, *a);
+                std::string fact = "took " + by + " to waylay " + PlayerName() + " on the road: " + Fill(n.why, *a);
+                // What they would settle for, so the leader can be talked to.
+                std::string settle;
+                for (const auto& turn : n.turns) {
+                    if (!turn.empty()) settle += (settle.empty() ? "" : "; or: ") + Fill(turn, *a);
+                }
+                if (!settle.empty()) fact += ". It need not come to blood if: " + settle;
+                return fact;
             }
             return {};
         }

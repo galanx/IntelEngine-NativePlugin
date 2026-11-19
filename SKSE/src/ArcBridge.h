@@ -169,7 +169,9 @@ namespace IntelEngine {
             bool judging = false;        // a reading is on its way
             int nones = 0;               // readings that found no outcome yet
             float judgedAt = -1.0f;      // real seconds of the last reading
+            float askedAt = -1.0f;       // real seconds: the player's first line since that reading (< 0: none yet)
             float visitAt = -1.0f;       // game days: the step's person was last sent to the player
+            float stalkHold = -1.0f;     // real seconds: a stalker is not sent after the player again before this
             bool lingering = false;      // the step's person stays with the player while they talk (the script's)
             float lingerHold = -1.0f;    // real seconds: not asked to linger again before this (refused or let go)
             std::array<std::int8_t, Arcs::kSites> bossState{};   // last seen: 0 unknown, 1 alive and loaded, 2 dead, 3 gone
@@ -188,10 +190,18 @@ namespace IntelEngine {
             bool chasing = false;        // they are coming after the player (not waiting on the road ahead)
             float callOffHold = -1.0f;   // real seconds: not asked to call them off again before this
             float comeHold = -1.0f;      // real seconds: not sent after the player again before this
+            float parleyAt = -1.0f;      // real seconds: the leader stepped out and has their word (< 0: not now)
+            float parleyHold = -1.0f;    // real seconds: a menu was open (an answer being typed); nothing decided before this
+            bool parleyFight = false;    // what was offered cannot be paid: they fall on the player
+            bool shortPurse = false;     // ... and the leader says so
+            std::uint8_t standWhy = 0;   // why the men stand down: 1 the player is beaten, 2 talked out of it
         };
         void TaleTalk(std::uint32_t id, const Arcs::Arc& a, Pending& pending, const Arcs::Facts& f);   // lock held
         /** A tale's ambush step, each look (lock held): when its men are placed, step out, or are called off. */
-        void AmbushLook(std::uint32_t id, Arcs::Arc& a, Pending& pending, float now, int placed, std::int32_t& bits);
+        void AmbushLook(std::uint32_t id, Arcs::Arc& a, Pending& pending, const Arcs::Node& n, float now, int placed);
+        /** The leader's word and what the player says to it (lock held): true when it is over and they fall on the
+         *  player, with why. A talk in between is read like a talk step's (SendJudge). */
+        bool Parley(std::uint32_t id, const Arcs::Arc& a, Pending& pending, const Arcs::Node& n, float nearest, std::string& why);
         void SendTale(std::shared_ptr<void> request, int attempt, std::string fix, std::string previous);   // any thread
         void TaleWritten(std::shared_ptr<void> request, int attempt, const std::string& text);              // main thread
         void SendOffer(std::uint32_t id, RE::Actor* asker);
