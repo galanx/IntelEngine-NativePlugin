@@ -1,5 +1,6 @@
 import { useState, useCallback, useRef } from 'react';
 import Select from './Select';
+import { twoColumns } from './Section';
 
 // Names of settings and of their options are those of SkyrimNet's plugin settings page (SettingsBridge.cpp and
 // manifest.yaml); SKSE/tests/RunSettingNamesCheck.py compares them. A unit that page carries in brackets stands
@@ -99,7 +100,7 @@ function SettingsTab({ config, storyTypes, onSettingChange, pluginConfig, onPlug
     );
   }
 
-  return (
+  return twoColumns(
     <div className="ie-settings p-3 space-y-1">
       {/* Story Engine */}
       <Accordion title="Stories" isOpen={openSections.storyEngine} onToggle={() => toggle('storyEngine')}>
