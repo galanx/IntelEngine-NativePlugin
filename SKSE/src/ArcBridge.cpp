@@ -1058,11 +1058,38 @@ namespace IntelEngine {
                     auto& pending = m_pending[a.id];
                     if (pending.offerSent || (pending.deferredAt >= 0.0f && real - pending.deferredAt < 60.0f)) continue;
                     auto* asker = RE::TESForm::LookupByID<RE::Actor>(a.cast[A::RAsker]);
-                    if (!asker || asker->IsDead() || !asker->Is3DLoaded() || asker->GetWorldspace() != player->GetWorldspace()) continue;
+                    if (!asker || asker->IsDead()) continue;
                     auto* theirCell = asker->GetParentCell();
                     auto* cell = player->GetParentCell();
-                    if (!cell || !theirCell || (cell->IsInteriorCell() && cell != theirCell) || theirCell->IsInteriorCell() != cell->IsInteriorCell()) continue;
-                    if (asker->GetPosition().GetDistance(player->GetPosition()) > 3000.0f) continue;
+                    const bool closeBy = asker->Is3DLoaded() && asker->GetWorldspace() == player->GetWorldspace() && cell && theirCell &&
+                                      !(cell->IsInteriorCell() && cell != theirCell) && theirCell->IsInteriorCell() == cell->IsInteriorCell() &&
+                                      asker->GetPosition().GetDistance(player->GetPosition()) <= 3000.0f;
+                    if (!closeBy) {
+                        // Talk in town for a good part of a day, and nobody came: some set out to find someone
+                        // themselves (Arcs.h, SetsOut). Through their own town only, by day, never into the player's
+                        // own home, and with the manners of any visitor. They ask on the way (the script's AskAround).
+                        if ((a.flags & A::Flag::Rumored) && !pending.setOut && (pending.setOutForced || A::MaySetOutNow(a, NowDays(), HourNow()))) {
+                            auto* town = TownOf(cell && cell->GetLocation() ? cell->GetLocation() : player->GetCurrentLocation());
+                            if (town && town->GetFormID() == a.place && !CellAnalyzer::GetSingleton()->IsPlayerInOwnHome() &&
+                                !LivingWorldBridge::GetSingleton()->IsBadMoment() &&
+                                A::QuietFor(m_book.LastBeat(a.id), NowDays(), A::kQuietHoursOwed) && !StandsBy(a)) {
+                                pending.setOut = true;
+                                pending.setOutForced = false;
+                                pending.sought = false;
+                                pending.offerSent = true;
+                                const auto arcId = a.id;
+                                const RE::FormID askerId = a.cast[A::RAsker];
+                                logger::info("Arcs: #{} {} has had no help from the talk in town ({:.0f} hours) and sets out to find someone: the offer goes out",
+                                             arcId, NameOf(askerId), (NowDays() - a.created) * 24.0f);
+                                if (auto* task = SKSE::GetTaskInterface()) {
+                                    task->AddTask([this, arcId, askerId]() {
+                                        if (auto* found = RE::TESForm::LookupByID<RE::Actor>(askerId)) SendOffer(arcId, found);
+                                    });
+                                }
+                            }
+                        }
+                        continue;
+                    }
                     // The player walked up to them and spoke (they had heard the talk in town, or simply stopped for a
                     // word): then it is the player who began it, and the asker says what troubles them there and then,
                     // whoever else stands near and however lately another story moved. Otherwise the usual manners
@@ -2425,6 +2452,46 @@ namespace IntelEngine {
         return true;
     }
 
+    RE::Actor* ArcBridge::Bystander(std::uint32_t id, RE::Actor* asker) const {
+        auto* player = RE::PlayerCharacter::GetSingleton();
+        auto* lists = RE::ProcessLists::GetSingleton();
+        if (!player || !lists || !asker || !asker->Is3DLoaded()) return nullptr;
+        auto* cell = asker->GetParentCell();
+        if (!cell) return nullptr;
+        RE::Actor* best = nullptr;
+        float bestDistance = 0.0f;
+        for (const auto& handle : lists->highActorHandles) {
+            auto actor = handle.get();
+            if (!actor || actor.get() == player || actor.get() == asker || actor->IsDead() || actor->IsDisabled() || !actor->Is3DLoaded()) continue;
+            if (actor->IsChild() || actor->IsPlayerTeammate() || actor->IsInCombat() || !actor->HasKeywordString("ActorTypeNPC")) continue;
+            if (auto* state = actor->AsActorState(); state && state->GetSitSleepState() == RE::SIT_SLEEP_STATE::kIsSleeping) continue;
+            // Nobody stops a jarl, a steward or a court wizard in passing to ask whether they know of a helping hand.
+            if (NPCIndex::IsHighStatus(actor.get())) continue;
+            auto* theirs = actor->GetParentCell();
+            if (!theirs || theirs->IsInteriorCell() != cell->IsInteriorCell() || (cell->IsInteriorCell() && theirs != cell)) continue;
+            const float distance = actor->GetPosition().GetDistance(asker->GetPosition());
+            const float toPlayer = actor->GetPosition().GetDistance(player->GetPosition());
+            // Near enough to walk up to, in the player's sight, and not the person standing next to the player.
+            if (distance > 900.0f || toPlayer < 250.0f || toPlayer > 2500.0f) continue;
+            // Each of these takes its own lock.
+            if (Involves(actor->GetFormID()) || QuestBridge::GetSingleton()->Involves(actor->GetFormID()) || NPCIndex::BlockedForStories(actor.get())) continue;
+            if (!best || distance < bestDistance) {
+                best = actor.get();
+                bestDistance = distance;
+            }
+        }
+        if (best) logger::info("Arcs: #{} {} stops {} on the way ({:.0f} units off) to ask them first", id, NameOf(asker->GetFormID()), NameOf(best->GetFormID()), bestDistance);
+        return best;
+    }
+
+    void ArcBridge::DebugSetOut(std::uint32_t id) {
+        std::scoped_lock lock(m_mutex);
+        if (auto* a = m_book.Find(id); a && (a->flags & A::Flag::Rumored)) {
+            m_pending[id].setOutForced = true;
+            logger::info("Arcs: #{} test: {} sets out at the next look", id, NameOf(a->cast[A::RAsker]));
+        }
+    }
+
     bool ArcBridge::GameNeedsPlace(RE::FormID location, std::string* quest) const {
         const auto it = m_questPlaces.find(location);
         if (it == m_questPlaces.end()) return false;
@@ -2500,6 +2567,16 @@ namespace IntelEngine {
         if (name == "effectprop") return pending != m_pending.end() ? pending->second.effectProp : 0;
         if (name == "gangsite") return pending != m_pending.end() ? pending->second.gangSite - 1 : -1;
         if (name == "camefar") return (a->flags & A::Flag::CameFar) ? 1 : 0;
+        if (name == "rumored") return (a->flags & A::Flag::Rumored) ? 1 : 0;
+        if (name == "asksaround") {
+            // Whether the asker stops someone on the way to the player (a story that began as talk; never when the
+            // player came to them and spoke: then the two are talking already).
+            if (!(a->flags & A::Flag::Rumored)) return 0;
+            const auto it = m_pending.find(id);
+            const bool sought = it != m_pending.end() && it->second.sought;
+            const bool setOut = it != m_pending.end() && (it->second.setOut || it->second.setOutForced);
+            return !sought && (setOut || A::AsksAround(*a)) ? 1 : 0;
+        }
         if (name == "captivestate") return a->captive ? static_cast<int>(a->captiveState) : -1;
         if (name == "captiveout") {
             // The player has left the place someone was held at, and stands under the open sky: they part here.
@@ -2731,7 +2808,14 @@ namespace IntelEngine {
         std::scoped_lock lock(m_mutex);
         const auto* a = m_book.Find(id);
         if (!a) return {};
-        if (name == "narration") return Fill(A::OfferNarration(*a), *a);
+        if (name == "narration") {
+            // The asker of a story that began as talk comes to the player (not the player to them): said from the facts.
+            if ((a->flags & A::Flag::Rumored) && a->pattern == A::Pattern::Tale && !a->offerAsk.empty()) {
+                const auto it = m_pending.find(id);
+                if (it == m_pending.end() || !it->second.sought) return Fill(A::OfferNarrationComing(*a), *a);
+            }
+            return Fill(A::OfferNarration(*a), *a);
+        }
         if (name == "prompt") return Fill(A::OfferPrompt(*a), *a);
         if (name == "title") return a->title;
         if (name == "place") return PlaceName(a->place);
@@ -2746,6 +2830,7 @@ namespace IntelEngine {
         }
         if (name == "thugname") return a->thugName;
         if (name == "captiveplace") return a->captive && a->captiveSite ? NameOf(a->site[a->captiveSite - 1u]) : std::string();
+        if (name == "askaround") return a->offerAsk;   // what they would ask of whoever agrees, for the asking on the way
         if (name == "spiritname") return a->spiritName;
         if (name == "spiritplace") return a->spiritSite ? NameOf(a->site[a->spiritSite - 1u]) : std::string();
         if (name == "spiritwants") return a->spiritWants ? a->propName[a->spiritWants - 1u] : std::string();
@@ -3245,6 +3330,8 @@ namespace IntelEngine {
         }
         std::int32_t ArcRankAfter(RE::StaticFunctionTag*, std::int32_t rank, bool closer) { return Hearts::RankAfter(rank, closer); }
         void ArcStoriesOn(RE::StaticFunctionTag*, bool on) { ArcBridge::GetSingleton()->StoriesOn(on); }
+        RE::Actor* ArcBystander(RE::StaticFunctionTag*, std::int32_t id, RE::Actor* asker) { return ArcBridge::GetSingleton()->Bystander(U(id), asker); }
+        void ArcDebugSetOut(RE::StaticFunctionTag*, std::int32_t id) { ArcBridge::GetSingleton()->DebugSetOut(U(id)); }
         void ArcEarshot(RE::StaticFunctionTag*, float units) {
             // Whisper mode shrinks SkyrimNet's distance to a couple of steps: someone that near still stands there.
             const float earshot = std::isfinite(units) && units > 0.0f ? std::clamp(units, 500.0f, 3000.0f) : kEarshotDefault;
@@ -3335,6 +3422,8 @@ namespace IntelEngine {
         a_vm->RegisterFunction("ArcCompany", script, ArcCompany); ++count;
         a_vm->RegisterFunction("ArcEarshot", script, ArcEarshot); ++count;
         a_vm->RegisterFunction("ArcStoriesOn", script, ArcStoriesOn); ++count;
+        a_vm->RegisterFunction("ArcBystander", script, ArcBystander); ++count;
+        a_vm->RegisterFunction("ArcDebugSetOut", script, ArcDebugSetOut); ++count;
         a_vm->RegisterFunction("ArcHeart", script, ArcHeart); ++count;
         a_vm->RegisterFunction("ArcRankAfter", script, ArcRankAfter); ++count;
         a_vm->RegisterFunction("ArcOfferHeldBack", script, ArcOfferHeldBack); ++count;

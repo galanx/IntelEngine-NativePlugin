@@ -280,6 +280,38 @@ static void SaveData() {
     Require(!Deserialize(bad, untouched), "a short record is refused");
     Require(untouched.all.size() == back.all.size(), "a refused record leaves the book as it was");
     Require(!Deserialize(bytes, untouched, 10), "an unknown version is refused");
+    // ---- talk in town, and the one it is about: who asks around, who sets out, and when
+    {
+        Arc plain;
+        plain.seed = 12345u;
+        Require(!AsksAround(plain) && !SetsOut(plain) && !MaySetOutNow(plain, 10.0f, 12.0f), "a story that did not begin as talk: nobody asks around, nobody sets out");
+        int ask = 0, out = 0;
+        for (std::uint32_t seed = 1; seed <= 2000; ++seed) {
+            Arc talk;
+            talk.flags = Flag::Rumored;
+            talk.seed = seed * 2654435761u;
+            ask += AsksAround(talk) ? 1 : 0;
+            out += SetsOut(talk) ? 1 : 0;
+            Require(AsksAround(talk) == AsksAround(talk) && SetsOut(talk) == SetsOut(talk), "fixed by the story's own seed");
+        }
+        Require(ask > 800 && ask < 1200, "about half of them stop someone on the way");
+        Require(out > 500 && out < 860, "about one in three sets out: it stays the rarer way");
+        Arc goer;
+        goer.flags = Flag::Rumored;
+        for (goer.seed = 1; !SetsOut(goer); ++goer.seed) {}
+        goer.created = 10.0f;
+        Require(!MaySetOutNow(goer, 10.0f + 5.9f / 24.0f, 12.0f), "not before the talk has gone round for a good part of a day");
+        Require(MaySetOutNow(goer, 10.0f + 6.1f / 24.0f, 12.0f), "then, by day");
+        Require(!MaySetOutNow(goer, 10.5f, 21.0f) && !MaySetOutNow(goer, 10.5f, 3.0f) && MaySetOutNow(goer, 10.5f, 8.0f), "never by night");
+        Require(!MaySetOutNow(goer, 9.5f, 12.0f), "not on a clock set back");
+        goer.phase = Phase::Open;
+        Require(!MaySetOutNow(goer, 10.5f, 12.0f), "not once the story is taken on");
+        Arc stayer;
+        stayer.flags = Flag::Rumored;
+        for (stayer.seed = 1; SetsOut(stayer); ++stayer.seed) {}
+        stayer.created = 10.0f;
+        Require(!MaySetOutNow(stayer, 12.0f, 12.0f), "the others wait as talk until the player passes by");
+    }
 
     // A save made before tales (record version 1: no tale block) still loads, every pattern arc as it was.
     std::vector<std::uint8_t> v1;

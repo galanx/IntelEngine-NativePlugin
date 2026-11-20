@@ -1107,7 +1107,7 @@ namespace IntelEngine {
             {
                 std::scoped_lock lock(m_mutex);
                 if (auto* arc = m_book.Find(id)) {
-                    arc->flags |= A::Flag::Deferred;
+                    arc->flags |= A::Flag::Deferred | A::Flag::Rumored;
                     arc->deadline = std::max(arc->deadline, NowDays() + 4.0f);
                 }
                 auto& pending = m_pending[id];

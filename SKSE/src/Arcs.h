@@ -201,6 +201,7 @@ namespace IntelEngine::Arcs {
         constexpr std::uint32_t CameFar = 1u << 11;       // the asker came to the player from another hold (rare: counted)
         constexpr std::uint32_t Deferred = 1u << 12;      // the asker could not reach the player (gone): at the next meeting
         constexpr std::uint32_t Heart = 1u << 13;         // a story of the heart between the asker and the player (never two running)
+        constexpr std::uint32_t Rumored = 1u << 14;       // it began as talk in town: its asker did not come to the player at once
     }
 
     struct PatternDef {
@@ -430,6 +431,29 @@ namespace IntelEngine::Arcs {
     };
 
     inline bool IsOpen(const Arc& a) { return a.phase == Phase::Open; }
+
+    // ---- talk in town, and the one it is about
+    // The user (2026-11-20): "hearing rumors about someone's problems, doesn't mean they should never approach you for
+    // help. We cannot simply shut down a feature. And we may sometimes witness people asking around for help until
+    // they reach you. [...] The rumors just make it more rare so it doesnt get repetetive and it doesnt look centered
+    // around the player, but still, those things should also happen."
+    // So the asker of a story that began as talk does not sit and wait for ever. Which of them do what is fixed by the
+    // story's own seed (a save plays out one way):
+    //  - when the player is near, they come over as before; about half of them first stop whoever stands near and
+    //    ask them (AsksAround), so that the player sees someone looking for help, not someone looking for the player;
+    //  - about one in three, once the talk has gone round for a good part of a day and nobody came, set out through
+    //    their own town to find someone (SetsOut), and reach the player after asking on the way. By day only.
+    namespace detail {
+        inline std::uint32_t Mix(std::uint32_t a, std::uint32_t b);   // further down
+    }
+    constexpr float kSetOutAfterHours = 6.0f;
+    constexpr float kSetOutFromHour = 8.0f, kSetOutUntilHour = 20.0f;
+    inline bool AsksAround(const Arc& a) { return (a.flags & Flag::Rumored) != 0 && detail::Mix(a.seed, 0xA5CAu) % 100u < 50u; }
+    inline bool SetsOut(const Arc& a) { return (a.flags & Flag::Rumored) != 0 && detail::Mix(a.seed, 0x5E70u) % 100u < 34u; }
+    inline bool MaySetOutNow(const Arc& a, float now, float hour) {
+        return SetsOut(a) && a.phase == Phase::Planned && now >= a.created && (now - a.created) * 24.0f >= kSetOutAfterHours &&
+               hour >= kSetOutFromHour && hour < kSetOutUntilHour;
+    }
 
     // The steps of an arc: a tale's own graph, else its pattern's table.
     inline std::span<const Node> NodesOf(const Arc& a) {
@@ -901,6 +925,15 @@ namespace IntelEngine::Arcs {
                 return "{asker} comes to {player} grim-faced: {victim} was found dead, and {asker} wants someone to find out who killed them";
             default: return {};
         }
+    }
+    // A story that began as talk in town was written with the player walking up to its asker ("how they receive a
+    // stranger who has heard"). When it is the asker who comes to the player (they met by chance, or the asker set
+    // out), that would be said the wrong way round ("You've been asking around about Torvald", played 2026-11-20):
+    // what brings them is then said from the facts, with their own question.
+    inline std::string OfferNarrationComing(const Arc& a) {
+        return "{asker} has had no help from the talk in town and has been asking around. Now {asker} comes up to {player}, whom {asker} does "
+               "not know, and asks in person, wary and hopeful: \"" + a.offerAsk + "\" It is {asker} who came looking for help; {player} has "
+               "asked nothing yet";
     }
     inline std::string OfferPrompt(const Arc& a) {
         if (a.pattern == Pattern::Tale) return a.gold ? a.offerAsk + " Reward: {gold} gold." : a.offerAsk;
