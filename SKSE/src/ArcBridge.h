@@ -108,6 +108,12 @@ namespace IntelEngine {
         bool GameNeedsPlace(RE::FormID location, std::string* quest = nullptr) const;
         /** A live story has this place among its own. Takes this bridge's lock. */
         bool PlaceInStory(RE::FormID location) const;
+        /** Someone near the asker of a story that began as talk whom they can stop and ask on their way to the player:
+         *  alive, awake, at peace, a person, no part of any story, not right beside the player and not out of the
+         *  player's sight. Null when nobody is. The game's thread; never called with this bridge's lock held. */
+        RE::Actor* Bystander(std::uint32_t id, RE::Actor* asker) const;
+        /** Test hook: the asker of this story sets out at the next look. */
+        void DebugSetOut(std::uint32_t id);
         /** The "Stories" switch of the settings: off, no new story of the town begins (those open go on to their end). */
         void StoriesOn(bool on);
         /** The script let the step's person go (silence, the player left, the step moved on). */
@@ -229,6 +235,8 @@ namespace IntelEngine {
             float deferredAt = -1.0f;    // real seconds: the asker gave up reaching the player (not offered again at once)
             std::uint8_t heldBy = 0;     // why a waiting offer did not go out at the last look (said once per reason)
             bool sought = false;         // the offer went out because the player came to the asker and spoke
+            bool setOut = false;         // the asker of a story that began as talk set out to find someone (once)
+            bool setOutForced = false;   // test hook: they set out at the next look, whatever the hour and their nature
             bool lingering = false;      // the step's person stays with the player while they talk (the script's)
             float lingerHold = -1.0f;    // real seconds: not asked to linger again before this (refused or let go)
             std::array<std::int8_t, Arcs::kSites> bossState{};   // last seen: 0 unknown, 1 alive and loaded, 2 dead, 3 gone

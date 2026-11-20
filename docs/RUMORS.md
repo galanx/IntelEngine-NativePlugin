@@ -99,6 +99,39 @@ meant a stranger elsewhere in town had no story at all. Now their trouble become
 
 If no model can write the tale, nothing goes round and nobody comes instead.
 
+### They still come, and they are seen asking
+
+The user (2026-11-20, on reading the first version): "hearing rumors about someone's problems, doesn't mean they should
+never approach you for help. We cannot simply shut down a feature. And we may sometimes witness people asking around
+for help until they reach you. This is more immersive. The rumors just make it more rare so it doesnt get repetetive
+and it doesnt look centered around the player, but still, those things should also happen."
+
+Talk in town makes the approach rarer and less about the player. It does not replace it. Which asker does what is fixed
+by the story's own seed (`Arcs.h`: `AsksAround`, `SetsOut`, `MaySetOutNow`), so a save plays out one way:
+
+- **A stranger who is right there when the trouble begins** comes straight to the player, as before the rumors.
+- **When the player passes near** (3,000 units, same space) the asker of a story that began as talk comes over, with a
+  visitor's manners. About half of them first **stop whoever stands near and ask them** (`IntelEngine_Arcs.AskAround`,
+  `ArcBridge::Bystander`): one person, a short question, in sight of the player. Then they come on.
+- **About one in three sets out.** Once the talk has gone round for six game hours and nobody came, by day, while the
+  player is in their town and not at home, they go looking through town, ask on the way, and reach the player. The
+  others stay talk until the player passes by or goes to them.
+- The bystander is a person, awake and at peace, with no part in any story, not a child, not a follower, not a jarl,
+  steward or court wizard, not on the user's block lists, near the asker and in the player's sight but not at the
+  player's elbow. Nobody near: no detour.
+- How they walk there: the order that takes them to the player ends at the bystander for a moment (the travel's own
+  linked reference), then at the player again. Walking them there by any other means was pulled straight back.
+- An asker who comes to the player says so from the facts (`Arcs::OfferNarrationComing`): the writer's words for the
+  offer were written for a stranger who walks up having heard, and said the wrong way round ("You've been asking
+  around about Torvald") when it was the asker who came.
+- If they cannot come after all (another visitor is on the way), their story is not dropped: it stays talk in town.
+
+Played 2026-11-20 at Whiterun's gate: Anoriath, 5,700 units off at his stall, set out, stopped Adrianne Avenicci in the
+street ("Mistress Avenicci, pardon the stop. A hunter I knew, Torvald, was found dead out by White River Watch [...]
+Do you know anyone who'd look into who killed him? I'd pay 155 gold."), came on to the player ("I've asked near every
+soul in this market and gotten nothing but shrugs. So I'll ask you plain: will you look into Torvald's death?"), and
+the offer followed. Test hook `DebugSetOut <story id>` (sets out at the next look and asks on the way).
+
 ## What feeds the ledger
 
 | From | Kind, weight | Notes |
