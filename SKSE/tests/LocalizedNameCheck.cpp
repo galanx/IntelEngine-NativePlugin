@@ -1,3 +1,4 @@
+#include "PlaceNameFile.h"
 #include "Utf8Fold.h"
 
 #include <iostream>
@@ -32,6 +33,21 @@ int main() {
     Require(Utf8Levenshtein("", "abc") == 3, "empty input");
     Require(Utf8Levenshtein("a\xE4", "ab") == 1, "invalid UTF-8 falls back to bytes");
 
-    std::cout << "PASS: Cyrillic/accented folding, ASCII parity, invalid-UTF-8 and length-guard fallbacks, "
+    using IntelEngine::ParsePlaceNameLine;
+    const auto row = ParsePlaceNameLine("\xEF\xBB\xBFSkyrim.esm\t0x018A56\tL\tWhiterun\r\n");
+    Require(row && row->master == "Skyrim.esm" && row->localId == 0x018A56 && row->type == 'L' && row->name == "Whiterun",
+            "place-name row with BOM, 0x prefix and CRLF");
+    const auto bare = ParsePlaceNameLine("Dawnguard.esm\t357e\tC\tCastle Volkihar\textra");
+    Require(bare && bare->localId == 0x357E && bare->type == 'C' && bare->name == "Castle Volkihar\textra",
+            "hex without prefix; a tab inside the name is kept");
+    const auto german = ParsePlaceNameLine("Skyrim.esm\t18A56\tL\tWei\xC3\x9F" "lauf");  // Weißlauf
+    Require(german && german->name == "Wei\xC3\x9F" "lauf", "UTF-8 name kept as bytes");
+    Require(!ParsePlaceNameLine("# comment") && !ParsePlaceNameLine("") && !ParsePlaceNameLine("\r"), "comment and blank lines");
+    Require(!ParsePlaceNameLine("Skyrim.esm\t18A56\tX\tWhiterun"), "unknown type");
+    Require(!ParsePlaceNameLine("Skyrim.esm\t18G56\tL\tWhiterun"), "bad hex");
+    Require(!ParsePlaceNameLine("Skyrim.esm\t18A56\tL"), "missing name");
+    Require(!ParsePlaceNameLine("Skyrim.esm\t18A56\tL\t"), "empty name");
+
+    std::cout << "PASS: place-name rows; Cyrillic/accented folding, ASCII parity, invalid-UTF-8 and length-guard fallbacks, "
                  "character-based Levenshtein\n";
 }
