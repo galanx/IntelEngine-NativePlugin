@@ -743,6 +743,11 @@ namespace IntelEngine {
                 if (auto* lies = refOf(a.clueRef[n.prop]); a.clueState[n.prop] != A::ClueToPlace && Points(lies)) return lies;
                 return OutsideOf(a, n.site);
             }
+            // What walks by night: on it while it is out; by day the ground it walks.
+            if (n.kind == A::Kind::Haunt) {
+                if (auto* shade = refOf(a.spiritRef); a.spiritState == A::SpiritOut && Points(shade)) return shade;
+                return OutsideOf(a, n.site);
+            }
             // What the leader of an ambush carries: on the leader, standing or fallen.
             if (n.kind == A::Kind::Have && n.prop < A::kProps && (a.propAmbush & (1u << n.prop)) && a.thug[0]) {
                 if (auto* leader = refOf(a.thug[0]); Points(leader)) return leader;
@@ -940,6 +945,41 @@ namespace IntelEngine {
         std::array<std::atomic<RE::FormID>, 4> g_bound{};
         // And what lies outside a place to be looked at closely and has not been yet (the same reader).
         std::array<std::atomic<RE::FormID>, 4> g_clues{};
+        // What walks by night and is out right now, for each story that has one; `rest`: the player carries what lets
+        // it rest, so their hand on it lays it to rest (the same reader changes the crosshair's word).
+        struct SpiritSlot {
+            std::atomic<std::uint32_t> arc{0};
+            std::atomic<RE::FormID> ref{0};
+            std::atomic<bool> rest{false};
+        };
+        std::array<SpiritSlot, 4> g_spirits{};
+
+        // Written under the bridge's lock.
+        void SetSpirit(std::uint32_t arc, RE::FormID ref, bool rest) {
+            SpiritSlot* slot = nullptr;
+            for (auto& s : g_spirits) if (s.arc.load() == arc) slot = &s;
+            if (!slot && ref) {
+                for (auto& s : g_spirits) {
+                    if (!s.arc.load()) {
+                        slot = &s;
+                        break;
+                    }
+                }
+            }
+            if (!slot) return;
+            slot->rest.store(ref != 0 && rest);
+            slot->ref.store(ref);
+            slot->arc.store(ref ? arc : 0u);
+        }
+
+        // The game's own shades (Skyrim.esm): a woman of Yngvild's dead, a man of the cairns' dead. Leveled, as the
+        // game made them; the script takes them out of their factions and their anger before anyone sees them.
+        constexpr RE::FormID kShadeWoman = 0x00074360, kShadeMan = 0x000B1F96;
+
+        float HourNow() {
+            auto* calendar = RE::Calendar::GetSingleton();
+            return calendar ? calendar->GetHour() : 12.0f;
+        }
 
         void RefreshBound(const A::Book& book) {
             std::size_t k = 0, c = 0;
@@ -960,6 +1000,16 @@ namespace IntelEngine {
             const auto nodes = A::NodesOf(a);
             for (std::size_t i = 0; i < nodes.size(); ++i) {
                 if (nodes[i].kind == A::Kind::Examine && nodes[i].prop == k) return !(a.visited & (1u << i));
+            }
+            return false;
+        }
+
+        // What walks by night walks while the story has not been past it: after that the ground is quiet.
+        bool SpiritWanted(const A::Arc& a) {
+            if (!A::IsOpen(a) || !a.spiritSite || a.spiritState >= A::SpiritBanished) return false;
+            const auto nodes = A::NodesOf(a);
+            for (std::size_t i = 0; i < nodes.size(); ++i) {
+                if (nodes[i].kind == A::Kind::Haunt) return !(a.visited & (1u << i));
             }
             return false;
         }
@@ -1411,6 +1461,24 @@ namespace IntelEngine {
                 }
                 f.examined[k] = a->clueState[k] == A::ClueSeen;
             }
+            // What walks by night: struck down is struck down, by whoever's hand; one the game has lost walks again
+            // the next night. Whether the player's hand on it would lay it to rest is kept for the crosshair.
+            if (a->spiritSite) {
+                if (a->spiritState == A::SpiritOut) {
+                    auto* shade = a->spiritRef ? RE::TESForm::LookupByID<RE::Actor>(a->spiritRef) : nullptr;
+                    if (!shade || shade->IsDeleted()) {
+                        logger::info("Arcs: #{} {} is gone from the game: it walks again when night and the player are there", id, a->spiritName);
+                        a->spiritState = A::SpiritAway;
+                        a->spiritRef = 0;
+                    } else if (shade->IsDead()) {
+                        logger::info("Arcs: #{} {} is struck down outside {}", id, a->spiritName, NameOf(a->site[a->spiritSite - 1u]));
+                        a->spiritState = A::SpiritBanished;
+                    }
+                }
+                f.spirit = a->spiritState;
+                const bool out = a->spiritState == A::SpiritOut && a->spiritRef;
+                SetSpirit(a->id, out ? a->spiritRef : 0u, out && a->spiritWants && f.has[a->spiritWants - 1u]);
+            }
         }
         // A tale's ambush: its men are down, each dead or gone from the game, and at least one fell (they are placed
         // beside the player, in loaded ground: a death there is a real one).
@@ -1542,6 +1610,13 @@ namespace IntelEngine {
             for (std::size_t k = 0; k < A::kClues; ++k) {
                 if (!a->clueWhat[k] || a->clueState[k] != A::ClueToPlace || !ClueWanted(*a, k)) continue;
                 if (InTheWorldNow(OutsideOf(*a, a->clueSite[k]))) bits |= 1 << 14;
+            }
+            // What walks by night: put there once it is night and the ground by the place is in the game, taken away
+            // at first light (the script's TendSpirit; asked again every look until it is done).
+            if (SpiritWanted(*a)) {
+                const bool night = A::IsNight(HourNow());
+                if (a->spiritState == A::SpiritAway && night && InTheWorldNow(OutsideOf(*a, a->spiritSite))) bits |= 1 << 14;
+                if (a->spiritState == A::SpiritOut && !night) bits |= 1 << 14;
             }
             // Someone held there and still away: they are put at the heart of the place now that it is in the game
             // (the script's PlaceCaptive; asked again every look until it is done).
@@ -1781,6 +1856,7 @@ namespace IntelEngine {
         // file translates it. Asked whenever the player looks at someone: four numbers compared, no lock.
         std::string g_cutLoose = "Cut loose";
         std::string g_examine = "Examine";   // on what was left of a victim, where the game would say "Search"
+        std::string g_layToRest = "Lay to rest";   // on what walks by night, while the player carries what it wants
 
         struct NpcActivateText {
             static bool thunk(RE::TESNPC* base, RE::TESObjectREFR* ref, RE::BSString& text) {
@@ -1790,6 +1866,9 @@ namespace IntelEngine {
                 const std::string* word = nullptr;
                 for (const auto& one : g_bound) if (one.load(std::memory_order_relaxed) == id) word = &g_cutLoose;
                 for (const auto& one : g_clues) if (one.load(std::memory_order_relaxed) == id) word = &g_examine;
+                for (const auto& one : g_spirits) {
+                    if (one.ref.load(std::memory_order_relaxed) == id && one.rest.load(std::memory_order_relaxed)) word = &g_layToRest;
+                }
                 if (!word) return shown;
                 // The game writes "<word>\n<name>": the name is kept as it stands.
                 const char* was = text.c_str();
@@ -1817,7 +1896,8 @@ namespace IntelEngine {
     // by the people of the place until they part from the player (the script's UnholdCaptive, keepSafe).
     void ArcBridge::Activated(RE::Actor* actor) {
         if (!actor || actor->IsDisabled()) return;
-        std::uint32_t freed = 0, looked = 0;
+        std::uint32_t freed = 0, looked = 0, touched = 0;
+        bool canRest = false;
         std::size_t clue = 0;
         {
             std::scoped_lock lock(m_mutex);
@@ -1846,6 +1926,31 @@ namespace IntelEngine {
                 break;
             }
             if (freed || looked) RefreshBound(m_book);
+            // What walks by night: the player reaches out to it. With what it wants in their pack that lays it to
+            // rest (the script's part: its last words, and it goes); without, their hand passes through it.
+            if (!freed && !looked && !actor->IsDead()) {
+                auto* player = RE::PlayerCharacter::GetSingleton();
+                for (const auto& a : m_book.all) {
+                    if (!A::IsOpen(a) || a.spiritState != A::SpiritOut || a.spiritRef != actor->GetFormID()) continue;
+                    touched = a.id;
+                    if (a.spiritWants && player) {
+                        const auto p = static_cast<std::size_t>(a.spiritWants - 1u);
+                        canRest = FindStamped(player, a.propBase[p], a.propName[p]).object != nullptr;
+                    }
+                    break;
+                }
+            }
+        }
+        if (touched) {
+            if (auto* source = SKSE::GetModCallbackEventSource()) {
+                SKSE::ModCallbackEvent event{};
+                event.eventName = "IntelEngine_ArcSpirit";
+                event.strArg = canRest ? "rest" : "touch";
+                event.numArg = static_cast<float>(touched);
+                event.sender = actor;
+                source->SendEvent(&event);
+            }
+            return;
         }
         if (!freed && !looked) return;
         if (auto* source = SKSE::GetModCallbackEventSource()) {
@@ -1886,6 +1991,9 @@ namespace IntelEngine {
                 auto* look = data->LookupForm<RE::BGSMessage>(0x58E6, "IntelEngine.esp");
                 const char* lookWord = look ? look->GetFullName() : nullptr;
                 if (lookWord && *lookWord) g_examine = lookWord;
+                auto* rest = data->LookupForm<RE::BGSMessage>(0x58E7, "IntelEngine.esp");
+                const char* restWord = rest ? rest->GetFullName() : nullptr;
+                if (restWord && *restWord) g_layToRest = restWord;
                 logger::info("Arcs: the crosshair's word for someone held bound: \"{}\"{}", g_cutLoose, message ? "" : " (no such message in IntelEngine.esp)");
             }
             REL::Relocation<std::uintptr_t> npc{RE::VTABLE_TESNPC[0]};
@@ -2028,6 +2136,50 @@ namespace IntelEngine {
         a->clueState[k] = A::CluePlaced;
         logger::info("Arcs: #{} what was left of a victim lies outside {} ({:08X})", id, NameOf(a->site[a->clueSite[k] - 1u]), a->clueRef[k]);
         RefreshBound(m_book);
+    }
+
+    void ArcBridge::SpiritOut(std::uint32_t id, RE::Actor* shade) {
+        std::scoped_lock lock(m_mutex);
+        auto* a = m_book.Find(id);
+        if (!a || !shade || !a->spiritSite || a->spiritState != A::SpiritAway) return;
+        a->spiritRef = shade->GetFormID();
+        a->spiritState = A::SpiritOut;
+        SetSpirit(a->id, a->spiritRef, false);
+        logger::info("Arcs: #{} {} walks outside {} ({:08X}); it is night", id, a->spiritName, NameOf(a->site[a->spiritSite - 1u]), a->spiritRef);
+    }
+
+    void ArcBridge::SpiritGone(std::uint32_t id, int how) {
+        std::scoped_lock lock(m_mutex);
+        auto* a = m_book.Find(id);
+        if (!a || !a->spiritSite) return;
+        if (how == 0 && a->spiritState == A::SpiritOut) {
+            a->spiritState = A::SpiritAway;
+            logger::info("Arcs: #{} {} fades with the light: it walks again the next night", id, a->spiritName);
+        }
+        a->spiritRef = 0;
+        SetSpirit(a->id, 0, false);
+    }
+
+    bool ArcBridge::SpiritRest(std::uint32_t id) {
+        auto* player = RE::PlayerCharacter::GetSingleton();
+        std::scoped_lock lock(m_mutex);
+        auto* a = m_book.Find(id);
+        if (!a || !player || !A::IsOpen(*a) || a->spiritState != A::SpiritOut || !a->spiritWants) return false;
+        const auto p = static_cast<std::size_t>(a->spiritWants - 1u);
+        const auto found = FindStamped(player, a->propBase[p], a->propName[p]);
+        if (!found.object) {
+            logger::info("Arcs: #{} {} cannot be laid to rest: '{}' is not on the player", id, a->spiritName, a->propName[p]);
+            return false;
+        }
+        // It goes with the dead: out of the player's pack and out of the world.
+        player->RemoveItem(found.object, 1, RE::ITEM_REMOVE_REASON::kRemove, found.extra, nullptr);
+        a->spiritState = A::SpiritRested;
+        SetSpirit(a->id, 0, false);
+        const auto nodes = A::NodesOf(*a);
+        const bool asked = a->node < nodes.size() && nodes[a->node].kind == A::Kind::Haunt;
+        logger::info("Arcs: #{} {} is laid to rest: the player brought '{}'{}", id, a->spiritName, a->propName[p],
+                     asked ? "" : " (before the story asked for it)");
+        return true;
     }
 
     void ArcBridge::Captive(std::uint32_t id, int state) {
@@ -2428,6 +2580,17 @@ namespace IntelEngine {
             if (s >= A::kSites || !a->site[s]) return nullptr;
             return RemedyFor(a->siteKind[s], A::detail::Mix(a->seed, a->site[s]) % 2u != 0u);
         }
+        if (name.starts_with("spirit")) {
+            // What walks by night: "spiritbase" whose shade to put there (only while it is night, it is not out and
+            // the story still wants it), "spiritanchor" the ground it walks, "spirit" itself.
+            if (!a->spiritSite) return nullptr;
+            if (name == "spiritanchor") return OutsideOf(*a, a->spiritSite);
+            if (name == "spiritbase") {
+                if (a->spiritState != A::SpiritAway || !SpiritWanted(*a) || !A::IsNight(HourNow())) return nullptr;
+                return RE::TESForm::LookupByID(a->spiritWoman ? kShadeWoman : kShadeMan);
+            }
+            return a->spiritRef ? RE::TESForm::LookupByID(a->spiritRef) : nullptr;
+        }
         if (name.starts_with("clue")) {
             // What is to be looked at outside a place: "cluebase<k>" who or what to lay there (only while it does not
             // lie there and the story still wants it), "clueanchor<k>" the ground it lies by, "clue<k>" itself.
@@ -2559,6 +2722,9 @@ namespace IntelEngine {
         }
         if (name == "thugname") return a->thugName;
         if (name == "captiveplace") return a->captive && a->captiveSite ? NameOf(a->site[a->captiveSite - 1u]) : std::string();
+        if (name == "spiritname") return a->spiritName;
+        if (name == "spiritplace") return a->spiritSite ? NameOf(a->site[a->spiritSite - 1u]) : std::string();
+        if (name == "spiritwants") return a->spiritWants ? a->propName[a->spiritWants - 1u] : std::string();
         if (name.starts_with("cluename")) {
             // The name the story gives the dead one ("Torvald"), for the body to carry; empty when it gives none.
             const auto k = static_cast<std::size_t>(std::atoi(name.c_str() + 8));
@@ -2740,6 +2906,20 @@ namespace IntelEngine {
         std::scoped_lock lock(m_mutex);
         std::string out;
         for (const auto& a : m_book.all) {
+            // What walks by night is no one of the town: it knows what the story says it knows, and what it is.
+            if (A::IsOpen(a) && a.spiritRef == id && a.spiritState == A::SpiritOut && a.spiritSite) {
+                const std::string place = NameOf(a.site[a.spiritSite - 1u]);
+                std::string line = "I am not among the living. I am " + a.spiritName + ", a shade that walks outside " + place +
+                                   " between nightfall and first light, seen and heard by whoever comes here. " + a.spiritTruth +
+                                   " I speak as the dead might: little, plainly, of what I remember and what I want. I harm nobody who leaves me "
+                                   "be. I cannot leave this ground, no living hand can touch me, and I fade when the sky grows light.";
+                if (a.spiritWants) {
+                    line += " What would let me rest at last: " + a.propName[a.spiritWants - 1u] +
+                            ", brought here and held out to me. I cannot fetch it, and I do not know where it is now.";
+                }
+                out += "- " + Fill(line, a) + "\n";
+                continue;
+            }
             const auto role = m_book.RoleOf(a, id);
             if (role == A::RNone) continue;
             std::string line;
@@ -2792,6 +2972,7 @@ namespace IntelEngine {
     }
 
     void ArcBridge::Ended(const A::Arc& a) {
+        SetSpirit(a.id, 0, false);
         struct Note {
             RE::FormID who;
             std::string text;
@@ -2926,6 +3107,11 @@ namespace IntelEngine {
         g_homeDoors.clear();
         for (auto& held : g_bound) held.store(0);
         for (auto& lies : g_clues) lies.store(0);
+        for (auto& one : g_spirits) {
+            one.rest.store(false);
+            one.ref.store(0);
+            one.arc.store(0);
+        }
         m_book = A::Book{};
         m_pending.clear();
         // A save without arcs (made before them, or before this mod) still gets its look: every arc rumor is of another
@@ -2987,6 +3173,18 @@ namespace IntelEngine {
         void ArcCaptive(RE::StaticFunctionTag*, std::int32_t id, std::int32_t state) { ArcBridge::GetSingleton()->Captive(U(id), state); }
         void ArcCluePlaced(RE::StaticFunctionTag*, std::int32_t id, std::int32_t clue, RE::TESObjectREFR* lies) {
             ArcBridge::GetSingleton()->CluePlaced(U(id), clue, lies);
+        }
+        void ArcSpiritOut(RE::StaticFunctionTag*, std::int32_t id, RE::Actor* shade) { ArcBridge::GetSingleton()->SpiritOut(U(id), shade); }
+        void ArcSpiritGone(RE::StaticFunctionTag*, std::int32_t id, std::int32_t how) { ArcBridge::GetSingleton()->SpiritGone(U(id), how); }
+        bool ArcSpiritRest(RE::StaticFunctionTag*, std::int32_t id) { return ArcBridge::GetSingleton()->SpiritRest(U(id)); }
+        // A haunting asked for (talk of something that walks by night; the test hook): a story of the town about a
+        // shade outside one of the places near it, or nothing.
+        bool ArcRequestHaunt(RE::StaticFunctionTag*, RE::Actor* giver, bool rumored) {
+            if (!giver) return false;
+            ArcBridge::TaleSeed seed;
+            seed.kind = "haunting";
+            seed.rumored = rumored;
+            return ArcBridge::GetSingleton()->RequestTale(giver, {}, &seed);
         }
         // A hunt asked for (a rumor of deaths; the test hook): a story of the town about what is killing people near
         // it, with what was left of a victim to look at and what did it to face, or nothing.
@@ -3098,6 +3296,10 @@ namespace IntelEngine {
         a_vm->RegisterFunction("ArcCaptive", script, ArcCaptive); ++count;
         a_vm->RegisterFunction("ArcCluePlaced", script, ArcCluePlaced); ++count;
         a_vm->RegisterFunction("ArcRequestHunt", script, ArcRequestHunt); ++count;
+        a_vm->RegisterFunction("ArcRequestHaunt", script, ArcRequestHaunt); ++count;
+        a_vm->RegisterFunction("ArcSpiritOut", script, ArcSpiritOut); ++count;
+        a_vm->RegisterFunction("ArcSpiritGone", script, ArcSpiritGone); ++count;
+        a_vm->RegisterFunction("ArcSpiritRest", script, ArcSpiritRest); ++count;
         a_vm->RegisterFunction("ArcRequestRescue", script, ArcRequestRescue); ++count;
         a_vm->RegisterFunction("ArcThugPlaced", script, ArcThugPlaced); ++count;
         a_vm->RegisterFunction("ArcAmbushDone", script, ArcAmbushDone); ++count;

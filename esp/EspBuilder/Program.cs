@@ -110,6 +110,7 @@ public static class Program
         var holders = AddTaleHolders(mod);
         var cutLoose = AddCutLoose(mod);
         var examine = AddWord(mod, Examine, "Examine");
+        var layToRest = AddWord(mod, LayToRest, "Lay to rest");
         mod.WriteToBinary(output);
         Console.WriteLine($"{ThreadQuest} [{quest.FormKey.ID:X6}]: {quest.Aliases.Count} aliases, {quest.Objectives.Count} objectives -> {output}");
         Console.WriteLine($"{LifeSandbox} [{lifeSandbox.FormKey.ID:X6}], {LivesQuest} [{lives.FormKey.ID:X6}]");
@@ -120,6 +121,7 @@ public static class Program
         Console.WriteLine("tale holders " + string.Join(", ", holders.Select(m => $"{m.EditorID} [{m.FormKey.ID:X6}]")));
         Console.WriteLine($"{CutLoose} [{cutLoose.FormKey.ID:X6}]");
         Console.WriteLine($"{Examine} [{examine.FormKey.ID:X6}]");
+        Console.WriteLine($"{LayToRest} [{layToRest.FormKey.ID:X6}]");
         return 0;
     }
 
@@ -131,6 +133,10 @@ public static class Program
     // The crosshair's word on what a story left to be looked at closely (what was left of a victim), where the game
     // would say "Search": read by the DLL the same way (ArcBridge.cpp, g_examine).
     public const string Examine = "IntelEngine_Examine";
+
+    // The crosshair's word on what walks by night while the player carries the one thing it wants, where the game
+    // would say "Talk": read by the DLL the same way (ArcBridge.cpp, g_layToRest).
+    public const string LayToRest = "IntelEngine_LayToRest";
 
     static Message AddWord(SkyrimMod mod, string editorId, string word)
     {

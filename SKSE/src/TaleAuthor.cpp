@@ -880,6 +880,27 @@ namespace IntelEngine {
                 request->pool.mustPlace = false;
                 ctx["must_place"] = false;
             }
+            // Something that walks by night outside one of those places: on offer on the same ground, never in two
+            // stories running, never in a story of the heart. Asked for (the test hook, talk of a haunting), it is
+            // that or nothing.
+            const auto haunt = 1u << static_cast<unsigned>(A::Kind::Haunt);
+            const bool toldLately = std::any_of(recentBeats.begin(), recentBeats.begin() + static_cast<std::ptrdiff_t>(std::min<std::size_t>(2, recentBeats.size())),
+                                                [haunt](std::uint32_t beats) { return (beats & haunt) != 0; });
+            const bool mayHaunt = ground && !toldLately && heartLean.empty();
+            const bool haunting = taleSeed && taleSeed->kind == "haunting";
+            if (haunting && !mayHaunt) {
+                logger::info("Tales: no haunting for {}: {}", asker->GetDisplayFullName(),
+                             !ground ? "no place near with ground outside it" : "one of the last two stories was one, or this one is of the heart");
+                return false;
+            }
+            ctx["bar_haunt"] = !mayHaunt;
+            if (!mayHaunt) request->pool.barred |= haunt;
+            request->pool.mustHaunt = haunting;
+            ctx["must_haunt"] = haunting;
+            if (haunting) {
+                request->pool.mustPlace = false;
+                ctx["must_place"] = false;
+            }
         }
         // Someone held at a place: on offer when a place that keeps prisoners is near and someone of the town may be
         // held. A rescue asked for (the old dungeon master's quest of that name) is a story about exactly that, or
@@ -1162,9 +1183,9 @@ namespace IntelEngine {
     }
 
     void ArcBridge::LogOutline(const A::Arc& a) {
-        static constexpr const char* kKinds[] = {"?", "talk", "find", "give", "choose", "brawl", "go", "visit", "wait", "delve", "slay", "ambush", "stalk", "free", "examine"};
+        static constexpr const char* kKinds[] = {"?", "talk", "find", "give", "choose", "brawl", "go", "visit", "wait", "delve", "slay", "ambush", "stalk", "free", "examine", "haunt"};
         static constexpr const char* kWhens[] = {"?", "done", "option 1", "option 2", "option 3", "picked", "dead", "has", "won", "lost",
-                                                 "handed", "persuaded", "said 1", "said 2", "said 3", "waited", "found already"};
+                                                 "handed", "persuaded", "said 1", "said 2", "said 3", "waited", "found already", "rested"};
         for (std::size_t i = 0; i < a.graph.size(); ++i) {
             const auto& n = a.graph[i];
             std::string line = "Tales: #" + std::to_string(a.id) + " step " + std::to_string(i) + " " +

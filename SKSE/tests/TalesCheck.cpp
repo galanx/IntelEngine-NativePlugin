@@ -376,7 +376,7 @@ static void Adventure() {
     Require(back.Find(id)->bossName[0] == "Grelka the Silent" && back.Find(id)->graph[1].site == 1 && back.Find(id)->propSite[0] == 1, "whole");
     // A save made before ambushes (record version 4: no ambush block) still loads.
     auto v4 = bytes;
-    v4.resize(v4.size() - (3 * 4 + 2 + 1) - 3 - 14);   // the ambush block, the three bytes of someone held (version 7), the fourteen of remains (8)
+    v4.resize(v4.size() - (3 * 4 + 2 + 1) - 3 - 14 - 12);   // the ambush block, the three bytes of someone held (version 7), the fourteen of remains (8), the twelve of what walks by night (9)
     Book older;
     Require(Deserialize(v4, older, 4) && older.Find(id)->bossName[0] == "Grelka the Silent", "a record of version 4 loads");
 
@@ -451,7 +451,7 @@ static void Ambush() {
     // A save of record version 5 (ambushes, before stalkers) loads as it was.
     Book five;
     auto v5 = bytes;
-    v5.resize(v5.size() - 3 - 14);   // before someone could be held (version 7) or remains examined (8)
+    v5.resize(v5.size() - 3 - 14 - 12);   // before someone could be held (version 7), remains examined (8) or anything walked by night (9)
     Require(Deserialize(v5, five, 5) && five.Find(id)->graph[0].kind == Kind::Ambush, "a record of version 5 loads");
 
     const auto errorsOf = [](json x) { return Tales::Compile(x, Town()).errors; };
@@ -629,10 +629,10 @@ static void Mystery() {
     Require(b.clueWhat[0] == RemainsHunter && b.clueSite[0] == 1 && b.clueRef[0] == 0xFF001234 && b.clueState[0] == CluePlaced && b.graph[1].kind == Kind::Examine, "whole");
     Book seven;
     auto v7 = bytes;
-    v7.resize(v7.size() - 14);
+    v7.resize(v7.size() - 14 - 12);
     Require(!Deserialize(v7, seven, 7), "a step that examines read as version 7 is refused, not misread");
     auto wrong = bytes;
-    wrong[wrong.size() - 1] = 7;   // no such state
+    wrong[wrong.size() - 1 - 12] = 7;   // no such state
     Require(!Deserialize(wrong, seven), "a state that does not exist is refused");
 
     const auto errorsOf = [](json x, Tales::Pool pool) { return Tales::Compile(x, pool).errors; };
@@ -734,6 +734,144 @@ static void Mystery() {
     Require(rd.ok, "a hunt among people, with a choice after it, is deep enough");
 }
 
+// A haunting: people who will not speak of the dead one, the thing she wants, and her shade by night.
+static json Haunted() {
+    return json::parse(R"({
+      "title": "The Pale Widow", "genre": "the uncanny",
+      "premise": "Hulda took the dead woman's ring from her hand before the body was carried out, and has let the town believe the ring was lost.",
+      "people": [
+        {"who": "p0", "part": "the one who asks", "truth": "My aunt Hilde died out by the mine last winter. Now people say she walks there after dark."},
+        {"who": "p2", "part": "the one who kept it", "truth": "I took Hilde's ring from her hand before they carried her out. I have it at home."}
+      ],
+      "items": [{"id": "i1", "item": "Silver Ring", "name": "Hilde's Ring", "hidden": "home", "of": "p2"}],
+      "offer": {"words": "Ysolda comes to {player}, pale.", "ask": "Find out why my aunt does not rest.",
+                "journal": "Ysolda asked me to find out why her aunt's shade walks by the mine.", "reward": 150, "days": 4},
+      "steps": [
+        {"id": "s1", "do": "talk", "with": "p2", "goal": "Ask Hulda about the night Hilde died",
+         "outcomes": [{"if": "Hulda admits she has the ring", "then": "s2", "journal": "Hulda has the ring."},
+                      {"if": "Hulda says nothing", "then": "s3", "journal": "Hulda told me nothing."}]},
+        {"id": "s2", "do": "find", "item": "i1", "goal": "Find Hilde's ring in Hulda's home", "then": "s3", "journal": "I have Hilde's ring."},
+        {"id": "s3", "do": "haunt", "place": "d2", "spirit": "the Pale Widow", "sex": "woman", "wants": "i1",
+         "goal": "Go to the mine after dark and face what walks there",
+         "truth": "I was Hilde. I froze out here waiting for a man who never came, and someone took my ring from my hand before I was cold. I want it back.",
+         "rested": {"then": "s4", "journal": "I gave her the ring, and she was gone."},
+         "banished": {"then": "s4", "journal": "I struck her down. The mine is quiet."}},
+        {"id": "s4", "do": "choose", "with": "p2", "goal": "Face Hulda with it", "question": "What now?",
+         "options": [{"say": "The town will hear whose ring you kept.", "then": "end:good", "journal": "I told the town."},
+                     {"say": "It stays between us.", "then": "end:other", "journal": "I kept it to myself."}]}
+      ],
+      "endings": {"good": {"journal": "She rests, and it is known why she did not.", "rumor": "", "pay": true},
+                  "bad": {"journal": "Nobody knows why she walked.", "rumor": "", "pay": false},
+                  "other": {"journal": "It stays quiet.", "rumor": "", "pay": true}}
+    })");
+}
+
+static void Haunting() {
+    const auto r = Tales::Compile(Haunted(), TownThatHolds());
+    if (!r.ok) std::cerr << r.errors;
+    Require(r.ok, "a haunting compiles");
+    const Arc& a = r.arc;
+    const Node& walk = a.graph[2];
+    const auto has = [](const Node& n, If when) {
+        return std::any_of(n.edges.begin(), n.edges.end(), [when](const Edge& e) { return e.when == when; });
+    };
+    Require(walk.kind == Kind::Haunt && walk.site == 1 && walk.who == RNone && has(walk, If::Rested) && has(walk, If::Done), "the step that faces what walks: two ways on");
+    Require(a.spiritSite == 1 && a.spiritWoman == 1 && a.spiritWants == 1 && a.spiritState == SpiritAway && a.spiritRef == 0 &&
+            a.spiritName == "the Pale Widow" && a.spiritTruth.find("I was Hilde") != std::string::npos, "what walks, where, and what it wants");
+    Require(IsNight(22.0f) && IsNight(2.0f) && !IsNight(12.0f) && !IsNight(5.0f) && IsNight(21.0f), "night is from nine to five");
+
+    // Struck down.
+    {
+        Book book;
+        const auto id = book.Plan(a, 1.0f);
+        book.Accept(id, 1.0f);
+        Arc& t = *book.Find(id);
+        Facts f;
+        f.with[3] = f.spoke[3] = true;
+        f.turn = 1;
+        Advance(t, f, 1.1f);
+        Require(t.node == 2, "told nothing, the way leads to the shade all the same");
+        Facts night;
+        night.spirit = SpiritOut;
+        Require(!Advance(t, night, 1.2f).any(), "out there and unharmed: nothing is done yet");
+        night.spirit = SpiritBanished;
+        const auto done = Advance(t, night, 1.3f);
+        Require(t.node == 3 && done.line.find("struck her down") != std::string::npos, "struck down: the story goes on by that way");
+    }
+    // Laid to rest, and through the co-save while it walks.
+    {
+        Book book;
+        const auto id = book.Plan(a, 1.0f);
+        book.Accept(id, 1.0f);
+        Arc& t = *book.Find(id);
+        Facts f;
+        f.with[3] = f.spoke[3] = true;
+        f.turn = 0;
+        Advance(t, f, 1.1f);
+        Facts got;
+        got.has[0] = true;
+        Advance(t, got, 1.2f);
+        Require(t.node == 2, "with the ring in hand, to the shade");
+        t.spiritRef = 0xFF00ABCD;
+        t.spiritState = SpiritOut;
+        const auto bytes = Serialize(book);
+        Book back;
+        Require(Deserialize(bytes, back), "what walks survives the co-save");
+        const Arc& b = *back.Find(id);
+        Require(b.spiritSite == 1 && b.spiritWoman == 1 && b.spiritWants == 1 && b.spiritState == SpiritOut && b.spiritRef == 0xFF00ABCD &&
+                b.spiritName == "the Pale Widow" && b.spiritTruth == t.spiritTruth && b.graph[2].kind == Kind::Haunt, "whole");
+        Book eight;
+        Require(!Deserialize(bytes, eight, 8), "a haunting read as version 8 is refused, not misread");
+        Facts rest;
+        rest.spirit = SpiritRested;
+        const auto done = Advance(t, rest, 1.3f);
+        Require(t.node == 3 && done.line.find("gave her the ring") != std::string::npos, "laid to rest: the story goes on by the other way");
+    }
+
+    const auto errorsOf = [](json x, Tales::Pool pool) { return Tales::Compile(x, pool).errors; };
+    json j = Haunted();
+    j["steps"][2].erase("banished");
+    Require(errorsOf(j, TownThatHolds()).find("strikes it down") != std::string::npos, "it can always be ended by force: the story is never stuck");
+    j = Haunted();
+    j["steps"][2].erase("truth");
+    Require(errorsOf(j, TownThatHolds()).find("in its own words") != std::string::npos, "the dead one has words of their own");
+    j = Haunted();
+    j["steps"][2]["sex"] = "wolf";
+    Require(errorsOf(j, TownThatHolds()).find("\"woman\" or \"man\"") != std::string::npos, "the shade of a person");
+    j = Haunted();
+    j["steps"][2]["wants"] = "i9";
+    Require(errorsOf(j, TownThatHolds()).find("names no item of the tale") != std::string::npos, "it wants a thing of the story");
+    j = Haunted();
+    j["steps"][2].erase("wants");
+    Require(errorsOf(j, TownThatHolds()).find("\"rested\" needs \"wants\"") != std::string::npos, "nothing rests for nothing");
+    j = Haunted();
+    j["steps"][1]["do"] = "wait";
+    j["steps"][1].erase("item");
+    j["steps"][1]["hours"] = 2;
+    Require(errorsOf(j, TownThatHolds()).find("must be in {player}'s hands by then") != std::string::npos, "what lets it rest can be had before");
+    {
+        json plain = Haunted();
+        plain["steps"][2].erase("wants");
+        plain["steps"][2].erase("rested");
+        const auto rp = Tales::Compile(plain, TownThatHolds());
+        Require(rp.ok && rp.arc.spiritWants == 0 && !has(rp.arc.graph[2], If::Rested), "a shade that wants nothing can only be struck down");
+    }
+    auto closed = TownThatHolds();
+    for (auto& s : closed.sites) s.outside = false;
+    Require(errorsOf(Haunted(), closed).find("nothing walks outside") != std::string::npos, "only where there is ground outside it");
+    auto barred = TownThatHolds();
+    barred.barred = 1u << static_cast<unsigned>(Kind::Haunt);
+    Require(errorsOf(Haunted(), barred).find("no \"haunt\" in this story") != std::string::npos, "not in every story");
+    auto asked = TownThatHolds();
+    asked.mustHaunt = true;
+    Require(Tales::Compile(Haunted(), asked).ok, "a haunting asked for, and it is one");
+    Require(errorsOf(Hunted(), asked).find("this story is a haunting") != std::string::npos, "and nothing else");
+    j = Haunted();
+    j["steps"].push_back(j["steps"][2]);
+    j["steps"][4]["id"] = "s5";
+    Require(errorsOf(j, TownThatHolds()).find("one thing that walks by night") != std::string::npos, "one in a story");
+}
+
 static void Captive() {
     const auto r = Tales::Compile(Taken(), TownThatHolds());
     if (!r.ok) std::cerr << r.errors;
@@ -816,10 +954,10 @@ static void Captive() {
             back.Find(id)->graph[2].kind == Kind::Free, "whole");
     Book six;
     auto v6 = bytes;
-    v6.resize(v6.size() - 3 - 14);   // without the three bytes of someone held, and the fourteen of the remains after them
+    v6.resize(v6.size() - 3 - 14 - 12);   // without the three bytes of someone held, the fourteen of the remains and the twelve of what walks by night after them
     Require(!Deserialize(v6, six, 6), "a step that frees someone read as version 6 is refused, not misread");
     auto wrong = bytes;
-    wrong[wrong.size() - 1 - 14] = 9;   // no such state
+    wrong[wrong.size() - 1 - 14 - 12] = 9;   // no such state
     Require(!Deserialize(wrong, six), "a state that does not exist is refused");
 
     const auto errorsOf = [](json x, Tales::Pool pool) { return Tales::Compile(x, pool).errors; };
@@ -978,6 +1116,7 @@ int main() {
         Stalk();
         Captive();
         Mystery();
+        Haunting();
         Depth();
         LongWords();
         Refusals();

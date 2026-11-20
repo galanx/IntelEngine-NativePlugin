@@ -81,6 +81,13 @@ namespace IntelEngine {
         void Captive(std::uint32_t id, int state);
         /** The script laid what is to be looked at outside a place (null: it could not). */
         void CluePlaced(std::uint32_t id, int clue, RE::TESObjectREFR* lies);
+        /** The script put what walks by night outside its place (it is night, and the ground there is in the game). */
+        void SpiritOut(std::uint32_t id, RE::Actor* shade);
+        /** The script took it away again: at first light (how 0: it walks again the next night). */
+        void SpiritGone(std::uint32_t id, int how);
+        /** The player holds out what lets it rest: the thing leaves their pack and the shade is at rest. False when
+         *  it is not out, wants nothing, or the thing is not on the player. */
+        bool SpiritRest(std::uint32_t id);
         /** Who or what a story lays outside a place to be looked at (Arcs::Remains): the game's own people and beasts. */
         static RE::TESBoundObject* RemainsBase(std::uint8_t what);
         /** What helps against what lives in a place of that kind (a den's master is a spider or a troll): the game's
