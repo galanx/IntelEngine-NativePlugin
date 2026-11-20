@@ -30,6 +30,7 @@ namespace IntelEngine::HeartBridge {
             bool childIsPlayers = false;
             std::uint8_t children = 0;
             bool playersChild = false;
+            float refusedAt = -1.0f;   // the game day the player was first seen to have turned them down
         };
         std::mutex g_mutex;
         std::unordered_map<RE::FormID, Script> g_told;
@@ -163,6 +164,11 @@ namespace IntelEngine::HeartBridge {
             if (h.tracked) h.sparked = s.sparked;
             else h.sparked = h.sparked || s.sparked;
             h.stance = s.stance;
+            if (s.stance < 0 && s.refusedAt >= 0.0f) {
+                auto* calendar = RE::Calendar::GetSingleton();
+                const float now = calendar ? calendar->GetCurrentGameTime() : 0.0f;
+                h.refusedDays = std::max(0.0f, now - s.refusedAt);
+            }
             h.withChild = s.withChild;
             h.childIsPlayers = s.childIsPlayers;
             h.children = s.children;
@@ -188,9 +194,12 @@ namespace IntelEngine::HeartBridge {
         return Hearts::Words(HeartOf(actor), name && *name ? name : "the traveller");
     }
 
-    void Told(std::uint32_t actor, int sparked, int stance, int withChild, bool childIsPlayers, int children, bool playersChild) {
+    bool SecondChanceFor(RE::Actor* actor) { return actor && Hearts::SecondChance(HeartOf(actor)); }
+
+    void Told(std::uint32_t actor, int sparked, int stance, int withChild, bool childIsPlayers, int children, bool playersChild, float refusedAt) {
         if (!actor) return;
         Script s;
+        s.refusedAt = refusedAt;
         s.sparked = sparked != 0;
         s.stance = static_cast<std::int8_t>(std::clamp(stance, -1, 1));
         s.withChild = static_cast<std::uint8_t>(std::clamp(withChild, 0, 3));

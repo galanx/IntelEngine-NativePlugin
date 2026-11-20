@@ -131,6 +131,7 @@ namespace IntelEngine {
             std::string kind;
             bool fromAfar = false;
             bool otherHold = false;   // from another hold: counted, so that it stays rare (FarComerLately)
+            bool rumored = false;     // nobody comes to the player with it: it is talk in town, and the player may go to them
         };
         /** Someone came to the player from another hold with a story within this many game days. Any thread. */
         bool FarComerLately(float days) const;
@@ -211,6 +212,8 @@ namespace IntelEngine {
             float offerDue = -1.0f;      // game days: someone on the road from another hold reaches the player then (< 0: not set)
             bool offerSent = false;      // ... and their offer went out
             float deferredAt = -1.0f;    // real seconds: the asker gave up reaching the player (not offered again at once)
+            std::uint8_t heldBy = 0;     // why a waiting offer did not go out at the last look (said once per reason)
+            bool sought = false;         // the offer went out because the player came to the asker and spoke
             bool lingering = false;      // the step's person stays with the player while they talk (the script's)
             float lingerHold = -1.0f;    // real seconds: not asked to linger again before this (refused or let go)
             std::array<std::int8_t, Arcs::kSites> bossState{};   // last seen: 0 unknown, 1 alive and loaded, 2 dead, 3 gone

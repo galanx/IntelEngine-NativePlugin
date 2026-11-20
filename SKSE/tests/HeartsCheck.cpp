@@ -42,6 +42,29 @@ static void WhoMayBePartOfOne() {
     Require(LeanOf(Adult(), refused, rules) == Lean::None, "turned down is turned down");
     refused.tier = Beloved;
     Require(LeanOf(Adult(), refused, rules) == Lean::None, "however strong it is on their side");
+    // A no stands for a season; after it, only where the two have grown close, the door may stand ajar again.
+    Heart later = warm;
+    later.stance = -1;
+    later.tier = Confidant;
+    later.refusedDays = kRefusalRestDays - 1.0f;
+    Require(LeanOf(Adult(), later, rules) == Lean::None, "a no still stands inside its season");
+    later.refusedDays = kRefusalRestDays;
+    Require(SecondChance(later) && LeanOf(Adult(), later, rules) == Lean::Courtship, "long after, and close again: a second chance");
+    later.tier = Friend;
+    Require(LeanOf(Adult(), later, rules) == Lean::None, "time alone reopens nothing: they must have grown closer than before");
+    later.tier = Confidant;
+    later.sparked = false;
+    Require(LeanOf(Adult(), later, rules) == Lean::None, "nothing on their side any more: nothing to reopen");
+    later.sparked = true;
+    later.wedElsewhere = true;
+    Require(LeanOf(Adult(), later, rules) == Lean::None, "married to another since: never a second chance");
+    later.wedElsewhere = false;
+    later.refusedDays = -1.0f;
+    Require(LeanOf(Adult(), later, rules) == Lean::None, "when the no was said is not known: it stands");
+    later.refusedDays = 90.0f;
+    Require(Words(later, "Ada").find("turned them down once") != std::string::npos && Words(later, "Ada").find("never pressed") != std::string::npos &&
+            Words(later, "Ada").find("not reopened") == std::string::npos, "a second chance is said as what it is");
+    Require(LeanOf(child, later, rules) == Lean::None, "and never a child, whatever else holds");
     Rules classic;
     classic.stories = false;
     Require(LeanOf(Adult(), warm, classic) == Lean::None, "switched off: none");

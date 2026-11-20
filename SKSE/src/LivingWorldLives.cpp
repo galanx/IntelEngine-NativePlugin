@@ -1,4 +1,5 @@
 #include "LivingWorldBridge.h"
+#include "RumorBridge.h"
 #include "Safe.h"
 #include "QuestBridge.h"
 #include "ArcBridge.h"
@@ -917,6 +918,9 @@ namespace IntelEngine {
         const auto placeName = PlaceName(order.step.place);
         const float stepAt = life->stepAt;
         const RE::FormID owner = order.actor;
+        // The talk of the day as well (RumorBridge): each new step of their life replaces the word of the last.
+        RumorBridge::GetSingleton()->Withdraw(Rumors::Owner::Life, owner);
+        if (!rumor.empty()) RumorBridge::GetSingleton()->Note(Rumors::Kind::Life, rumor, order.step.place, owner, 0, Rumors::Owner::Life, owner, 0.4f, false);
         std::thread([this, memories, rumor, condition, label, placeName, stepAt, owner]() {
             for (const auto& m : memories) {
                 if (m.memory.empty() || !SkyrimNetAPI::AddMemory) continue;

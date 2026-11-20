@@ -25,7 +25,10 @@ namespace IntelEngine::HeartBridge {
 
     // What only scripts can read (other mods keep it in script storage): told by IntelEngine_Arcs about once a
     // minute for everyone a relationship mod tracks. Any thread.
-    void Told(std::uint32_t actor, int sparked, int stance, int withChild, bool childIsPlayers, int children, bool playersChild);
+    void Told(std::uint32_t actor, int sparked, int stance, int withChild, bool childIsPlayers, int children, bool playersChild,
+              float refusedAt = -1.0f);
+    /** A courtship with them would be a second chance: turned down long ago, close again since (Hearts::SecondChance). */
+    bool SecondChanceFor(RE::Actor* actor);
     // A save was loaded or the game went back to the menu: what was told belongs to another timeline.
     void Forget();
 

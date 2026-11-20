@@ -25,6 +25,7 @@
 #include "StorylineBridge.h"
 #include "QuestBridge.h"
 #include "ArcBridge.h"
+#include "RumorBridge.h"
 #include "QuestStateTracker.h"
 #include "StringUtils.h"
 #include "AsyncDispatch.h"
@@ -106,6 +107,7 @@ namespace IntelEngine {
         StorylineBridge::GetSingleton()->Save(a_intfc);
         QuestBridge::GetSingleton()->Save(a_intfc);
         ArcBridge::GetSingleton()->Save(a_intfc);
+        RumorBridge::GetSingleton()->Save(a_intfc);
     }
 
     void LoadCallback(SKSE::SerializationInterface* a_intfc) {
@@ -138,6 +140,8 @@ namespace IntelEngine {
                 QuestBridge::GetSingleton()->Load(a_intfc, version, length);
             } else if (type == Arcs::kRecordType) {
                 ArcBridge::GetSingleton()->Load(a_intfc, version, length);
+            } else if (type == kRumorRecordType) {
+                RumorBridge::GetSingleton()->Load(a_intfc, version, length);
             }
         }
     }
@@ -162,6 +166,7 @@ namespace IntelEngine {
         StorylineBridge::GetSingleton()->Revert();
         QuestBridge::GetSingleton()->Revert();
         ArcBridge::GetSingleton()->Revert();
+        RumorBridge::GetSingleton()->Revert();
         ProximityMonitor::GetSingleton()->DisarmAll();
         logger::info("RevertCallback: Save ID and SlotTracker cleared (gen={})",
             tracker->loadGeneration.load(std::memory_order_relaxed));
@@ -450,6 +455,12 @@ namespace IntelEngine {
                         "Returns the name of the hold this NPC is in, empty when none.",
                         [](RE::Actor* actor) -> std::string { return LivingWorldBridge::HoldName(actor); });
                     logger::info("{} SkyrimNet decorator: get_intelengine_hold", holdRegistered ? "Registered" : "Failed to register");
+                    // The talk of the day: what this NPC has heard and could pass on (prompt submodule 0204_intel_rumors).
+                    const bool rumorsRegistered = SkyrimNetAPI::RegisterDecorator(
+                        "get_intelengine_rumors",
+                        "Returns what this NPC has heard lately and could pass on (rumors going round their hold); empty when nothing.",
+                        [](RE::Actor* actor) -> std::string { return RumorBridge::GetSingleton()->Lines(actor); });
+                    logger::info("{} SkyrimNet decorator: get_intelengine_rumors", rumorsRegistered ? "Registered" : "Failed to register");
                 }
 
                 // Register quest decorator with SkyrimNet (soft dependency — skipped if API unavailable)

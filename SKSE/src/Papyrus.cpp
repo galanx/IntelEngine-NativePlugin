@@ -19,6 +19,7 @@
 #include "StorylineBridge.h"
 #include "QuestBridge.h"
 #include "ArcBridge.h"
+#include "RumorBridge.h"
 #include "PlaceTargets.h"
 #include "ItemIndex.h"
 #include <random>
@@ -751,6 +752,7 @@ namespace IntelEngine::Papyrus {
             int questCount = 0;
             QuestNatives::Register(a_vm, questCount);
             ArcBridge::Register(a_vm, questCount);   // story arcs
+            RumorBridge::Register(a_vm, questCount);   // the talk of the day
             count += questCount;
         }
 

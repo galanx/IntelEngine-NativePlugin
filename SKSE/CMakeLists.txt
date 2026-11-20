@@ -164,6 +164,7 @@ set(SOURCES
     src/ArcBridge.cpp
     src/TaleAuthor.cpp
     src/HeartBridge.cpp
+    src/RumorBridge.cpp
     src/StoryDirector.cpp
     src/SettingsBridge.cpp
     src/AsyncDispatch.cpp

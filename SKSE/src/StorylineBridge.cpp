@@ -1,4 +1,5 @@
 #include "StorylineBridge.h"
+#include "RumorBridge.h"
 
 #include "ItemNames.h"
 #include "LivingWorldBridge.h"
@@ -124,6 +125,7 @@ namespace IntelEngine {
         std::string deed;
         std::string hold;
         std::string owner;
+        RE::FormID ownerId = 0, ownerAt = 0;
         {
             std::scoped_lock lock(m_mutex);
             const bool changed = m_book.Apply(id, event, NowDays());
@@ -137,6 +139,8 @@ namespace IntelEngine {
                 owner = NameOf(s->owner);
                 auto* ownerActor = s->owner ? RE::TESForm::LookupByID<RE::Actor>(s->owner) : nullptr;
                 hold = LivingWorldBridge::HoldName(ownerActor);
+                ownerId = s->owner;
+                if (auto* at = ownerActor ? ownerActor->GetCurrentLocation() : nullptr) ownerAt = at->GetFormID();
                 deed = Fill(text, *s);
                 for (auto at = deed.find("{owner}"); at != std::string::npos; at = deed.find("{owner}", at + owner.size())) {
                     deed.replace(at, 7, owner.empty() ? "someone" : owner);
@@ -148,6 +152,8 @@ namespace IntelEngine {
                 }
             }
         }
+        // The talk of the day as well (RumorBridge).
+        if (!deed.empty() && ownerAt) RumorBridge::GetSingleton()->Note(Rumors::Kind::Deed, deed, ownerAt, ownerId, 0, Rumors::Owner::Storyline, id, 0.45f, false);
         if (!deed.empty() && !hold.empty() && SkyrimNetAPI::AddWorldKnowledge) {
             auto escape = [](const std::string& text) {
                 std::string out;
