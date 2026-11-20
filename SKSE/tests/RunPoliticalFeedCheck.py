@@ -118,6 +118,7 @@ template<class... T> void error(T&&...) {}
         "std::string FactionPolitics::GetFactionDisplayName(",
         "int FactionPolitics::EnforceWarRule(",
         "bool FactionPolitics::WarPossible(",
+        "bool FactionPolitics::WarPossibleLocked(",
         "std::string FactionPolitics::GetRelationStatus(",
         "nlohmann::json FactionPolitics::FactionToJsonFromSnapshot(",
     )
