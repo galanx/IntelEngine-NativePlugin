@@ -412,7 +412,18 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
       if (form === 'story') { setStoryNpc(next.npcName); setStoryType(next.storyType); setStoryNarration(next.narration ?? ''); setStoryFields(Object.fromEntries(Object.keys(allowed).filter(k => !['npcName','storyType','narration'].includes(k)).map(k => [k,next[k]]))); }
       if (form === 'social') { setSocialNpc1(next.npc1Name); setSocialNpc2(next.npc2Name); setSocialType(next.socialType); setSocialNarration(next.narration); setSocialFields(Object.fromEntries(Object.keys(allowed).filter(k => !['npc1Name','npc2Name','socialType','narration'].includes(k)).map(k => [k,next[k]]))); }
       setTouched(t=>({...t,[typeKey]:t[typeKey] || 'generated'}));
-      if (form === 'political') { setPolFactionA(next.factionA); setPolFactionB(next.factionB); setPolEventType(next.eventType); setPolDescription(next.description); setPolDelta(next.relationDelta); }
+      if (form === 'political') {
+        // A generated number must fit the event type (a betrayal never raises the relation); otherwise, or when
+        // Generate left it blank, use the type's suggested number. A number the player typed stays as typed.
+        const evt = POLITICAL_EVENT_TYPES.find(e => e.key === next.eventType);
+        if (touched.relationDelta !== true && evt) {
+          const generated = result.fields.relationDelta;
+          const fits = Number.isInteger(generated) && generated >= -15 && generated <= 15 && Math.sign(generated) === Math.sign(evt.delta);
+          if (!fits && typeof generated === 'number') audit.rejected.relationDelta = 'Does not fit the event type';
+          next.relationDelta = fits ? generated : evt.delta;
+        }
+        setPolFactionA(next.factionA); setPolFactionB(next.factionB); setPolEventType(next.eventType); setPolDescription(next.description); setPolDelta(next.relationDelta);
+      }
       if (form === 'action') { const matches = nearby.filter(n => n.name === next.npcName); setActionNpc(nearby.find(n => n.id === actionNpc)?.name === next.npcName ? actionNpc : matches.length === 1 ? matches[0].id : ''); setSelectedAction(next.actionName); setActionParams(prev => (request.fields.actionName === 'CancelCurrentTask' || request.fields.actionName === 'ChangeSpeed') ? { ...prev, reason:next.reason || '' } : Object.fromEntries(Object.keys(allowed).filter(k => !['npcName','actionName'].includes(k)).map(k => [k,next[k] ?? '']))); }
       audit.ok = true; delete audit.rejected.$response; audit.applied = Object.keys(result.fields).filter(k=>next[k] !== old[k]); for (const k of Object.keys(result.fields)) if (!skipped.has(k) && !audit.applied.includes(k)) audit.rejected[k] ??= 'Preserved or unchanged';
       setGenerateError('');
@@ -903,7 +914,7 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
                 type="number"
                 value={polDelta}
                 onInput={() => setTouched(t=>({...t,relationDelta:true}))}
-                onChange={e => setPolDelta(Number(e.target.value))}
+                onChange={e => { const v = Math.trunc(Number(e.target.value)); setPolDelta(Number.isFinite(v) ? Math.max(-15, Math.min(15, v)) : 0); }}
                 className="w-14 bg-white/5 border border-white/10 rounded px-2 py-1.5 text-xs text-gray-200 outline-none text-center"
                 min={-15}
                 max={15}
