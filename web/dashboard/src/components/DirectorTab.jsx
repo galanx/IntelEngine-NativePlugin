@@ -419,7 +419,7 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
         if (touched.relationDelta !== true && evt) {
           const generated = result.fields.relationDelta;
           const fits = Number.isInteger(generated) && generated >= -15 && generated <= 15 && Math.sign(generated) === Math.sign(evt.delta);
-          if (!fits && typeof generated === 'number') audit.rejected.relationDelta = 'Does not fit the event type';
+          if (!fits && typeof generated === 'number') audit.rejected.relationDelta ??= 'Does not fit the event type';
           next.relationDelta = fits ? generated : evt.delta;
         }
         setPolFactionA(next.factionA); setPolFactionB(next.factionB); setPolEventType(next.eventType); setPolDescription(next.description); setPolDelta(next.relationDelta);

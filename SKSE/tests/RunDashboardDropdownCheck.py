@@ -1304,6 +1304,59 @@ SCRIPT = r"""
       document.getElementById('result').textContent=JSON.stringify({status:'PASS',checks:['ambush_faction_hirer'],typed:JSON.parse(payloads.find(([name])=>name==='dispatchStory')[1]),generated});
       return;
     }
+    if (location.hash === '#political_delta_war') {
+      // Generated relation change must fit the event type; a typed one stays; the field holds -15..15;
+      // a War Declaration for a pair war_allowed doesn't permit is blocked with a hint (war_with from the DLL).
+      const pol = document.querySelector('section:nth-of-type(3)');
+      const control = text => [...pol.querySelectorAll('button')].find(e=>e.textContent.trim()===text);
+      const delta = () => pol.querySelector('input[type=number]').value;
+      // An unpicked type is chosen at random from 13 (no war_declaration/surrender/peace_offer); index 8 = Betrayal,
+      // the live case: the type comes from Generate, the delta from the form's +8 default.
+      const random = Math.random; Math.random = () => 8.5 / 13;
+      const generate = async fields => {
+        control('Generate').click(); await pause();
+        const request = JSON.parse(payloads.at(-1)[1]);
+        window.directorGenerateResult(JSON.stringify({requestId:request.requestId,form:'political',ok:true,fields})); await pause();
+        check(button('Political event type').value==='Betrayal', 'type pick is not Betrayal: '+button('Political event type').value);
+      };
+      const pact = {factionA:'ImperialFaction',factionB:'StormcloakFaction',eventType:'betrayal',description:'Broke a sworn pact'};
+      await generate(pact);
+      check(delta()==='-12', 'blank generated delta did not take the betrayal default: '+delta());
+      control('Clear').click(); await pause();
+      await generate({...pact,relationDelta:8});
+      check(delta()==='-12', 'positive generated delta kept for a betrayal: '+delta());
+      check(JSON.parse(payloads.at(-1)[1]).outcome?.rejected?.relationDelta==='Does not fit the event type', 'wrong-sign generated delta not reported');
+      control('Clear').click(); await pause();
+      await generate({...pact,relationDelta:-7});
+      check(delta()==='-7', 'fitting generated delta replaced: '+delta());
+      await fill('section:nth-of-type(3) input[type=number]','5');
+      check(delta()==='5', 'typed delta not taken: '+delta());
+      await generate({...pact,description:'Broke a pact again',relationDelta:-9});
+      check(delta()==='5', 'typed delta replaced by Generate: '+delta());
+      await fill('section:nth-of-type(3) input[type=number]','-16');
+      check(delta()==='-15', 'delta not held to -15: '+delta());
+      Math.random = random;
+      control('Clear').click(); await pause();
+      window.updateFullState(JSON.stringify({config:{},pluginConfig:{'ui.scale':1},tasks:[],scheduled:[],loadedNpcs:[],actions:[],
+        politics:{enabled:true,factions:[{id:'ImperialFaction',name:'Imperial Legion',war_with:['StormcloakFaction']},
+          {id:'StormcloakFaction',name:'Stormcloaks',war_with:['ImperialFaction']},{id:'CompanionsFaction',name:'Companions',war_with:[]}],
+          relations:[],wars:[],player_standings:[],events:[]}}));
+      await pause();
+      const dispatch = () => [...pol.querySelectorAll('fieldset > button')].find(e=>e.textContent.trim()==='Dispatch Political Event');
+      const hint = () => [...pol.querySelectorAll('p')].some(e=>e.textContent.startsWith("These two can't go to war."));
+      await fill('input[placeholder="e.g. StormcloakFaction"]','ImperialFaction');
+      await fill('input[placeholder="e.g. ThalmorFaction"]','CompanionsFaction');
+      await fill('section:nth-of-type(3) textarea','Declared war');
+      await choose('Political event type','War Declaration');
+      check(dispatch().disabled && hint(), 'war between a pair that cannot fight was not blocked');
+      await fill('input[placeholder="e.g. ThalmorFaction"]','StormcloakFaction');
+      check(!dispatch().disabled && !hint(), 'war between a pair that can fight was blocked');
+      await choose('Political event type','Insult');
+      await fill('input[placeholder="e.g. ThalmorFaction"]','CompanionsFaction');
+      check(!dispatch().disabled && !hint(), 'non-war event blocked by the war rule');
+      document.getElementById('result').textContent=JSON.stringify({status:'PASS',checks:['political_delta_war']});
+      return;
+    }
     if (location.hash === '#director_generate_identities') {
       const failures = [];
       const control = (index, text) => [...document.querySelectorAll(`section:nth-of-type(${index}) button`)].find(e=>e.textContent.trim()===text);
