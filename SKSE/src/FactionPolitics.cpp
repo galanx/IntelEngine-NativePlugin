@@ -1239,6 +1239,12 @@ war_allowed:
                     fj["leaders"] = nlohmann::json::array();
                     fj["disbanded"] = true;
                 }
+                // Dashboard only: who this faction may go to war with (war_allowed), so the Director form can say so
+                // before a war_declaration is refused.
+                auto warWith = nlohmann::json::array();
+                for (const auto& g : factions_)
+                    if (g.id != f.id && WarPossibleLocked(f, g)) warWith.push_back(g.id);
+                fj["war_with"] = std::move(warWith);
                 factionsJson.push_back(fj);
             }
             dashboard["factions"] = factionsJson;
@@ -2047,11 +2053,15 @@ war_allowed:
 
     // fix 94: war_allowed matcher. Entry matches "*", or the faction's id / name / type (case-insensitive).
     bool FactionPolitics::WarPossible(const FactionConfig& a, const FactionConfig& b) const {
+        std::lock_guard<std::mutex> lock(configMutex_);
+        return WarPossibleLocked(a, b);
+    }
+
+    bool FactionPolitics::WarPossibleLocked(const FactionConfig& a, const FactionConfig& b) const {
         if (a.id.rfind("PE_", 0) == 0 || b.id.rfind("PE_", 0) == 0) return false;
         const auto match = [](const std::string& e, const FactionConfig& f) {
             return e == "*" || ToLower(e) == ToLower(f.id) || ToLower(e) == ToLower(f.name) || ToLower(e) == ToLower(f.type);
         };
-        std::lock_guard<std::mutex> lock(configMutex_);
         for (const auto& [key, items] : warAllowed_) {
             const bool ka = match(key, a), kb = match(key, b);
             if (!ka && !kb) continue;
