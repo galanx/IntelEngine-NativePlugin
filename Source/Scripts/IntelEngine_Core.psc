@@ -188,7 +188,8 @@ Float LastMaintenanceRealTime = 0.0
 Function Maintenance(Bool isFirstLoad = false)
     {
         Called by PlayerAlias on every game load AND by C++ bootstrap.
-        Guard: skip if already ran within 2 real seconds (both paths fire on load).
+        Guard: skip if already ran within 5 real seconds (both paths fire on load; the C++ call
+        comes 3 s after kPostLoadGame, Plugin.cpp, so a 2 s window let it run Maintenance twice).
         isFirstLoad = true when mod is first installed (OnInit on alias)
         isFirstLoad = false on subsequent loads (OnPlayerLoadGame on alias)
     }
@@ -202,8 +203,8 @@ Function Maintenance(Bool isFirstLoad = false)
     If now < LastMaintenanceRealTime
         LastMaintenanceRealTime = 0.0
     EndIf
-    If !isFirstLoad && (now - LastMaintenanceRealTime) < 2.0 && LastMaintenanceRealTime > 0.0
-        DebugMsg("IntelEngine Maintenance skipped (duplicate call within 2s)")
+    If !isFirstLoad && (now - LastMaintenanceRealTime) < 5.0 && LastMaintenanceRealTime > 0.0
+        DebugMsg("IntelEngine Maintenance skipped (duplicate call within 5s)")
         return
     EndIf
     LastMaintenanceRealTime = now
