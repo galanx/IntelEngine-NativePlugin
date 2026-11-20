@@ -65,6 +65,7 @@ namespace IntelEngine::Arcs {
         Stalk = 12,  // `who` shadows the player out of doors until caught or coming forward, and they talk
         Free = 13,   // `who` is held at place `site`: the player has reached them there, and they are free
         Examine = 14, // what was left of a victim lies outside place `site`: the player has looked at it closely (clue `prop`)
+        Haunt = 15,   // something walks by night outside place `site`: it is gone, by force (Done) or at rest (Rested)
     };
 
     enum class Phase : std::uint8_t { Planned = 0, Open = 1, Ended = 2 };
@@ -120,6 +121,7 @@ namespace IntelEngine::Arcs {
         Said2 = 14,
         Waited = 15,     // `hours` game hours passed on this step
         Freed = 16,      // the one held is free already: the player found them before the story came to it
+        Rested = 17,     // what walked by night was laid to rest: the player brought it what it wanted
     };
     constexpr int kPersuadeSpeech = 35;
 
@@ -318,6 +320,7 @@ namespace IntelEngine::Arcs {
         bool ambushOver = false;               // the men of the ambush are dead
         bool captiveReached = false;           // the player stands by the one held at a place, and nobody is fighting
         std::array<bool, kClues> examined{};   // the player has looked closely at what was left there
+        std::uint8_t spirit = 0;               // what walks by night (SpiritState): SpiritBanished or SpiritRested once it is gone
     };
 
     constexpr std::size_t kMaxText = 200;
@@ -343,6 +346,15 @@ namespace IntelEngine::Arcs {
     enum Remains : std::uint8_t { RemainsNone = 0, RemainsHunter = 1, RemainsCow = 2, RemainsHorse = 3, RemainsGoat = 4, RemainsDeer = 5 };
     constexpr std::uint8_t kRemains = 5;
     enum ClueState : std::uint8_t { ClueToPlace = 0, CluePlaced = 1, ClueSeen = 2 };
+
+    // Something that walks by night outside a place: the shade of someone who died there and cannot rest. It is out
+    // only between nightfall and first light, and only while the story has not been past it; it harms nobody who
+    // leaves it be, speaks from its own truth, and is gone for good when it is struck down (Banished) or given the
+    // one thing it wants (Rested). The script puts it there and takes it away again (ArcBridge::SpiritOut / SpiritGone).
+    enum SpiritState : std::uint8_t { SpiritAway = 0, SpiritOut = 1, SpiritBanished = 2, SpiritRested = 3 };
+    constexpr float kNightBegins = 21.0f;   // the hour of the day
+    constexpr float kNightEnds = 5.0f;
+    inline bool IsNight(float hour) { return hour >= kNightBegins || hour < kNightEnds; }
 
     struct Arc {
         std::uint32_t id = 0;
@@ -407,6 +419,14 @@ namespace IntelEngine::Arcs {
         std::array<std::uint8_t, kClues> clueSite{};    // the place (index + 1) it lies outside of
         std::array<std::uint32_t, kClues> clueRef{};    // what the script put there, 0 = nothing yet
         std::array<std::uint8_t, kClues> clueState{};   // ClueState
+        // ---- something that walks by night outside a place (record version 9)
+        std::uint8_t spiritSite = 0;                    // the place (index + 1) it walks outside of, 0 = nothing walks
+        std::uint8_t spiritWoman = 0;                   // 1 a woman's shade, 0 a man's
+        std::uint8_t spiritWants = 0;                   // the prop (index + 1) that lays it to rest, 0 = nothing does
+        std::uint8_t spiritState = SpiritAway;
+        std::uint32_t spiritRef = 0;                    // the shade the script put there, 0 = it is not out
+        std::string spiritName;                         // its name in the story ("the Pale Widow")
+        std::string spiritTruth;                        // who it was, how it died, what holds it here: first person
     };
 
     inline bool IsOpen(const Arc& a) { return a.phase == Phase::Open; }
@@ -461,6 +481,7 @@ namespace IntelEngine::Arcs {
                     case Kind::Ambush: return f.ambushOver;
                     case Kind::Free: return f.captiveReached;
                     case Kind::Examine: return n.prop < kClues && f.examined[n.prop];
+                    case Kind::Haunt: return f.spirit == SpiritBanished;
                     default: return false;
                 }
             case If::Option0: return f.answer == 0;
@@ -480,6 +501,7 @@ namespace IntelEngine::Arcs {
             case If::Said2: return f.turn == 2;
             case If::Waited: return f.hoursHere >= e.hours;
             case If::Freed: return f.captiveReached;
+            case If::Rested: return f.spirit == SpiritRested;
         }
         return false;
     }
@@ -1081,7 +1103,7 @@ namespace IntelEngine::Arcs {
     // ------------------------------------------------------------------ save data (co-save record 'IEAR')
 
     constexpr std::uint32_t kRecordType = 'IEAR';
-    constexpr std::uint32_t kRecordVersion = 8;   // 2: tales; 3: a visit's why; 4: places out in the world; 5: ambushes; 6: stalkers; 7: someone held at a place; 8: remains to examine. Older ones load
+    constexpr std::uint32_t kRecordVersion = 9;   // 2: tales; 3: a visit's why; 4: places out in the world; 5: ambushes; 6: stalkers; 7: someone held at a place; 8: remains to examine; 9: what walks by night. Older ones load
 
     namespace detail {
         template <class T>
@@ -1166,7 +1188,7 @@ namespace IntelEngine::Arcs {
                 !Get(in, at, n.logStage) || !Get(in, at, n.extendDays)) {
                 return false;
             }
-            const auto lastKind = static_cast<std::uint8_t>(version >= 8 ? Kind::Examine : version >= 7 ? Kind::Free : version >= 6 ? Kind::Stalk : version >= 5 ? Kind::Ambush : Kind::Slay);
+            const auto lastKind = static_cast<std::uint8_t>(version >= 9 ? Kind::Haunt : version >= 8 ? Kind::Examine : version >= 7 ? Kind::Free : version >= 6 ? Kind::Stalk : version >= 5 ? Kind::Ambush : Kind::Slay);
             if (kind < 1 || kind > lastKind || who >= kRoles || marker >= kRoles || n.prop >= kProps) return false;
             n.kind = static_cast<Kind>(kind);
             n.who = static_cast<Role>(who);
@@ -1191,7 +1213,7 @@ namespace IntelEngine::Arcs {
                     !GetText(in, at, e.line) || !Get(in, at, e.hours) || !Get(in, at, bondWith)) {
                     return false;
                 }
-                if (when < 1 || when > static_cast<std::uint8_t>(If::Freed) || role >= kRoles || effectRole >= kRoles ||
+                if (when < 1 || when > static_cast<std::uint8_t>(version >= 9 ? If::Rested : If::Freed) || role >= kRoles || effectRole >= kRoles ||
                     effect2Role >= kRoles || bondWith >= kRoles || effect > kEffects || effect2 > kEffects || !ValidEnding(ending) ||
                     e.prop >= kProps || !std::isfinite(e.hours)) {
                     return false;
@@ -1298,13 +1320,21 @@ namespace IntelEngine::Arcs {
                 detail::Put(out, a.clueRef[k]);
                 detail::Put(out, a.clueState[k]);
             }
+            // ---- version 9: what walks by night
+            detail::Put(out, a.spiritSite);
+            detail::Put(out, a.spiritWoman);
+            detail::Put(out, a.spiritWants);
+            detail::Put(out, a.spiritState);
+            detail::Put(out, a.spiritRef);
+            detail::PutText(out, a.spiritName);
+            detail::PutLong(out, a.spiritTruth);
         }
         return out;
     }
 
     // All or nothing. Version 1 records (before tales) load as they were.
     inline bool Deserialize(std::span<const std::uint8_t> in, Book& book, std::uint32_t version = kRecordVersion) {
-        if (version < 1 || version > 8) return false;
+        if (version < 1 || version > kRecordVersion) return false;
         std::size_t at = 0;
         Book read;
         std::uint8_t lastPattern = 0;
@@ -1394,6 +1424,14 @@ namespace IntelEngine::Arcs {
                         (a.clueWhat[k] != 0) != (a.clueSite[k] != 0)) {
                         return false;
                     }
+                }
+            }
+            if (version >= 9) {
+                if (!detail::Get(in, at, a.spiritSite) || !detail::Get(in, at, a.spiritWoman) || !detail::Get(in, at, a.spiritWants) ||
+                    !detail::Get(in, at, a.spiritState) || !detail::Get(in, at, a.spiritRef) || !detail::GetText(in, at, a.spiritName) ||
+                    !detail::GetLong(in, at, a.spiritTruth) || a.spiritSite > kSites || a.spiritWoman > 1 || a.spiritWants > kProps ||
+                    a.spiritState > SpiritRested) {
+                    return false;
                 }
             }
             const bool tale = pattern == static_cast<std::uint8_t>(Pattern::Tale);

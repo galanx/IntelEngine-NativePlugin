@@ -119,6 +119,7 @@ namespace IntelEngine::Tales {
         bool mustPlace = false;     // this one leads out into the world (the last ones stayed in town)
         bool mustCaptive = false;   // this one is about someone held at a place (a rescue was asked for)
         bool mustExamine = false;   // this one is a hunt for what is killing people: remains to look at, then what did it
+        bool mustHaunt = false;     // this one is a haunting: something walks by night outside one of the places
         bool rumored = false;       // it begins as talk in town (the asker does not come): the offer says what people say
     };
 
@@ -588,6 +589,7 @@ namespace IntelEngine::Tales {
         };
         std::vector<Step> built(steps.size());
         int ambushes = 0;   // one ambush a story (its men are the arc's own)
+        int haunts = 0;     // one thing that walks by night a story (the arc's own)
         std::size_t clues = 0;   // things to examine, each with its own slot of the arc
         for (std::size_t i = 0; i < steps.size(); ++i) {
             const auto& s = steps[i];
@@ -768,6 +770,53 @@ namespace IntelEngine::Tales {
                     ++clues;
                 }
                 st.edges.push_back({A::If::Done, branch(s, i, where)});
+            } else if (kind == "haunt") {
+                // Something walks by night outside a place: the shade of someone who died there and cannot rest. The
+                // engine puts it there between nightfall and first light; it harms nobody who leaves it be and speaks
+                // from the truth written here. The step is over when it is gone: struck down ("banished", always
+                // possible, so the story can never be stuck), or given the one thing it wants ("rested", when "wants"
+                // names an item of the tale that can be found before, checked below).
+                if (haunts++ > 0) fail(where + ": one thing that walks by night in a story");
+                n.kind = A::Kind::Haunt;
+                n.site = siteOf(Str(s, "place"), where);
+                if (n.site) {
+                    for (const auto& ps : pool.sites) {
+                        if (ps.location == a.site[n.site - 1u] && !ps.outside) fail(where + ": nothing walks outside " + ps.name + " (it has no way in under the open sky)");
+                    }
+                }
+                const auto name = Words(Str(s, "spirit"), 50);
+                if (name.empty()) fail(where + ": \"spirit\": what people call what walks there (\"the Pale Widow\")");
+                const auto truth = Words(Str(s, "truth"), kMaxTruth);
+                if (truth.size() < 40) fail(where + ": \"truth\": who it was, how it died and what holds it here, in its own words (first person)");
+                const auto sex = Lower(Str(s, "sex"));
+                if (sex != "woman" && sex != "man") fail(where + ": \"sex\": \"woman\" or \"man\" (whose shade it is)");
+                if (haunts == 1) {
+                    a.spiritSite = n.site;
+                    a.spiritWoman = sex == "woman" ? 1 : 0;
+                    a.spiritName = name;
+                    a.spiritTruth = truth;
+                }
+                if (!Str(s, "wants").empty()) {
+                    const auto it = propOf.find(Lower(Str(s, "wants")));
+                    if (it == propOf.end()) {
+                        fail(where + ": \"wants\" names no item of the tale");
+                    } else {
+                        n.prop = it->second;
+                        if (haunts == 1) a.spiritWants = static_cast<std::uint8_t>(it->second + 1u);
+                    }
+                    if (!s.contains("rested") || !s["rested"].is_object()) {
+                        fail(where + ": \"rested\": {\"then\", \"journal\"}, where the story goes when {player} brings it what it wants");
+                    } else {
+                        st.edges.push_back({A::If::Rested, branch(s["rested"], i, where + " rested")});
+                    }
+                } else if (s.contains("rested")) {
+                    fail(where + ": \"rested\" needs \"wants\": the item of the tale that lets it rest");
+                }
+                if (!s.contains("banished") || !s["banished"].is_object()) {
+                    fail(where + ": \"banished\": {\"then\", \"journal\"}, where the story goes when {player} strikes it down");
+                } else {
+                    st.edges.push_back({A::If::Done, branch(s["banished"], i, where + " banished")});
+                }
             } else if (kind == "free") {
                 // Someone held at a place: found there and cut loose by the player. (The engine keeps them alive and in their bonds
                 // until then, and the people of the place leave them be.)
@@ -822,7 +871,7 @@ namespace IntelEngine::Tales {
                 n.waitHours = static_cast<float>(std::clamp(Int(s, "hours", 12), 1, 72));
                 st.edges.push_back({A::If::Done, branch(s, i, where)});
             } else {
-                fail(where + ": \"do\" must be talk, find, give, choose, visit, wait, brawl, go, delve, slay, free, examine, name, ambush or stalk");
+                fail(where + ": \"do\" must be talk, find, give, choose, visit, wait, brawl, go, delve, slay, free, examine, name, haunt, ambush or stalk");
             }
             if (static_cast<unsigned>(n.kind) != 0 && (pool.barred & (1u << static_cast<unsigned>(n.kind)))) {
                 fail(where + ": no \"" + kind + "\" in this story (a story told lately had one): tell this one another way");
@@ -1014,6 +1063,52 @@ namespace IntelEngine::Tales {
         if (pool.mustExamine && !examines) {
             fail("steps: this story is a hunt for what is killing people: a step \"examine\" (what was left of a victim, outside one of the places), then the \"slay\" there");
         }
+        // ---- what walks by night: only if the story comes to it, and what lets it rest can be had before
+        bool haunted = false;
+        for (std::size_t i = 0; i < steps.size(); ++i) {
+            if (kindOf(i) != A::Kind::Haunt) continue;
+            if (!reach[i]) {
+                // A step that is never reached leaves nothing walking out there.
+                a.spiritSite = a.spiritWoman = a.spiritWants = 0;
+                a.spiritName.clear();
+                a.spiritTruth.clear();
+                continue;
+            }
+            haunted = true;
+            if (!a.spiritWants) continue;
+            const auto wanted = static_cast<std::uint8_t>(a.spiritWants - 1u);
+            // Every step from which the haunting can be reached.
+            std::vector<bool> before(steps.size(), false);
+            bool grew = true;
+            before[i] = true;
+            while (grew) {
+                grew = false;
+                for (std::size_t j = 0; j < steps.size(); ++j) {
+                    if (before[j] || !reach[j]) continue;
+                    for (const int to : leads[j]) {
+                        if (to >= 0 && before[static_cast<std::size_t>(to)]) {
+                            before[j] = true;
+                            grew = true;
+                            break;
+                        }
+                    }
+                }
+            }
+            bool had = false;
+            for (std::size_t j = 0; j < steps.size() && !had; ++j) {
+                if (j == i || !before[j]) continue;
+                if (kindOf(j) == A::Kind::Have && built[j].node.prop == wanted) had = true;
+                for (const auto& [when, b] : built[j].edges) {
+                    if (b.effect == A::Effect::GiveItem && b.prop == static_cast<int>(wanted)) had = true;
+                }
+            }
+            if (!had) {
+                fail("step " + Str(steps[i], "id") + ": what lets it rest must be in {player}'s hands by then: a \"find\" of that item, or someone giving it, comes before");
+            }
+        }
+        if (pool.mustHaunt && !haunted) {
+            fail("steps: this story is a haunting: a step \"haunt\" (what walks by night outside one of the places), reached by every way through it or by most");
+        }
         if (pool.mustCaptive && a.captive) {
             const auto* held = personOf(static_cast<A::Role>(a.captive));
             if (held && !held->close) {
@@ -1029,7 +1124,7 @@ namespace IntelEngine::Tales {
             };
             const auto outThere = [&](std::size_t i) {
                 const auto k = kindOf(i);
-                return k == A::Kind::Delve || k == A::Kind::Slay || k == A::Kind::Free || k == A::Kind::Examine;
+                return k == A::Kind::Delve || k == A::Kind::Slay || k == A::Kind::Free || k == A::Kind::Examine || k == A::Kind::Haunt;
             };
             std::set<int> endingsReached;
             bool anyPlace = false;

@@ -851,3 +851,75 @@ later. Will intelengine spawn new monsters and boss? Or will it stay empty".
 - Things that only show themselves at night, and a ghost with a grievance.
 - A scene by the town (where the dead were found), tracks leading from it, more than bodies to look at.
 - The hook: a rumor of deaths heard at an inn, leading to the one who will pay to have it found out.
+
+## Something that walks by night: hauntings (2026-11-20)
+
+The user (2026-11-20): "Night and ghosts and such mystery quests that are well written and immersive with witcher 3
+vibes and a bit spooky so we have more variety."
+
+### What it is
+
+A step of a tale, "haunt" (`Kind::Haunt`): outside one of the story's places the shade of someone who died there walks
+between nightfall (21:00) and first light (05:00). By day there is nothing to see. The story is about why it does not
+rest, and that is always something the living did.
+
+- **It is spoken with like anyone.** The shade is an actor of the game's own ghosts (a woman of Yngvild's dead, a man
+  of the cairns' dead; Skyrim.esm, leveled), named by the story. What it knows is the "truth" the writer gave it, first
+  person, put into its prompt by `ArcBridge::LinesFor` together with what it is: not among the living, bound to the
+  spot, gone at first light, and what would let it rest. Played: "I was Ingerd... I lay on these rocks last winter with
+  a broken ankle, and the snow came. An elf took my mother's necklace and left me. I want it back."
+- **It harms nobody who leaves it be.** The script takes it out of its factions and its anger before anyone sees it.
+- **Two ways to end it**, both prepared by the writer:
+  - `banished` (always there, so a story can never be stuck): the player strikes it down. The game's own "Ghostly
+    Remains" are left. Never the good ending by itself: the wrong stays unrighted.
+  - `rested` (when "wants" names an item of the tale): with that thing in their pack the crosshair on the shade reads
+    **Lay to rest** (MESG `IntelEngine_LayToRest` [0058E7], the same hook as "Cut loose" and "Examine"). The player's
+    hand on it takes the thing out of their pack for good, the shade says its last words, and fades. Without the
+    thing their hand passes through it, and it answers that in its own way.
+- **Fair by construction** (Tales.h): one haunting a story; the place must have open ground outside; the shade has a
+  name, a sex and a truth of its own; "rested" needs "wants", and what it wants must be in the player's hands on some
+  way before the shade is reached (a "find" for it, or someone handing it over). Not in two stories running, never in
+  a story of the heart.
+- **Out of order counts**, as for remains and captives: the shade walks from the moment the story is taken on, while
+  the story has not been past it. A player who goes there on the first night, before asking anyone, meets it, hears
+  what it wants ("An elf with a bow left me on these rocks. He took my mother's necklace. Find it, and I may rest."),
+  and may strike it down there and then; the step is done when the story comes to it.
+
+### How it runs
+
+- Arc fields (co-save record version 9): `spiritSite`, `spiritWoman`, `spiritWants`, `spiritState`
+  (`SpiritAway`, `SpiritOut`, `SpiritBanished`, `SpiritRested`), `spiritRef`, `spiritName`, `spiritTruth`.
+  `Facts::spirit` carries the state; `If::Done` on a haunt is "banished", `If::Rested` is "laid to rest".
+- The look every two seconds (`ArcBridge::Advance`) sees a shade that died (banished, whoever struck it) or that the
+  game lost (it walks again), and asks the script (signal bit 14, the same as for masters, captives and remains) to
+  put it out when it is night and the ground by the place is in the game, or to take it away when the sky is light.
+- `IntelEngine_Arcs.TendSpirit`: placed by the place's map marker, or 900 units behind the player when that spot is in
+  plain view close by, fading in either way (it is a shade: that is how it should arrive). At first light it fades
+  unless it is fighting. `OnArcSpirit`: the player's hand on it ("rest" or "touch"). `ReleaseSpirit` when the story ends.
+- The journal's marker stands on the shade while it is out and on the place by day (`MarkerOf`).
+- Cost: a lookup and two compares a look; nothing per frame. In the session that played it the slowest look at a
+  story in 150 was 0.36 ms (the budget is 0.5).
+
+### Asked for
+
+- The dungeon master may write one whenever a place near has open ground (`bar_haunt` false); the prompt's step list
+  then offers "haunt".
+- `ArcRequestHaunt(giver, rumored)` asks for exactly that or nothing (`must_haunt`, the section "Something walks by
+  night near <town>" of the prompt): people who will not speak of the dead one, the one thing the dead one wants in a
+  living person's keeping, the shade by night, and an ending among the living. Test hook `DebugHaunt`.
+
+### Played (2026-11-20, test profile)
+
+"The Woman at Graywinter" (hand-written, `Scripts/intelengine/tales/test_q.json`): Olava told what she had seen
+("pale as frost against the rocks, one hand forever at her own throat"), Elrindir gave up the necklace when faced with
+it, the shade stood by the cave mouth after dark with the journal's marker over her, the crosshair read "Lay to
+rest", and her last words were her own ("I can let go now. Be well, warrior. Don't forget me."). In a second run,
+without the necklace: reached for, she said what she wanted; at 05:12 she faded and at 21:30 she walked again with the
+player standing there; struck down, she left Ghostly Remains and the state was Banished. Model-written on the second
+attempt: "The Hunter Who Was Never Buried" (compiled, not played through).
+
+### Not yet
+
+- A haunting inside a home in town, and one that only shows itself to someone who has first looked at the remains.
+- The shade of a victim of a hunt as an optional witness at night.
+- Other things of the night that are not the dead (what only comes out after dark at a place).
