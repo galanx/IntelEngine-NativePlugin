@@ -22,6 +22,7 @@
 #include "ProcessUtils.h"
 #include "PoliticalEngineBridge.h"
 #include "RumorBridge.h"
+#include "FactionEditor.h"
 
 #include <fstream>
 #include <filesystem>
@@ -365,6 +366,17 @@ war_allowed:
         vanillaSynced_.clear();  // Reset per-save vanilla faction sync tracking
         WritePoliticalStateFile();
         logger::info("FactionPolitics: Initialized successfully");
+    }
+
+    bool FactionPolitics::ReloadConfig() {
+        if (!LoadConfig()) return false;
+        if (PoliticalDB::GetSingleton()->IsReady()) {
+            SeedDefaultRelations();
+            RecalculateRelationScores();
+            WritePoliticalStateFile();
+        }
+        logger::info("FactionPolitics: the faction file was read in again ({} factions)", GetAllFactions().size());
+        return true;
     }
 
     void FactionPolitics::ClearCaches() {
@@ -1565,7 +1577,7 @@ war_allowed:
         // Tier 2: Skyrim engine faction membership
         for (const auto& fac : factions_) {
             if (fac.skyrimFactionId.empty()) continue;
-            auto* skyrimFaction = RE::TESForm::LookupByEditorID<RE::TESFaction>(fac.skyrimFactionId);
+            auto* skyrimFaction = FactionEditor::GameFaction(fac.skyrimFactionId);
             if (skyrimFaction && actor->IsInFaction(skyrimFaction)) {
                 return fac;
             }
@@ -1808,7 +1820,7 @@ war_allowed:
         for (const auto& fac : factions_) {
             if (fac.skyrimFactionId.empty()) continue;
 
-            auto* skyrimFaction = RE::TESForm::LookupByEditorID<RE::TESFaction>(fac.skyrimFactionId);
+            auto* skyrimFaction = FactionEditor::GameFaction(fac.skyrimFactionId);
             if (!skyrimFaction) continue;
 
             int violent = player->GetViolentCrimeGoldValue(skyrimFaction);
@@ -1836,7 +1848,7 @@ war_allowed:
         // Tier 2: Skyrim engine faction membership
         for (const auto& fac : factions_) {
             if (fac.skyrimFactionId.empty()) continue;
-            auto* skyrimFaction = RE::TESForm::LookupByEditorID<RE::TESFaction>(fac.skyrimFactionId);
+            auto* skyrimFaction = FactionEditor::GameFaction(fac.skyrimFactionId);
             if (skyrimFaction && actor->IsInFaction(skyrimFaction)) {
                 return fac.id;
             }
@@ -1973,7 +1985,7 @@ war_allowed:
             if (battleSnap.active && battleSnap.playerParticipated &&
                 (fac.id == battleSnap.factionA || fac.id == battleSnap.factionB)) continue;
 
-            auto* skyrimFaction = RE::TESForm::LookupByEditorID<RE::TESFaction>(fac.skyrimFactionId);
+            auto* skyrimFaction = FactionEditor::GameFaction(fac.skyrimFactionId);
             if (!skyrimFaction) continue;
 
             int violent = player->GetViolentCrimeGoldValue(skyrimFaction);
@@ -2056,7 +2068,7 @@ war_allowed:
             if (vanillaSynced_.count(fac.id)) continue;
 
             // Check if player is in the vanilla faction
-            auto* skyrimFac = RE::TESForm::LookupByEditorID<RE::TESFaction>(fac.skyrimFactionId);
+            auto* skyrimFac = FactionEditor::GameFaction(fac.skyrimFactionId);
             if (!skyrimFac) continue;
 
             bool inFaction = false;

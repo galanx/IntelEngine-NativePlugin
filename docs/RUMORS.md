@@ -110,7 +110,9 @@ If no model can write the tale, nothing goes round and nobody comes instead.
 | A storyline's deed (`StorylineBridge::Apply`) | Deed 0.45 | |
 | A former follower's life (`LivingWorldLives`) | Life 0.4 | each step replaces the last |
 
-Politics (News) is the next feeder, with the politics overhaul.
+Politics feeds it too (News, by the kind of event: a war declared or ended 0.95, a battle 0.8, an alliance or an
+attempt on someone's life 0.75, trade and quarrels 0.5, spying 0.45): `FactionPolitics::News`, see
+`docs/POLITICS_AND_FACTIONS.md`.
 
 ## Cost
 
@@ -122,6 +124,5 @@ threads. The search for the publican runs once, when the player has walked into 
 ## Not yet
 
 - A page to see and delete what is going round (the dashboard).
-- Politics as News, and battles talked of in every hold.
 - Rumors that are wrong on purpose (a Trouble whose talk in town blames the wrong thing is already possible inside a
   hunt: the naming step).

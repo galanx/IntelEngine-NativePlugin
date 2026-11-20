@@ -353,6 +353,7 @@ function App() {
                 politics={state.politics}
                 calendar={state.calendar}
                 sendAction={sendAction}
+                knownNpcs={state.knownNpcs || []}
               />
             )}
             <div hidden={activeTab !== 'director'}>

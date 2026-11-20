@@ -60,7 +60,9 @@ def method(source, signature):
 
 manager = pathlib.Path(sys.argv[2]).read_text(encoding="utf-8") if len(sys.argv) > 2 else (SRC / "DashboardUIManager.cpp").read_text(encoding="utf-8")
 has_generate = "    void DashboardUIManager::OnGenerateDirectorStatic(" in manager
-listener_count = 16 + int(has_generate)
+# 4.0: the faction editor's listener (FactionEditor.cpp does its work; here it only has to be routed).
+has_editor = "    void DashboardUIManager::OnFactionEditorStatic(" in manager
+listener_count = 16 + int(has_generate) + int(has_editor)
 listener_start = manager.index("        static const UiListener listeners[] = {")
 listener_end = manager.index("        };", listener_start)
 listener_entries = manager[manager.index("{", listener_start) + 1:listener_end]
@@ -70,6 +72,7 @@ for index, callback in enumerate((
     "OnToggleStoryTypeStatic", "OnChangeSettingStatic", "OnRemovePackagesStatic",
     "OnChangePluginConfigStatic", "OnDispatchStoryStatic", "OnDispatchNpcSocialStatic",
     "OnDispatchPoliticsStatic", "OnExecuteActionStatic", "OnToggleActionStatic",
+    *(["OnFactionEditorStatic"] if has_editor else []),
     "OnGenerateDirectorStatic",
     "OnTextFocusStatic",
 )):
@@ -266,7 +269,7 @@ void route(int id,const char* arg) { ++callbackHits; routedListener=id; listener
 #define ROUTE(N) void listener##N(const char* a){route(N,a);}
 ROUTE(0) ROUTE(1) ROUTE(2) ROUTE(3) ROUTE(4) ROUTE(5) ROUTE(6) ROUTE(7)
 ROUTE(8) ROUTE(9) ROUTE(10) ROUTE(11) ROUTE(12) ROUTE(13) ROUTE(14) ROUTE(15)
-ROUTE(16)
+ROUTE(16) ROUTE(17)
 #undef ROUTE
 namespace IntelEngine::SkyrimNetAPI {
 inline bool (*SendCustomPromptToLLM)(const char*, const char*, const char*,
@@ -287,6 +290,7 @@ const std::array<std::string_view, ''' + str(listener_count) + r'''> expectedNam
     "onDashboard_toggleStoryType", "onDashboard_changeSetting", "onDashboard_removePackages",
     "onDashboard_changePluginConfig", "onDashboard_dispatchStory", "onDashboard_dispatchNpcSocial",
     "onDashboard_dispatchPolitics", "onDashboard_executeAction", "onDashboard_toggleAction",
+    *(["onDashboard_factionEditor"] if has_editor else []),
     *(["onDashboard_generateDirector"] if has_generate else []),
     "onDashboard_textFocus",
 )) + r'''};
@@ -725,6 +729,7 @@ public:
     std::string pendingFullState_,pendingSlotPayload_,pendingFullStatePayload_;
     std::atomic_size_t knownNpcsSize_{static_cast<std::size_t>(-1)};
     std::vector<std::pair<std::uint64_t,std::string>> pendingDirectorResults_;
+    std::vector<std::pair<std::uint64_t,std::string>> pendingEditorResults_;
     std::mutex mutex_,actionCacheMutex_; std::condition_variable pollCondition_;
     struct ActionParam {std::string name,description;std::vector<std::string> enumValues;};
     struct ActionMeta {std::string name,fileName,description;bool enabled=true;std::vector<ActionParam> params;std::string category;bool isCategory=true;};
@@ -741,11 +746,14 @@ public:
     static void OnDispatchStoryStatic(const char*); static void OnDispatchNpcSocialStatic(const char*); static void OnDispatchPoliticsStatic(const char*); static void OnExecuteActionStatic(const char*);
     static void OnChangePluginConfigStatic(const char*); static void OnToggleActionStatic(const char*);
     static void OnGenerateDirectorStatic(const char*);
+    static void OnFactionEditorStatic(const char*);
     static void OnTextFocusStatic(const char*);
 };
 }
 ''' + "namespace IntelEngine {\n" + "\n".join(callbacks) + (
     "\nvoid DashboardUIManager::OnGenerateDirectorStatic(const char*) {}\n" if not has_generate else ""
+) + (
+    "\nvoid DashboardUIManager::OnFactionEditorStatic(const char*) {}\n"
 ) + r'''
 void testManager() {
     auto* m=DashboardUIManager::GetSingleton(); m->host_=std::make_unique<FakeHost>();

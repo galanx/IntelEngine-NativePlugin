@@ -153,6 +153,7 @@ set(SOURCES
     src/PoliticalDB.cpp
     src/FactionPolitics.cpp
     src/FactionConfigLoader.cpp
+    src/FactionEditor.cpp
     src/BattleManager.cpp
     src/DialogueTracker.cpp
     src/SpeechTracker.cpp
