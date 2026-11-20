@@ -377,6 +377,12 @@ $configCount = Copy-TreeFiles `
     -ExcludedNames @("settings.yaml", "factions.yaml")
 Write-Host "  $configCount plugin config files staged (settings.yaml and factions.yaml preserved)"
 
+$placeNamesCount = Copy-TreeFiles `
+    -SourceRoot (Join-Path $SKSEDir "Plugins\IntelEngine\placenames") `
+    -DestinationRoot (Join-Path $DataDir "SKSE\Plugins\IntelEngine\placenames") `
+    -Label "Place names"
+Write-Host "  $placeNamesCount place-name files staged"
+
 $dataSourceDir = Join-Path $DataDir "Source\Scripts"
 if (-not (Test-Path -LiteralPath $dataSourceDir)) {
     New-Item -ItemType Directory -Path $dataSourceDir -Force | Out-Null
