@@ -233,6 +233,12 @@ Compare-SourceTree `
     -DataRoot $PluginConfigData `
     -ExcludedNames @("settings.yaml", "factions.yaml")
 
+Write-Host "`n=== Place Names ===" -ForegroundColor Cyan
+Compare-SourceTree `
+    -Label "Place names" `
+    -SourceRoot (Join-Path $SKSEDir "Plugins\IntelEngine\placenames") `
+    -DataRoot (Join-Path $DataDir "SKSE\Plugins\IntelEngine\placenames")
+
 # =============================================================================
 # Known retired loose files must be absent; shared roots remain untouched
 # =============================================================================
