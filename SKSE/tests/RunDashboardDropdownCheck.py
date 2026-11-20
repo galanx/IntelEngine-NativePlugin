@@ -1307,7 +1307,7 @@ SCRIPT = r"""
     if (location.hash === '#political_delta_war') {
       // Generated relation change must fit the event type; a typed one stays; the field holds -15..15;
       // a War Declaration for a pair war_allowed doesn't permit is blocked with a hint (war_with from the DLL).
-      const pol = document.querySelector('section:nth-of-type(3)');
+      const pol = [...document.querySelectorAll('section')].find(s => /Political Dispatch/.test(s.querySelector('h2')?.textContent || ''));
       const control = text => [...pol.querySelectorAll('button')].find(e=>e.textContent.trim()===text);
       const delta = () => pol.querySelector('input[type=number]').value;
       // An unpicked type is chosen at random from 13 (no war_declaration/surrender/peace_offer); index 8 = Betrayal,
@@ -1329,11 +1329,11 @@ SCRIPT = r"""
       control('Clear').click(); await pause();
       await generate({...pact,relationDelta:-7});
       check(delta()==='-7', 'fitting generated delta replaced: '+delta());
-      await fill('section:nth-of-type(3) input[type=number]','5');
+      await fill('input[type=number]','5',pol);
       check(delta()==='5', 'typed delta not taken: '+delta());
       await generate({...pact,description:'Broke a pact again',relationDelta:-9});
       check(delta()==='5', 'typed delta replaced by Generate: '+delta());
-      await fill('section:nth-of-type(3) input[type=number]','-16');
+      await fill('input[type=number]','-16',pol);
       check(delta()==='-15', 'delta not held to -15: '+delta());
       Math.random = random;
       control('Clear').click(); await pause();
@@ -1346,7 +1346,7 @@ SCRIPT = r"""
       const hint = () => [...pol.querySelectorAll('p')].some(e=>e.textContent.startsWith("These two can't go to war."));
       await fill('input[placeholder="e.g. StormcloakFaction"]','ImperialFaction');
       await fill('input[placeholder="e.g. ThalmorFaction"]','CompanionsFaction');
-      await fill('section:nth-of-type(3) textarea','Declared war');
+      await fill('textarea','Declared war',pol);
       await choose('Political event type','War Declaration');
       check(dispatch().disabled && hint(), 'war between a pair that cannot fight was not blocked');
       await fill('input[placeholder="e.g. ThalmorFaction"]','StormcloakFaction');
