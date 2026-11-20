@@ -1752,31 +1752,22 @@ Bool Function IsCarriageDriver(Actor npc)
 EndFunction
 
 Function DismissFollowerForTask(Actor npc)
-    {Prepare NPC for a new IntelEngine task by clearing ALL package overrides.
+    {Prepare NPC for a new IntelEngine task: remove IntelEngine's own package overrides and the vanilla
+    follower flag.
 
-    Uses ActorUtil.ClearPackageOverride to remove the PapyrusUtil overrides of every mod, IntelEngine's own
-    included. (Since SkyrimNet got its package registry this no longer reaches the packages SkyrimNet runs
-    itself, such as TalkToPlayer at priority 30 or a FollowPlayer row: those sit below IntelEngine's 90 and
-    100 and lose to them without being removed.)
-    IntelEngine's task functions (GoToLocation, FetchNPC, etc.) immediately apply
-    their own packages after this call, so the NPC is never left without overrides.
-
-    Why blanket clear instead of removing specific packages:
-    SkyrimNet's companion follow system uses its own package overrides that are
-    invisible to IntelEngine. SetPlayerTeammate(false) only clears the vanilla
-    follower flag — SkyrimNet's follow package stays active and overrides the
-    travel package, causing the NPC to follow the player instead of traveling.
-    Diagnosed via Ingrid's Western Watchtower trip where she followed the player
-    for 1.5 hours instead of walking to the destination, with no stuck detection
-    (she was moving, just not toward the destination).
+    Other mods' PapyrusUtil overrides stay. They used to be wiped here (ActorUtil.ClearPackageOverride),
+    which cost follower frameworks their packages with nothing to put them back (galanx/IntelEngine-GamePlugin#38,
+    seen with Nether's Follower Framework and without it). The wipe was for SkyrimNet's follow package; since
+    SkyrimNet got its package registry, its own packages (TalkToPlayer at 30, a FollowPlayer row) sit below
+    IntelEngine's 90 and 100 and lose to them without being removed.
+    IntelEngine's task functions (GoToLocation, FetchNPC, etc.) apply their own packages right after this call.
 
     Note: EvaluatePackage is NOT called here — callers apply their own packages
     first, then evaluate. This prevents a brief gap where the NPC has no overrides
     and reverts to default AI.}
 
-    ; Clear ALL package overrides from all sources
-    ActorUtil.ClearPackageOverride(npc)
-    DebugMsg("Cleared all package overrides for " + npc.GetDisplayName())
+    RemoveIntelPackages(npc, false)
+    DebugMsg("Removed IntelEngine package overrides for " + npc.GetDisplayName())
 
     ; Also clear vanilla follower state so the engine doesn't re-apply follow AI
     If npc.IsPlayerTeammate()
