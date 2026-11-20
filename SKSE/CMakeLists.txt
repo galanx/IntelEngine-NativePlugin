@@ -204,6 +204,8 @@ target_include_directories(StoryCandidateResolutionCheck PRIVATE ${CMAKE_CURRENT
 add_executable(NamedPlaceMatchCheck EXCLUDE_FROM_ALL tests/NamedPlaceMatchCheck.cpp)
 target_include_directories(NamedPlaceMatchCheck PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(NamedPlaceMatchCheck PRIVATE nlohmann_json::nlohmann_json)
+add_executable(LocalizedNameCheck EXCLUDE_FROM_ALL tests/LocalizedNameCheck.cpp)
+target_include_directories(LocalizedNameCheck PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 add_executable(FactionLeaderNameMatchCheck EXCLUDE_FROM_ALL tests/FactionLeaderNameMatchCheck.cpp)
 target_include_directories(FactionLeaderNameMatchCheck PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 add_executable(FormIDStringCheck EXCLUDE_FROM_ALL tests/FormIDStringCheck.cpp)

@@ -6,6 +6,7 @@
  */
 
 #include "LocationResolver.h"
+#include "PlaceNameFile.h"
 #include "CellAnalyzer.h"
 #include "NPCIndex.h"
 #include "StringUtils.h"
@@ -15,6 +16,8 @@
 #include "NamedPlaceMatch.h"
 
 #include <cfloat>
+#include <filesystem>
+#include <fstream>
 #include <utility>
 #include <nlohmann/json.hpp>
 
@@ -98,6 +101,41 @@ namespace IntelEngine {
                 }
             }
         }
+
+        // Add place names from Data/SKSE/Plugins/IntelEngine/placenames/*.tsv (english.tsv ships), so names
+        // in another language resolve: English input on a German install, for one. The game's own names were
+        // indexed above and stay first-wins.
+        std::error_code dirError;
+        try {
+            for (const auto& file : std::filesystem::directory_iterator("Data/SKSE/Plugins/IntelEngine/placenames", dirError)) {
+                if (file.path().extension() != ".tsv") continue;
+                std::ifstream in(file.path(), std::ios::binary);
+                std::uint32_t rows = 0, found = 0, added = 0;
+                for (std::string line; std::getline(in, line);) {
+                    const auto row = ParsePlaceNameLine(line);
+                    if (!row) continue;
+                    rows++;
+                    auto* form = dataHandler->LookupForm(row->localId, row->master);
+                    if (!form) continue;  // master not loaded
+                    auto* cell = row->type == 'C' ? form->As<RE::TESObjectCELL>() : nullptr;
+                    const bool isLocation = row->type == 'L' && form->Is(RE::FormType::Location);
+                    if (!isLocation && !(cell && cell->IsInteriorCell())) continue;
+                    found++;
+
+                    auto& index = isLocation ? m_locationIndex : m_cellIndex;
+                    std::string lowerName = StringUtils::ToLowerStd(row->name);
+                    if (index.try_emplace(lowerName, form->GetFormID()).second) {
+                        (isLocation ? m_allLocationNames : m_allCellNames).push_back(std::move(lowerName));
+                        added++;
+                    }
+                }
+                logger::info("Place names {}: {} rows, {} forms found, {} names added",
+                             file.path().filename().string(), rows, found, added);
+            }
+        } catch (const std::exception& e) {
+            logger::warn("Place-name files: {}", e.what());
+        }
+        if (dirError) logger::info("No place-name files ({})", dirError.message());
 
         // Cache LocTypePlayerHouse keyword for player home resolution
         m_locTypePlayerHouse = RE::TESForm::LookupByEditorID<RE::BGSKeyword>("LocTypePlayerHouse");
