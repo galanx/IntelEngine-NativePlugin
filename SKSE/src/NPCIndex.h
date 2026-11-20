@@ -190,6 +190,11 @@ namespace IntelEngine {
         static bool IsEligibleStoryCandidate(RE::Actor* actor, RE::Actor* player,
             RE::TESObjectCELL* playerCell, SlotTracker* tracker);
 
+        /** The user's own lists (blocked names, blocked factions, the white lists) keep this person out of stories:
+         *  the same lists the director's candidates go through, as last read (a director round reads them anew on a
+         *  worker thread). For everything that casts people: a town's tales, their askers, the patterns. */
+        static bool BlockedForStories(RE::Actor* actor);
+
         /** 4.0: a place where someone may cry out for help in front of everyone (a town, a city, a settlement, an
          *  inn; not a dungeon, a dangerous place or the player's home). */
         static bool IsPleaPlace(RE::Actor* player);

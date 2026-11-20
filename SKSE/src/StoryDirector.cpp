@@ -275,7 +275,12 @@ namespace IntelEngine::StoryDirector {
                 const RE::FormID giverId = chosen.formId;
                 const std::string kind = chosen.kind;
                 const bool otherHold = chosen.reach >= 2;
-                if (auto* task = SKSE::GetTaskInterface()) {
+                // Word from someone who is not here is a letter, as it was before 4.0: nobody crosses the hold to say
+                // what a courier can carry, and nobody stays silent because the road is long. (Before, such a moment
+                // became a tale whose asker travels in person, or nothing at all.)
+                const bool letter = chosen.kind == "message" && chosen.reach >= 1;
+                if (letter) logger::info("[Director] {} is not here and sends word: a letter by courier", chosen.name);
+                if (auto* task = letter ? nullptr : SKSE::GetTaskInterface()) {
                     task->AddTask([asked, giverId, why, kind, otherHold]() {
                         auto* giver = RE::TESForm::LookupByID<RE::Actor>(giverId);
                         ArcBridge::TaleSeed seed{why, kind, true, otherHold};
@@ -291,12 +296,12 @@ namespace IntelEngine::StoryDirector {
                 // Someone who is not here comes with a story of their own or not at all: never the one-off visit of the
                 // old dungeon master (the user: "people were visiting for the smallest most absurd reasons across the
                 // world").
-                if (chosen.reach >= 1) {
+                if (chosen.reach >= 1 && !letter) {
                     logger::info("[Director] no tale for {} now, and they are not here: nothing comes of it", chosen.name);
                     session->done("");
                     return;
                 }
-                logger::info("[Director] no tale for {} now: the moment goes the old way", chosen.name);
+                if (!letter) logger::info("[Director] no tale for {} now: the moment goes the old way", chosen.name);
             }
             // 4.0 quests (docs/QUESTS.md): a quest moment is planned by the engine first, every step a fact of the game;
             // the 3.8 writer path runs only when no quest fits this person now (rescues, faction quests).

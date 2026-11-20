@@ -4,6 +4,7 @@
 #include "Safe.h"
 #include "SkyrimNetAPI.h"
 
+#include <cctype>
 #include <chrono>
 #include <thread>
 #include <unordered_set>
@@ -128,6 +129,25 @@ namespace IntelEngine {
         return id;
     }
 
+    std::uint32_t RumorBridge::NoteNews(const std::string& text, const std::string& where, float weight, std::uint32_t ownerId) {
+        static constexpr std::pair<const char*, std::uint8_t> kNames[] = {
+            {"whiterun", R::Whiterun},   {"falkreath", R::Falkreath},   {"markarth", R::Reach},        {"reach", R::Reach},
+            {"solitude", R::Haafingar},  {"haafingar", R::Haafingar},   {"morthal", R::Hjaalmarch},    {"hjaalmarch", R::Hjaalmarch},
+            {"dawnstar", R::Pale},       {"pale", R::Pale},             {"winterhold", R::Winterhold}, {"windhelm", R::Eastmarch},
+            {"eastmarch", R::Eastmarch}, {"riften", R::Rift},           {"rift", R::Rift}};
+        std::string lower = where;
+        for (auto& c : lower) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        std::uint8_t hold = m_playerHold.load();
+        for (const auto& [name, index] : kNames) {
+            if (lower.find(name) != std::string::npos) {
+                hold = index;
+                break;
+            }
+        }
+        if (hold >= R::kHolds) return 0;
+        return Note(R::Kind::News, text, R::kHoldLocation[hold], 0, 0, R::Owner::Politics, ownerId, weight, false);
+    }
+
     void RumorBridge::Withdraw(R::Owner owner, std::uint32_t ownerId, R::Kind only) {
         std::vector<R::Rumor> gone;
         {
@@ -154,6 +174,9 @@ namespace IntelEngine {
         const FrameClock clock("Rumors: a look at the talk of the day", cost, FrameClock::Now());
         const float now = NowDays();
         m_now.store(now);
+        if (auto* player = RE::PlayerCharacter::GetSingleton()) {
+            if (const auto hold = HoldOf(player->GetCurrentLocation()); hold != R::NoHold) m_playerHold.store(hold);
+        }
         std::vector<R::Event> reached;
         std::vector<R::Rumor> gone;
         bool reconcile = false;

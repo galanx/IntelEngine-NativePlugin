@@ -21,6 +21,7 @@
 #include "SkyrimNetAPI.h"
 #include "ProcessUtils.h"
 #include "PoliticalEngineBridge.h"
+#include "RumorBridge.h"
 
 #include <fstream>
 #include <filesystem>
@@ -671,8 +672,27 @@ war_allowed:
                 pendingPE_[std::to_string(eventId)] = description;
             }
             WritePoliticalStateFile();
+            News(factionA, eventType, description, eventId);
         }
         return eventId;
+    }
+
+    void FactionPolitics::News(const std::string& factionA, const std::string& eventType, const std::string& text, int eventId) {
+        // How far word of it travels: a war declared or ended is heard in every hold within days, a battle in the
+        // holds around, the smaller dealings of the great where they happened. The bookkeeping of the simulation and
+        // the player's own tally are no news.
+        if (text.size() < 12 || eventType == "relation_adjustment" || eventType == "player_battle" || eventType == "player_kill" ||
+            eventType == "political_reaction") {
+            return;
+        }
+        float weight = 0.5f;
+        if (eventType == "war_declaration" || eventType == "surrender" || eventType == "peace_treaty" || eventType == "war_ended") weight = 0.95f;
+        else if (eventType == "battle_result" || eventType == "battle_scheduled") weight = 0.8f;
+        else if (eventType == "alliance_proposal" || eventType == "mutual_defense_pact" || eventType == "political_marriage" ||
+                 eventType == "assassination_attempt") weight = 0.75f;
+        else if (eventType == "espionage" || eventType == "sabotage") weight = 0.45f;   // whispered, not cried out
+        const auto faction = GetFaction(factionA);
+        RumorBridge::GetSingleton()->NoteNews(text, faction ? faction->hold : std::string(), weight, static_cast<std::uint32_t>((std::max)(eventId, 0)));
     }
 
     // =========================================================================
@@ -891,6 +911,43 @@ war_allowed:
             snap.playerSide = war.allegiance;
         }
 
+        // Every other faction's own story in the game (VanillaWar::QuestlineOf, or the faction file's free_after):
+        // read here, on the game's thread, and kept for every other thread.
+        {
+            std::vector<FactionConfig> all;
+            {
+                std::lock_guard<std::mutex> lock(configMutex_);
+                all = factions_;
+            }
+            std::unordered_map<std::string, std::string> bound;
+            for (const auto& f : all) {
+                const auto questline = f.freeAfterSet ? f.freeAfter : VanillaWar::QuestlineOf(f.skyrimFactionId);
+                if (questline.empty()) continue;
+                const auto open = VanillaWar::BoundBy(questline, [](const std::string& id) {
+                    auto* quest = RE::TESForm::LookupByEditorID<RE::TESQuest>(id);
+                    if (!quest) return VanillaWar::Quest::NotInGame;
+                    return quest->IsCompleted() ? VanillaWar::Quest::Finished : VanillaWar::Quest::Unfinished;
+                });
+                if (open.empty()) continue;
+                auto* quest = RE::TESForm::LookupByEditorID<RE::TESQuest>(open);
+                const char* name = quest ? quest->GetFullName() : nullptr;
+                bound[f.id] = name && *name ? name : open;
+            }
+            {
+                std::lock_guard<std::mutex> lock(boundMutex_);
+                if (bound != boundBy_) {
+                    for (const auto& [id, story] : bound) {
+                        if (!boundBy_.contains(id)) logger::info("Politics: {} is bound by its own story in the game (\"{}\"): no war, no harm to it until that is finished", id, story);
+                    }
+                    for (const auto& [id, story] : boundBy_) {
+                        if (!bound.contains(id)) logger::info("Politics: {} is free: its story in the game (\"{}\") is finished", id, story);
+                    }
+                    boundBy_ = bound;
+                }
+            }
+            snap.bound = std::move(bound);
+        }
+
         if (PoliticalEngineBridge::GetSingleton()->IsActive() && !PoliticalEngineBridge::GetSingleton()->HasSidesExport()) {
             auto* keyword = RE::TESForm::LookupByID<RE::BGSKeyword>(0x2A456);
             auto* data = RE::TESDataHandler::GetSingleton();
@@ -958,7 +1015,7 @@ war_allowed:
                                                               const PoliticsTickSnapshot& snap) const {
         // Worker-safe variant: liveness comes from snapshot fields populated in Phase A.
         // Snapshot has all leaders for all factions; we filter by (factionId, name).
-        return BuildFactionJsonCore(f, [&f, &snap](const std::string& name) -> std::pair<bool, bool> {
+        auto fj = BuildFactionJsonCore(f, [&f, &snap](const std::string& name) -> std::pair<bool, bool> {
             for (const auto& s : snap.leaders) {
                 if (s.factionId == f.id && s.name == name) {
                     return {s.wasResolved, s.confirmedDead};
@@ -966,6 +1023,8 @@ war_allowed:
             }
             return {false, false};  // not in snapshot — assume alive
         });
+        if (const auto it = snap.bound.find(f.id); !fj.empty() && it != snap.bound.end()) fj["bound"] = VanillaWar::BoundTelling(it->second);
+        return fj;
     }
 
     // =========================================================================
@@ -2107,6 +2166,9 @@ war_allowed:
                                     static_cast<VanillaWar::State>(vanillaWar_.load()))) {
             return false;
         }
+        // Nor against any other faction's own story: no war by or against one whose questline the player has not
+        // finished.
+        if (!BoundBy(a.id).empty() || !BoundBy(b.id).empty()) return false;
         const auto match = [](const std::string& e, const FactionConfig& f) {
             return e == "*" || ToLower(e) == ToLower(f.id) || ToLower(e) == ToLower(f.name) || ToLower(e) == ToLower(f.type);
         };
@@ -2120,10 +2182,45 @@ war_allowed:
         return false;
     }
 
+    std::string FactionPolitics::BoundBy(const std::string& factionId) const {
+        std::lock_guard<std::mutex> lock(boundMutex_);
+        const auto it = boundBy_.find(factionId);
+        return it == boundBy_.end() ? std::string() : it->second;
+    }
+
     void FactionPolitics::HoldToTheGamesWar(const PoliticsTickSnapshot& snap) {
         if (!initialized_.load()) return;
         auto* db = PoliticalDB::GetSingleton();
         if (!db || !db->IsReady()) return;
+        // A faction bound by its own story: a war it is in (begun before this rule, or before a load) ends with no
+        // winner, and its score with anyone stays short of war.
+        if (!snap.bound.empty()) {
+            std::vector<FactionConfig> all;
+            {
+                std::lock_guard<std::mutex> lock(configMutex_);
+                all = factions_;
+            }
+            for (std::size_t i = 0; i < all.size(); ++i) {
+                for (std::size_t k = i + 1; k < all.size(); ++k) {
+                    const auto& a = all[i];
+                    const auto& b = all[k];
+                    const bool boundA = snap.bound.contains(a.id), boundB = snap.bound.contains(b.id);
+                    if (!boundA && !boundB) continue;
+                    const std::string& story = snap.bound.at(boundA ? a.id : b.id);
+                    if (db->GetActiveWar(a.id, b.id) && EndWar(a.id, b.id, std::string(), snap.currentGameTime)) {
+                        logger::info("Politics: the war of {} and {} is called off: {} is bound by its own story in the game (\"{}\")", a.id, b.id,
+                                     boundA ? a.id : b.id, story);
+                    }
+                    const int threshold = (std::max)({RELATION_HOSTILE - 1, a.warThreshold, b.warThreshold});
+                    const int floor = VanillaWar::BoundFloor(threshold, RELATION_MIN);
+                    const int score = db->GetRelation(a.id, b.id);
+                    if (score < floor) {
+                        db->AdjustRelation(a.id, b.id, floor - score);
+                        logger::info("Politics: {} and {} held at {} (was {}): \"{}\" is not finished", a.id, b.id, floor, score, story);
+                    }
+                }
+            }
+        }
         const auto state = static_cast<VanillaWar::State>(snap.civilWar);
         std::vector<FactionConfig> sided;
         {
@@ -2310,6 +2407,12 @@ war_allowed:
             db->RecordEvent(factionA, factionB, "relation_adjustment", "War ended", peaceDelta, gameTime);
             db->AdjustRelation(factionA, factionB, peaceDelta);
             WritePoliticalStateFile();
+            {
+                const std::string nameA = GetFactionDisplayName(factionA), nameB = GetFactionDisplayName(factionB);
+                News(factionA, "war_ended", named.empty() ? "The fighting between " + nameA + " and " + nameB + " has stopped, and neither is said to have won."
+                                                          : "The war between " + nameA + " and " + nameB + " is over, and " +
+                                                                GetFactionDisplayName(named) + " had the better of it.", war->id);
+            }
         }
         return ok;
     }
@@ -2408,6 +2511,7 @@ war_allowed:
                         physicalPosition ? narrative : "Battle resolved", -10, gameTime, "",
                         physicalPosition ? location : "", physicalPosition ? *physicalPosition : nullptr);
         db->AdjustRelation(factionA, factionB, -10);
+        if (physicalPosition) News(factionA, "battle_result", narrative, battleId);
 
         WritePoliticalStateFile();
         return battleId;
@@ -2890,6 +2994,16 @@ war_allowed:
             logger::warn("Politics DM: rejected surrender — no active war between {} and {}", factionA, factionB);
             out["error"] = "surrender requires an active war";
             return out.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
+        }
+        // Nothing that harms a faction whose own story in the game is unfinished, whoever proposes it.
+        if (VanillaWar::HarmsTheBound(eventType)) {
+            for (const auto& id : {factionA, factionB}) {
+                if (const auto story = id.empty() ? std::string() : BoundBy(id); !story.empty()) {
+                    logger::warn("Politics DM: rejected {}: {} is bound by its own story in the game (\"{}\")", eventType, id, story);
+                    out["error"] = "a faction of this event is bound by its own story in the game";
+                    return out.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
+                }
+            }
         }
         // fix 94: refuse a war_declaration for a pair war_allowed does not permit (fix 74 was prompt-only).
         if (eventType == "war_declaration") {

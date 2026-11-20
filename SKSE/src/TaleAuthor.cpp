@@ -379,6 +379,10 @@ namespace IntelEngine {
         const bool afar = taleSeed && taleSeed->fromAfar;
         // `written`: a tale given as JSON (test hook ArcDebugTaleFile) instead of one asked of the model.
         if (!asker || (written.empty() && !SkyrimNetAPI::SendCustomPromptToLLM)) return false;
+        if (written.empty() && NPCIndex::BlockedForStories(asker)) {
+            logger::info("Tales: no tale for {}: kept out of stories by the user's lists", asker->GetDisplayFullName());
+            return false;
+        }
         const float real = RealNow();
         const auto started = std::chrono::steady_clock::now();
         if (m_taleBusy.load()) {

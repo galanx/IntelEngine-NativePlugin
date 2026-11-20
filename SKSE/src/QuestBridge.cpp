@@ -316,7 +316,15 @@ namespace IntelEngine {
         }
         std::vector<Q::PlaceOption> options;
         options.reserve(m_places.size());
+        int kept = 0;
         for (const auto& p : m_places) {
+            // Never where a quest of the game that is not finished has something of its own, nor where a story has
+            // its master (the user: nothing ever contradicts the game's quests). ArcBridge's lock inside this one's is
+            // the allowed order.
+            if (ArcBridge::GetSingleton()->GameNeedsPlace(p.location) || ArcBridge::GetSingleton()->PlaceInStory(p.location)) {
+                ++kept;
+                continue;
+            }
             auto* location = RE::TESForm::LookupByID<RE::BGSLocation>(p.location);
             Q::PlaceOption o;
             o.location = p.location;
@@ -327,6 +335,7 @@ namespace IntelEngine {
             o.distance = (p.hasAt && giverAt) ? p.at.GetDistance(*giverAt) : 0.0f;
             options.push_back(o);
         }
+        if (kept) logger::info("Quests: {} place(s) left out: a quest of the game or a story needs them", kept);
         const std::uint32_t seed = Q::detail::Mix(giverId, static_cast<std::uint32_t>(now * 24.0f));
         const auto* place = Q::PickPlace(options, m_book, playerPlace, seed);
         if (!place) {
@@ -428,6 +437,7 @@ namespace IntelEngine {
         std::vector<Q::PlaceOption> options;
         for (const auto& p : m_places) {
             if (atPlace && p.location != atPlace) continue;   // met where they already are
+            if (ArcBridge::GetSingleton()->GameNeedsPlace(p.location) || ArcBridge::GetSingleton()->PlaceInStory(p.location)) continue;
             auto* location = RE::TESForm::LookupByID<RE::BGSLocation>(p.location);
             Q::PlaceOption o;
             o.location = p.location;

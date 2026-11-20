@@ -43,6 +43,14 @@ with tempfile.TemporaryDirectory(prefix="pe-prompts-") as directory:
             assert b"civil_war" in told, "the lore section tells of the game's own civil war"
             at = data.index(head) + len(head)
             data = data[:at] + told + data[data.index(after, at):]
+            # 4.0: a faction bound by its own story in the game (VanillaWar.h, BoundBy) has a section of its own, with
+            # or without Political Engine. The same section goes into the baseline.
+            bound_head, bound_after = b"## Factions bound by their own story", b"## World Knowledge"
+            begin = current.index(bound_head)
+            section = current[begin:current.index(bound_after, begin)]
+            assert b"`bound`" in section, "the section names the bound line"
+            at = data.index(bound_after)
+            data = data[:at] + section + data[at:]
         (work / f"baseline{i}.prompt").write_bytes(data)
     (work / "check.cpp").write_text(r'''
 #include <inja/inja.hpp>

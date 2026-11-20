@@ -234,6 +234,10 @@ namespace IntelEngine {
                         else if (key == "war_threshold") currentFaction.warThreshold = ParseInt(value, -50);
                         else if (key == "conflict_style") currentFaction.conflictStyle = value;
                         else if (key == "soldier_template") currentFaction.soldierTemplate = value;
+                        else if (key == "free_after") {
+                            currentFaction.freeAfter = ParseInlineArray(StripComment(lines[i].substr(lines[i].find(':')+1)));
+                            currentFaction.freeAfterSet = true;
+                        }
                         else if (key == "prison_location") currentFaction.prisonLocation = value;
                         else if (key == "prison_marker") ParseFloatArray3(StripComment(lines[i].substr(lines[i].find(':')+1)), currentFaction.prisonMarker);
                         break;

@@ -51,6 +51,28 @@ int main() {
         const auto others = BandFor(S, T, State::Undecided, -49, -100, 100);
         Require(others.lo == -100 && others.hi == 100, "others are not held");
 
+        // ---- every other faction's own story
+        {
+            Require(QuestlineOf("CompanionsFaction") == std::vector<std::string>{"C06"} && QuestlineOf("CWImperialFaction").empty() &&
+                    QuestlineOf("SomeModsFaction").empty(), "the game's own guilds have a questline; the rest have none");
+            const auto none = [](const std::string&) { return Quest::NotInGame; };
+            const auto open = [](const std::string&) { return Quest::Unfinished; };
+            const auto done = [](const std::string&) { return Quest::Finished; };
+            Require(BoundBy(QuestlineOf("CompanionsFaction"), open) == "C06", "bound while its questline is unfinished");
+            Require(BoundBy(QuestlineOf("CompanionsFaction"), done).empty(), "free once it is finished");
+            Require(BoundBy(QuestlineOf("CompanionsFaction"), none).empty(), "a quest the load order does not have binds nobody");
+            Require(BoundBy({}, open).empty(), "no questline: free");
+            const auto destroyed = [](const std::string& id) { return id == "DBDestroy" ? Quest::Finished : Quest::Unfinished; };
+            Require(BoundBy(QuestlineOf("DarkBrotherhoodFaction"), open) == "DB11", "either of two ends it: neither has");
+            Require(BoundBy(QuestlineOf("DarkBrotherhoodFaction"), destroyed).empty(), "either of two ends it: one has");
+            const auto second = [](const std::string& id) { return id == "A" ? Quest::Finished : Quest::Unfinished; };
+            Require(BoundBy({"A", "B"}, second) == "B", "every quest of the list must be finished");
+            Require(BoundFloor(-60, -100) == -55 && BoundFloor(-99, -100) == -94, "held short of war");
+            Require(HarmsTheBound("war_declaration") && HarmsTheBound("assassination_attempt") && !HarmsTheBound("trade_deal") &&
+                    !HarmsTheBound("brawl") && !HarmsTheBound("diplomatic_gift"), "what may not touch the bound, and what may");
+            Require(BoundTelling("Glory of the Dead").find("Glory of the Dead") != std::string::npos, "the dungeon master is told which story");
+        }
+
         // ---- what is told
         Require(Telling(State::Undecided, 0).find("undecided") != std::string::npos && Telling(State::Undecided, 0).find("{player}") == std::string::npos, "undecided, nobody's side");
         Require(Telling(State::Undecided, 2).find("{player} has taken the Stormcloaks' side") != std::string::npos, "a side taken in a war still fought");
