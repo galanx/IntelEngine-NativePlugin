@@ -455,6 +455,8 @@ namespace IntelEngine {
 
         /** fix 94: may this pair ever be at war? (war_allowed in factions.yaml; PE_ realms never). Takes configMutex_. */
         bool WarPossible(const FactionConfig& a, const FactionConfig& b) const;
+        /** WarPossible for a caller that already holds configMutex_. */
+        bool WarPossibleLocked(const FactionConfig& a, const FactionConfig& b) const;
 
         /** fix 94: declare the lowest-scored eligible Critical pair (Rule 3) in code. Returns war id or -1. */
         int EnforceWarRule(const PoliticsTickSnapshot& snap);

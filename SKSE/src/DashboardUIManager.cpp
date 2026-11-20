@@ -1061,7 +1061,9 @@ namespace IntelEngine {
                 [queue, form, id](const char* response, int success) mutable {
                     std::string_view raw = response ? response : "";
                     logger::info("[Dashboard] Generate form={} request={} raw={}", form, id, raw.substr(0, 600));
-                    if (!success) { queue({}, "Generation failed"); return; }
+                    // SkyrimNet's reason when it gives one ("Global AI disabled"), so the form doesn't just say it failed.
+                    if (!success) { queue({}, raw.empty() ? std::string("Generation failed")
+                                              : "Generation failed: " + std::string(raw.substr(0, 160))); return; }
                     try {
                         const auto first = raw.find('{'), last = raw.rfind('}');
                         auto fields = nlohmann::json::parse(first != raw.npos && last != raw.npos ? raw.substr(first, last - first + 1) : raw);
