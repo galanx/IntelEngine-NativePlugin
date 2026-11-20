@@ -147,12 +147,19 @@ void FinishPrismaDomReady(PrismaContext& context, PrismaView view, std::uint64_t
         requestGeneration = context.requestGeneration;
         magelight = context.magelight;
     }
-    static constexpr std::array<PRISMA_UI_API::JSListenerCallback, 17> callbacks = {
+    // One trampoline for each listener of the dashboard (DashboardUIManager's table). A listener beyond these would
+    // simply not be heard, so the table outgrowing them is said aloud.
+    static constexpr std::array<PRISMA_UI_API::JSListenerCallback, 20> callbacks = {
         &PrismaListener<0>, &PrismaListener<1>, &PrismaListener<2>, &PrismaListener<3>,
         &PrismaListener<4>, &PrismaListener<5>, &PrismaListener<6>, &PrismaListener<7>,
         &PrismaListener<8>, &PrismaListener<9>, &PrismaListener<10>, &PrismaListener<11>,
-        &PrismaListener<12>, &PrismaListener<13>, &PrismaListener<14>, &PrismaListener<15>, &PrismaListener<16>
+        &PrismaListener<12>, &PrismaListener<13>, &PrismaListener<14>, &PrismaListener<15>, &PrismaListener<16>,
+        &PrismaListener<17>, &PrismaListener<18>, &PrismaListener<19>
     };
+    if (listeners.size() > callbacks.size()) {
+        logger::error("[Dashboard] {} listeners, but PrismaUI is given {}: the last {} are not heard", listeners.size(), callbacks.size(),
+                      listeners.size() - callbacks.size());
+    }
     for (std::size_t i = 0; i < listeners.size() && i < callbacks.size(); ++i)
         api->RegisterJSListener(view, listeners[i].name, callbacks[i]);
     {

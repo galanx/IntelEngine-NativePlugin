@@ -115,6 +115,12 @@ namespace IntelEngine {
         /** Get a faction config by ID. Returns nullopt if not found. */
         std::optional<FactionConfig> GetFaction(const std::string& factionId) const;
 
+        /** Where the user's faction file is (for the faction editor). */
+        std::string ConfigPath() const { return GetConfigPath(); }
+        /** The faction file was written anew (the faction editor): read it in again, with what start-up does after
+         *  reading it (default relations for new pairs, scores, the state file). Any thread. */
+        bool ReloadConfig();
+
         /** Get all loaded factions (returns copy — safe across threads). */
         std::vector<FactionConfig> GetAllFactions() const {
             std::lock_guard<std::mutex> lock(configMutex_);

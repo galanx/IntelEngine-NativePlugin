@@ -46,6 +46,7 @@
 #include "DashboardConfig.h"
 #include "DashboardUIManager.h"
 #include "FactionPolitics.h"
+#include "FactionEditor.h"
 #include "PoliticalDB.h"
 #include "BattleManager.h"
 #include "ProcessUtils.h"
@@ -753,6 +754,7 @@ namespace IntelEngine::Papyrus {
             QuestNatives::Register(a_vm, questCount);
             ArcBridge::Register(a_vm, questCount);   // story arcs
             RumorBridge::Register(a_vm, questCount);   // the talk of the day
+            FactionEditor::Register(a_vm, questCount);  // the faction editor's test hook
             count += questCount;
         }
 
@@ -5108,7 +5110,7 @@ namespace IntelEngine::Papyrus {
     RE::TESFaction* GetSkyrimFaction(RE::StaticFunctionTag*, RE::BSFixedString factionId) {
         auto config = FactionPolitics::GetSingleton()->GetFaction(factionId.c_str());
         if (!config || config->skyrimFactionId.empty()) return nullptr;
-        return RE::TESForm::LookupByEditorID<RE::TESFaction>(config->skyrimFactionId);
+        return FactionEditor::GameFaction(config->skyrimFactionId);
     }
 
     RE::BSFixedString GetFactionRival(RE::StaticFunctionTag*, RE::BSFixedString factionId) {
@@ -5340,7 +5342,7 @@ namespace IntelEngine::Papyrus {
             if (factionConfig && !factionConfig->skyrimFactionId.empty()) {
                 auto* dataHandler = RE::TESDataHandler::GetSingleton();
                 if (dataHandler) {
-                    politicalFaction = RE::TESForm::LookupByEditorID<RE::TESFaction>(factionConfig->skyrimFactionId);
+                    politicalFaction = FactionEditor::GameFaction(factionConfig->skyrimFactionId);
                 }
             }
 
