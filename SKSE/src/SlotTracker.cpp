@@ -7,6 +7,7 @@
 
 #include "SlotTracker.h"
 #include "SkyrimNetAPI.h"
+#include "StringUtils.h"
 #include <chrono>
 #include <nlohmann/json.hpp>
 
@@ -262,7 +263,8 @@ namespace IntelEngine {
         logger::info("SlotTracker: All slots cleared ({} busy states released)", busyFormIds.size());
     }
 
-    std::string SlotTracker::BuildBusyReason(const std::string& taskType, const std::string& targetName) {
+    std::string SlotTracker::BuildBusyReason(const std::string& rawType, const std::string& targetName) {
+        const std::string taskType = StringUtils::ToLowerStd(rawType);  // pooled spelling may be "Travel"
         if (taskType == "travel") return "traveling to " + targetName;
         if (taskType == "fetch_npc") return "fetching " + targetName;
         if (taskType == "deliver_message") return "delivering a message to " + targetName;
