@@ -4953,7 +4953,7 @@ namespace IntelEngine::Papyrus {
     RE::BSFixedString GetSlotStatusNative(RE::StaticFunctionTag*,
                                            RE::BSFixedString taskType, int taskState,
                                            RE::BSFixedString targetName, RE::BSFixedString cellName) {
-        std::string type = taskType.c_str();
+        std::string type = StringUtils::ToLowerStd(taskType.c_str());  // pooled spelling may be "Travel"
         std::string target = targetName.c_str();
         std::string cell = cellName.c_str();
         std::string status;
@@ -5050,7 +5050,7 @@ namespace IntelEngine::Papyrus {
     }
 
     RE::BSFixedString BuildStuckNarration(RE::StaticFunctionTag*, RE::BSFixedString taskType) {
-        std::string type = taskType.c_str();
+        std::string type = StringUtils::ToLowerStd(taskType.c_str());  // pooled spelling may be "Fetch_npc"
         if (type == "fetch_npc") return RE::BSFixedString("tried to carry out the task but couldn't get going and gave up.");
         if (type == "deliver_message") return RE::BSFixedString("tried to deliver the message but was unable to reach the destination and gave up.");
         if (type == "search_for_actor") return RE::BSFixedString("searched but couldn't find who they were looking for and gave up.");
