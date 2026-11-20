@@ -241,7 +241,7 @@ namespace IntelEngine {
                     if (evt["data"].is_string()) {
                         eventData = evt["data"].get<std::string>();
                     } else {
-                        eventData = evt["data"].dump();
+                        eventData = evt["data"].dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
                     }
                 }
 
@@ -395,7 +395,7 @@ namespace IntelEngine {
                     if (evt["data"].is_string()) {
                         eventData = evt["data"].get<std::string>();
                     } else {
-                        eventData = evt["data"].dump();
+                        eventData = evt["data"].dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
                     }
                 }
 
@@ -526,7 +526,7 @@ namespace IntelEngine {
 
                 std::string eventData;
                 if (evt.contains("data")) {
-                    eventData = evt["data"].is_string() ? evt["data"].get<std::string>() : evt["data"].dump();
+                    eventData = evt["data"].is_string() ? evt["data"].get<std::string>() : evt["data"].dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
                 }
 
                 std::string text = Truncate(SanitizeForPrompt(
@@ -719,7 +719,28 @@ namespace IntelEngine {
         }
     }
 
+    namespace {
+        std::mutex g_metMutex;
+        std::unordered_set<RE::FormID> g_metPlayer;
+    }
+
+    bool MemoryDB::HasMetPlayer(RE::FormID formId) const {
+        std::scoped_lock lock(g_metMutex);
+        return g_metPlayer.contains(formId);
+    }
+
     std::vector<PlayerRelationship> MemoryDB::GetPlayerRelationshipData() {
+        auto rows = ReadPlayerRelationshipData();
+        {
+            std::scoped_lock lock(g_metMutex);
+            for (const auto& row : rows) {
+                if (row.formId && row.interactionCount > 0) g_metPlayer.insert(row.formId);
+            }
+        }
+        return rows;
+    }
+
+    std::vector<PlayerRelationship> MemoryDB::ReadPlayerRelationshipData() {
         if (!SkyrimNetAPI::GetPlayerContext) return {};
         try {
             auto jsonStr = SkyrimNetAPI::GetPlayerContext(0.0f);  // 0 = all time

@@ -13,11 +13,21 @@
 #include "FriendlyKey.h"
 #include "JsonKeys.h"
 #include "NPCIndex.h"
+#include "LivingWorldBridge.h"
+#include "ItemNames.h"
+#include "StoryDirector.h"
+#include "StorylineBridge.h"
+#include "QuestBridge.h"
+#include "ArcBridge.h"
+#include "RumorBridge.h"
+#include "PlaceTargets.h"
 #include "ItemIndex.h"
 #include <random>
 #include <algorithm>
 #include <chrono>
 #include <mutex>
+#include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include "LocationResolver.h"
 #include "StringUtils.h"
@@ -36,6 +46,7 @@
 #include "DashboardConfig.h"
 #include "DashboardUIManager.h"
 #include "FactionPolitics.h"
+#include "FactionEditor.h"
 #include "PoliticalDB.h"
 #include "BattleManager.h"
 #include "ProcessUtils.h"
@@ -69,6 +80,54 @@ namespace IntelEngine::Papyrus {
     void NotifySocialCooldown(RE::StaticFunctionTag*, RE::Actor*, float, float);
     void NotifyStoryTypePicked(RE::StaticFunctionTag*, RE::BSFixedString);
     void RecordStoryDispatch(RE::StaticFunctionTag*, RE::BSFixedString, RE::BSFixedString, RE::BSFixedString);
+    bool LivingWorldMayDeliver(RE::StaticFunctionTag*, std::int32_t, bool);
+    void SetLivingWorldSettings(RE::StaticFunctionTag*, std::int32_t, std::int32_t, std::int32_t, std::int32_t, float, float);
+    void LivingWorldMomentDispatched(RE::StaticFunctionTag*, RE::Actor*, RE::BSFixedString);
+    std::int32_t StorylineOpen(RE::StaticFunctionTag*, std::int32_t, std::int32_t, RE::Actor*, RE::Actor*, RE::BGSLocation*,
+                               RE::TESObjectREFR*, RE::TESForm*, float, std::int32_t, bool);
+    RE::BSFixedString StorylineRefusal(RE::StaticFunctionTag*, std::int32_t, std::int32_t, RE::Actor*);
+    bool StorylineEvent(RE::StaticFunctionTag*, std::int32_t, std::int32_t);
+    std::vector<std::int32_t> StorylineOpenIds(RE::StaticFunctionTag*);
+    std::vector<std::int32_t> StorylineOverdue(RE::StaticFunctionTag*);
+    std::int32_t StorylineField(RE::StaticFunctionTag*, std::int32_t, RE::BSFixedString);
+    RE::Actor* StorylineOwner(RE::StaticFunctionTag*, std::int32_t);
+    RE::Actor* StorylineOther(RE::StaticFunctionTag*, std::int32_t);
+    RE::BGSLocation* StorylinePlace(RE::StaticFunctionTag*, std::int32_t);
+    RE::TESObjectREFR* StorylineTarget(RE::StaticFunctionTag*, std::int32_t);
+    RE::TESForm* StorylineItem(RE::StaticFunctionTag*, std::int32_t);
+    RE::BSFixedString StorylineMemory(RE::StaticFunctionTag*, std::int32_t);
+    std::int32_t StorylineReward(RE::StaticFunctionTag*, std::int32_t, std::int32_t);
+    std::int32_t StorylineOpenIdFor(RE::StaticFunctionTag*, RE::Actor*);
+    bool StorylineCallOff(RE::StaticFunctionTag*, std::int32_t, RE::BSFixedString);
+    RE::BSFixedString StorylineAmend(RE::StaticFunctionTag*, std::int32_t, std::int32_t, RE::Actor*, RE::BGSLocation*,
+                                     RE::TESObjectREFR*, RE::TESForm*, std::int32_t, RE::BSFixedString);
+    RE::BSFixedString StorylineReply(RE::StaticFunctionTag*, std::int32_t, RE::Actor*, RE::BSFixedString, bool);
+    std::int32_t StorylineAboutId(RE::StaticFunctionTag*, RE::Actor*);
+    RE::BSFixedString StorylineOtherMemory(RE::StaticFunctionTag*, std::int32_t);
+    std::int32_t StorylineOfferedGold(RE::StaticFunctionTag*, std::int32_t, std::int32_t);
+    bool StorylineMayComeAlong(RE::StaticFunctionTag*, RE::Actor*);
+    bool StorylineSetAbout(RE::StaticFunctionTag*, std::int32_t, RE::BSFixedString);
+    RE::BSFixedString StorylineText(RE::StaticFunctionTag*, std::int32_t, RE::BSFixedString);
+    void LivingWorldTrack(RE::StaticFunctionTag*);
+    RE::BSFixedString LivingWorldDebugAdventure(RE::StaticFunctionTag*, RE::Actor*);
+    void LivingWorldMarkGreeted(RE::StaticFunctionTag*, RE::Actor*);
+    RE::Actor* LivingWorldTakeOrder(RE::StaticFunctionTag*);
+    std::vector<RE::Actor*> LivingWorldKeepers(RE::StaticFunctionTag*, std::int32_t);
+    std::int32_t LivingWorldOrderKind(RE::StaticFunctionTag*);
+    RE::TESObjectREFR* LivingWorldOrderTarget(RE::StaticFunctionTag*);
+    float LivingWorldOrderOffset(RE::StaticFunctionTag*, std::int32_t);
+    RE::Actor* LivingWorldOrderCompanion(RE::StaticFunctionTag*);
+    bool LivingWorldOrderProtect(RE::StaticFunctionTag*);
+    RE::BSFixedString LivingWorldOrderNarration(RE::StaticFunctionTag*);
+    void LivingWorldOrderDone(RE::StaticFunctionTag*, bool);
+    RE::BSFixedString LivingWorldDescribe(RE::StaticFunctionTag*, RE::Actor*);
+    bool LivingWorldMayMove(RE::StaticFunctionTag*, RE::Actor*, RE::BSFixedString);
+    bool LivingWorldQuestHolds(RE::StaticFunctionTag*, RE::Actor*);
+    void LivingWorldSceneBusy(RE::StaticFunctionTag*, bool);
+    RE::TESObjectREFR* ResolveSkyrimNetPlace(RE::StaticFunctionTag*, RE::Actor*, RE::BSFixedString);
+    float SkyrimNetPlaceOffset(RE::StaticFunctionTag*, RE::Actor*, std::int32_t);
+    RE::TESForm* ResolveItemByName(RE::StaticFunctionTag*, RE::BSFixedString);
+    RE::TESForm* FindItemNamedExactly(RE::StaticFunctionTag*, RE::Actor*, RE::BSFixedString);
     void MarkLastDispatchFailed(RE::StaticFunctionTag*, RE::BSFixedString);
     void WarmStoryTypeCountsFromCSV(RE::StaticFunctionTag*, RE::BSFixedString);
     void SetRecentGossipContext(RE::StaticFunctionTag*, RE::BSFixedString);
@@ -416,6 +475,52 @@ namespace IntelEngine::Papyrus {
         a_vm->RegisterFunction("NotifySocialCooldown", SCRIPT_NAME, NotifySocialCooldown); ++count;
         a_vm->RegisterFunction("NotifyStoryTypePicked", SCRIPT_NAME, NotifyStoryTypePicked); ++count;
         a_vm->RegisterFunction("RecordStoryDispatch", SCRIPT_NAME, RecordStoryDispatch); ++count;
+        a_vm->RegisterFunction("LivingWorldMayDeliver", SCRIPT_NAME, LivingWorldMayDeliver); ++count;
+        a_vm->RegisterFunction("SetLivingWorldSettings", SCRIPT_NAME, SetLivingWorldSettings); ++count;
+        a_vm->RegisterFunction("LivingWorldMomentDispatched", SCRIPT_NAME, LivingWorldMomentDispatched); ++count;
+        a_vm->RegisterFunction("StorylineOpen", SCRIPT_NAME, StorylineOpen); ++count;
+        a_vm->RegisterFunction("StorylineRefusal", SCRIPT_NAME, StorylineRefusal); ++count;
+        a_vm->RegisterFunction("StorylineEvent", SCRIPT_NAME, StorylineEvent); ++count;
+        a_vm->RegisterFunction("StorylineOpenIds", SCRIPT_NAME, StorylineOpenIds); ++count;
+        a_vm->RegisterFunction("StorylineOverdue", SCRIPT_NAME, StorylineOverdue); ++count;
+        a_vm->RegisterFunction("StorylineField", SCRIPT_NAME, StorylineField); ++count;
+        a_vm->RegisterFunction("StorylineOwner", SCRIPT_NAME, StorylineOwner); ++count;
+        a_vm->RegisterFunction("StorylineOther", SCRIPT_NAME, StorylineOther); ++count;
+        a_vm->RegisterFunction("StorylinePlace", SCRIPT_NAME, StorylinePlace); ++count;
+        a_vm->RegisterFunction("StorylineTarget", SCRIPT_NAME, StorylineTarget); ++count;
+        a_vm->RegisterFunction("StorylineItem", SCRIPT_NAME, StorylineItem); ++count;
+        a_vm->RegisterFunction("StorylineMemory", SCRIPT_NAME, StorylineMemory); ++count;
+        a_vm->RegisterFunction("StorylineReward", SCRIPT_NAME, StorylineReward); ++count;
+        a_vm->RegisterFunction("StorylineOpenIdFor", SCRIPT_NAME, StorylineOpenIdFor); ++count;
+        a_vm->RegisterFunction("StorylineCallOff", SCRIPT_NAME, StorylineCallOff); ++count;
+        a_vm->RegisterFunction("StorylineAmend", SCRIPT_NAME, StorylineAmend); ++count;
+        a_vm->RegisterFunction("StorylineReply", SCRIPT_NAME, StorylineReply); ++count;
+        a_vm->RegisterFunction("StorylineAboutId", SCRIPT_NAME, StorylineAboutId); ++count;
+        a_vm->RegisterFunction("StorylineOtherMemory", SCRIPT_NAME, StorylineOtherMemory); ++count;
+        a_vm->RegisterFunction("StorylineOfferedGold", SCRIPT_NAME, StorylineOfferedGold); ++count;
+        a_vm->RegisterFunction("StorylineMayComeAlong", SCRIPT_NAME, StorylineMayComeAlong); ++count;
+        a_vm->RegisterFunction("StorylineSetAbout", SCRIPT_NAME, StorylineSetAbout); ++count;
+        a_vm->RegisterFunction("StorylineText", SCRIPT_NAME, StorylineText); ++count;
+        a_vm->RegisterFunction("LivingWorldTrack", SCRIPT_NAME, LivingWorldTrack); ++count;
+        a_vm->RegisterFunction("LivingWorldDebugAdventure", SCRIPT_NAME, LivingWorldDebugAdventure); ++count;
+        a_vm->RegisterFunction("LivingWorldMarkGreeted", SCRIPT_NAME, LivingWorldMarkGreeted); ++count;
+        a_vm->RegisterFunction("LivingWorldTakeOrder", SCRIPT_NAME, LivingWorldTakeOrder); ++count;
+        a_vm->RegisterFunction("LivingWorldKeepers", SCRIPT_NAME, LivingWorldKeepers); ++count;
+        a_vm->RegisterFunction("LivingWorldOrderKind", SCRIPT_NAME, LivingWorldOrderKind); ++count;
+        a_vm->RegisterFunction("LivingWorldOrderTarget", SCRIPT_NAME, LivingWorldOrderTarget); ++count;
+        a_vm->RegisterFunction("LivingWorldOrderOffset", SCRIPT_NAME, LivingWorldOrderOffset); ++count;
+        a_vm->RegisterFunction("LivingWorldOrderCompanion", SCRIPT_NAME, LivingWorldOrderCompanion); ++count;
+        a_vm->RegisterFunction("LivingWorldOrderProtect", SCRIPT_NAME, LivingWorldOrderProtect); ++count;
+        a_vm->RegisterFunction("LivingWorldOrderNarration", SCRIPT_NAME, LivingWorldOrderNarration); ++count;
+        a_vm->RegisterFunction("LivingWorldOrderDone", SCRIPT_NAME, LivingWorldOrderDone); ++count;
+        a_vm->RegisterFunction("LivingWorldDescribe", SCRIPT_NAME, LivingWorldDescribe); ++count;
+        a_vm->RegisterFunction("LivingWorldMayMove", SCRIPT_NAME, LivingWorldMayMove); ++count;
+        a_vm->RegisterFunction("LivingWorldQuestHolds", SCRIPT_NAME, LivingWorldQuestHolds); ++count;
+        a_vm->RegisterFunction("LivingWorldSceneBusy", SCRIPT_NAME, LivingWorldSceneBusy); ++count;
+        a_vm->RegisterFunction("ResolveSkyrimNetPlace", SCRIPT_NAME, ResolveSkyrimNetPlace); ++count;
+        a_vm->RegisterFunction("SkyrimNetPlaceOffset", SCRIPT_NAME, SkyrimNetPlaceOffset); ++count;
+        a_vm->RegisterFunction("ResolveItemByName", SCRIPT_NAME, ResolveItemByName); ++count;
+        a_vm->RegisterFunction("FindItemNamedExactly", SCRIPT_NAME, FindItemNamedExactly); ++count;
         a_vm->RegisterFunction("MarkLastDispatchFailed", SCRIPT_NAME, MarkLastDispatchFailed); ++count;
         a_vm->RegisterFunction("WarmStoryTypeCountsFromCSV", SCRIPT_NAME, WarmStoryTypeCountsFromCSV); ++count;
         a_vm->RegisterFunction("SetRecentGossipContext", SCRIPT_NAME, SetRecentGossipContext); ++count;
@@ -642,6 +747,16 @@ namespace IntelEngine::Papyrus {
         a_vm->RegisterFunction("SetAutoBioCount", SCRIPT_NAME, SetAutoBioCount); ++count;
         a_vm->RegisterFunction("GetAutoBioCount", SCRIPT_NAME, GetAutoBioCount); ++count;
         a_vm->RegisterFunction("GetAutoBioCountsJson", SCRIPT_NAME, GetAutoBioCountsJson); ++count;
+
+        // 4.0 quests (QuestBridge)
+        {
+            int questCount = 0;
+            QuestNatives::Register(a_vm, questCount);
+            ArcBridge::Register(a_vm, questCount);   // story arcs
+            RumorBridge::Register(a_vm, questCount);   // the talk of the day
+            FactionEditor::Register(a_vm, questCount);  // the faction editor's test hook
+            count += questCount;
+        }
 
         logger::info("Registered {} Papyrus functions", count);
         return true;
@@ -1715,8 +1830,33 @@ namespace IntelEngine::Papyrus {
         return RE::BSFixedString(NPCIndex::GetNPCHoldName(actor).c_str());
     }
 
+    namespace {
+        // The game's own record of an acquaintance: the player has talked to them in its dialogue at least once, or
+        // their relationship rank with the player is anything but the neutral 0 (friend, ally, lover, rival, foe).
+        // SkyrimNet's history alone made old acquaintances strangers: anyone met in vanilla quests, or before
+        // SkyrimNet was installed ("I don't know you, stranger" from someone the player knows, the user, 2026-11-18).
+        bool GameSaysTheyMet(RE::Actor* actor, RE::PlayerCharacter* player) {
+            if (!actor || !player) return false;
+            RE::ConditionCheckParams params(actor, player);
+            RE::TESConditionItem talked;
+            talked.data.functionData.function = RE::FUNCTION_DATA::FunctionID::kGetTalkedToPC;
+            talked.data.comparisonValue.f = 1.0f;
+            talked.data.flags.opCode = RE::CONDITION_ITEM_DATA::OpCode::kEqualTo;
+            talked.data.object = RE::CONDITIONITEMOBJECT::kSelf;
+            if (talked(params)) return true;
+            RE::TESConditionItem rank;
+            rank.data.functionData.function = RE::FUNCTION_DATA::FunctionID::kGetRelationshipRank;
+            rank.data.functionData.params[0] = player;
+            rank.data.comparisonValue.f = 0.0f;
+            rank.data.flags.opCode = RE::CONDITION_ITEM_DATA::OpCode::kNotEqualTo;
+            rank.data.object = RE::CONDITIONITEMOBJECT::kSelf;
+            return rank(params);
+        }
+    }
+
     bool NPCKnowsPlayer(RE::StaticFunctionTag*, RE::Actor* actor) {
         if (!actor) return false;
+        if (GameSaysTheyMet(actor, RE::PlayerCharacter::GetSingleton())) return true;
         auto* memDB = MemoryDB::GetSingleton();
         if (!memDB) return false;
         RE::FormID formId = actor->GetFormID();
@@ -1884,7 +2024,7 @@ namespace IntelEngine::Papyrus {
                         } else if (value.is_null()) {
                             s_cachedFields[keyLower] = "";
                         } else {
-                            s_cachedFields[keyLower] = value.dump();
+                            s_cachedFields[keyLower] = value.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
                         }
                     }
 
@@ -2080,7 +2220,10 @@ namespace IntelEngine::Papyrus {
             }
             std::string questEditorId = qedit;
             logger::debug("[NPCTick] Phase A snapshot (gen={})", generation);
-            auto snap = NPCIndex::GetSingleton()->BuildNPCTickSnapshot(static_cast<int>(maxPairs));
+            // The snapshot is taken a slice per frame; the rest goes on, on the game's thread, once it is done.
+            NPCIndex::GetSingleton()->BuildNPCTickSnapshotSpread(static_cast<int>(maxPairs),
+                [generation, questEditorId = std::move(questEditorId), scriptName = std::move(scriptName),
+                 functionName = std::move(functionName)](NPCIndex::NPCTickSnapshot snap) mutable {
             const bool playerAtInn = FactionPolitics::IsPlayerAtInn();
             if (snap.candidates.empty()) {
                 NPCTickResult result;
@@ -2118,6 +2261,7 @@ namespace IntelEngine::Papyrus {
                     AsyncDispatch::ExecuteQuestFunctionString(questEditorId, scriptName, functionName, requestJson);
                 });
             });
+                });
         });
     }
 
@@ -2164,6 +2308,370 @@ namespace IntelEngine::Papyrus {
      * type and subType cleanly — single source of truth for sub-type
      * derivation lives in Papyrus, not duplicated against a cached JSON field.
      */
+    /** 4.0 living world: may a story moment land now (pacing, seams, bad moments)? */
+    bool LivingWorldMayDeliver(RE::StaticFunctionTag*, std::int32_t seam, bool urgent) {
+        return LivingWorldBridge::GetSingleton()->MayDeliver(seam, urgent);
+    }
+
+    /** 4.0 living world: the six settings, from the scripts on load and on every change. Out-of-range values clamp. */
+    void SetLivingWorldSettings(RE::StaticFunctionTag*, std::int32_t level, std::int32_t interruptions, std::int32_t questNpcs,
+                                std::int32_t pacing, float waitDays, float lifeDays) {
+        LivingWorld::Settings s;
+        s.level = static_cast<LivingWorld::WorldLevel>(std::clamp(level, 0, 2));
+        s.interruptions = static_cast<LivingWorld::Interruptions>(std::clamp(interruptions, 0, 2));
+        s.questNpcMoves = static_cast<LivingWorld::QuestNpcMoves>(std::clamp(questNpcs, 0, 2));
+        s.pacing = static_cast<LivingWorld::Pacing>(std::clamp(pacing, 0, 2));
+        s.waitOrderDays = std::clamp(waitDays, 1.0f, 120.0f);
+        s.lifeStartDays = std::clamp(lifeDays, 1.0f, 60.0f);
+        LivingWorldBridge::GetSingleton()->SetSettings(s);
+    }
+
+    // ---------------------------------------------------------------- 4.0 storylines (StorylineBridge)
+
+    std::int32_t StorylineOpen(RE::StaticFunctionTag*, std::int32_t kind, std::int32_t request, RE::Actor* owner,
+                               RE::Actor* other, RE::BGSLocation* place, RE::TESObjectREFR* target, RE::TESForm* item,
+                               float days, std::int32_t importance, bool urgent) {
+        if (!owner || kind < 1 || kind > 3 || request < 0 || request > static_cast<int>(Storylines::Request::Rescue)) return 0;
+        Storylines::Storyline s;
+        s.kind = static_cast<Storylines::Kind>(kind);
+        s.request = static_cast<Storylines::Request>(request);
+        s.owner = owner->GetFormID();
+        s.other = other ? other->GetFormID() : 0;
+        s.place = place ? place->GetFormID() : 0;
+        s.target = target ? target->GetFormID() : 0;
+        s.item = item ? item->GetFormID() : 0;
+        s.importance = static_cast<std::uint8_t>(std::clamp(importance, 1, 3));
+        auto* calendar = RE::Calendar::GetSingleton();
+        s.deadline = days > 0.0f && calendar ? calendar->GetCurrentGameTime() + days : 0.0f;
+        return static_cast<std::int32_t>(StorylineBridge::GetSingleton()->Open(s, urgent));
+    }
+
+    RE::BSFixedString StorylineRefusal(RE::StaticFunctionTag*, std::int32_t kind, std::int32_t request, RE::Actor* owner) {
+        if (kind < 1 || kind > 3 || request < 0 || request > static_cast<int>(Storylines::Request::Rescue)) return "unknown kind";
+        return StorylineBridge::GetSingleton()->Refusal(static_cast<Storylines::Kind>(kind),
+                                                         static_cast<Storylines::Request>(request),
+                                                         owner ? owner->GetFormID() : 0, true).c_str();  // asked in conversation
+    }
+
+    bool StorylineEvent(RE::StaticFunctionTag*, std::int32_t id, std::int32_t event) {
+        if (id <= 0 || event < 1 || event > static_cast<int>(Storylines::Event::FellThrough)) return false;
+        return StorylineBridge::GetSingleton()->Apply(static_cast<std::uint32_t>(id), static_cast<Storylines::Event>(event));
+    }
+
+    std::vector<std::int32_t> StorylineOpenIds(RE::StaticFunctionTag*) {
+        const auto ids = StorylineBridge::GetSingleton()->OpenIds();
+        return {ids.begin(), ids.end()};
+    }
+
+    std::vector<std::int32_t> StorylineOverdue(RE::StaticFunctionTag*) {
+        const auto ids = StorylineBridge::GetSingleton()->Overdue();
+        return {ids.begin(), ids.end()};
+    }
+
+    /** One number of a storyline: "slot" (255 none), "objective" (255 none), "stage", "kind", "request",
+     *  "importance". -1 when there is no such storyline. */
+    std::int32_t StorylineField(RE::StaticFunctionTag*, std::int32_t id, RE::BSFixedString field) {
+        const auto s = StorylineBridge::GetSingleton()->Get(static_cast<std::uint32_t>(id));
+        if (!s) return -1;
+        // Lower case first: the game's string pool hands back the first spelling it saw ("Stage", "Request").
+        const auto f = StringUtils::ToLowerStd(field.c_str() ? field.c_str() : "");
+        if (f == "slot") return s->slot;
+        if (f == "objective") return static_cast<std::int32_t>(Storylines::ObjectiveFor(*s));
+        if (f == "stage") return static_cast<std::int32_t>(s->stage);
+        if (f == "kind") return static_cast<std::int32_t>(s->kind);
+        if (f == "request") return static_cast<std::int32_t>(s->request);
+        if (f == "importance") return s->importance;
+        if (f == "comes") return (s->changes & Storylines::Changed::ComesAlong) ? 1 : 0;
+        if (f == "replied") return s->reply.empty() ? 0 : 1;
+        return -1;
+    }
+
+    RE::Actor* StorylineOwner(RE::StaticFunctionTag*, std::int32_t id) {
+        const auto s = StorylineBridge::GetSingleton()->Get(static_cast<std::uint32_t>(id));
+        return s ? RE::TESForm::LookupByID<RE::Actor>(s->owner) : nullptr;
+    }
+
+    RE::Actor* StorylineOther(RE::StaticFunctionTag*, std::int32_t id) {
+        const auto s = StorylineBridge::GetSingleton()->Get(static_cast<std::uint32_t>(id));
+        return s && s->other ? RE::TESForm::LookupByID<RE::Actor>(s->other) : nullptr;
+    }
+
+    RE::BGSLocation* StorylinePlace(RE::StaticFunctionTag*, std::int32_t id) {
+        const auto s = StorylineBridge::GetSingleton()->Get(static_cast<std::uint32_t>(id));
+        return s && s->place ? RE::TESForm::LookupByID<RE::BGSLocation>(s->place) : nullptr;
+    }
+
+    RE::TESObjectREFR* StorylineTarget(RE::StaticFunctionTag*, std::int32_t id) {
+        const auto s = StorylineBridge::GetSingleton()->Get(static_cast<std::uint32_t>(id));
+        return s && s->target ? RE::TESForm::LookupByID<RE::TESObjectREFR>(s->target) : nullptr;
+    }
+
+    RE::TESForm* StorylineItem(RE::StaticFunctionTag*, std::int32_t id) {
+        const auto s = StorylineBridge::GetSingleton()->Get(static_cast<std::uint32_t>(id));
+        return s && s->item ? RE::TESForm::LookupByID(s->item) : nullptr;
+    }
+
+    RE::BSFixedString StorylineMemory(RE::StaticFunctionTag*, std::int32_t id) {
+        return StorylineBridge::GetSingleton()->MemoryFor(static_cast<std::uint32_t>(id)).c_str();
+    }
+
+    std::int32_t StorylineReward(RE::StaticFunctionTag*, std::int32_t id, std::int32_t playerLevel) {
+        const auto s = StorylineBridge::GetSingleton()->Get(static_cast<std::uint32_t>(id));
+        return s ? Storylines::RewardGold(*s, playerLevel) : 0;
+    }
+
+    /** Every kind of item a person can carry, in this order; fn returns true to stop. */
+    template <class Fn>
+    static void ForEachItemForm(RE::TESDataHandler* data, Fn&& fn) {
+        bool stop = false;
+        const auto each = [&](auto& forms) {
+            for (auto* form : forms) {
+                if (stop) return;
+                if (!form) continue;
+                const char* name = form->GetName();
+                if (name && *name && fn(form, name)) stop = true;
+            }
+        };
+        each(data->GetFormArray<RE::AlchemyItem>());
+        each(data->GetFormArray<RE::IngredientItem>());
+        each(data->GetFormArray<RE::TESObjectMISC>());
+        each(data->GetFormArray<RE::TESObjectWEAP>());
+        each(data->GetFormArray<RE::TESObjectARMO>());
+        each(data->GetFormArray<RE::TESObjectBOOK>());
+        each(data->GetFormArray<RE::TESSoulGem>());
+        each(data->GetFormArray<RE::TESAmmo>());
+    }
+
+    // Every item name of the load order, read once at the main menu (kDataLoaded): finding the item someone named is
+    // then a few lookups. ResolveItemByName used to read every item's name up to three times, inside a frame of play,
+    // when someone asked the player to bring something; on a large load order that is tens of thousands of names.
+    // Items made during play (a brewed potion) are not in it; FindItemNamedExactly still matches them by name.
+    namespace {
+        struct ItemBook {
+            std::vector<RE::TESForm*> forms;                        // in the order ForEachItemForm lists them
+            std::unordered_map<std::string, std::uint32_t> exact;   // lower-case name -> the first item called so
+            std::unordered_map<RE::FormID, std::uint32_t> number;   // form -> its number
+            ItemNames::Book names;
+            bool built = false;
+        };
+        ItemBook g_itemBook;
+    }
+
+    void BuildItemBook() {
+        if (g_itemBook.built) return;
+        auto* data = RE::TESDataHandler::GetSingleton();
+        if (!data) return;
+        const auto started = std::chrono::steady_clock::now();
+        ForEachItemForm(data, [](RE::TESForm* form, const char* name) {
+            const auto index = static_cast<std::uint32_t>(g_itemBook.forms.size());
+            g_itemBook.forms.push_back(form);
+            g_itemBook.exact.try_emplace(StringUtils::ToLowerStd(name), index);
+            g_itemBook.number.try_emplace(form->GetFormID(), index);
+            g_itemBook.names.Add(name);
+            return false;
+        });
+        g_itemBook.built = true;
+        const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
+        logger::info("Item names: {} items read at the main menu ({:.0f} ms)", g_itemBook.forms.size(), ms);
+    }
+
+    /** The base form of the item someone named, searched in every kind of item a person can carry; the first
+     *  plugin's wins. In this order: exactly that name (any case); the same item under the modlist's own spelling
+     *  (sorting tags, words turned round, "Sweetroll" for "Sweet Roll": ItemNames::Same); else the plainest item whose
+     *  name ends in the said words ("Mead" is "Nord Mead": ItemNames::Loose). Never part of a word: a storyline must
+     *  never ask for "Vase" when "Ale" was said (the item index has no drinks, and its fuzzy match did exactly that). */
+    RE::TESForm* ResolveItemByName(RE::StaticFunctionTag*, RE::BSFixedString itemName) {
+        if (!itemName.c_str() || !*itemName.c_str()) return nullptr;
+        BuildItemBook();   // at the main menu already; only if that was missed
+        if (!g_itemBook.built) return nullptr;
+        const std::string said = itemName.c_str();
+        if (auto it = g_itemBook.exact.find(StringUtils::ToLowerStd(said)); it != g_itemBook.exact.end()) {
+            return g_itemBook.forms[it->second];
+        }
+        if (const auto i = g_itemBook.names.FindSame(said); i >= 0) {
+            auto* found = g_itemBook.forms[static_cast<std::size_t>(i)];
+            logger::info("ResolveItemByName: '{}' is called '{}' here", said, found->GetName());
+            return found;
+        }
+        if (const auto i = g_itemBook.names.FindLoose(said); i >= 0) {
+            auto* found = g_itemBook.forms[static_cast<std::size_t>(i)];
+            logger::info("ResolveItemByName: no item is called '{}'; taking '{}'", said, found->GetName());
+            return found;
+        }
+        return nullptr;
+    }
+
+    /** An item this actor carries that is the named item (exactly, or under another spelling of the same words:
+     *  ItemNames::Same), else None. Two mods' "Ale" both count, "[Drink] Ale" too; "Pale Ale" does not. Called every
+     *  two seconds while a request for an item is open: the items that are the same are looked up in the book once
+     *  per call instead of reading each carried item's name. */
+    RE::TESForm* FindItemNamedExactly(RE::StaticFunctionTag*, RE::Actor* actor, RE::BSFixedString itemName) {
+        if (!actor || !itemName.c_str() || !*itemName.c_str()) return nullptr;
+        BuildItemBook();
+        const std::string said = itemName.c_str();
+        const auto wanted = StringUtils::ToLowerStd(said);
+        std::unordered_set<RE::FormID> sameForms;
+        for (const auto index : g_itemBook.names.SameAll(said)) sameForms.insert(g_itemBook.forms[index]->GetFormID());
+        RE::TESForm* same = nullptr;
+        for (const auto& [item, data] : actor->GetInventory()) {
+            if (!item || data.first <= 0) continue;
+            const char* name = item->GetName();
+            if (!name || !*name) continue;
+            if (StringUtils::ToLowerStd(name) == wanted) return item;
+            if (same) continue;
+            const bool known = g_itemBook.number.contains(item->GetFormID());
+            if (known ? sameForms.contains(item->GetFormID()) : ItemNames::Same(said, name)) same = item;
+        }
+        return same;
+    }
+
+    std::int32_t StorylineOpenIdFor(RE::StaticFunctionTag*, RE::Actor* owner) {
+        return owner ? static_cast<std::int32_t>(StorylineBridge::GetSingleton()->OpenIdFor(owner->GetFormID())) : 0;
+    }
+
+    // 4.0 branches from conversation: the one who asked changes it, the one it is about answers.
+    bool StorylineCallOff(RE::StaticFunctionTag*, std::int32_t id, RE::BSFixedString note) {
+        if (id <= 0) return false;
+        return StorylineBridge::GetSingleton()->CallOff(static_cast<std::uint32_t>(id), note.c_str() ? note.c_str() : "");
+    }
+
+    /** change: 1 more time, 2 hurry, 3 raise the reward (gold = the sum named), 4 a new person, place or item.
+     *  Returns "" when changed, else why not. */
+    RE::BSFixedString StorylineAmend(RE::StaticFunctionTag*, std::int32_t id, std::int32_t change, RE::Actor* other,
+                                     RE::BGSLocation* place, RE::TESObjectREFR* target, RE::TESForm* item, std::int32_t gold,
+                                     RE::BSFixedString note) {
+        if (id <= 0 || change < 1 || change > static_cast<int>(Storylines::Change::NewSubject)) return "unknown change";
+        Storylines::Book::Amendment a;
+        a.change = static_cast<Storylines::Change>(change);
+        a.other = other ? other->GetFormID() : 0;
+        a.place = place ? place->GetFormID() : 0;
+        a.target = target ? target->GetFormID() : 0;
+        a.item = item ? item->GetFormID() : 0;
+        a.gold = gold;
+        a.note = note.c_str() ? note.c_str() : "";
+        return StorylineBridge::GetSingleton()->Amend(static_cast<std::uint32_t>(id), a).c_str();
+    }
+
+    RE::BSFixedString StorylineReply(RE::StaticFunctionTag*, std::int32_t id, RE::Actor* speaker, RE::BSFixedString reply,
+                                     bool comesAlong) {
+        if (id <= 0 || !speaker) return "nobody";
+        return StorylineBridge::GetSingleton()
+            ->Reply(static_cast<std::uint32_t>(id), speaker->GetFormID(), reply.c_str() ? reply.c_str() : "", comesAlong)
+            .c_str();
+    }
+
+    std::int32_t StorylineAboutId(RE::StaticFunctionTag*, RE::Actor* person) {
+        return person ? static_cast<std::int32_t>(StorylineBridge::GetSingleton()->AboutId(person->GetFormID())) : 0;
+    }
+
+    RE::BSFixedString StorylineOtherMemory(RE::StaticFunctionTag*, std::int32_t id) {
+        return StorylineBridge::GetSingleton()->OtherMemoryFor(static_cast<std::uint32_t>(id)).c_str();
+    }
+
+    std::int32_t StorylineOfferedGold(RE::StaticFunctionTag*, std::int32_t id, std::int32_t playerLevel) {
+        return StorylineBridge::GetSingleton()->OfferedGold(static_cast<std::uint32_t>(id), playerLevel);
+    }
+
+    /** Whether a running quest lets this person go along with the player to whoever asked about them (the setting
+     *  "NPCs of running quests may move", as for a quest moment); the storyline's own objective does not count. */
+    bool StorylineMayComeAlong(RE::StaticFunctionTag*, RE::Actor* person) {
+        return LivingWorldBridge::GetSingleton()->MayMoveForStory(person, "quest", true);
+    }
+
+    bool StorylineSetAbout(RE::StaticFunctionTag*, std::int32_t id, RE::BSFixedString text) {
+        if (id <= 0 || !text.c_str()) return false;
+        return StorylineBridge::GetSingleton()->SetAbout(static_cast<std::uint32_t>(id), text.c_str());
+    }
+
+    RE::BSFixedString StorylineText(RE::StaticFunctionTag*, std::int32_t id, RE::BSFixedString field) {
+        const auto s = StorylineBridge::GetSingleton()->Get(static_cast<std::uint32_t>(id));
+        if (!s) return "";
+        // Lower case first: the game's string pool hands back the first spelling it saw ("Reply", "Note").
+        const auto f = StringUtils::ToLowerStd(field.c_str() ? field.c_str() : "");
+        if (f == "about") return s->about.c_str();
+        if (f == "reply") return s->reply.c_str();
+        if (f == "note") return s->note.c_str();
+        return "";
+    }
+
+    // ---------------------------------------------------------------- 4.0 lives of followers left behind
+
+    void LivingWorldTrack(RE::StaticFunctionTag*) { LivingWorldBridge::GetSingleton()->Track(); }
+    void LivingWorldMarkGreeted(RE::StaticFunctionTag*, RE::Actor* actor) {
+        if (actor) LivingWorldBridge::GetSingleton()->MarkGreeted(actor->GetFormID());
+    }
+    RE::BSFixedString LivingWorldDebugAdventure(RE::StaticFunctionTag*, RE::Actor* actor) {
+        return RE::BSFixedString(LivingWorldBridge::GetSingleton()->DebugAdventure(actor).c_str());
+    }
+    RE::Actor* LivingWorldTakeOrder(RE::StaticFunctionTag*) { return LivingWorldBridge::GetSingleton()->TakeOrder(); }
+    std::vector<RE::Actor*> LivingWorldKeepers(RE::StaticFunctionTag*, std::int32_t limit) {
+        return LivingWorldBridge::GetSingleton()->Keepers(static_cast<std::size_t>(std::clamp(limit, 0, 32)));
+    }
+    std::int32_t LivingWorldOrderKind(RE::StaticFunctionTag*) {
+        return static_cast<std::int32_t>(LivingWorldBridge::GetSingleton()->CurrentOrderKind());
+    }
+    RE::TESObjectREFR* LivingWorldOrderTarget(RE::StaticFunctionTag*) { return LivingWorldBridge::GetSingleton()->OrderTarget(); }
+    float LivingWorldOrderOffset(RE::StaticFunctionTag*, std::int32_t axis) {
+        return LivingWorldBridge::GetSingleton()->OrderOffset(axis);
+    }
+    RE::Actor* LivingWorldOrderCompanion(RE::StaticFunctionTag*) { return LivingWorldBridge::GetSingleton()->OrderCompanion(); }
+    bool LivingWorldOrderProtect(RE::StaticFunctionTag*) { return LivingWorldBridge::GetSingleton()->OrderProtect(); }
+    RE::BSFixedString LivingWorldOrderNarration(RE::StaticFunctionTag*) {
+        return LivingWorldBridge::GetSingleton()->OrderNarration().c_str();
+    }
+    void LivingWorldOrderDone(RE::StaticFunctionTag*, bool ok) { LivingWorldBridge::GetSingleton()->OrderDone(ok); }
+    RE::BSFixedString LivingWorldDescribe(RE::StaticFunctionTag*, RE::Actor* actor) {
+        return LivingWorldBridge::GetSingleton()->Describe(actor).c_str();
+    }
+    // ---------------------------------------------------------------- 4.0 places named in SkyrimNet
+
+    namespace {
+        std::mutex g_placeOffsetsMutex;
+        std::unordered_map<RE::FormID, RE::NiPoint3> g_placeOffsets;  // per NPC: from the anchor to the place
+    }
+
+    RE::TESObjectREFR* ResolveSkyrimNetPlace(RE::StaticFunctionTag*, RE::Actor* npc, RE::BSFixedString destination) {
+        if (!npc) return nullptr;
+        const auto started = std::chrono::steady_clock::now();
+        const auto target = PlaceTargets::Resolve(npc, destination.c_str() ? destination.c_str() : "");
+        // Every trip asks SkyrimNet's places first, inside a frame of play: how long that takes, in the log.
+        const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
+        logger::info("ResolveSkyrimNetPlace('{}'): {} ({:.2f} ms of the game's frame)", destination.c_str() ? destination.c_str() : "",
+                     target ? target->name : std::string("no such place"), ms);
+        if (!target) return nullptr;
+        LocationResolver::GetSingleton()->ClearLastResolvedHome();
+        std::scoped_lock lock(g_placeOffsetsMutex);
+        g_placeOffsets[npc->GetFormID()] = target->offset;
+        return target->anchor;
+    }
+
+    float SkyrimNetPlaceOffset(RE::StaticFunctionTag*, RE::Actor* npc, std::int32_t axis) {
+        if (!npc) return 0.0f;
+        std::scoped_lock lock(g_placeOffsetsMutex);
+        const auto it = g_placeOffsets.find(npc->GetFormID());
+        if (it == g_placeOffsets.end()) return 0.0f;
+        return axis == 0 ? it->second.x : axis == 1 ? it->second.y : axis == 2 ? it->second.z : 0.0f;
+    }
+
+    bool LivingWorldMayMove(RE::StaticFunctionTag*, RE::Actor* npc, RE::BSFixedString storyType) {
+        return LivingWorldBridge::GetSingleton()->MayMoveForStory(npc, storyType.c_str() ? storyType.c_str() : "");
+    }
+
+    void LivingWorldSceneBusy(RE::StaticFunctionTag*, bool busy) { LivingWorldBridge::SetSceneBusy(busy); }
+
+    // Held by the game right now, whatever the settings say: a scene they are part of, or a quest of the player's whose
+    // shown objective points at them. (Neloth was walked off by a travel task in the middle of his own quest.)
+    bool LivingWorldQuestHolds(RE::StaticFunctionTag*, RE::Actor* npc) {
+        if (!npc) return false;
+        if (npc->GetCurrentScene()) return true;
+        return LivingWorldBridge::QuestTie(npc, false) == 2;
+    }
+
+    /** 4.0 living world: a story moment really started with this NPC (the success path only, never a rejection). */
+    void LivingWorldMomentDispatched(RE::StaticFunctionTag*, RE::Actor* npc, RE::BSFixedString storyType) {
+        LivingWorldBridge::GetSingleton()->OnStoryDispatched(npc ? npc->GetFormID() : 0, storyType.c_str() ? storyType.c_str() : "");
+    }
+
     void RecordStoryDispatch(RE::StaticFunctionTag*,
                               RE::BSFixedString storyType,
                               RE::BSFixedString npcName,
@@ -2382,7 +2890,9 @@ namespace IntelEngine::Papyrus {
         const std::string& dmContext,
         const std::unordered_set<std::string>& excludedSet,
         bool playerAtInn,
-        float currentGameTime) {
+        float currentGameTime,
+        const std::string& decidedNpc = "",
+        const std::string& decidedType = "") {
 
         static const char* allTypes[] = {
             "seek_player", "informant", "road_encounter",
@@ -2404,6 +2914,9 @@ namespace IntelEngine::Papyrus {
 
         std::string json = "{";
         json += "\"candidatePool\":\"" + dmContext + "\",";
+        // 4.0 staged director: who acts and the kind of moment, already decided ("" = the dungeon master chooses)
+        json += "\"decided_npc\":\"" + MemoryDB::EscapeJsonString(decidedNpc) + "\",";
+        json += "\"decided_type\":\"" + MemoryDB::EscapeJsonString(decidedType) + "\",";
 
         // Per-type show flags: "1" if allowed, "0" if excluded.
         // MUST always include ALL keys with non-empty values. Inja's variable
@@ -2565,7 +3078,10 @@ namespace IntelEngine::Papyrus {
                            questEditorId = std::move(questEditorId),
                            scriptName = std::move(scriptName),
                            functionName = std::move(functionName)]() mutable {
-                auto snap = NPCIndex::GetSingleton()->BuildStoryDMTickSnapshot(maxC, absenceDays, prefetch);
+              // 4.0: the snapshot is taken a slice per frame; the rest goes on, on the game's thread, once it is done.
+              NPCIndex::GetSingleton()->BuildStoryDMTickSnapshotSpread(maxC, absenceDays, std::move(prefetch),
+                  [excludedSet = std::move(excludedSet), questEditorId = std::move(questEditorId),
+                   scriptName = std::move(scriptName), functionName = std::move(functionName)](NPCIndex::StoryDMTickSnapshot snap) mutable {
                 bool playerAtInn = FactionPolitics::IsPlayerAtInn();
                 float currentGameTime = snap.currentGameTime;
 
@@ -2580,6 +3096,26 @@ namespace IntelEngine::Papyrus {
                                        questEditorId = std::move(questEditorId),
                                        scriptName = std::move(scriptName),
                                        functionName = std::move(functionName)]() mutable {
+                    // 4.0: at the living-world levels each candidate is judged on their own first (StoryDirector);
+                    // the dungeon master then writes the one moment chosen. Classic keeps the single prompt below.
+                    if (StoryDirector::ShouldRun()) {
+                        auto build = [playerAtInn, currentGameTime](const std::string& md, const std::unordered_set<std::string>& ex,
+                                                                    const std::string& npc, const std::string& type) {
+                            return BuildStoryDMRequestJsonCore(md, ex, playerAtInn, currentGameTime, npc, type);
+                        };
+                        auto deliver = [questEditorId, scriptName, functionName](std::string requestJson) {
+                            auto* t2 = SKSE::GetTaskInterface();
+                            if (!t2) {
+                                logger::error("Staged director: TaskInterface unavailable, callback dropped");
+                                return;
+                            }
+                            t2->AddTask([questEditorId, scriptName, functionName, requestJson = std::move(requestJson)]() {
+                                AsyncDispatch::ExecuteQuestFunctionString(questEditorId, scriptName, functionName, requestJson);
+                            });
+                        };
+                        StoryDirector::Run(std::move(snap), std::move(excludedSet), std::move(build), std::move(deliver));
+                        return;
+                    }
                     std::string md = NPCIndex::GetSingleton()->BuildDungeonMasterContextFromSnapshot(snap, excludedSet);
                     std::string requestJson;
                     if (!md.empty()) {
@@ -2598,6 +3134,7 @@ namespace IntelEngine::Papyrus {
                         AsyncDispatch::ExecuteQuestFunctionString(questEditorId, scriptName, functionName, requestJson);
                     });
                 });
+              });
             });
         });
     }
@@ -2997,7 +3534,7 @@ namespace IntelEngine::Papyrus {
         for (const auto& [formId, count] : counts) {
             j[std::to_string(formId)] = count;
         }
-        return j.dump();
+        return j.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
     }
 
     // ==========================================================================
@@ -3991,7 +4528,15 @@ namespace IntelEngine::Papyrus {
                          factionA.c_str());
             return db->GetRelation(factionA.c_str(), factionB.c_str());
         }
-        return db->AdjustRelation(factionA.c_str(), factionB.c_str(), delta);
+        // Ids as factions.yaml writes them, whatever case they came in; an id that is no faction changes nothing (it
+        // used to leave an orphan row behind).
+        const auto a = FactionPolitics::GetSingleton()->CanonicalId(factionA.c_str());
+        const auto b = FactionPolitics::GetSingleton()->CanonicalId(factionB.c_str());
+        if (a.empty() || b.empty()) {
+            logger::warn("FactionPolitics: relation adjustment for an unknown faction: '{}' / '{}'", factionA.c_str(), factionB.c_str());
+            return 0;
+        }
+        return db->AdjustRelation(a, b, delta);
     }
 
     int GetPlayerFactionStanding(RE::StaticFunctionTag*, RE::BSFixedString factionId) {
@@ -4004,7 +4549,12 @@ namespace IntelEngine::Papyrus {
         auto* db = PoliticalDB::GetSingleton();
         if (!db->IsReady()) return 0;
         float gameTime = RE::Calendar::GetSingleton() ? RE::Calendar::GetSingleton()->GetHoursPassed() : 0.0f;
-        return db->AdjustPlayerStanding(factionId.c_str(), delta, gameTime);
+        const auto id = FactionPolitics::GetSingleton()->CanonicalId(factionId.c_str());
+        if (id.empty()) {
+            logger::warn("FactionPolitics: standing adjustment for an unknown faction: '{}'", factionId.c_str());
+            return 0;
+        }
+        return db->AdjustPlayerStanding(id, delta, gameTime);
     }
 
     bool IsFactionAtWar(RE::StaticFunctionTag*, RE::BSFixedString factionA, RE::BSFixedString factionB) {
@@ -4070,6 +4620,7 @@ namespace IntelEngine::Papyrus {
 
         // Phase A — main thread.
         auto snap = politics->BuildPoliticsTickSnapshot(currentGameTime);
+        politics->HoldToTheGamesWar(snap);   // first: what the game's own civil war allows
         politics->EnforceWarRule(snap);  // fix 94: before the context build so this tick's DM sees the new war
 
         AsyncDispatch::Submit([snap = std::move(snap),
@@ -4103,7 +4654,7 @@ namespace IntelEngine::Papyrus {
     }
 
     RE::BSFixedString GetPoliticalEventsAfter(RE::StaticFunctionTag*, int afterId, int limit) {
-        return RE::BSFixedString(PoliticalDB::GetSingleton()->GetPoliticalEventsAfter(afterId, limit).dump());
+        return RE::BSFixedString(PoliticalDB::GetSingleton()->GetPoliticalEventsAfter(afterId, limit).dump(-1, ' ', false, nlohmann::json::error_handler_t::replace));
     }
 
     RE::BSFixedString GetFactionsJson(RE::StaticFunctionTag*) {
@@ -4231,6 +4782,13 @@ namespace IntelEngine::Papyrus {
 
         std::string targetFacId(targetFaction.c_str());
         std::string attackerFacId(attackerFaction.c_str());
+
+        // Never in the player's own home: a leader who happens to stand there (a spouse, a guest) drew the assassin
+        // into the house ("random assassins spawn in player homes").
+        if (CellAnalyzer::GetSingleton()->IsPlayerInOwnHome()) {
+            logger::info("ExecuteAssassination: not in the player's own home");
+            return nullptr;
+        }
 
         // 1. Find leader in player's cell/proximity
         auto leaders = GetFactionLeaderActors(nullptr, targetFaction);
@@ -4552,7 +5110,7 @@ namespace IntelEngine::Papyrus {
     RE::TESFaction* GetSkyrimFaction(RE::StaticFunctionTag*, RE::BSFixedString factionId) {
         auto config = FactionPolitics::GetSingleton()->GetFaction(factionId.c_str());
         if (!config || config->skyrimFactionId.empty()) return nullptr;
-        return RE::TESForm::LookupByEditorID<RE::TESFaction>(config->skyrimFactionId);
+        return FactionEditor::GameFaction(config->skyrimFactionId);
     }
 
     RE::BSFixedString GetFactionRival(RE::StaticFunctionTag*, RE::BSFixedString factionId) {
@@ -4599,6 +5157,11 @@ namespace IntelEngine::Papyrus {
             if (actor->IsInCombat()) return false;
             // Only humanoid NPCs — skip creatures, animals, daedra (e.g., Volkihar death hounds)
             if (kwActorTypeNPC && !actor->HasKeyword(kwActorTypeNPC)) return false;
+            // A person of a playable people, no child, nobody made at run time, and no enemy of the player: a mod's
+            // creature that carries the "NPC" keyword and its faction was sent as a faction's messenger, and
+            // everything in sight attacked it ("a little banekamp creature").
+            if (actor->IsDynamicForm() || actor->IsChild() || actor->IsHostileToActor(player)) return false;
+            if (auto* race = actor->GetRace(); !race || !race->GetPlayable() || race->IsChildRace()) return false;
 
             // Skip high-status NPCs (Jarls, court wizards, stewards, housecarls)
             if (NPCIndex::IsHighStatus(actor)) return false;
@@ -4766,15 +5329,20 @@ namespace IntelEngine::Papyrus {
         // attack everyone on sight, then add them to the political faction they fight for.
         // For faction templates: soldiers already belong to the right faction.
         // Battle factions (Intel_BattleSideA/B) are assigned later by Papyrus.
+        // Every soldier, from a fallback template or a faction's own, belongs to the side they were called up for
+        // and to nothing else. Only fallback bandits used to be stripped: soldiers from a real template kept its
+        // factions, and where that template is the game's bandits, thieves or Forsworn (several of the default
+        // factions) they attacked the player on sight, a player who had sided with nobody ("random people spawn and
+        // attack me", gone with politics switched off). A hold's guards kept their crime faction, too.
         bool isFallbackTemplate = templateId.empty() || !LookupLeveledActor(templateId.c_str());
-        if (isFallbackTemplate) {
+        {
             // Look up the political faction's Skyrim engine faction (e.g., CWSonsFaction)
             RE::TESFaction* politicalFaction = nullptr;
             auto factionConfig = FactionPolitics::GetSingleton()->GetFaction(factionId);
             if (factionConfig && !factionConfig->skyrimFactionId.empty()) {
                 auto* dataHandler = RE::TESDataHandler::GetSingleton();
                 if (dataHandler) {
-                    politicalFaction = RE::TESForm::LookupByEditorID<RE::TESFaction>(factionConfig->skyrimFactionId);
+                    politicalFaction = FactionEditor::GameFaction(factionConfig->skyrimFactionId);
                 }
             }
 
@@ -4787,7 +5355,7 @@ namespace IntelEngine::Papyrus {
                     return false;
                 });
                 for (auto* fac : toRemove) {
-                    actor->AddToFaction(fac, -1);
+                    if (fac != politicalFaction) actor->AddToFaction(fac, -1);
                 }
                 // Add to the political faction they fight for
                 if (politicalFaction) {
@@ -5377,7 +5945,7 @@ namespace IntelEngine::Papyrus {
                 if (arr[index].is_string()) {
                     return RE::BSFixedString(arr[index].get<std::string>());
                 }
-                return RE::BSFixedString(arr[index].dump());
+                return RE::BSFixedString(arr[index].dump(-1, ' ', false, nlohmann::json::error_handler_t::replace));
             }
         } catch (...) {}
         return RE::BSFixedString("");

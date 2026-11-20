@@ -27,6 +27,9 @@ namespace IntelEngine::Papyrus {
      */
     RE::TESBoundObject* LookupLeveledActor(const char* editorID);
     nlohmann::json PollAndSyncPE();
+    /** kDataLoaded: every item name of the load order, read once at the main menu (ResolveItemByName and
+     *  FindItemNamedExactly look items up in it instead of reading every name inside a frame of play). */
+    void BuildItemBook();
 
     // ==========================================================================
     // NPC Search Functions

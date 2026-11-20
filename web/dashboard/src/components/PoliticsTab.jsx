@@ -1,6 +1,7 @@
 import withSections from './Section';
 import React from 'react';
 import GameTime from './GameTime';
+import FactionEditor from './FactionEditor';
 
 const STATUS_COLORS = {
   Alliance: 'text-emerald-400',
@@ -36,7 +37,8 @@ function MoraleBar({ value, label }) {
   );
 }
 
-function PoliticsTab({ politics, calendar, sendAction }) {
+function PoliticsTab({ politics, calendar, sendAction, knownNpcs = [] }) {
+  const [editing, setEditing] = React.useState(false);
   if (!politics || !politics.enabled) {
     return (
       <div className="p-3">
@@ -233,6 +235,14 @@ function PoliticsTab({ politics, calendar, sendAction }) {
             </div>
           ))}
         </div>
+      </section>
+
+      {/* The faction editor: asked for, not loaded with the tab (it reads the whole load order once) */}
+      <section style={editing ? { gridColumn: '1 / -1' } : undefined}>
+        <h2 className="section-header mb-2">Edit factions</h2>
+        {editing
+          ? <FactionEditor sendAction={sendAction} knownNpcs={knownNpcs} />
+          : <button type="button" className="btn-icon" onClick={() => setEditing(true)}>Add or change factions{'\u2026'}</button>}
       </section>
 
       {/* Recent Events (non-war) */}

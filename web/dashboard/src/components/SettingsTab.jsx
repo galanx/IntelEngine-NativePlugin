@@ -5,6 +5,31 @@ import Select from './Select';
 // manifest.yaml); SKSE/tests/RunSettingNamesCheck.py compares them. A unit that page carries in brackets stands
 // beside the value here.
 const NPC_POLICIES = ['Allow all NPCs', 'Block civilians only', 'Allow followers only', 'Block all NPCs'];
+// 4.0 living world: the choices as on SkyrimNet's settings page.
+const LW_LEVELS = ['Classic', 'Rumors', 'Lives'];
+const LW_LEVEL_HINTS = [
+  'As before 4.0.',
+  'The world moves on while you are away and you hear about it, but followers you left wait where you left them.',
+  'Followers you left behind live lives of their own (work at an inn, an adventure, a trip) and you can come upon them later; people close to you miss you while you are away.',
+];
+const LW_INTERRUPTIONS = ['Never', 'Only when urgent', 'Realistic'];
+const LW_INTERRUPTION_HINTS = [
+  'Nobody turns up during a fight, a conversation, a scene or a menu.',
+  'Only something urgent may interrupt a fight, a conversation, a scene or a menu.',
+  'Now and then someone turns up at a bad moment, as in real life.',
+];
+const LW_QUEST_NPCS = ['Never', 'For important reasons', 'Freely'];
+const LW_QUEST_NPC_HINTS = [
+  'NPCs who take part in a running quest stay where the quest needs them.',
+  'They may travel or move for an important story. The target of an objective you have open never moves.',
+  'They may travel or move for any story. The target of an objective you have open never moves.',
+];
+const LW_PACING = ['Calm', 'Normal', 'Lively'];
+const LW_PACING_HINTS = [
+  'About one notable moment every two game days.',
+  'About one notable moment every game day.',
+  'About two notable moments every game day.',
+];
 const DANGER_HINTS = [
   'No filtering. All NPC types can visit you in dungeons and caves. Informants always turn back.',
   'Farmers, merchants and civilians stay away. Warriors and mages can still visit. Informants always turn back.',
@@ -85,7 +110,7 @@ const MOD_FLAGS = [
 
 function SettingsTab({ config, storyTypes, onSettingChange, pluginConfig, onPluginConfigChange }) {
   // Track which accordion sections are open (by key)
-  const [openSections, setOpenSections] = useState({ storyEngine: true, tasks: true });
+  const [openSections, setOpenSections] = useState({ storyEngine: true, livingWorld: true, tasks: true });
 
   const toggle = useCallback((key) => {
     setOpenSections(prev => ({ ...prev, [key]: !prev[key] }));
@@ -140,6 +165,54 @@ function SettingsTab({ config, storyTypes, onSettingChange, pluginConfig, onPlug
           value={config.allowStuckTeleport}
           onChange={v => onSettingChange('allowStuckTeleport', v)}
           hint="A story NPC who cannot get on, or has been on the way for longer than Longest journey, is placed further along, out of your sight. When disabled, they give up instead."
+        />
+      </Accordion>
+
+      {/* Living world (4.0) */}
+      <Accordion title="Living world" isOpen={openSections.livingWorld} onToggle={() => toggle('livingWorld')}>
+        <PolicyRow
+          label="How alive the world is"
+          value={config.livingWorldLevel ?? 2}
+          options={LW_LEVELS}
+          hints={LW_LEVEL_HINTS}
+          onChange={v => onSettingChange('livingWorldLevel', v)}
+        />
+        <PolicyRow
+          label="Interruptions at bad moments"
+          value={config.livingWorldInterruptions ?? 1}
+          options={LW_INTERRUPTIONS}
+          hints={LW_INTERRUPTION_HINTS}
+          onChange={v => onSettingChange('livingWorldInterruptions', v)}
+        />
+        <PolicyRow
+          label="NPCs of running quests may move"
+          value={config.livingWorldQuestNpcs ?? 1}
+          options={LW_QUEST_NPCS}
+          hints={LW_QUEST_NPC_HINTS}
+          onChange={v => onSettingChange('livingWorldQuestNpcs', v)}
+        />
+        <PolicyRow
+          label="How often something happens"
+          value={config.livingWorldPacing ?? 1}
+          options={LW_PACING}
+          hints={LW_PACING_HINTS}
+          onChange={v => onSettingChange('livingWorldPacing', v)}
+        />
+        <SliderRow
+          label="A follower told to wait waits"
+          value={config.livingWorldWaitDays ?? 30}
+          min={1} max={120} step={1}
+          unit="days"
+          onCommit={v => onSettingChange('livingWorldWaitDays', v)}
+          hint="How long after you told a follower to wait they start a life of their own, once their follower mod lets them go. While it still holds them, they keep waiting."
+        />
+        <SliderRow
+          label="A follower left behind moves on after"
+          value={config.livingWorldLifeDays ?? 7}
+          min={1} max={60} step={1}
+          unit="days"
+          onCommit={v => onSettingChange('livingWorldLifeDays', v)}
+          hint="How long a follower you dismissed stays where you left them before starting a life of their own."
         />
       </Accordion>
 

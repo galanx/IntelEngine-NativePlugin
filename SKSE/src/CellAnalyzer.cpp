@@ -500,7 +500,7 @@ namespace IntelEngine {
             // TODO: Scan for notable furniture (bars, fireplaces, beds)
             result["notableAreas"] = areasJson;
 
-            auto jsonStr = result.dump();
+            auto jsonStr = result.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
             logger::debug("GetSpatialInfoJSON: Returning {} bytes of JSON", jsonStr.size());
             return RE::BSFixedString(jsonStr);
 

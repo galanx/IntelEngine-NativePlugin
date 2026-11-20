@@ -11,8 +11,11 @@
 #include "StringUtils.h"
 #include "ProcessUtils.h"
 #include "Settings.h"
+#include "SkyrimNetAPI.h"
+#include "NamedPlaceMatch.h"
 
 #include <cfloat>
+#include <unordered_set>
 #include <utility>
 #include <nlohmann/json.hpp>
 
@@ -278,10 +281,21 @@ namespace IntelEngine {
             std::string lowerName = StringUtils::ToLowerStd(locationName);
             RE::TESObjectCELL* destCell = nullptr;
             {
+                // "Drunken Huntsman" names the cell "The Drunken Huntsman" (and "The Bannered Mare" is often said
+                // without "the"): an exact name with or without a leading "the " is still exact.
+                std::vector<std::string> names{lowerName};
+                if (lowerName.rfind("the ", 0) == 0) {
+                    names.push_back(lowerName.substr(4));
+                } else {
+                    names.push_back("the " + lowerName);
+                }
                 std::shared_lock lock(m_mutex);
-                auto cellIt = m_cellIndex.find(lowerName);
-                if (cellIt != m_cellIndex.end()) {
-                    destCell = RE::TESForm::LookupByID<RE::TESObjectCELL>(cellIt->second);
+                for (const auto& name : names) {
+                    auto cellIt = m_cellIndex.find(name);
+                    if (cellIt != m_cellIndex.end()) {
+                        destCell = RE::TESForm::LookupByID<RE::TESObjectCELL>(cellIt->second);
+                        if (destCell) break;
+                    }
                 }
             }
             if (destCell && destCell->IsInteriorCell()) {
@@ -313,6 +327,19 @@ namespace IntelEngine {
             auto worldMarkerPtr = std::as_const(bgsLocation->worldLocMarker).get();
             if (worldMarkerPtr) {
                 auto* markerRef = worldMarkerPtr.get();
+                // A marker standing inside another building is the game data's mistake, not a destination: the
+                // Drunken Huntsman's own marker is placed in Belethor's General Goods next door, so everyone sent
+                // to the inn waited in the shop (seen 2026-11-17). Used only when its interior belongs to this place.
+                if (markerRef) {
+                    auto* markerCell = markerRef->GetParentCell();
+                    auto* markerLoc = markerCell ? markerCell->GetLocation() : nullptr;
+                    if (markerCell && markerCell->IsInteriorCell() && markerLoc && markerLoc != bgsLocation &&
+                        !markerLoc->IsParent(bgsLocation)) {
+                        logger::info("  Strategy 1: worldLocMarker lies in '{}', another place: not used",
+                                     markerCell->GetName() ? markerCell->GetName() : "unnamed");
+                        markerRef = nullptr;
+                    }
+                }
                 if (markerRef) {
                     auto pos = markerRef->GetPosition();
                     logger::info("  Strategy 1 SUCCESS: worldLocMarker at ({:.0f}, {:.0f}, {:.0f})",
@@ -418,6 +445,9 @@ namespace IntelEngine {
                         auto markerPtr = std::as_const(loc->worldLocMarker).get();
                         if (markerPtr) {
                             auto* ref = markerPtr.get();
+                            // Under the open sky only: a marker inside a building is that building, not the town it
+                            // stands in ("Whiterun" became Dragonsreach, and a horse was sent up the palace steps).
+                            if (auto* markerCell = ref ? ref->GetParentCell() : nullptr; markerCell && markerCell->IsInteriorCell()) continue;
                             if (ref) {
                                 float dist = ref->GetPosition().GetDistance(playerPos);
                                 if (dist < bestChildDist) {
@@ -1309,6 +1339,22 @@ namespace IntelEngine {
         return ref;
     }
 
+    std::vector<std::pair<RE::FormID, RE::FormID>> LocationResolver::DungeonAnchors() const {
+        std::shared_lock lock(m_mutex);
+        std::vector<std::pair<RE::FormID, RE::FormID>> out;
+        out.reserve(m_dungeonIndex.size());
+        for (const auto& [location, endpoint] : m_dungeonIndex) out.emplace_back(location, endpoint.anchorRefId);
+        return out;
+    }
+
+    std::vector<std::pair<RE::FormID, RE::FormID>> LocationResolver::HomeCells() const {
+        std::shared_lock lock(m_mutex);
+        std::vector<std::pair<RE::FormID, RE::FormID>> out;
+        out.reserve(m_npcHomeIndex.size());
+        for (const auto& [base, home] : m_npcHomeIndex) out.emplace_back(base, home.cellFormId);
+        return out;
+    }
+
     RE::TESObjectREFR* LocationResolver::GetDungeonBossAnchor(const std::string& locationName) {
         if (locationName.empty()) return nullptr;
 
@@ -1670,6 +1716,29 @@ namespace IntelEngine {
     // Unified Destination Resolution
     // =========================================================================
 
+    bool LocationResolver::IsExactPlaceName(const std::string& destination) {
+        std::string lower = StringUtils::ToLowerStd(destination);
+        // The plain words of a direction keep their meaning even if some cell's editor ID happens to be one of them.
+        static const std::unordered_set<std::string> plainWords{
+            "upstairs", "up", "above", "downstairs", "down", "below", "outside", "out", "exterior", "inside", "in",
+            "interior", "back", "the back", "back room", "cellar", "basement", "stairs", "stairwell", "staircase",
+            "bedroom", "the bedroom", "room", "my room", "bed", "my bed", "kitchen", "the kitchen", "bath", "the bath",
+            "pool", "the pool", "river", "the river", "lake", "the lake", "stream", "the stream", "water", "the water",
+            "the shore", "home", "my home", "your home"};
+        if (plainWords.contains(lower)) return false;
+        std::vector<std::string> names{lower};
+        if (lower.rfind("the ", 0) == 0) {
+            names.push_back(lower.substr(4));
+        } else {
+            names.push_back("the " + lower);
+        }
+        std::shared_lock lock(m_mutex);
+        for (const auto& name : names) {
+            if (m_cellIndex.contains(name) || m_locationIndex.contains(name)) return true;
+        }
+        return false;
+    }
+
     SemanticIntent LocationResolver::DetectSemanticIntent(const std::string& destination) {
         std::string lower = StringUtils::ToLowerStd(destination);
 
@@ -1912,6 +1981,72 @@ namespace IntelEngine {
         return "";
     }
 
+    RE::TESObjectREFR* LocationResolver::ResolveNamedPlace(RE::Actor* actor, const std::string& destination) {
+        if (!SkyrimNetAPI::ListPlaces) return nullptr;  // SkyrimNet older than v1.0.0-rc1
+
+        const auto places = ParseNamedPlaces(SkyrimNetAPI::ListPlaces(""));
+        RE::FormID currentSpace = 0;
+        if (auto* cell = actor->GetParentCell(); cell && cell->IsInteriorCell()) {
+            currentSpace = cell->GetFormID();
+        } else if (auto* worldspace = actor->GetWorldspace()) {
+            currentSpace = worldspace->GetFormID();
+        }
+
+        const auto* place = MatchNamedPlace(places, destination, currentSpace);
+        if (!place) {
+            logger::debug("  Named Place: no match for '{}' among {} places", destination, places.size());
+            return nullptr;
+        }
+
+        auto* interiorCell = RE::TESForm::LookupByID<RE::TESObjectCELL>(place->space);
+        // SkyrimNet's defaults for a place without a radius (PublicAPI.h "Named places")
+        const float radius = place->radius > 0.0f ? place->radius : (interiorCell ? 350.0f : 1500.0f);
+        const RE::NiPoint3 center{place->x, place->y, place->z};
+
+        // SkyrimNet's containment rule: a place reaches 200 units up or down (PublicAPI.h "Named places")
+        constexpr float kPlaceHalfHeight = 200.0f;
+        RE::TESObjectREFR* bestRef = nullptr;
+        float bestDistance = radius;
+        // Persistent refs only: travel holds the target as a linked ref, and a temporary ref is freed when its
+        // cell unloads (2026-11-17-run1: CTD in the travel package after the player left the cell).
+        const auto consider = [&](RE::TESObjectREFR* ref) -> RE::BSContainer::ForEachResult {
+            if (ref && ref->IsPersistent() && !ref->IsDisabled() && !ref->IsDeleted() && !ref->As<RE::Actor>()) {
+                const auto pos = ref->GetPosition();
+                const float dz = pos.z - center.z;
+                const float distance = pos.GetDistance(center);
+                if (dz >= -kPlaceHalfHeight && dz <= kPlaceHalfHeight && distance <= bestDistance) {
+                    bestDistance = distance;
+                    bestRef = ref;
+                }
+            }
+            return RE::BSContainer::ForEachResult::kContinue;
+        };
+
+        if (interiorCell) {
+            interiorCell->ForEachReference(consider);
+        } else if (auto* worldspace = RE::TESForm::LookupByID<RE::TESWorldSpace>(place->space)) {
+            auto* player = RE::PlayerCharacter::GetSingleton();
+            auto* tes = RE::TES::GetSingleton();
+            auto* playerCell = player ? player->GetParentCell() : nullptr;
+            if (tes && playerCell && !playerCell->IsInteriorCell() && player->GetWorldspace() == worldspace) {
+                tes->ForEachReferenceInRange(player, player->GetPosition().GetDistance(center) + radius, consider);
+            } else if (worldspace->persistentCell) {
+                // ponytail: a place in an unloaded exterior only sees persistent refs; add a cell-grid
+                // lookup at (x, y) if such places fail to resolve in play.
+                worldspace->persistentCell->ForEachReference(consider);
+            }
+        }
+
+        if (!bestRef) {
+            logger::info("  Named Place '{}' (space {:08X}) matched, but no reference within {:.0f} units",
+                         place->name, place->space, radius);
+            return nullptr;
+        }
+        logger::info("  Named Place '{}' (space {:08X}) -> ref {:08X}, {:.0f} units from its position",
+                     place->name, place->space, bestRef->GetFormID(), bestDistance);
+        return bestRef;
+    }
+
     RE::TESObjectREFR* LocationResolver::ResolveAnyDestination(RE::Actor* actor, const std::string& destination) {
         if (!actor || destination.empty()) return nullptr;
 
@@ -1920,8 +2055,15 @@ namespace IntelEngine {
 
         logger::debug("ResolveAnyDestination: '{}' for '{}'", destination, actor->GetDisplayFullName());
 
-        // Phase 1: Detect semantic intent
-        auto intent = DetectSemanticIntent(destination);
+        // SkyrimNet's Named Places are not asked for here (3.8.3's ResolveNamedPlace, above, stays for whoever wants
+        // the nearest reference of a place by its exact name): in 4.0 every trip asks them first, before this
+        // resolver (Core.ResolveTravelTarget -> PlaceTargets: the name in any spelling, the place's own spot, and a
+        // room word such as "the kitchen" only inside the building one stands in). Asking again here would list
+        // SkyrimNet's places a second time on every resolution, and a room word would mean any room so named anywhere.
+
+        // Phase 1: Detect semantic intent. Not in a place's own name: "White River Watch" has "river" in it and sent
+        // Jenassa to the river by Riverwood instead of the fort (2026-11-18); "Riverwood" and "Lakeview Manor" alike.
+        auto intent = IsExactPlaceName(destination) ? SemanticIntent{} : DetectSemanticIntent(destination);
 
         if (intent.type != SemanticIntent::NONE) {
             logger::debug("  Semantic intent: type={}, context='{}', preferBeds={}, homeOwner={}",
@@ -2132,7 +2274,7 @@ namespace IntelEngine {
         stats["npcHomesIndexed"] = m_npcHomeIndex.size();
         stats["indexBuilt"] = m_indexBuilt;
 
-        return RE::BSFixedString(stats.dump());
+        return RE::BSFixedString(stats.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace));
     }
 
     std::vector<RE::FormID> LocationResolver::GetHouseholdMembers(RE::Actor* actor) {

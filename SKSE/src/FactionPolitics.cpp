@@ -8,6 +8,7 @@
 
 #include "FactionPolitics.h"
 #include "FactionPairValidation.h"
+#include "VanillaWar.h"
 #include "InformantRumorValidation.h"
 #include "FactionConfigLoader.h"
 #include <filesystem>
@@ -20,6 +21,8 @@
 #include "SkyrimNetAPI.h"
 #include "ProcessUtils.h"
 #include "PoliticalEngineBridge.h"
+#include "RumorBridge.h"
+#include "FactionEditor.h"
 
 #include <fstream>
 #include <filesystem>
@@ -311,9 +314,11 @@ war_allowed:
         ++factionRevision_;
         factionIndex_.clear();
         nameToId_.clear();
+        idByLower_.clear();
         std::string loadedIds;
         for (size_t i = 0; i < factions_.size(); ++i) {
             factionIndex_[factions_[i].id] = i;
+            idByLower_[ToLower(factions_[i].id)] = factions_[i].id;
             nameToId_[ToLower(factions_[i].name)] = factions_[i].id;
             if (!loadedIds.empty()) loadedIds += ", ";
             loadedIds += factions_[i].id;
@@ -361,6 +366,17 @@ war_allowed:
         vanillaSynced_.clear();  // Reset per-save vanilla faction sync tracking
         WritePoliticalStateFile();
         logger::info("FactionPolitics: Initialized successfully");
+    }
+
+    bool FactionPolitics::ReloadConfig() {
+        if (!LoadConfig()) return false;
+        if (PoliticalDB::GetSingleton()->IsReady()) {
+            SeedDefaultRelations();
+            RecalculateRelationScores();
+            WritePoliticalStateFile();
+        }
+        logger::info("FactionPolitics: the faction file was read in again ({} factions)", GetAllFactions().size());
+        return true;
     }
 
     void FactionPolitics::ClearCaches() {
@@ -459,7 +475,7 @@ war_allowed:
     static constexpr const char* kRealms[] = {"Solitude", "Windhelm", "Whiterun", "Markarth", "Riften", "Dawnstar", "Falkreath", "Morthal", "Winterhold"};  // PE realm_id 0..8
     void FactionPolitics::SyncPERulers(const nlohmann::json& rulers) {
         if (!peIntegration_.load() || !rulers.is_object()) {
-            logger::debug("[diag:pe] ruler sync skipped: integration={} rulers={}", peIntegration_.load(), rulers.dump().substr(0, 200));
+            logger::debug("[diag:pe] ruler sync skipped: integration={} rulers={}", peIntegration_.load(), rulers.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace).substr(0, 200));
             return;
         }
         for (int i = 0; i < 9; ++i) {
@@ -554,8 +570,21 @@ war_allowed:
     std::optional<FactionConfig> FactionPolitics::GetFaction(const std::string& factionId) const {
         std::lock_guard<std::mutex> lock(configMutex_);
         auto it = factionIndex_.find(factionId);
+        // An id is one id whatever its letters' case: the model and other mods' files write "CollegeOfWinterholdFaction"
+        // where factions.yaml has "CollegeofWinterholdFaction" (reports were refused as "Unknown faction", the College's
+        // soldiers came out as bandits, and an orphan entry with no standing appeared beside the real one).
+        if (it == factionIndex_.end()) {
+            if (const auto lower = idByLower_.find(ToLower(factionId)); lower != idByLower_.end()) it = factionIndex_.find(lower->second);
+        }
         if (it == factionIndex_.end()) return std::nullopt;
         return factions_[it->second];
+    }
+
+    std::string FactionPolitics::CanonicalId(const std::string& anyCase) const {
+        std::lock_guard<std::mutex> lock(configMutex_);
+        if (factionIndex_.contains(anyCase)) return anyCase;
+        const auto lower = idByLower_.find(ToLower(anyCase));
+        return lower != idByLower_.end() ? lower->second : std::string();
     }
 
     std::string FactionPolitics::GetFactionIdByName(const std::string& displayName) const {
@@ -567,6 +596,9 @@ war_allowed:
     std::string FactionPolitics::GetSoldierTemplate(const std::string& factionId) const {
         std::lock_guard<std::mutex> lock(configMutex_);
         auto it = factionIndex_.find(factionId);
+        if (it == factionIndex_.end()) {
+            if (const auto lower = idByLower_.find(ToLower(factionId)); lower != idByLower_.end()) it = factionIndex_.find(lower->second);
+        }
         if (it == factionIndex_.end()) return "";
         return factions_[it->second].soldierTemplate;
     }
@@ -652,8 +684,27 @@ war_allowed:
                 pendingPE_[std::to_string(eventId)] = description;
             }
             WritePoliticalStateFile();
+            News(factionA, eventType, description, eventId);
         }
         return eventId;
+    }
+
+    void FactionPolitics::News(const std::string& factionA, const std::string& eventType, const std::string& text, int eventId) {
+        // How far word of it travels: a war declared or ended is heard in every hold within days, a battle in the
+        // holds around, the smaller dealings of the great where they happened. The bookkeeping of the simulation and
+        // the player's own tally are no news.
+        if (text.size() < 12 || eventType == "relation_adjustment" || eventType == "player_battle" || eventType == "player_kill" ||
+            eventType == "political_reaction") {
+            return;
+        }
+        float weight = 0.5f;
+        if (eventType == "war_declaration" || eventType == "surrender" || eventType == "peace_treaty" || eventType == "war_ended") weight = 0.95f;
+        else if (eventType == "battle_result" || eventType == "battle_scheduled") weight = 0.8f;
+        else if (eventType == "alliance_proposal" || eventType == "mutual_defense_pact" || eventType == "political_marriage" ||
+                 eventType == "assassination_attempt") weight = 0.75f;
+        else if (eventType == "espionage" || eventType == "sabotage") weight = 0.45f;   // whispered, not cried out
+        const auto faction = GetFaction(factionA);
+        RumorBridge::GetSingleton()->NoteNews(text, faction ? faction->hold : std::string(), weight, static_cast<std::uint32_t>((std::max)(eventId, 0)));
     }
 
     // =========================================================================
@@ -788,7 +839,7 @@ war_allowed:
                 out["ready"] = false;
                 out["revision"] = factionRevision_;
                 out["factions"] = std::move(organizations);
-                return out.dump();
+                return out.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
             }
             // ponytail: liveness polling misses transitions between reads; add leader death/resurrection hooks if needed.
             for (const auto& f : factions_) {
@@ -809,7 +860,7 @@ war_allowed:
         const auto current = db->FeedIdentity();
         if (out["load_id"] != current["load_id"] || !initialized_.load()) out["ready"] = false;
         out["factions"] = out["ready"].get<bool>() ? std::move(organizations) : nlohmann::json::array();
-        return out.dump();
+        return out.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
     }
 
     std::unordered_map<std::string, std::string> FactionPolitics::BuildIdToNameMap() const {
@@ -847,6 +898,67 @@ war_allowed:
 
         std::string playerHold = NPCIndex::GetNPCHoldName(player);
         if (!playerHold.empty()) snap.playerHold = playerHold;
+
+        // The game's own civil war (Skyrim.esm: the CWObj quest's last stage, the CWPlayerAllegiance global, Season
+        // Unending and the end of the main quest). Read here, on the game's thread, and kept for every other thread.
+        {
+            VanillaWar::Facts war;
+            auto* cwObj = RE::TESForm::LookupByID<RE::TESQuest>(0x00029940);
+            auto* allegiance = RE::TESForm::LookupByID<RE::TESGlobal>(0x00023A43);
+            auto* council = RE::TESForm::LookupByID<RE::TESQuest>(0x00045923);   // MQ302
+            auto* ending = RE::TESForm::LookupByID<RE::TESQuest>(0x00046EF2);    // MQ305
+            war.over = cwObj && cwObj->GetCurrentStageID() >= 255;
+            war.allegiance = allegiance ? static_cast<int>(allegiance->value) : 0;
+            war.truce = council && council->IsCompleted();
+            war.dragonsDone = ending && ending->IsCompleted();
+            const auto now = VanillaWar::Of(war);
+            if (static_cast<std::uint8_t>(now) != vanillaWar_.load() || war.allegiance != vanillaAllegiance_.load()) {
+                static constexpr const char* kStates[] = {"undecided", "under truce", "won by the Empire", "won by the Stormcloaks"};
+                logger::info("Politics: the game's civil war is {} (the player's side: {})", kStates[static_cast<int>(now)],
+                             war.allegiance == 1 ? "the Empire" : war.allegiance == 2 ? "the Stormcloaks" : "none");
+            }
+            vanillaWar_.store(static_cast<std::uint8_t>(now));
+            vanillaAllegiance_.store(war.allegiance);
+            snap.civilWar = static_cast<std::uint8_t>(now);
+            snap.playerSide = war.allegiance;
+        }
+
+        // Every other faction's own story in the game (VanillaWar::QuestlineOf, or the faction file's free_after):
+        // read here, on the game's thread, and kept for every other thread.
+        {
+            std::vector<FactionConfig> all;
+            {
+                std::lock_guard<std::mutex> lock(configMutex_);
+                all = factions_;
+            }
+            std::unordered_map<std::string, std::string> bound;
+            for (const auto& f : all) {
+                const auto questline = f.freeAfterSet ? f.freeAfter : VanillaWar::QuestlineOf(f.skyrimFactionId);
+                if (questline.empty()) continue;
+                const auto open = VanillaWar::BoundBy(questline, [](const std::string& id) {
+                    auto* quest = RE::TESForm::LookupByEditorID<RE::TESQuest>(id);
+                    if (!quest) return VanillaWar::Quest::NotInGame;
+                    return quest->IsCompleted() ? VanillaWar::Quest::Finished : VanillaWar::Quest::Unfinished;
+                });
+                if (open.empty()) continue;
+                auto* quest = RE::TESForm::LookupByEditorID<RE::TESQuest>(open);
+                const char* name = quest ? quest->GetFullName() : nullptr;
+                bound[f.id] = name && *name ? name : open;
+            }
+            {
+                std::lock_guard<std::mutex> lock(boundMutex_);
+                if (bound != boundBy_) {
+                    for (const auto& [id, story] : bound) {
+                        if (!boundBy_.contains(id)) logger::info("Politics: {} is bound by its own story in the game (\"{}\"): no war, no harm to it until that is finished", id, story);
+                    }
+                    for (const auto& [id, story] : boundBy_) {
+                        if (!bound.contains(id)) logger::info("Politics: {} is free: its story in the game (\"{}\") is finished", id, story);
+                    }
+                    boundBy_ = bound;
+                }
+            }
+            snap.bound = std::move(bound);
+        }
 
         if (PoliticalEngineBridge::GetSingleton()->IsActive() && !PoliticalEngineBridge::GetSingleton()->HasSidesExport()) {
             auto* keyword = RE::TESForm::LookupByID<RE::BGSKeyword>(0x2A456);
@@ -915,7 +1027,7 @@ war_allowed:
                                                               const PoliticsTickSnapshot& snap) const {
         // Worker-safe variant: liveness comes from snapshot fields populated in Phase A.
         // Snapshot has all leaders for all factions; we filter by (factionId, name).
-        return BuildFactionJsonCore(f, [&f, &snap](const std::string& name) -> std::pair<bool, bool> {
+        auto fj = BuildFactionJsonCore(f, [&f, &snap](const std::string& name) -> std::pair<bool, bool> {
             for (const auto& s : snap.leaders) {
                 if (s.factionId == f.id && s.name == name) {
                     return {s.wasResolved, s.confirmedDead};
@@ -923,6 +1035,8 @@ war_allowed:
             }
             return {false, false};  // not in snapshot — assume alive
         });
+        if (const auto it = snap.bound.find(f.id); !fj.empty() && it != snap.bound.end()) fj["bound"] = VanillaWar::BoundTelling(it->second);
+        return fj;
     }
 
     // =========================================================================
@@ -1040,6 +1154,8 @@ war_allowed:
             eventsJson.push_back(ej);
         }
         state["recent_events"] = eventsJson;
+        // The game's own civil war, as fact (VanillaWar.h): no event may contradict it.
+        state["civil_war"] = VanillaWar::Telling(static_cast<VanillaWar::State>(snap.civilWar), 0);
         auto pe = PoliticalEngineBridge::GetSingleton()->Context();
         {
             std::lock_guard lock(peMutex_);
@@ -1192,13 +1308,13 @@ war_allowed:
         }
 
         nlohmann::json wrapper;
-        wrapper["politicalContext"] = state.dump(2);
+        wrapper["politicalContext"] = state.dump(2, ' ', false, nlohmann::json::error_handler_t::replace);
         wrapper["tickHours"] = std::to_string(tickIntervalHours_.load());
         wrapper["maxActiveWars"] = std::to_string(maxActiveWars_.load());
         wrapper["maxRelationChange"] = std::to_string(maxRelationChangePerTick_.load());
         wrapper["peActive"] = state.contains("political_engine");
 
-        return wrapper.dump();
+        return wrapper.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
     }
 
     // =========================================================================
@@ -1324,7 +1440,7 @@ war_allowed:
         dashboard["enabled"] = enabled_.load();
         dashboard["tick_hours"] = tickIntervalHours_.load();
 
-        return dashboard.dump();
+        return dashboard.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
     }
 
     // =========================================================================
@@ -1461,7 +1577,7 @@ war_allowed:
         // Tier 2: Skyrim engine faction membership
         for (const auto& fac : factions_) {
             if (fac.skyrimFactionId.empty()) continue;
-            auto* skyrimFaction = RE::TESForm::LookupByEditorID<RE::TESFaction>(fac.skyrimFactionId);
+            auto* skyrimFaction = FactionEditor::GameFaction(fac.skyrimFactionId);
             if (skyrimFaction && actor->IsInFaction(skyrimFaction)) {
                 return fac;
             }
@@ -1674,7 +1790,7 @@ war_allowed:
                      attackerFaction, targetFaction, eventType, spawnCount,
                      spawnDefenders ? ", " + std::to_string(defenderCount) + " defenders" : "");
 
-        return result.dump();
+        return result.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
     }
 
     void FactionPolitics::ConfirmManifestationCooldown() {
@@ -1704,7 +1820,7 @@ war_allowed:
         for (const auto& fac : factions_) {
             if (fac.skyrimFactionId.empty()) continue;
 
-            auto* skyrimFaction = RE::TESForm::LookupByEditorID<RE::TESFaction>(fac.skyrimFactionId);
+            auto* skyrimFaction = FactionEditor::GameFaction(fac.skyrimFactionId);
             if (!skyrimFaction) continue;
 
             int violent = player->GetViolentCrimeGoldValue(skyrimFaction);
@@ -1732,7 +1848,7 @@ war_allowed:
         // Tier 2: Skyrim engine faction membership
         for (const auto& fac : factions_) {
             if (fac.skyrimFactionId.empty()) continue;
-            auto* skyrimFaction = RE::TESForm::LookupByEditorID<RE::TESFaction>(fac.skyrimFactionId);
+            auto* skyrimFaction = FactionEditor::GameFaction(fac.skyrimFactionId);
             if (skyrimFaction && actor->IsInFaction(skyrimFaction)) {
                 return fac.id;
             }
@@ -1751,14 +1867,20 @@ war_allowed:
             RE::SendHUDMessage::ShowHUDMessage("Conduct report failed: politics is not initialized.");
             return 0;
         }
-        const std::string factionId = GetFaction(factionInput) ? factionInput : GetFactionIdByName(factionInput);
+        const std::string canonical = CanonicalId(factionInput);
+        const std::string factionId = !canonical.empty() ? canonical : GetFactionIdByName(factionInput);
 
-        // Map sentiment to delta
+        // Map sentiment to delta. The word as the model writes it: "Positive", "strongly positive" ("Invalid sentiment
+        // 'Positive'" lost the report).
+        std::string mood = ToLower(sentiment);
+        while (!mood.empty() && mood.back() == ' ') mood.pop_back();
+        while (!mood.empty() && mood.front() == ' ') mood.erase(mood.begin());
+        for (auto& c : mood) if (c == ' ' || c == '-') c = '_';
         int delta = 0;
-        if (sentiment == "strongly_positive") delta = 10;
-        else if (sentiment == "positive") delta = 5;
-        else if (sentiment == "negative") delta = -5;
-        else if (sentiment == "strongly_negative") delta = -10;
+        if (mood == "strongly_positive" || mood == "very_positive") delta = 10;
+        else if (mood == "positive") delta = 5;
+        else if (mood == "negative") delta = -5;
+        else if (mood == "strongly_negative" || mood == "very_negative") delta = -10;
         else {
             logger::warn("FactionPolitics: Invalid sentiment '{}'", sentiment);
             RE::SendHUDMessage::ShowHUDMessage(("Conduct report failed: invalid sentiment '" + sentiment + "'.").c_str());
@@ -1863,7 +1985,7 @@ war_allowed:
             if (battleSnap.active && battleSnap.playerParticipated &&
                 (fac.id == battleSnap.factionA || fac.id == battleSnap.factionB)) continue;
 
-            auto* skyrimFaction = RE::TESForm::LookupByEditorID<RE::TESFaction>(fac.skyrimFactionId);
+            auto* skyrimFaction = FactionEditor::GameFaction(fac.skyrimFactionId);
             if (!skyrimFaction) continue;
 
             int violent = player->GetViolentCrimeGoldValue(skyrimFaction);
@@ -1946,7 +2068,7 @@ war_allowed:
             if (vanillaSynced_.count(fac.id)) continue;
 
             // Check if player is in the vanilla faction
-            auto* skyrimFac = RE::TESForm::LookupByEditorID<RE::TESFaction>(fac.skyrimFactionId);
+            auto* skyrimFac = FactionEditor::GameFaction(fac.skyrimFactionId);
             if (!skyrimFac) continue;
 
             bool inFaction = false;
@@ -1963,14 +2085,16 @@ war_allowed:
             // Mark as synced regardless of current standing — we only check once
             vanillaSynced_.insert(fac.id);
 
-            // Only boost if currently at 0 (never interacted with the political system)
+            // Only for someone the simulation has never had a standing for. The test used to be "standing is 0", and
+            // the list of who had been given it is forgotten with every load: a member whose standing had worn down to
+            // nothing was handed the 40 again at the next load ("values reset on login").
             auto standings = db->GetAllPlayerStandings();
-            int currentStanding = 0;
+            bool known = false;
             for (const auto& ps : standings) {
-                if (ps.factionId == fac.id) { currentStanding = ps.standing; break; }
+                if (ps.factionId == fac.id) { known = true; break; }
             }
 
-            if (currentStanding == 0) {
+            if (!known) {
                 db->AdjustPlayerStanding(fac.id, 40, gameTime);
                 logger::info("SyncVanillaFactions: Player is in {} ({}), granted initial standing 40",
                     fac.name, fac.skyrimFactionId);
@@ -2048,6 +2172,15 @@ war_allowed:
     // fix 94: war_allowed matcher. Entry matches "*", or the faction's id / name / type (case-insensitive).
     bool FactionPolitics::WarPossible(const FactionConfig& a, const FactionConfig& b) const {
         if (a.id.rfind("PE_", 0) == 0 || b.id.rfind("PE_", 0) == 0) return false;
+        // Never against the game's own civil war: no war of the Empire with the Thalmor while the Concordat binds it,
+        // none with the Stormcloaks under the truce or after the game has decided theirs.
+        if (!VanillaWar::WarAllowed(VanillaWar::SideOf(a.skyrimFactionId), VanillaWar::SideOf(b.skyrimFactionId),
+                                    static_cast<VanillaWar::State>(vanillaWar_.load()))) {
+            return false;
+        }
+        // Nor against any other faction's own story: no war by or against one whose questline the player has not
+        // finished.
+        if (!BoundBy(a.id).empty() || !BoundBy(b.id).empty()) return false;
         const auto match = [](const std::string& e, const FactionConfig& f) {
             return e == "*" || ToLower(e) == ToLower(f.id) || ToLower(e) == ToLower(f.name) || ToLower(e) == ToLower(f.type);
         };
@@ -2059,6 +2192,87 @@ war_allowed:
                 if ((ka && match(it, b)) || (kb && match(it, a))) return true;
         }
         return false;
+    }
+
+    std::string FactionPolitics::BoundBy(const std::string& factionId) const {
+        std::lock_guard<std::mutex> lock(boundMutex_);
+        const auto it = boundBy_.find(factionId);
+        return it == boundBy_.end() ? std::string() : it->second;
+    }
+
+    void FactionPolitics::HoldToTheGamesWar(const PoliticsTickSnapshot& snap) {
+        if (!initialized_.load()) return;
+        auto* db = PoliticalDB::GetSingleton();
+        if (!db || !db->IsReady()) return;
+        // A faction bound by its own story: a war it is in (begun before this rule, or before a load) ends with no
+        // winner, and its score with anyone stays short of war.
+        if (!snap.bound.empty()) {
+            std::vector<FactionConfig> all;
+            {
+                std::lock_guard<std::mutex> lock(configMutex_);
+                all = factions_;
+            }
+            for (std::size_t i = 0; i < all.size(); ++i) {
+                for (std::size_t k = i + 1; k < all.size(); ++k) {
+                    const auto& a = all[i];
+                    const auto& b = all[k];
+                    const bool boundA = snap.bound.contains(a.id), boundB = snap.bound.contains(b.id);
+                    if (!boundA && !boundB) continue;
+                    const std::string& story = snap.bound.at(boundA ? a.id : b.id);
+                    if (db->GetActiveWar(a.id, b.id) && EndWar(a.id, b.id, std::string(), snap.currentGameTime)) {
+                        logger::info("Politics: the war of {} and {} is called off: {} is bound by its own story in the game (\"{}\")", a.id, b.id,
+                                     boundA ? a.id : b.id, story);
+                    }
+                    const int threshold = (std::max)({RELATION_HOSTILE - 1, a.warThreshold, b.warThreshold});
+                    const int floor = VanillaWar::BoundFloor(threshold, RELATION_MIN);
+                    const int score = db->GetRelation(a.id, b.id);
+                    if (score < floor) {
+                        db->AdjustRelation(a.id, b.id, floor - score);
+                        logger::info("Politics: {} and {} held at {} (was {}): \"{}\" is not finished", a.id, b.id, floor, score, story);
+                    }
+                }
+            }
+        }
+        const auto state = static_cast<VanillaWar::State>(snap.civilWar);
+        std::vector<FactionConfig> sided;
+        {
+            std::lock_guard<std::mutex> lock(configMutex_);
+            for (const auto& f : factions_) {
+                if (VanillaWar::SideOf(f.skyrimFactionId) != VanillaWar::Side::None) sided.push_back(f);
+            }
+        }
+        for (std::size_t i = 0; i < sided.size(); ++i) {
+            for (std::size_t k = i + 1; k < sided.size(); ++k) {
+                const auto& a = sided[i];
+                const auto& b = sided[k];
+                const auto sa = VanillaWar::SideOf(a.skyrimFactionId), sb = VanillaWar::SideOf(b.skyrimFactionId);
+                if (!VanillaWar::CivilWarPair(sa, sb) && !VanillaWar::ConcordatPair(sa, sb)) continue;
+                // A war of the simulation between them that may not go on (the truce; the game has decided it) ends now,
+                // with the winner the game named, or none.
+                if (!VanillaWar::WarGoesOn(sa, sb, state) && db->GetActiveWar(a.id, b.id)) {
+                    const auto winner = VanillaWar::Winner(state);
+                    const std::string victor = winner == VanillaWar::Side::None ? std::string() : (sa == winner ? a.id : b.id);
+                    if (EndWar(a.id, b.id, victor, snap.currentGameTime)) {
+                        RecordPoliticalEvent(a.id, b.id, "relation_adjustment",
+                                             state == VanillaWar::State::Truce ? "The truce of High Hrothgar holds: the fighting has stopped."
+                                                                               : "The civil war is over.", 0, snap.currentGameTime);
+                        logger::info("Politics: the war of {} and {} ends with the game's own ({})", a.id, b.id,
+                                     state == VanillaWar::State::Truce ? "truce" : "decided");
+                    }
+                }
+                // Their score is held where the game's state allows it. Silent: the same is done after every load
+                // (scores are rebuilt from the events), so nothing depends on it being remembered.
+                const int threshold = (std::max)({RELATION_HOSTILE - 1, a.warThreshold, b.warThreshold});
+                const auto band = VanillaWar::BandFor(sa, sb, state, threshold, RELATION_MIN, RELATION_MAX);
+                const int score = db->GetRelation(a.id, b.id);
+                const int held = VanillaWar::Held(score, band);
+                if (held != score) {
+                    db->AdjustRelation(a.id, b.id, held - score);
+                    logger::info("Politics: {} and {} held at {} (was {}): the game's civil war allows no {}", a.id, b.id, held, score,
+                                 held > score ? "war between them now" : "friendship between them");
+                }
+            }
+        }
     }
 
     // fix 94 (live 2026-11-12): the DM ignored Rule 3 on 11 of 11 ticks; declare the lowest-scored eligible Critical pair in code.
@@ -2167,7 +2381,7 @@ war_allowed:
             WritePoliticalStateFile();
         }
 
-        return updates.dump();
+        return updates.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
     }
 
     bool FactionPolitics::EndWar(const std::string& factionA, const std::string& factionB,
@@ -2183,7 +2397,17 @@ war_allowed:
             return false;
         }
 
-        bool ok = db->EndWar(war->id, victor, gameTime);
+        // Nobody wins the game's own civil war here: a campaign of the simulation may end, but while the game has not
+        // decided the war there is no victor and no surrender ("The Stormcloaks sued for peace" in a war the player had
+        // not fought yet).
+        std::string named = victor;
+        if (const auto a = GetFaction(factionA), b = GetFaction(factionB); a && b && !named.empty() &&
+            !VanillaWar::MayNameWinner(VanillaWar::SideOf(a->skyrimFactionId), VanillaWar::SideOf(b->skyrimFactionId),
+                                       static_cast<VanillaWar::State>(vanillaWar_.load()))) {
+            logger::info("FactionPolitics::EndWar: no victor named for {} / {}: the game's civil war is undecided", factionA, factionB);
+            named.clear();
+        }
+        bool ok = db->EndWar(war->id, named, gameTime);
         if (ok) {
             // Peace improves relations a little, and it leaves the pair out of "Critical": an uneasy truce at least.
             // With +10 alone a pair at -65 stayed Critical, and the code that declares war for Critical pairs
@@ -2195,6 +2419,12 @@ war_allowed:
             db->RecordEvent(factionA, factionB, "relation_adjustment", "War ended", peaceDelta, gameTime);
             db->AdjustRelation(factionA, factionB, peaceDelta);
             WritePoliticalStateFile();
+            {
+                const std::string nameA = GetFactionDisplayName(factionA), nameB = GetFactionDisplayName(factionB);
+                News(factionA, "war_ended", named.empty() ? "The fighting between " + nameA + " and " + nameB + " has stopped, and neither is said to have won."
+                                                          : "The war between " + nameA + " and " + nameB + " is over, and " +
+                                                                GetFactionDisplayName(named) + " had the better of it.", war->id);
+            }
         }
         return ok;
     }
@@ -2293,6 +2523,7 @@ war_allowed:
                         physicalPosition ? narrative : "Battle resolved", -10, gameTime, "",
                         physicalPosition ? location : "", physicalPosition ? *physicalPosition : nullptr);
         db->AdjustRelation(factionA, factionB, -10);
+        if (physicalPosition) News(factionA, "battle_result", narrative, battleId);
 
         WritePoliticalStateFile();
         return battleId;
@@ -2303,10 +2534,16 @@ war_allowed:
     // =========================================================================
 
     void FactionPolitics::WritePoliticalStateFile() {
-        if (!initialized_.load() || !enabled_.load()) return;
+        // One file for every save, read by everyone's bio: with politics off, or before this save's state is ready, it
+        // is taken away, or the last character's factions, events and standings are told as this one's.
+        const auto forget = []() {
+            std::error_code ignored;
+            std::filesystem::remove("Data/SKSE/Plugins/IntelEngine/political_state.json", ignored);
+        };
+        if (!initialized_.load() || !enabled_.load()) return forget();
 
         auto* db = PoliticalDB::GetSingleton();
-        if (!db->IsReady()) return;
+        if (!db->IsReady()) return forget();
 
         // Gather all data before building JSON.
         // Each DB call is independently locked. Since WritePoliticalStateFile is called
@@ -2360,6 +2597,8 @@ war_allowed:
             eventsJson.push_back(ej);
         }
         state["recent_events"] = eventsJson;
+        // The game's own civil war, as everyone in Skyrim knows it (read on the game's thread at each political tick).
+        state["civil_war"] = VanillaWar::Telling(static_cast<VanillaWar::State>(vanillaWar_.load()), vanillaAllegiance_.load());
 
         // Non-neutral relations only — include display names
         nlohmann::json relationsJson = nlohmann::json::array();
@@ -2415,7 +2654,7 @@ war_allowed:
             std::filesystem::create_directories(outPath.parent_path());
             std::ofstream file(outPath, std::ios::trunc);
             if (file.is_open()) {
-                file << state.dump(2);
+                file << state.dump(2, ' ', false, nlohmann::json::error_handler_t::replace);
                 file.close();
                 logger::debug("FactionPolitics: Wrote political_state.json ({} events, {} relations)",
                              recentEvents.size(), relationsJson.size());
@@ -2502,19 +2741,19 @@ war_allowed:
             resp = nlohmann::json::parse(responseJson);
         } catch (...) {
             out["reason"] = "JSON parse error";
-            return out.dump();
+            return out.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
         }
 
         bool shouldAct = resp.value("should_act", false);
         if (!shouldAct) {
             out["reason"] = "should_act is false";
-            return out.dump();
+            return out.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
         }
 
         std::string storyType = resp.value("type", "");
         if (storyType.empty()) {
             out["reason"] = "missing type field";
-            return out.dump();
+            return out.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
         }
 
         // Check if story type is excluded
@@ -2530,7 +2769,7 @@ war_allowed:
             }
             if (token == storyType) {
                 out["reason"] = "type '" + storyType + "' is disabled";
-                return out.dump();
+                return out.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
             }
         }
 
@@ -2539,7 +2778,7 @@ war_allowed:
             std::string subType = resp.value("questSubType", "");
             if (subType.empty()) {
                 out["reason"] = "quest type missing questSubType";
-                return out.dump();
+                return out.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
             }
 
             // Whitelist of known subtypes
@@ -2549,7 +2788,7 @@ war_allowed:
             };
             if (validSubTypes.find(subType) == validSubTypes.end()) {
                 out["reason"] = "unknown questSubType: " + subType;
-                return out.dump();
+                return out.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
             }
 
             // Check if subtype is excluded
@@ -2560,7 +2799,7 @@ war_allowed:
                 if (start != std::string::npos) token = token.substr(start);
                 if (token == questExcludeKey) {
                     out["reason"] = "questSubType '" + subType + "' is disabled";
-                    return out.dump();
+                    return out.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
                 }
             }
 
@@ -2573,28 +2812,28 @@ war_allowed:
             if (subType == "faction_rescue") {
                 if (questLoc.empty() || enemyType.empty() || victimName.empty() || alliedFaction.empty()) {
                     out["reason"] = "faction_rescue missing questLocation, enemyType, victimName, or alliedFaction";
-                    return out.dump();
+                    return out.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
                 }
             } else if (subType == "rescue") {
                 if (questLoc.empty() || enemyType.empty() || victimName.empty()) {
                     out["reason"] = "rescue missing questLocation, enemyType, or victimName";
-                    return out.dump();
+                    return out.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
                 }
             } else if (subType == "faction_combat") {
                 if (questLoc.empty() || enemyType.empty() || alliedFaction.empty()) {
                     out["reason"] = "faction_combat missing questLocation, enemyType, or alliedFaction";
-                    return out.dump();
+                    return out.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
                 }
             } else if (subType == "faction_battle") {
                 if (questLoc.empty() || alliedFaction.empty()) {
                     out["reason"] = "faction_battle missing questLocation or alliedFaction";
-                    return out.dump();
+                    return out.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
                 }
             } else {
                 // combat, find_item, etc.
                 if (questLoc.empty() || enemyType.empty()) {
                     out["reason"] = "quest missing questLocation or enemyType";
-                    return out.dump();
+                    return out.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
                 }
             }
         }
@@ -2609,13 +2848,13 @@ war_allowed:
                 logger::debug("FactionPolitics: informant rejected ({}): subject='{}' rumor='{}' gossip='{}' sender='{}'",
                               why, subject, rumor, gossip, resp.value("sender", ""));
                 out["reason"] = "informant " + why;
-                return out.dump();
+                return out.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
             }
         }
 
         out["valid"] = true;
         out["type"] = storyType;
-        return out.dump();
+        return out.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
     }
 
     // =========================================================================
@@ -2662,7 +2901,7 @@ war_allowed:
         RecordPoliticalEvent(alliedFaction, "", "player_combat", battleDesc, 0, gameTime);
 
         out["allyName"] = allyName;
-        return out.dump();
+        return out.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
     }
 
     std::string FactionPolitics::BuildBattleExpiryFact(const std::string& alliedFaction,
@@ -2686,7 +2925,7 @@ war_allowed:
 
         if (success != 1 || response.empty()) {
             out["error"] = "DM response failed or empty";
-            return out.dump();
+            return out.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
         }
 
         // Strip non-JSON content (markdown fences, reasoning preamble, trailing text)
@@ -2724,14 +2963,14 @@ war_allowed:
         } catch (const std::exception& e) {
             logger::error("Politics: JSON parse error: {} — first 200 chars: '{}'", e.what(), cleanResponse.substr(0, 200));
             out["error"] = "JSON parse error";
-            return out.dump();
+            return out.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
         }
 
         bool shouldAct = resp.value("should_act", false);
         logger::info("Politics DM: should_act={}", shouldAct);
         if (!shouldAct) {
             out["noAction"] = true;
-            return out.dump();
+            return out.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
         }
 
         std::string factionA = resp.value("faction_a", "");
@@ -2748,10 +2987,10 @@ war_allowed:
             if (!reactionId->is_number_integer() || !PoliticalEngineBridge::GetSingleton()->IsActive() ||
                 peLoadId_ != PoliticalDB::GetSingleton()->FeedIdentity().value("load_id", "") ||
                 !eligiblePE_.contains(reactionId->dump()) || eventType != "political_reaction") {
-                out["error"] = "stale or invalid PE reaction"; return out.dump();
+                out["error"] = "stale or invalid PE reaction"; return out.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
             }
             if (!moveReactionRelations) delta = 0;
-        } else if (eventType == "political_reaction") { out["error"] = "reaction requires reacts_to"; return out.dump(); }
+        } else if (eventType == "political_reaction") { out["error"] = "reaction requires reacts_to"; return out.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace); }
 
         logger::info("Politics DM: factionA={}, factionB={}, type={}, delta={}, desc={}",
             factionA, factionB, eventType, delta, description.substr(0, 80));
@@ -2759,14 +2998,24 @@ war_allowed:
         if (factionA.empty() || eventType.empty()) {
             logger::warn("Politics DM: rejected — missing faction_a or event_type");
             out["error"] = "missing faction_a or event_type";
-            return out.dump();
+            return out.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
         }
 
         // Live 2026-11-10: a Director surrender with no IE war still logged "WAR ENDED"; reject it before recording.
         if (eventType == "surrender" && !PoliticalDB::GetSingleton()->GetActiveWar(factionA, factionB)) {
             logger::warn("Politics DM: rejected surrender — no active war between {} and {}", factionA, factionB);
             out["error"] = "surrender requires an active war";
-            return out.dump();
+            return out.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
+        }
+        // Nothing that harms a faction whose own story in the game is unfinished, whoever proposes it.
+        if (VanillaWar::HarmsTheBound(eventType)) {
+            for (const auto& id : {factionA, factionB}) {
+                if (const auto story = id.empty() ? std::string() : BoundBy(id); !story.empty()) {
+                    logger::warn("Politics DM: rejected {}: {} is bound by its own story in the game (\"{}\")", eventType, id, story);
+                    out["error"] = "a faction of this event is bound by its own story in the game";
+                    return out.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
+                }
+            }
         }
         // fix 94: refuse a war_declaration for a pair war_allowed does not permit (fix 74 was prompt-only).
         if (eventType == "war_declaration") {
@@ -2774,7 +3023,7 @@ war_allowed:
             if (!a || !b || !WarPossible(*a, *b)) {
                 logger::warn("Politics DM: rejected war_declaration — war not allowed between {} and {}", factionA, factionB);
                 out["error"] = "war not possible for this pair";
-                return out.dump();
+                return out.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
             }
         }
         // Live 2026-11-12 (#133): the DM sent battle_result with no active war; record it as a skirmish that does not manifest.
@@ -2790,7 +3039,7 @@ war_allowed:
                 last[0].eventType == eventType && last[0].description == description) {
                 logger::info("Politics DM: rejected duplicate of event #{}", last[0].id);
                 out["error"] = "duplicate of latest event";
-                return out.dump();
+                return out.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
             }
             // Live 2026-11-10: 7 of 10 ticks were the same war's battle_result; never two in a row for one pair.
             if (const char* why = eventType == "battle_result" ? BattleResultBlockedReason(last, factionA, factionB,
@@ -2798,7 +3047,7 @@ war_allowed:
                 logger::info("Politics DM: rejected battle_result for {} vs {} — {}", factionA, factionB, why);
                 out["error"] = std::string(why).find("scheduled") != std::string::npos
                     ? "battle_result while a battle for the same war is scheduled" : "consecutive battle_result for the same war";
-                return out.dump();
+                return out.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
             }
         }
 
@@ -2813,7 +3062,7 @@ war_allowed:
             logger::error("Politics DM: RecordPoliticalEvent FAILED for {} vs {} (type={})",
                 factionA, factionB, eventType);
             out["error"] = "event recording failed";
-            return out.dump();
+            return out.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
         }
         if (reaction) { eligiblePE_.erase(reactionId->dump()); out["reacts_to"] = *reactionId; peLock.unlock(); }
         logger::info("Politics DM: Event #{} recorded — {} vs {} ({}), delta={}",
@@ -2849,7 +3098,7 @@ war_allowed:
             if (!war) {
                 logger::info("Politics: battle_result ignored — no active war between {} and {}", factionA, factionB);
                 out["acted"] = false;
-                return out.dump();
+                return out.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
             }
 
             std::string battleLoc = resp.value("battle_location", "the field");
@@ -2934,7 +3183,7 @@ war_allowed:
         out["crimeChanges"] = crimeChanges;
         out["vanillaSynced"] = vanillaSynced;
 
-        return out.dump();
+        return out.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
     }
 
     std::string FactionPolitics::RunStandingMechanicsInternal() {
@@ -2949,7 +3198,7 @@ war_allowed:
         out["crimeChanges"] = crimeChanges;
         out["vanillaSynced"] = vanillaSynced;
         out["updated"] = (decayed > 0 || crimeChanges > 0 || vanillaSynced > 0);
-        return out.dump();
+        return out.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
     }
 
 }  // namespace IntelEngine

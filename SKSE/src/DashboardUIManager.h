@@ -72,6 +72,7 @@ namespace IntelEngine {
         std::string pendingFullState_;
         std::string pendingSlotPayload_;
         std::vector<std::pair<std::uint64_t, std::string>> pendingDirectorResults_;
+        std::vector<std::pair<std::uint64_t, std::string>> pendingEditorResults_;   // the faction editor's answers
         std::string pendingFullStatePayload_;
         std::size_t knownNpcsSize_ = static_cast<std::size_t>(-1);
         mutable std::mutex mutex_;
@@ -103,6 +104,7 @@ namespace IntelEngine {
         static void OnExecuteActionStatic(const char* jsonArg);
         static void OnGenerateDirectorStatic(const char* jsonArg);
         static void OnToggleActionStatic(const char* jsonArg);
+        static void OnFactionEditorStatic(const char* jsonArg);
 
         void SendModEvent(const std::string& eventName, const std::string& strArg = "", float numArg = 0.0f);
 

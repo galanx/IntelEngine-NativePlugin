@@ -199,6 +199,8 @@ namespace IntelEngine {
          * Used by Papyrus to store the cell ID for later re-locking.
          */
         RE::FormID GetLastResolvedHomeCellId() const { return m_lastResolvedHomeCellId; }
+        /** A destination resolved elsewhere (a SkyrimNet place) is no one's home: no door gets unlocked for it. */
+        void ClearLastResolvedHome() { m_lastResolvedHomeCellId = 0; }
 
         /**
          * Get cached LocTypePlayerHouse keyword.
@@ -238,6 +240,10 @@ namespace IntelEngine {
          * @return Boss anchor ref, or nullptr if dungeon not indexed
          */
         RE::TESObjectREFR* GetDungeonBossAnchor(RE::BGSLocation* loc);
+        /** Every dungeon of the index: its location and its boss room anchor (4.0 quests pick their places here). */
+        std::vector<std::pair<RE::FormID, RE::FormID>> DungeonAnchors() const;
+        /** (actor base, the interior cell of the bed they own) for every NPC with a home (story arcs' townsfolk). */
+        std::vector<std::pair<RE::FormID, RE::FormID>> HomeCells() const;
         RE::TESObjectREFR* GetDungeonBossAnchor(const std::string& locationName);
 
     private:
@@ -278,8 +284,15 @@ namespace IntelEngine {
         // Debug: Log all doors in actor's cell with direction signals
         void LogAllDoors(RE::Actor* actor);
 
+        // Resolve a SkyrimNet Named Place by exact name to the nearest reference at its position.
+        // nullptr when SkyrimNet has no ListPlaces, nothing matches, or no reference is in range.
+        RE::TESObjectREFR* ResolveNamedPlace(RE::Actor* actor, const std::string& destination);
+
         // Detect semantic intent from any destination string
         SemanticIntent DetectSemanticIntent(const std::string& destination);
+        /** The whole destination is the name of a place in the game (a cell or a location, with or without a leading
+         *  "the "), so no word inside it is a semantic hint. */
+        bool IsExactPlaceName(const std::string& destination);
 
         // Resolve via parent BGSLocation (for "outside" fallback)
         RE::TESObjectREFR* ResolveViaParentLocation(RE::Actor* actor);
