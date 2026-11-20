@@ -11,7 +11,10 @@
 // Hard rules, whatever is installed and whatever anyone asks for:
 //  - nobody who is a child, or looks or sounds like one, is ever part of a story of the heart;
 //  - nobody of the player's own family;
-//  - nobody the player has turned down;
+//  - nobody the player has turned down, while that stands (the user, 2026-11-20: "a failed courtship might still
+//    become something if the player and the npc find the sparks": after a long while, and only once the two have
+//    grown closer than they were, a story may leave the player room to show that something has changed; nobody
+//    ever presses them);
 //  - the story is told in words and ends at the door: what happens behind it is another mod's to tell, or nobody's.
 
 #include <cstdint>
@@ -37,6 +40,7 @@ namespace IntelEngine::Hearts {
         bool tracked = false;        // a relationship mod keeps their bond (else it is the game's own rank)
         bool sparked = false;        // there is something of the heart between the two, on their side
         std::int8_t stance = 0;      // the player's answer to it: -1 turned down, 0 unanswered, 1 welcomed
+        float refusedDays = -1.0f;   // game days since the player was first seen to have turned them down; below 0 = not known
         Wed wed = Wed::None;         // with the player
         bool wedElsewhere = false;   // married to somebody else
         std::uint8_t withChild = 0;  // 0 no, 1 to 3 the trimester
@@ -67,9 +71,17 @@ namespace IntelEngine::Hearts {
 
     inline bool MayHaveAHeartStory(const Who& who) { return who.person && !who.childlike && !who.kin; }
 
+    // A no is not for ever, and is never worn down either: it stands for a season, and after that only where the two
+    // have since grown close (closer than a first courtship asks for) may a story leave the door ajar again.
+    constexpr float kRefusalRestDays = 30.0f;
+
+    inline bool SecondChance(const Heart& h) {
+        return h.stance < 0 && h.sparked && h.refusedDays >= kRefusalRestDays && h.tier >= Confidant && h.wed == Wed::None && !h.wedElsewhere;
+    }
+
     inline Lean LeanOf(const Who& who, const Heart& h, const Rules& rules) {
         if (!rules.stories || !MayHaveAHeartStory(who)) return Lean::None;
-        if (h.stance < 0) return Lean::None;   // turned down is turned down
+        if (h.stance < 0) return SecondChance(h) ? Lean::Courtship : Lean::None;   // turned down is turned down, while it stands
         if (h.wed == Wed::Married) return (h.children > 0 || (h.withChild && h.childIsPlayers)) ? Lean::Family : Lean::Together;
         if (h.wed == Wed::Engaged) return Lean::Together;
         if (h.wed == Wed::Ended || h.wed == Wed::Widowed) return Lean::None;   // what ended is not reopened by a story
@@ -116,7 +128,10 @@ namespace IntelEngine::Hearts {
             if (h.tier >= Lover) add(std::string("To ") + player + ": " + TierWord(h.tier) + ".");
             else if (h.tier >= Friend) add(std::string("To ") + player + ": " + TierWord(h.tier) + (h.sparked ? ", and there is more than friendship in it." : "."));
         }
-        if (h.sparked && h.stance < 0) add(player + " has turned them down, kindly or not. That is settled and is not reopened.");
+        if (h.sparked && h.stance < 0 && SecondChance(h)) {
+            add(player + " turned them down once. That was long ago, and the two have grown close since. They have never pressed it and never "
+                "will; whether anything has changed is " + player + "'s alone to show.");
+        } else if (h.sparked && h.stance < 0) add(player + " has turned them down, kindly or not. That is settled and is not reopened.");
         else if (h.sparked && h.stance == 0 && h.tier < Lover && h.wed == Wed::None) add(player + " has not yet answered what they feel.");
         if (h.wedElsewhere) add("Married to someone else.");
         if (h.withChild) {

@@ -119,12 +119,14 @@ namespace IntelEngine::Tales {
         bool mustPlace = false;     // this one leads out into the world (the last ones stayed in town)
         bool mustCaptive = false;   // this one is about someone held at a place (a rescue was asked for)
         bool mustExamine = false;   // this one is a hunt for what is killing people: remains to look at, then what did it
+        bool rumored = false;       // it begins as talk in town (the asker does not come): the offer says what people say
     };
 
     struct Result {
         bool ok = false;
         std::string errors;           // what was wrong, one per line (sent back to the author once)
         std::string notes;            // what was mended without asking (unreachable steps dropped)
+        std::string hook;             // what people say of it in town before anyone has looked into it ("offer.rumor")
         A::Arc arc;
     };
 
@@ -419,6 +421,8 @@ namespace IntelEngine::Tales {
         const auto& offer = tale.contains("offer") ? tale["offer"] : nlohmann::json::object();
         a.offerWords = Words(Str(offer, "words"), 600);
         a.offerAsk = Words(Str(offer, "ask"), 200);
+        r.hook = Words(Str(offer, "rumor"), 240);
+        if (pool.rumored && r.hook.empty()) fail("offer: \"rumor\": what people in town are saying about it, in one sentence that names who is looking for help");
         a.opening = Words(Str(offer, "journal"), kMaxLine);
         a.gold = pool.heart ? 0u : static_cast<std::uint32_t>(std::clamp(Int(offer, "reward", static_cast<int>(pool.gold)), 25, 1000));
         a.days = static_cast<float>(std::clamp(Int(offer, "days", 3), 1, 7));

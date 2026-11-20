@@ -3,6 +3,7 @@
 // request and its answer, and the judge who reads a talk and names which prepared outcome it turned into.
 
 #include "ArcBridge.h"
+#include "RumorBridge.h"
 #include "Safe.h"
 
 #include "AsyncDispatch.h"
@@ -358,6 +359,7 @@ namespace IntelEngine {
             RE::FormID asker = 0;
             RE::FormID town = 0;
             std::uint32_t seed = 0;        // the story's own number, fixed before it is written (which master a den has)
+            bool rumored = false;          // it begins as talk in town: nobody comes to the player with it
             bool afar = false;             // the director's: the asker comes to the player wherever the player is
             bool otherHold = false;        // ... from another hold
             bool heart = false;            // a story of the heart between the asker and the player (Hearts.h)
@@ -366,8 +368,9 @@ namespace IntelEngine {
         std::shared_ptr<Request> g_request;   // the tale being written (one at a time)
         float g_requestAt = -1.0f;
 
-        constexpr std::array<const char*, 14> kGenres = {"crime",     "romance",    "family",  "mystery", "politics", "intrigue", "rivalry",
-                                                         "redemption", "debt",      "a secret", "faith",  "adventure", "grief",  "jealousy"};
+        constexpr std::array<const char*, 16> kGenres = {"crime",     "romance",    "family",  "mystery", "politics", "intrigue", "rivalry",
+                                                         "redemption", "debt",      "a secret", "faith",  "adventure", "grief",  "jealousy",
+                                                         "the uncanny", "a hunt"};
     }
 
     // ------------------------------------------------------------------ the request
@@ -495,6 +498,8 @@ namespace IntelEngine {
         request->asker = asker->GetFormID();
         request->town = me->town;
         request->seed = A::detail::Mix(request->asker, static_cast<std::uint32_t>(NowDays() * 1440.0f));
+        request->rumored = taleSeed && taleSeed->rumored && !afar;
+        request->pool.rumored = request->rumored && written.empty();
         request->afar = afar;
         request->otherHold = taleSeed && taleSeed->otherHold;
         // ---- the people: the asker, then those of the town the game ties to them, then the town's known faces
@@ -757,10 +762,20 @@ namespace IntelEngine {
             if (std::find(recentGenres.begin(), recentGenres.begin() + std::min<std::size_t>(recentGenres.size(), 5), g) == recentGenres.end()) fresh.push_back(g);
         }
         std::string lean = fresh.empty() ? std::string(kGenres[seed % kGenres.size()]) : fresh[seed % fresh.size()];
+        // And a second flavour to weave in (the user, 2026-11-20: "Rotate in a meaningful way or compose them together
+        // ... All flavours can be combined to create beautiful stories"): a hunt that is also about a marriage, a debt
+        // with something uncanny under it. Another of those not told lately.
+        std::string thread;
+        if (fresh.size() >= 2) {
+            thread = fresh[(seed / 7u + 1u) % fresh.size()];
+            if (thread == lean) thread = fresh[(seed / 7u + 2u) % fresh.size()];
+            if (thread == lean) thread.clear();
+        }
         // A story of the heart, when that is what stands between the asker and the player (Hearts.h decides who and
         // what, from facts): about the two of them, not a favour for a third. Never two such stories running, and
         // none while one is open.
         std::string heartLean;
+        bool secondChance = false;
         if (written.empty() && !recentHeart) {
             const auto wants = HeartBridge::LeanFor(asker);
             switch (wants) {
@@ -774,7 +789,9 @@ namespace IntelEngine {
                 lean = Hearts::LeanWord(wants);
                 request->heart = true;
                 request->pool.heart = true;
-                logger::info("Tales: {} and the player: a story of the heart ({})", asker->GetDisplayFullName(), lean);
+                secondChance = wants == Hearts::Lean::Courtship && HeartBridge::SecondChanceFor(asker);
+                logger::info("Tales: {} and the player: a story of the heart ({}{})", asker->GetDisplayFullName(), lean,
+                             secondChance ? ", after a no long ago" : "");
             }
         }
 
@@ -892,7 +909,10 @@ namespace IntelEngine {
         ctx["quests"] = PlayerQuests();
         ctx["told"] = told;
         ctx["lean"] = lean;
+        ctx["thread"] = heartLean.empty() ? thread : std::string();
+        ctx["rumored"] = request->pool.rumored;
         if (!heartLean.empty()) ctx["heart_lean"] = heartLean;
+        if (secondChance) ctx["second_chance"] = true;
         ctx["reward"] = request->pool.gold;
         {
             const int knowsPlayer = KnowsPlayer(asker, me->town);
@@ -995,6 +1015,11 @@ namespace IntelEngine {
                 logger::info("Tales: no tale ({})", why);   // a test's own tale: nothing else instead
                 return;
             }
+            if (request->rumored) {
+                // It would have begun as talk in town: with no tale there is no talk, and nobody comes instead.
+                logger::info("Tales: no tale ({}); nothing goes round", why);
+                return;
+            }
             logger::info("Tales: no tale ({}); the town's story falls back to a pattern", why);
             auto* asker = RE::TESForm::LookupByID<RE::Actor>(request->asker);
             if (!asker) return;
@@ -1047,9 +1072,45 @@ namespace IntelEngine {
         g_request.reset();
         m_taleBusy.store(false);
         const bool onTheRoad = (a.flags & A::Flag::CameFar) != 0;
+        std::string hook = result.hook;
         const auto id = PlanTale(std::move(a));
         auto* asker = RE::TESForm::LookupByID<RE::Actor>(request->asker);
-        if (id && asker && onTheRoad) {
+        if (id && asker && request->rumored && !onTheRoad) {
+            // Talk in town before anyone comes to the player: what people say of it goes round the hold (the innkeeper
+            // brings it up, anyone may mention it), and the story waits until the player and the one who wants help
+            // next meet, as a story does whose asker could not reach the player. Then the offer goes out (Lapse).
+            {
+                std::scoped_lock lock(m_mutex);
+                if (auto* arc = m_book.Find(id)) {
+                    arc->flags |= A::Flag::Deferred;
+                    arc->deadline = std::max(arc->deadline, NowDays() + 4.0f);
+                }
+                auto& pending = m_pending[id];
+                pending.offerSent = false;
+                pending.deferredAt = RealNow();
+            }
+            if (hook.empty()) hook = NameOf(request->asker) + " has trouble, and has been asking around for someone who will look into it.";
+            // Where to look for them is a fact of the game, not the writer's to leave out: talk that names no place
+            // sends nobody anywhere.
+            {
+                std::scoped_lock lock(m_mutex);
+                const Folk* me = FolkOf(request->asker);
+                auto* homeCell = me && me->home ? RE::TESForm::LookupByID<RE::TESObjectCELL>(me->home) : nullptr;
+                const char* homeName = homeCell ? homeCell->GetFullName() : nullptr;
+                // Unless the writer named the place already ("of the Drunken Huntsman" names "The Drunken Huntsman").
+                const auto lower = [](std::string s) {
+                    for (auto& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+                    return s;
+                };
+                std::string known = homeName ? lower(homeName) : std::string();
+                if (known.starts_with("the ")) known.erase(0, 4);
+                if (!known.empty() && lower(hook).find(known) == std::string::npos) {
+                    hook += " " + NameOf(request->asker) + " lives at " + homeName + ".";
+                }
+            }
+            RumorBridge::GetSingleton()->Note(Rumors::Kind::Trouble, hook, request->town, 0, request->asker, Rumors::Owner::Arc, id, 0.65f, true);
+            logger::info("Tales: #{} begins as talk in town: {}", id, hook);
+        } else if (id && asker && onTheRoad) {
             // From another hold: they are on the road for a good part of a day before they reach the player (Lapse
             // sends the offer then). Nothing is held meanwhile: no story slot, no visitor on the way.
             std::scoped_lock lock(m_mutex);

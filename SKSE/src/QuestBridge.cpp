@@ -1,5 +1,6 @@
 #include "QuestBridge.h"
 #include "FrameCost.h"
+#include "RumorBridge.h"
 #include "Safe.h"
 
 #include "ArcBridge.h"
@@ -1152,6 +1153,9 @@ namespace IntelEngine {
         if (text.empty() || !holdName || !*holdName || !SkyrimNetAPI::AddWorldKnowledge) return;
         const std::string rumor = Fill(text, q);
         const std::string giverName = NameOf(q.giver);
+        // The talk of the day as well (RumorBridge). The player has taken it on already, so nobody brings it up to
+        // them unasked (its weight stays under that line); it is told when asked for, and it travels.
+        RumorBridge::GetSingleton()->Note(Rumors::Kind::Deed, rumor, hold->GetFormID(), q.giver, 0, Rumors::Owner::Quest, q.id, 0.45f, false);
         const std::string condition = "get_intelengine_hold(actorUUID) == \"" + Escape(holdName) + "\" and actorName != \"" + Escape(giverName) + "\"";
         const std::string label = std::string(kRumorLabel) + std::to_string(q.id);
         const auto id = q.id;
@@ -1185,6 +1189,9 @@ namespace IntelEngine {
         const std::string place = PlaceName(q.place);
         const auto id = q.id;
         const auto created = static_cast<long long>(q.created * 10000.0f);
+        // How it ended replaces the word of the trouble, in the talk of the day too.
+        RumorBridge::GetSingleton()->Withdraw(Rumors::Owner::Quest, id);
+        if (!deed.empty() && hold) RumorBridge::GetSingleton()->Note(Rumors::Kind::Deed, deed, hold->GetFormID(), who, 0, Rumors::Owner::Quest, id, 0.6f, false);
         logger::info("Quests: #{} ended ({}): {}", id, static_cast<int>(q.ending), memory);
         std::thread([openRumor, memory, deed, who, holdName, giverName, place, id, companion, companionMemory, created]() {
             if (openRumor > 0 && SkyrimNetAPI::RemoveWorldKnowledge) SkyrimNetAPI::RemoveWorldKnowledge(openRumor);

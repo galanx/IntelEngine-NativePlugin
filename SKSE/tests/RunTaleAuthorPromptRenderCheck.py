@@ -32,7 +32,7 @@ BASE = {
                {"key": "d2", "name": "Shimmermist Cave", "what": "a Falmer hive and a Dwemer hall", "heart": "a Dwarven centurion", "far": "half a day's walk", "cleared": True, "holds": False, "outside": False, "signs": "burns and clean deep cuts"}],
     "quests": ["Dragon Rising: Kill the dragon"], "told": ["crime: The Quiet Ledger - a ledger that lied"], "lean": "debt", "reward": 150,
     "bar_ambush": False, "bar_brawl": True, "bar_stalk": False, "bar_places": False, "asker_knows": "met",
-    "must_place": False, "must_captive": False, "bar_captive": False, "bar_examine": False, "must_mystery": False,
+    "must_place": False, "must_captive": False, "bar_captive": False, "bar_examine": False, "must_mystery": False, "thread": "", "rumored": False,
 }
 
 
@@ -56,6 +56,7 @@ CASES = {
     "a rescue": (case(must_captive=True, lean="adventure"), {"has": [TAKEN, "who is held at one of the places below", '"do": "free"', "Close to Ysolda.", "close to Ysolda (nobody asks a stranger"], "not": [HEART]}),
     "nobody held this time": (case(bar_captive=True), {"has": ['"delve":'], "not": ['"free": someone of the story', TAKEN]}),
     "a hunt": (case(must_mystery=True, lean="mystery"), {"has": ["# Something is killing near", '"examine": what was left of a victim', '"name": after an "examine"', "leaves these signs on those it kills"], "not": [TAKEN]}),
+    "talk in town": (case(rumored=True, thread="grief"), {"has": ["# This one begins as talk in town", '"rumor": "..."', "weave in a thread of grief"], "not": [TAKEN]}),
     "no hunt this time": (case(bar_examine=True), {"has": ['"delve":'], "not": ['"examine": what was left of a victim', '"name": after an "examine"', "leaves these signs on those it kills", "# Something is killing near"]}),
     "staying in town": (case(bar_places=True, bar_captive=True), {"has": ["This story stays among people"], "not": ['"delve":', '"free": someone of the story', "one act of a story", TAKEN]}),
     "a stranger asks": (case(asker_knows="stranger"), {"has": ["a stranger taking a chance on a stranger"], "not": [HEART]}),

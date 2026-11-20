@@ -1,5 +1,6 @@
 #include "ArcBridge.h"
 #include "FrameCost.h"
+#include "RumorBridge.h"
 #include "Safe.h"
 #include "HeartBridge.h"
 
@@ -774,6 +775,8 @@ namespace IntelEngine {
     RE::Actor* ArcBridge::Company(std::uint32_t id) const {
         std::scoped_lock lock(m_mutex);
         const auto* a = m_book.Find(id);
+        // The player came to the asker and spoke: what they are told then is theirs to hear, whoever stands near.
+        if (const auto it = m_pending.find(id); it != m_pending.end() && it->second.sought) return nullptr;
         return a ? StandsBy(*a) : nullptr;
     }
 
@@ -874,6 +877,8 @@ namespace IntelEngine {
         std::scoped_lock lock(m_mutex);
         const bool ok = m_book.Accept(id, NowDays());
         logger::info("Arcs: #{} {}", id, ok ? "taken on" : "could not be taken on");
+        // Taken on: the talk of someone looking for help is over (a story that began as talk in town).
+        if (ok) RumorBridge::GetSingleton()->Withdraw(Rumors::Owner::Arc, id, Rumors::Kind::Trouble);
         if (const auto* a = ok ? m_book.Find(id) : nullptr) Spread(*a);
         return ok;
     }
@@ -890,6 +895,10 @@ namespace IntelEngine {
         auto* hold = HoldOf(town);
         const std::string holdName = hold && hold->GetFullName() ? hold->GetFullName() : "";
         const std::string askerName = NameOf(askerId);
+        // What the hold keeps (below) is also the talk of the day: brought up at the inn, carried to the next hold,
+        // forgotten in a week or two (RumorBridge). The newer word of a story replaces its older one.
+        RumorBridge::GetSingleton()->Withdraw(Rumors::Owner::Arc, id, Rumors::Kind::Deed);
+        if (!rumor.empty()) RumorBridge::GetSingleton()->Note(Rumors::Kind::Deed, rumor, placeId, 0, 0, Rumors::Owner::Arc, id, 0.6f, false);
         ++m_writing;
         std::thread([this, id, rumor, replace, holdName, askerName]() {
             if (replace > 0 && SkyrimNetAPI::RemoveWorldKnowledge) SkyrimNetAPI::RemoveWorldKnowledge(replace);
@@ -911,6 +920,7 @@ namespace IntelEngine {
     bool ArcBridge::Decline(std::uint32_t id) {
         std::scoped_lock lock(m_mutex);
         if (!m_book.EndPlanned(id, A::Ending::Declined, NowDays())) return false;
+        RumorBridge::GetSingleton()->Withdraw(Rumors::Owner::Arc, id, Rumors::Kind::Trouble);
         if (const auto* a = m_book.Find(id)) Ended(*a);
         return true;
     }
@@ -919,6 +929,7 @@ namespace IntelEngine {
         std::scoped_lock lock(m_mutex);
         const bool ok = m_book.EndPlanned(id, A::Ending::Lapsed, NowDays());
         if (ok) logger::info("Arcs: #{} dropped before it was offered", id);
+        if (ok) RumorBridge::GetSingleton()->Withdraw(Rumors::Owner::Arc, id, Rumors::Kind::Trouble);
         return ok;
     }
 
@@ -957,9 +968,12 @@ namespace IntelEngine {
     std::vector<std::uint32_t> ArcBridge::Lapse() {
         bool reconcile = false;
         std::vector<std::uint32_t> ids;
+        // The talk of the day moves on (once a game hour; this look runs every two seconds anyway).
+        RumorBridge::GetSingleton()->Tick();
         {
             std::scoped_lock lock(m_mutex);
             ids = m_book.Lapse(NowDays());
+            for (const auto lapsed : ids) RumorBridge::GetSingleton()->Withdraw(Rumors::Owner::Arc, lapsed, Rumors::Kind::Trouble);
             RefreshBound(m_book);   // after a load, and after a story that ended with someone still held
             // Someone on the road from another hold reaches the player: their offer goes out now (after a load too:
             // the road is counted from when their story was planned).
@@ -997,12 +1011,31 @@ namespace IntelEngine {
                     auto* cell = player->GetParentCell();
                     if (!cell || !theirCell || (cell->IsInteriorCell() && cell != theirCell) || theirCell->IsInteriorCell() != cell->IsInteriorCell()) continue;
                     if (asker->GetPosition().GetDistance(player->GetPosition()) > 3000.0f) continue;
-                    if (LivingWorldBridge::GetSingleton()->IsBadMoment()) continue;
-                    if (!A::QuietFor(m_book.LastBeat(a.id), NowDays(), A::kQuietHoursOwed) || StandsBy(a)) continue;
+                    // The player walked up to them and spoke (they had heard the talk in town, or simply stopped for a
+                    // word): then it is the player who began it, and the asker says what troubles them there and then,
+                    // whoever else stands near and however lately another story moved. Otherwise the usual manners
+                    // hold: not at a bad moment, not on the heels of another story, not in front of its people.
+                    const bool sought = PlayerIsWith(asker, kWithDistance) && SpokeWithPlayer(asker->GetFormID());
+                    std::uint8_t held = 0;
+                    RE::Actor* bystander = nullptr;
+                    if (LivingWorldBridge::GetSingleton()->IsBadMoment()) held = 1;
+                    else if (!sought && !A::QuietFor(m_book.LastBeat(a.id), NowDays(), A::kQuietHoursOwed)) held = 2;
+                    else if (!sought && (bystander = StandsBy(a)) != nullptr) held = 3;
+                    if (held) {
+                        if (held != pending.heldBy && held != 1) {
+                            logger::info("Arcs: #{} {} is near the player and waits with the offer: {}", a.id, NameOf(a.cast[A::RAsker]),
+                                         held == 2 ? "another story moved within the hour" : (NameOf(bystander->GetFormID()) + " of the story stands within earshot").c_str());
+                        }
+                        pending.heldBy = held;
+                        continue;
+                    }
+                    pending.heldBy = 0;
+                    pending.sought = sought;
                     pending.offerSent = true;
                     const auto arcId = a.id;
                     const RE::FormID askerId = a.cast[A::RAsker];
-                    logger::info("Arcs: #{} {} meets the player again: the offer goes out", arcId, NameOf(askerId));
+                    logger::info("Arcs: #{} {}: the offer goes out", arcId,
+                                 sought ? "the player came to " + NameOf(askerId) + " and spoke" : NameOf(askerId) + " meets the player again");
                     if (auto* task = SKSE::GetTaskInterface()) {
                         task->AddTask([this, arcId, askerId]() {
                             if (auto* found = RE::TESForm::LookupByID<RE::Actor>(askerId)) SendOffer(arcId, found);
@@ -1078,20 +1111,24 @@ namespace IntelEngine {
             if (AskedWithin(asker->GetFormID(), kAskerRestDays)) continue;
             // A stranger who has heard nothing of the player does not go looking for them: only when the player is
             // right there, where a stranger with trouble might take a chance on a stranger.
+            TaleSeed talk;
             if (knows[f->ref] == 0) {
                 const bool there = asker->Is3DLoaded() && asker->GetWorldspace() == player->GetWorldspace() &&
                                    asker->GetParentCell() && cell && asker->GetParentCell()->IsInteriorCell() == cell->IsInteriorCell() &&
                                    (!cell->IsInteriorCell() || asker->GetParentCell() == cell) &&
                                    asker->GetPosition().GetDistance(player->GetPosition()) < 2500.0f;
-                if (!there) continue;
+                // Elsewhere in town their trouble becomes talk: the player hears of it (at the inn, from anyone) and
+                // may go to them. Before, such a story was simply never told.
+                if (!there) talk.rumored = true;
             }
             // A tale the dungeon master writes for them, when a model can be asked; its answer brings the offer.
-            if (RequestTale(asker)) {
+            if (RequestTale(asker, {}, talk.rumored ? &talk : nullptr)) {
                 logger::info("Arcs: a tale is being written in {} after {:.1f} hours there, with {} ({:.2f} ms)", PlaceName(townId),
                              (now - m_paceSince) * 24.0f, NameOf(f->ref), spent());
                 m_paceSince = now;
                 return;
             }
+            if (talk.rumored) continue;   // no model to write it: a stranger elsewhere in town still does not come looking
             const auto id = PlanFor(asker, 0, true);
             if (!id) continue;
             logger::info("Arcs: #{} begins in {} after {:.1f} hours there: {} comes to the player ({:.2f} ms)", id, PlaceName(townId),
@@ -2953,10 +2990,11 @@ namespace IntelEngine {
         }
         // A hunt asked for (a rumor of deaths; the test hook): a story of the town about what is killing people near
         // it, with what was left of a victim to look at and what did it to face, or nothing.
-        bool ArcRequestHunt(RE::StaticFunctionTag*, RE::Actor* giver) {
+        bool ArcRequestHunt(RE::StaticFunctionTag*, RE::Actor* giver, bool rumored) {
             if (!giver) return false;
             ArcBridge::TaleSeed seed;
             seed.kind = "mystery";
+            seed.rumored = rumored;
             return ArcBridge::GetSingleton()->RequestTale(giver, {}, &seed);
         }
         // A rescue asked for by the old dungeon master or the dashboard: a story of the town about someone held at a
@@ -2980,8 +3018,8 @@ namespace IntelEngine {
         RE::Actor* ArcCompany(RE::StaticFunctionTag*, std::int32_t id) { return ArcBridge::GetSingleton()->Company(U(id)); }
         // What only scripts can read of someone's heart (other mods keep it in script storage): Hearts.h, HeartBridge.
         void ArcHeart(RE::StaticFunctionTag*, RE::Actor* who, std::int32_t sparked, std::int32_t stance, std::int32_t withChild,
-                      bool childIsPlayers, std::int32_t children, bool playersChild) {
-            if (who) HeartBridge::Told(who->GetFormID(), sparked, stance, withChild, childIsPlayers, children, playersChild);
+                      bool childIsPlayers, std::int32_t children, bool playersChild, float refusedAt) {
+            if (who) HeartBridge::Told(who->GetFormID(), sparked, stance, withChild, childIsPlayers, children, playersChild, refusedAt);
         }
         std::int32_t ArcRankAfter(RE::StaticFunctionTag*, std::int32_t rank, bool closer) { return Hearts::RankAfter(rank, closer); }
         void ArcEarshot(RE::StaticFunctionTag*, float units) {
