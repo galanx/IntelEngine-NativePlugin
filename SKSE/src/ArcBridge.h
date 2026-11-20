@@ -102,6 +102,14 @@ namespace IntelEngine {
         /** Whether a place out in the world is free for a story: no quest of the game still needs it, none of the
          *  player's objectives points into it, no other story or quest of IntelEngine's is set there. */
         bool SiteFree(RE::BGSLocation* location, const std::unordered_set<RE::FormID>& objectiveLocations, std::string& why) const;
+        /** A quest of the game that is not finished has something of its own at this place: nothing of IntelEngine's is
+         *  set there (a story's master, a bounty's brigand, a thief's hideout). `quest`: its name. Read-only after the
+         *  catalogue at the main menu; the game's thread. */
+        bool GameNeedsPlace(RE::FormID location, std::string* quest = nullptr) const;
+        /** A live story has this place among its own. Takes this bridge's lock. */
+        bool PlaceInStory(RE::FormID location) const;
+        /** The "Stories" switch of the settings: off, no new story of the town begins (those open go on to their end). */
+        void StoriesOn(bool on);
         /** The script let the step's person go (silence, the player left, the step moved on). */
         void LingerOver(std::uint32_t id);
         /** A tale's steps and branches, one log line each (when planned and after a load). */
@@ -262,6 +270,7 @@ namespace IntelEngine {
         /** The game's own small quests (favours with a name) of each person, by base: for the tale author only. */
         std::unordered_map<RE::FormID, std::vector<RE::FormID>> m_favours;
         std::atomic<bool> m_taleBusy{false};
+        std::atomic<bool> m_storiesOn{true};   // the "Stories" switch, as the script last told it
         std::atomic<float> m_questBusyUntil{-1.0f};   // real seconds: a quest moved on lately
         std::array<std::array<RE::FormID, 2>, Arcs::kSlots> m_holders{};
 

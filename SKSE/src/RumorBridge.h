@@ -22,6 +22,9 @@ namespace IntelEngine {
          *  place lies in no hold of the list or there is nothing to say. Any thread. */
         std::uint32_t Note(Rumors::Kind kind, const std::string& text, RE::FormID location, RE::FormID about, RE::FormID lead,
                            Rumors::Owner owner, std::uint32_t ownerId, float weight, bool ownEntry);
+        /** News of the world (politics): it begins in the hold a city or hold of this name lies in ("Solitude",
+         *  "Haafingar"), or where the player last was when the name says nothing. Any thread. */
+        std::uint32_t NoteNews(const std::string& text, const std::string& where, float weight, std::uint32_t ownerId);
         /** Everything of one owner goes (a story given up, taken on or ended; a quest closed). Any thread. */
         void Withdraw(Rumors::Owner owner, std::uint32_t ownerId, Rumors::Kind only = Rumors::Kind{});
         /** The owners (ids) that have a rumor of this kind out: so their keeper can take it back when its time is over. */
@@ -57,6 +60,7 @@ namespace IntelEngine {
         Rumors::Ledger m_ledger;
         float m_lastTick = -1.0f;                 // game days
         std::atomic<float> m_now{0.0f};           // the game's time at the last tick, for readers on other threads
+        std::atomic<std::uint8_t> m_playerHold{0};  // the hold the player was last in (Tick), for news that names no place
         std::chrono::steady_clock::time_point m_loadedAt{};
         bool m_reconciled = false;
     };

@@ -55,6 +55,11 @@ namespace IntelEngine {
         std::string prisonLocation;  // Cell EditorID for prisoner holding (Phase 4)
         float prisonMarker[3] = {};  // [x, y, z] position within prison cell (Phase 4)
         int peSide = -1;            // optional Political Engine side (0-3); -1 = derive from skyrimFactionId
+        // The quests of the game that must be finished before this faction is free to go to war or be harmed
+        // ("free_after" in factions.yaml; "A|B": either). Not given: the game's own for its skyrim_faction_id
+        // (VanillaWar::QuestlineOf). Given and empty: never bound.
+        std::vector<std::string> freeAfter;
+        bool freeAfterSet = false;
     };
 
     /** Political Engine side of an organization: its pe_side if set, else its engine-faction default (-1 = none). */
@@ -242,6 +247,7 @@ namespace IntelEngine {
             nlohmann::json vanillaSides = nlohmann::json::array();
             std::uint8_t civilWar = 0;   // VanillaWar::State: the game's own civil war as the game keeps it
             int playerSide = 0;          // 0 none, 1 the Empire, 2 the Stormcloaks
+            std::unordered_map<std::string, std::string> bound;   // faction id -> the story of the game that still binds it
         };
 
         /**
@@ -385,6 +391,8 @@ namespace IntelEngine {
         std::string CanonicalId(const std::string& anyCase) const;
         /** The game's own civil war as last read (VanillaWar::State). Any thread. */
         std::uint8_t CivilWarState() const { return vanillaWar_.load(); }
+        /** The story of the game that still binds a faction (the quest's name), empty when it is free. Any thread. */
+        std::string BoundBy(const std::string& factionId) const;
         int CivilWarPlayerSide() const { return vanillaAllegiance_.load(); }
 
         /** Process one war tick for all active wars.
@@ -522,6 +530,10 @@ namespace IntelEngine {
         std::unordered_map<std::string, std::string> idByLower_;   // lowercase id -> id as written (ids are asked for in any case)
         std::atomic<std::uint8_t> vanillaWar_{0};                  // VanillaWar::State, read on the game's thread each tick
         std::atomic<int> vanillaAllegiance_{0};
+        mutable std::mutex boundMutex_;
+        std::unordered_map<std::string, std::string> boundBy_;   // read on the game's thread each tick (BuildPoliticsTickSnapshot)
+        /** What happened in the world's politics becomes talk (RumorBridge): how far it travels follows its kind. */
+        void News(const std::string& factionA, const std::string& eventType, const std::string& text, int eventId);
     };
 
 }  // namespace IntelEngine

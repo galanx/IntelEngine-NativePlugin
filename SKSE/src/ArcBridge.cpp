@@ -416,6 +416,8 @@ namespace IntelEngine {
     bool ArcBridge::Usable(RE::Actor* actor, int need, std::string& why) const {
         if (!actor || actor->IsDead() || actor->IsDisabled() || actor->IsDeleted()) return why = "dead or gone", false;
         if (actor->IsChild()) return why = "a child", false;
+        // The user's own lists: someone they keep out of stories has no part in a town's story either.
+        if (NPCIndex::BlockedForStories(actor)) return why = "kept out of stories by the user's lists", false;
         if (actor->IsPlayerTeammate() || InFaction(actor, kCurrentFollower)) return why = "with the player", false;
         if (actor->IsInCombat()) return why = "fighting", false;
         // Each of these takes its own lock: Usable is never called with this bridge's lock held.
@@ -1109,7 +1111,7 @@ namespace IntelEngine {
 
     void ArcBridge::Pace() {
         auto* player = RE::PlayerCharacter::GetSingleton();
-        if (!player || !m_catalogued) return;
+        if (!player || !m_catalogued || !m_storiesOn.load()) return;
         const float now = NowDays();
         auto* cell = player->GetParentCell();
         auto* town = TownOf(cell && cell->GetLocation() ? cell->GetLocation() : player->GetCurrentLocation());
@@ -1159,6 +1161,7 @@ namespace IntelEngine {
             auto* asker = RE::TESForm::LookupByID<RE::Actor>(f->ref);
             if (!asker || asker->IsDead() || asker->IsDisabled()) continue;
             if (AskedWithin(asker->GetFormID(), kAskerRestDays)) continue;
+            if (NPCIndex::BlockedForStories(asker)) continue;   // the user's own lists
             // A stranger who has heard nothing of the player does not go looking for them: only when the player is
             // right there, where a stranger with trouble might take a chance on a stranger.
             TaleSeed talk;
@@ -2410,15 +2413,7 @@ namespace IntelEngine {
     bool ArcBridge::SiteFree(RE::BGSLocation* location, const std::unordered_set<RE::FormID>& objectiveLocations, std::string& why) const {
         if (!location) return why = "no place", false;
         if (objectiveLocations.contains(location->GetFormID())) return why = "a quest of the player's leads there", false;
-        if (const auto it = m_questPlaces.find(location->GetFormID()); it != m_questPlaces.end()) {
-            for (const auto questId : it->second) {
-                auto* quest = RE::TESForm::LookupByID<RE::TESQuest>(questId);
-                if (quest && !quest->IsCompleted()) {
-                    const char* name = quest->GetFullName();
-                    return why = std::string("a quest of the game still needs it (") + (name && *name ? name : "a quest") + ")", false;
-                }
-            }
-        }
+        if (std::string quest; GameNeedsPlace(location->GetFormID(), &quest)) return why = "a quest of the game still needs it (" + quest + ")", false;
         if (QuestBridge::GetSingleton()->PlaceInUse(location->GetFormID())) return why = "a quest of IntelEngine's is set there", false;
         std::scoped_lock lock(m_mutex);
         for (const auto& a : m_book.all) {
@@ -2428,6 +2423,35 @@ namespace IntelEngine {
             }
         }
         return true;
+    }
+
+    bool ArcBridge::GameNeedsPlace(RE::FormID location, std::string* quest) const {
+        const auto it = m_questPlaces.find(location);
+        if (it == m_questPlaces.end()) return false;
+        for (const auto questId : it->second) {
+            auto* q = RE::TESForm::LookupByID<RE::TESQuest>(questId);
+            if (q && !q->IsCompleted()) {
+                const char* name = q->GetFullName();
+                if (quest) *quest = name && *name ? name : "a quest";
+                return true;
+            }
+        }
+        return false;
+    }
+
+    bool ArcBridge::PlaceInStory(RE::FormID location) const {
+        std::scoped_lock lock(m_mutex);
+        for (const auto& a : m_book.all) {
+            if (!A::IsLive(a)) continue;
+            for (const auto s : a.site) if (s == location) return true;
+        }
+        return false;
+    }
+
+    void ArcBridge::StoriesOn(bool on) {
+        if (m_storiesOn.exchange(on) != on) {
+            logger::info("Arcs: the Stories switch is {}: {}", on ? "on" : "off", on ? "the town's stories come again" : "no new story of the town begins; those open go on");
+        }
     }
 
     bool ArcBridge::FetchProp(std::uint32_t id, int prop) {
@@ -3220,6 +3244,7 @@ namespace IntelEngine {
             if (who) HeartBridge::Told(who->GetFormID(), sparked, stance, withChild, childIsPlayers, children, playersChild, refusedAt);
         }
         std::int32_t ArcRankAfter(RE::StaticFunctionTag*, std::int32_t rank, bool closer) { return Hearts::RankAfter(rank, closer); }
+        void ArcStoriesOn(RE::StaticFunctionTag*, bool on) { ArcBridge::GetSingleton()->StoriesOn(on); }
         void ArcEarshot(RE::StaticFunctionTag*, float units) {
             // Whisper mode shrinks SkyrimNet's distance to a couple of steps: someone that near still stands there.
             const float earshot = std::isfinite(units) && units > 0.0f ? std::clamp(units, 500.0f, 3000.0f) : kEarshotDefault;
@@ -3309,6 +3334,7 @@ namespace IntelEngine {
         a_vm->RegisterFunction("ArcOfferDeferred", script, ArcOfferDeferred); ++count;
         a_vm->RegisterFunction("ArcCompany", script, ArcCompany); ++count;
         a_vm->RegisterFunction("ArcEarshot", script, ArcEarshot); ++count;
+        a_vm->RegisterFunction("ArcStoriesOn", script, ArcStoriesOn); ++count;
         a_vm->RegisterFunction("ArcHeart", script, ArcHeart); ++count;
         a_vm->RegisterFunction("ArcRankAfter", script, ArcRankAfter); ++count;
         a_vm->RegisterFunction("ArcOfferHeldBack", script, ArcOfferHeldBack); ++count;

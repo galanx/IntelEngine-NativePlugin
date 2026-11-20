@@ -1252,6 +1252,11 @@ namespace IntelEngine {
         return false;
     }
 
+    bool NPCIndex::BlockedForStories(RE::Actor* actor) {
+        if (!actor) return true;
+        return IsInBlockedFaction(actor) || IsBlockedByName(actor) || !PassesFactionWhitelist(actor) || !PassesNPCWhitelist(actor);
+    }
+
     bool NPCIndex::IsEligibleStoryCandidate(RE::Actor* actor, RE::Actor* player,
         RE::TESObjectCELL* playerCell, SlotTracker* tracker) {
         if (!PassesCommonEligibility(actor, player, tracker, false)) return false;
