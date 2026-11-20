@@ -589,6 +589,10 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
   const polEventTypeValid = !!touched.eventType && POLITICAL_EVENT_TYPES.some(type => type.key === polEventType);
   const storyRequired = [[storyType === 'informant' ? 'Informant NPC' : 'NPC', !!storyNpc.trim()], ['Story type', storyTypeValid], ...(storyType === 'informant' ? [] : [['Narration', !!storyNarration.trim()]]), ...variantRequired(currentFields, storyFields)];
   const socialRequired = [['NPC 1', !!socialNpc1.trim()], ['NPC 2', !!socialNpc2.trim()], ['Social type', socialTypeValid], ['Narration', !!socialNarration.trim()], ...variantRequired(currentSocialFields, socialFields)];
+  // A war_declaration for a pair war_allowed doesn't permit is refused in game; say so first. war_with comes from the DLL
+  // (absent on an older DLL, then nothing is blocked).
+  const polWarWith = factions.find(f => f.id === polFactionA.trim())?.war_with;
+  const polWarBlocked = polEventType === 'war_declaration' && Array.isArray(polWarWith) && !!polFactionB.trim() && !polWarWith.includes(polFactionB.trim());
   const politicalRequired = [['Faction A', !!polFactionA.trim()], ['Faction B', !!polFactionB.trim() && polFactionA.trim() !== polFactionB.trim()], ['Political event type', polEventTypeValid], ['Description', !!polDescription.trim()]];
   const missingFields = fields => fields.some(([, valid]) => !valid) && <p className="text-[10px] text-gray-400">Fill required fields: {fields.filter(([, valid]) => !valid).map(([label]) => label).join(', ')}</p>;
   const busyHeader = form => {
@@ -918,12 +922,13 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
           </Field>
           <button
             onClick={handleDispatchPolitics}
-            disabled={politicalRequired.some(([, valid]) => !valid)}
+            disabled={politicalRequired.some(([, valid]) => !valid) || polWarBlocked}
             className="w-full px-3 py-1.5 text-xs font-medium rounded transition-colors bg-amber-500/20 text-amber-400 hover:bg-amber-500/30 disabled:opacity-30 disabled:cursor-not-allowed"
           >
             {busyConfirm.startsWith('sent:dispatchPolitics:') ? 'Sent' : 'Dispatch Political Event'}
           </button>
           {missingFields(politicalRequired)}
+          {polWarBlocked && <p className="text-[10px] text-amber-400">These two can't go to war. Only pairs allowed by war_allowed in factions.yaml fight wars (by default, military factions only).</p>}
         </fieldset>
       </section>
 
