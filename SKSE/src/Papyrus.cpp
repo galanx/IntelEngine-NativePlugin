@@ -230,8 +230,17 @@ namespace IntelEngine::Papyrus {
     // Battle system forward declarations
     RE::BSFixedString GetFactionSoldierTemplate(RE::StaticFunctionTag*, RE::BSFixedString);
     std::vector<RE::Actor*> SpawnBattleSoldiers(RE::StaticFunctionTag*, RE::BSFixedString, RE::TESObjectREFR*);
-    RE::BSFixedString ExecuteFullBattleSpawn(RE::StaticFunctionTag*, RE::BSFixedString, RE::Actor*, float, RE::TESObjectREFR*);
-    RE::BSFixedString SpawnReinforcements(RE::StaticFunctionTag*, int, RE::Actor*, RE::TESObjectREFR*);
+    RE::BSFixedString BattlePickField(RE::StaticFunctionTag*, RE::Actor*, RE::TESObjectREFR*);
+    RE::BSFixedString BattleMusterLine(RE::StaticFunctionTag*, RE::BSFixedString, int, int, RE::Actor*);
+    RE::BSFixedString BattleReinforceLine(RE::StaticFunctionTag*, RE::BSFixedString, int, int, RE::Actor*);
+    void BattleBeginFight(RE::StaticFunctionTag*);
+    RE::BSFixedString BattleVerdict(RE::StaticFunctionTag*);
+    void BattleNoteTurnedDown(RE::StaticFunctionTag*, RE::BSFixedString);
+    void BattleNotePlayerLeft(RE::StaticFunctionTag*);
+    RE::BSFixedString BattleFieldInfo(RE::StaticFunctionTag*);
+    RE::BSFixedString BattleSay(RE::StaticFunctionTag*, RE::BSFixedString, RE::BSFixedString, RE::BSFixedString, RE::BSFixedString, int, int);
+    int GetBattleWaveOf(RE::StaticFunctionTag*, RE::BSFixedString);
+    void AdvanceBattleWaveOf(RE::StaticFunctionTag*, RE::BSFixedString);
     int GetJsonArrayInt(RE::StaticFunctionTag*, RE::BSFixedString, RE::BSFixedString, int);
     void SetActorProtected(RE::StaticFunctionTag*, RE::Actor*, bool);
     RE::BSFixedString GetBattleSoldierFormIds(RE::StaticFunctionTag*, RE::BSFixedString);
@@ -663,8 +672,17 @@ namespace IntelEngine::Papyrus {
         // Battle System Functions
         a_vm->RegisterFunction("GetFactionSoldierTemplate", SCRIPT_NAME, GetFactionSoldierTemplate); ++count;
         a_vm->RegisterFunction("SpawnBattleSoldiers", SCRIPT_NAME, SpawnBattleSoldiers); ++count;
-        a_vm->RegisterFunction("ExecuteFullBattleSpawn", SCRIPT_NAME, ExecuteFullBattleSpawn); ++count;
-        a_vm->RegisterFunction("SpawnReinforcements", SCRIPT_NAME, SpawnReinforcements); ++count;
+        a_vm->RegisterFunction("BattlePickField", SCRIPT_NAME, BattlePickField); ++count;
+        a_vm->RegisterFunction("BattleMusterLine", SCRIPT_NAME, BattleMusterLine); ++count;
+        a_vm->RegisterFunction("BattleReinforceLine", SCRIPT_NAME, BattleReinforceLine); ++count;
+        a_vm->RegisterFunction("BattleBeginFight", SCRIPT_NAME, BattleBeginFight); ++count;
+        a_vm->RegisterFunction("BattleVerdict", SCRIPT_NAME, BattleVerdict); ++count;
+        a_vm->RegisterFunction("BattleNoteTurnedDown", SCRIPT_NAME, BattleNoteTurnedDown); ++count;
+        a_vm->RegisterFunction("BattleNotePlayerLeft", SCRIPT_NAME, BattleNotePlayerLeft); ++count;
+        a_vm->RegisterFunction("BattleFieldInfo", SCRIPT_NAME, BattleFieldInfo); ++count;
+        a_vm->RegisterFunction("BattleSay", SCRIPT_NAME, BattleSay); ++count;
+        a_vm->RegisterFunction("GetBattleWaveOf", SCRIPT_NAME, GetBattleWaveOf); ++count;
+        a_vm->RegisterFunction("AdvanceBattleWaveOf", SCRIPT_NAME, AdvanceBattleWaveOf); ++count;
         a_vm->RegisterFunction("GetJsonArrayInt", SCRIPT_NAME, GetJsonArrayInt); ++count;
         a_vm->RegisterFunction("SetActorProtected", SCRIPT_NAME, SetActorProtected); ++count;
         a_vm->RegisterFunction("GetBattleSoldierFormIds", SCRIPT_NAME, GetBattleSoldierFormIds); ++count;
@@ -5390,21 +5408,41 @@ namespace IntelEngine::Papyrus {
         }
     }
 
-    RE::BSFixedString ExecuteFullBattleSpawn(RE::StaticFunctionTag*,
-                                              RE::BSFixedString questAutoJoinFaction,
-                                              RE::Actor* player, float playerAngleZ,
-                                              RE::TESObjectREFR* spawnAnchor) {
-        auto* bm = BattleManager::GetSingleton();
-        if (!bm) return RE::BSFixedString("{}");
-        return RE::BSFixedString(bm->ExecuteFullBattleSpawn(
-            questAutoJoinFaction.c_str(), player, playerAngleZ, spawnAnchor).c_str());
+    RE::BSFixedString BattlePickField(RE::StaticFunctionTag*, RE::Actor* player, RE::TESObjectREFR* place) {
+        return RE::BSFixedString(BattleManager::GetSingleton()->PickField(player, place).c_str());
     }
 
-    RE::BSFixedString SpawnReinforcements(RE::StaticFunctionTag*, int count, RE::Actor* player,
-                                          RE::TESObjectREFR* spawnAnchor) {
-        auto* bm = BattleManager::GetSingleton();
-        if (!bm) return RE::BSFixedString("{}");
-        return RE::BSFixedString(bm->SpawnReinforcements(count, player, spawnAnchor).c_str());
+    RE::BSFixedString BattleMusterLine(RE::StaticFunctionTag*, RE::BSFixedString side, int first, int count, RE::Actor* player) {
+        return RE::BSFixedString(BattleManager::GetSingleton()->MusterLine(side.c_str(), first, count, player).c_str());
+    }
+
+    RE::BSFixedString BattleReinforceLine(RE::StaticFunctionTag*, RE::BSFixedString side, int first, int count, RE::Actor* player) {
+        return RE::BSFixedString(BattleManager::GetSingleton()->ReinforceLine(side.c_str(), first, count, player).c_str());
+    }
+
+    void BattleBeginFight(RE::StaticFunctionTag*) { BattleManager::GetSingleton()->BeginFight(); }
+
+    RE::BSFixedString BattleVerdict(RE::StaticFunctionTag*) {
+        return RE::BSFixedString(BattleManager::GetSingleton()->Verdict().c_str());
+    }
+
+    void BattleNoteTurnedDown(RE::StaticFunctionTag*, RE::BSFixedString factionId) {
+        BattleManager::GetSingleton()->NoteTurnedDown(factionId.c_str());
+    }
+
+    void BattleNotePlayerLeft(RE::StaticFunctionTag*) { BattleManager::GetSingleton()->NotePlayerLeft(); }
+
+    RE::BSFixedString BattleFieldInfo(RE::StaticFunctionTag*) {
+        return RE::BSFixedString(BattleManager::GetSingleton()->FieldInfo().c_str());
+    }
+
+    int GetBattleWaveOf(RE::StaticFunctionTag*, RE::BSFixedString side) { return BattleManager::GetSingleton()->GetWave(side.c_str()); }
+
+    void AdvanceBattleWaveOf(RE::StaticFunctionTag*, RE::BSFixedString side) { BattleManager::GetSingleton()->AdvanceWaveOf(side.c_str()); }
+
+    RE::BSFixedString BattleSay(RE::StaticFunctionTag*, RE::BSFixedString what, RE::BSFixedString a, RE::BSFixedString b,
+                                RE::BSFixedString name, int number, int other) {
+        return RE::BSFixedString(BattleManager::GetSingleton()->Say(what.c_str(), a.c_str(), b.c_str(), name.c_str(), number, other).c_str());
     }
 
     RE::BSFixedString GetBattleSoldierFormIds(RE::StaticFunctionTag*, RE::BSFixedString side) {
@@ -5445,13 +5483,6 @@ namespace IntelEngine::Papyrus {
         if (bm) bm->SnapshotBounties();
     }
 
-    // Snapshot of bounty at battle start — only clear what was added DURING the battle
-    static std::unordered_map<RE::FormID, std::int32_t> s_preBattleBounty;
-    static constexpr RE::FormID kHoldCrimeFactions[] = {
-        0x00029DB0, 0x00029DB1, 0x00029DB2, 0x00029DB3, 0x00029DB4,
-        0x00029DB5, 0x00029DB6, 0x00029DB7, 0x00029DB8
-    };
-
     void ClearBattleTeammates(RE::StaticFunctionTag*) {
         // Centralized: delegates to BattleManager::RestoreEnlistedGuards which uses
         // tracked FormIDs (works even if guards unloaded). No more ForEachLoadedActor guesswork.
@@ -5459,29 +5490,10 @@ namespace IntelEngine::Papyrus {
     }
 
     void ClearAllHoldBounties(RE::StaticFunctionTag*) {
-        // Revert bounty to pre-battle snapshot — only clears what accumulated DURING the battle.
-        // First call snapshots current bounty; subsequent calls revert to snapshot.
-        if (s_preBattleBounty.empty()) {
-            // First call — take snapshot
-            for (auto fid : kHoldCrimeFactions) {
-                auto* faction = RE::TESForm::LookupByID<RE::TESFaction>(fid);
-                if (faction) {
-                    s_preBattleBounty[fid] = faction->GetCrimeGold();
-                }
-            }
-            return;
-        }
-        // Subsequent calls — revert to snapshot
-        for (auto fid : kHoldCrimeFactions) {
-            auto* faction = RE::TESForm::LookupByID<RE::TESFaction>(fid);
-            if (!faction) continue;
-            auto it = s_preBattleBounty.find(fid);
-            std::int32_t preBattle = (it != s_preBattleBounty.end()) ? it->second : 0;
-            if (faction->GetCrimeGold() > preBattle) {
-                faction->SetCrimeGold(preBattle);
-                faction->SetCrimeGoldViolent(0);
-            }
-        }
+        // Does nothing any more (kept for scripts of an older version). It was meant to take back the bounty a battle
+        // brought, in every hold. Of its nine "hold crime factions" one was a crime faction, Haafingar: only Solitude's
+        // bounty was ever noted and set back, wherever the battle was. The soldiers of a battle belong to no crime
+        // faction: killing them brings no bounty to take back.
     }
 
     // ClearBattleBounties and RestoreBounties implementations removed.
@@ -5735,7 +5747,6 @@ namespace IntelEngine::Papyrus {
 
     void ResetBattleState(RE::StaticFunctionTag*) {
         BattleManager::GetSingleton()->ResetBattleState();
-        s_preBattleBounty.clear();  // Reset bounty snapshot for next battle
     }
 
     RE::BSFixedString CalculateBattleMarkerPosition(RE::StaticFunctionTag*,
@@ -5787,6 +5798,9 @@ namespace IntelEngine::Papyrus {
 
             // Skip battle-spawned soldiers (they have temp FormIDs in FF range)
             if ((a->GetFormID() >> 24) == 0xFF) continue;
+            // People witness things. (Two chickens and a cow of Chillfurrow Farm were given the memory of having
+            // witnessed a battle between the Legion and the Stormcloaks, 2026-11-20.)
+            if (!a->HasKeywordString("ActorTypeNPC")) continue;
 
             result.push_back(a);
         }
@@ -5894,7 +5908,10 @@ namespace IntelEngine::Papyrus {
         auto* player = RE::PlayerCharacter::GetSingleton();
         if (!player) return -1;
         auto pos = player->GetPosition();
-        return BattleManager::GetSingleton()->PollPendingBattles(pos.x, pos.y, pos.z);
+        auto* cell = player->GetParentCell();
+        auto* world = player->GetWorldspace();
+        return BattleManager::GetSingleton()->PollPendingBattles(pos.x, pos.y, world ? world->GetFormID() : 0,
+                                                                 !cell || cell->IsInteriorCell());
     }
 
     void RemovePendingBattle(RE::StaticFunctionTag*, int id) {

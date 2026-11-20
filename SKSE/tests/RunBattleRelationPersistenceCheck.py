@@ -55,7 +55,7 @@ template<class... T> void error(T&&...) {}
         "\nvoid FactionPolitics::WritePoliticalStateFile() {}\n"
         # The end of a war becomes talk of the day (RumorBridge) in the game; here it only needs to link.
         "std::string FactionPolitics::GetFactionDisplayName(const std::string& id) const { return id; }\n"
-        "void FactionPolitics::News(const std::string&, const std::string&, const std::string&, int) {}\n}\n", encoding="utf-8")
+        "void FactionPolitics::News(const std::string&, const std::string&, const std::string&, int, const std::string&) {}\n}\n", encoding="utf-8")
     executable = work / "check.exe"
     subprocess.run([
         "clang++", "-std=c++20", "-Wall", "-Wextra", "-Werror", "-D_CRT_SECURE_NO_WARNINGS",

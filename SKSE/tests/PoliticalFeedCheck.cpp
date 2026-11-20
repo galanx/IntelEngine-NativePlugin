@@ -44,6 +44,10 @@ bool FactionPolitics::EndWar(const std::string&, const std::string&, const std::
 int FactionPolitics::GetActiveWarId(const std::string&, const std::string&) { throw std::runtime_error("unexpected scheduled battle reaction"); }
 std::string FactionPolitics::CheckEventManifestation(const std::string&, const std::string&, const std::string&) { throw std::runtime_error("unexpected manifested reaction"); }
 int BattleManager::AddPendingBattle(const std::string&, const std::string&, const std::string&, const std::string&) { throw std::runtime_error("unexpected battle reaction"); }
+// Nobody is gathered for a battle anywhere in this fixture.
+bool BattleManager::HasPendingBattle(const std::string&, const std::string&) const { return false; }
+std::pair<std::string, std::string> BattleManager::PendingBattlePlace(int) const { return {}; }
+bool BattleManager::PlayerIsInHold(const std::string&) const { return false; }
 int FactionPolitics::SyncVanillaFactionStandings() { return 0; } // No player actor in this offline fixture.
 int FactionPolitics::CheckCrimeGoldStandings() { return 0; } // No engine bounties in this offline fixture.
 nlohmann::json FactionPolitics::TestPEContext() {

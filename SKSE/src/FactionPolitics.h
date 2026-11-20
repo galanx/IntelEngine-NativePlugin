@@ -160,7 +160,7 @@ namespace IntelEngine {
         int RecordPoliticalEvent(const std::string& factionA, const std::string& factionB,
                                  const std::string& eventType, const std::string& description,
                                  int delta, float gameTime, const std::string& locationName = "",
-                                 const nlohmann::json& position = nullptr);
+                                 const nlohmann::json& position = nullptr, const std::string& newsFrom = "");
         std::string GetFactionsJson();
 
         // =================================================================
@@ -539,7 +539,8 @@ namespace IntelEngine {
         mutable std::mutex boundMutex_;
         std::unordered_map<std::string, std::string> boundBy_;   // read on the game's thread each tick (BuildPoliticsTickSnapshot)
         /** What happened in the world's politics becomes talk (RumorBridge): how far it travels follows its kind. */
-        void News(const std::string& factionA, const std::string& eventType, const std::string& text, int eventId);
+        void News(const std::string& factionA, const std::string& eventType, const std::string& text, int eventId,
+                  const std::string& from = "");
     };
 
 }  // namespace IntelEngine

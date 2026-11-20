@@ -12,15 +12,25 @@
  */
 
 #include "Plugin.h"
+#include "Battlefield.h"
 
 #include <nlohmann/json.hpp>
 #include <mutex>
 #include <optional>
 #include <string>
 #include <vector>
+#include <unordered_map>
 #include <unordered_set>
 
+namespace SKSE {
+    class SerializationInterface;
+}
+
 namespace IntelEngine {
+
+    // Co-save record of the armies gathered somewhere (the pending battles). They used to live in memory alone and
+    // were thrown away on every load: word of a battle "before the day is out" had gone round, and it never came.
+    constexpr std::uint32_t kPendingBattleRecord = 'IEPB';
 
     /** A battle waiting to materialize — exists as metadata until the player approaches. */
     struct PendingBattle {
@@ -31,6 +41,8 @@ namespace IntelEngine {
         float x = 0.f, y = 0.f, z = 0.f;  // world coordinates from BGSLocation worldLocMarker
         float deadline = 0.f;               // game time when battle auto-resolves
         std::string resultJson;             // full DM response JSON for post-resolution
+        RE::FormID worldspace = 0;          // the world the place lies in (0: indoors, never fought in view)
+        std::string hold;                   // the hold it lies in, by its name in the game: where word of it starts
     };
 
     class BattleManager {
@@ -50,10 +62,20 @@ namespace IntelEngine {
                              const std::string& factionA, const std::string& factionB,
                              const std::string& resultJson);
 
-        /** Check all pending battles against player position.
-         *  Returns the ID of the first pending battle within triggerDistance, or -1.
-         *  Also expires battles past their deadline (calls RecordOffScreenBattle). */
-        int PollPendingBattles(float playerX, float playerY, float playerZ);
+        /** Check all pending battles against where the player is: the same world, out of doors, within
+         *  Battlefield::kTriggerDistance of the place. Returns the ID of the first such battle, or -1.
+         *  Also decides the battles whose time is up, where nobody saw them (RecordOffScreenBattle), and tells of them. */
+        int PollPendingBattles(float playerX, float playerY, RE::FormID worldspace, bool indoors);
+
+        /** Are these two already gathering for a battle somewhere? */
+        bool HasPendingBattle(const std::string& factionA, const std::string& factionB) const;
+
+        /** The place and the hold of a pending battle, as the game names them ({"", ""} when there is none). */
+        std::pair<std::string, std::string> PendingBattlePlace(int id) const;
+
+        /** Is the player in this hold (by the name the game gives it) right now? Word of a battle reaches them at once
+         *  only there. */
+        bool PlayerIsInHold(const std::string& hold) const;
 
         /** Remove a pending battle by ID (after it has been triggered or expired). */
         void RemovePendingBattle(int id);
@@ -64,8 +86,13 @@ namespace IntelEngine {
         /** Get count of active pending battles. */
         int GetPendingBattleCount() const;
 
-        /** Clear all pending battles and expired results. Called on game reload. */
+        /** Clear all pending battles and expired results. */
         void ClearPendingBattles();
+
+        // The pending battles are kept with the save.
+        void Save(SKSE::SerializationInterface* intfc) const;
+        void Load(SKSE::SerializationInterface* intfc, std::uint32_t version, std::uint32_t length);
+        void Revert();
 
         /** Get and consume one expired battle result JSON from the queue.
          *  Returns "" (empty string) if no expired battles queued.
@@ -85,6 +112,10 @@ namespace IntelEngine {
 
         /** Check if a battle is currently active. */
         bool IsBattleActive() const;
+
+        /** Armies are drawn up or fighting, or a battle has only just ended (its dead on the field, its survivors
+         *  walking off): nobody comes up to the player with a story of their own. */
+        bool IsFieldBusy() const;
 
         /** Get the active battle ID, or -1 if none. */
         int GetActiveBattleId() const;
@@ -128,6 +159,12 @@ namespace IntelEngine {
 
         /** Advance to next wave. Called by Papyrus after spawning wave actors. */
         void AdvanceWave();
+
+        /** Each army brings up its own reserves, when it is the one that needs them ("A" or "B"). An army had its
+         *  next wave whenever either side was thinned: the side that was winning grew as fast as the one that was
+         *  losing, and whoever won the first clash won the battle (three of three, watched 2026-11-20). */
+        int GetWave(const std::string& side) const;
+        void AdvanceWaveOf(const std::string& side);
 
         // =================================================================
         // Player Participation
@@ -181,11 +218,11 @@ namespace IntelEngine {
         std::string ValidateFactionBattleDispatch(const std::string& alliedFaction,
                                                    const std::string& suggestedEnemy = "");
 
-        /** Spawn reinforcements for an active battle (wave 2+).
-         *  Handles factions, aggression, combat pairs, crime faction removal.
-         *  Returns JSON: {success, sideACount, sideBCount, sideAFormIds, sideBFormIds, playerSide} */
-        std::string SpawnReinforcements(int count, RE::Actor* player,
-                                        RE::TESObjectREFR* spawnAnchor = nullptr);
+        /** `count` more soldiers for one side of the active battle ("A" or "B"), created behind their own line where
+         *  the player is least likely to see it, switched off: the script lets them fade in and sends them on.
+         *  first: their number in the group that comes up together (0 picks where the group comes from).
+         *  Returns JSON: {success, count, formIds, error} */
+        std::string ReinforceLine(const std::string& side, int first, int count, RE::Actor* player);
 
         /** Calculate mid-battle state for late-arriving player.
          *  Returns JSON: {soldiersPerSide, moraleLossA, moraleLossB} */
@@ -201,10 +238,6 @@ namespace IntelEngine {
         /** Called every Papyrus poll — clears bounty and stops hostile friendly guards. */
         void SuppressBountyTick();
 
-        /** Enlist nearby friendly guards into the battle (add to battle faction, remove crime factions).
-         *  Tracked in modifiedGuardFormIds_ for reliable cleanup. */
-        void EnlistFriendlyGuards(const std::string& playerFactionId, RE::TESFaction* battleFaction, RE::Actor* player);
-
         /** Restore all enlisted guards to pre-battle state (remove battle faction, restore crime factions).
          *  Uses tracked FormIDs — works even if guards unloaded. */
         void RestoreEnlistedGuards();
@@ -212,28 +245,68 @@ namespace IntelEngine {
         /** Clean up ALL stale battle state — called on game load as safety net. */
         void CleanupStaleBattleState();
 
-        /** Remove player from hold crime factions (prevents ALL bounty).
-         *  Called at faction quest start. Stays removed until RestorePlayerCrimeFactions. */
+        /** Both do nothing any more (kept for the scripts that call them). 3.8 took the player "out of the nine hold
+         *  crime factions" for a faction quest and "put them back" afterwards. The player is in none of them to begin
+         *  with, and of the nine ids only one was a crime faction (see RepairPlayerFactions). */
         void RemovePlayerCrimeFactions();
-
-        /** Restore player to hold crime factions and clear residual bounty.
-         *  Called when faction quest fully completes. */
         void RestorePlayerCrimeFactions();
 
-        /** Execute the ENTIRE battle spawn sequence in C++.
-         *  Handles: player join, position calculation, spawn both sides,
-         *  faction assignment, combat initiation setup.
-         *  spawnAnchor: quest location ObjectReference — soldiers spawn HERE, not at player.
-         *  Returns JSON: {success, sideACount, sideBCount, playerJoined, joinFaction,
-         *                  notification, leaderFormId, sideAFormIds, sideBFormIds}
-         *  Papyrus only does: SetPlayerTeammate, ForceRefTo (quest marker). */
-        std::string ExecuteFullBattleSpawn(const std::string& questAutoJoinFaction,
-                                           RE::Actor* player, float playerAngleZ,
-                                           RE::TESObjectREFR* spawnAnchor);
+        /** Takes the player out of the three factions 3.8 put them into at the end of every battle joined and every
+         *  faction quest: CrimeFactionHaafingar, TownIrontreeMillFaction and TownHalfMoonMillFaction (the ids it took
+         *  for "the nine hold crime factions": 00029DB0 to 00029DB8, of which only the first is one, the next two are
+         *  two mills' people, and the rest are not factions). Run on every load. */
+        void RepairPlayerFactions();
 
-        /** Get the ESP side ("A" or "B") assigned to a political faction ID.
-         *  Uses the sideAFaction normalization: sideAFaction → "A", everything else → "B".
-         *  Returns "A" if no battle is active or sideAFaction is unset (safe default). */
+        /** Where the two armies of the active battle can be drawn up near the player: not where the player stands,
+         *  not where people live or stand about, on ground that is there, dry, and not across a cliff. `place`:
+         *  what the battle is named after (may be null). The field found is remembered for the battle.
+         *  Returns JSON: {ok, x, y, z, axis, reason} */
+        std::string PickField(RE::Actor* player, RE::TESObjectREFR* place);
+
+        /** Part of one army of the active battle drawn up on its field ("A" or "B"): soldiers `first` to
+         *  `first + count - 1` of its first wave, in ranks, the commander (number 0) in front, facing the other line,
+         *  standing down (they start nothing). Created where they stand, switched off: the script lets them fade in.
+         *  A few at a time: making one soldier takes about a quarter of a millisecond of the game's frame.
+         *  Returns JSON: {success, count, formIds, commander: [id] (with number 0), error} */
+        std::string MusterLine(const std::string& side, int first, int count, RE::Actor* player);
+
+        /** The lines have met: from now on the battle can be won and lost. */
+        void BeginFight();
+        bool IsMustering() const;
+
+        /** Who has the better of a battle that is not fought out (the player left, it went on too long).
+         *  Returns JSON: {result, victor} (victor "" and result "draw" when neither). */
+        std::string Verdict() const;
+
+        /** A side called the player to its line and was turned down or not answered. */
+        void NoteTurnedDown(const std::string& factionId);
+        /** The player has gone from the field: what follows is decided with nobody watching. Whoever had taken a
+         *  side walked away from it. */
+        void NotePlayerLeft();
+
+        /** A sentence of a battle, whole, for the script to show or to give somebody to say. Whole because of how the
+         *  game keeps text: one spelling for all strings that differ only in capitals, whichever came first. "the
+         *  Imperial Legion", put together in a script, came out as "The Imperial Legion" in the middle of a sentence
+         *  (2026-11-20), and would again for any name the game already holds with a capital.
+         *  what: see the function. a, b: faction ids. name: someone's name. number, other: counts. */
+        std::string Say(const std::string& what, const std::string& a, const std::string& b, const std::string& name, int number,
+                        int other) const;
+
+        /** For SkyrimNet (decorator get_intelengine_battle_side): the name of the army this soldier stands in, when
+         *  the player may still join it by saying so; empty for everyone else. */
+        std::string SideOpenTo(RE::Actor* actor) const;
+        /** For SkyrimNet (decorator get_intelengine_battle): what a soldier of the battle knows about where they
+         *  stand right now; empty for everyone else. */
+        std::string SoldierBrief(RE::Actor* actor) const;
+
+        /** The field of the active battle.
+         *  Returns JSON: {set, x, y, z, axis, mustering, commanderA: [id], commanderB: [id]} */
+        std::string FieldInfo() const;
+
+        /** The side ("A" or "B") a political faction stands on in the active battle: the battle's first faction is
+         *  side A (Intel_BattleSideA), the other side B. (3.8 put "the player's side" on A, but only on one of the two
+         *  ways a battle could begin: on the other this answered "A" for both factions, and a player who joined the
+         *  second faction fought their own side.) */
         std::string GetFactionSide(const std::string& factionId) const;
 
         /** Get FormIDs of soldiers on a given side ("A" or "B").
@@ -301,7 +374,8 @@ namespace IntelEngine {
             std::string locationName;
             int moraleA = 100;
             int moraleB = 100;
-            int currentWave = 0;         // 0=pre-battle, 1/2/3 = wave number
+            int currentWave = 0;         // 0=pre-battle, 1/2/3 = wave number (the further of the two sides)
+            int waveA = 0, waveB = 0;    // how many of its waves each side has on the field
             int waveStartAliveA = 0;     // alive count at start of current wave (casualty baseline)
             int waveStartAliveB = 0;
             // Narration throttling — track which events have been narrated
@@ -321,12 +395,32 @@ namespace IntelEngine {
             int playerKillsA = 0;            // soldiers from factionA killed by player
             int playerKillsB = 0;            // soldiers from factionB killed by player
             nlohmann::json physicalPosition = nullptr;
+
+            // The field (PickField), and how the battle stands on it.
+            bool fieldSet = false;
+            float fieldX = 0.f, fieldY = 0.f, fieldZ = 0.f, fieldAxis = 0.f;
+            bool mustering = true;           // drawn up, not yet fighting: nothing is decided
+            RE::FormID commanderA = 0, commanderB = 0;
+            std::unordered_set<std::string> turnedDown;   // sides that called the player to their line in vain
+            bool playerLeft = false;         // took a side and walked away
+            bool unseen = false;             // the player has gone: nobody is watching
+            std::string commanderFell;       // a side whose commander has just fallen, until the poll has said so
+            float reserveAX = 0.f, reserveAY = 0.f, reserveBX = 0.f, reserveBY = 0.f;   // where the group now coming up comes from
         };
-        /** Spawn soldiers for one faction side. Shared by ExecuteFullBattleSpawn and SpawnReinforcements. */
-        std::vector<RE::Actor*> SpawnSoldiersForFaction(
-            const std::string& factionId, RE::TESFaction* battleFaction,
-            int count, RE::TESObjectREFR* spawnRef, RE::Actor* player,
-            float offsetX = 0.f, float offsetY = 0.f, float centerX = 0.f, float centerY = 0.f);
+        /** The people a faction raises: `count` of its soldier template (its first ally's, the bandits', when its own
+         *  yields nobody). */
+        std::vector<RE::TESBoundObject*> RollFor(const std::string& factionId, int count, RE::Actor* player) const;
+        /** The record a soldier template names, looked up once a game session (by name it is a search). */
+        RE::TESBoundObject* TemplateOf(const std::string& templateId) const;
+        mutable std::unordered_map<std::string, RE::TESBoundObject*> templates_;
+        mutable std::mutex templatesMutex_;
+
+        /** Soldiers of one side created where they are to stand (never at the player), facing `facingDeg`, switched
+         *  off, without the factions they came with, in their battle side. standDown: they start no fight (the lines
+         *  at the muster). commander: the first of them leads the side. */
+        std::vector<RE::Actor*> RaiseSoldiers(const std::string& factionId, RE::TESFaction* battleFaction,
+                                              const std::vector<Battlefield::Vec>& spots, float facingDeg, float fallbackZ,
+                                              RE::Actor* player, bool standDown, bool commander);
 
         /** Resolve Intel_BattleSideA and Intel_BattleSideB factions from IntelEngine.esp.
          *  Returns {nullptr, nullptr} if ESP not found. */
@@ -342,6 +436,7 @@ namespace IntelEngine {
         mutable std::mutex mutex_;
         int nextBattleId_ = 1;
         std::atomic<bool> suppressBattleBounty_{false};  // set during active battle with player
+        std::atomic<double> quietUntil_{0.0};            // real seconds (steady clock): the aftermath of the last battle
 
         // Non-battle actors modified during battle (guards added to battle faction + teammate).
         // Tracked for reliable cleanup — ForEachLoadedActor misses unloaded actors.
@@ -352,8 +447,10 @@ namespace IntelEngine {
         std::vector<PendingBattle> pendingBattles_;
         mutable std::mutex pendingMutex_;  // separate mutex — pending ops don't touch active battle
         int nextPendingId_ = 1;
-        static constexpr float PENDING_TRIGGER_DISTANCE = 5000.f;
-        static constexpr float PENDING_BATTLE_DURATION = 3.0f / 24.0f;  // 3 game hours in days
+        // How long two armies face each other before it is decided without the player: long enough for word of
+        // it to reach a tavern and for someone who hears it there to walk out to the field. (3.8: three game hours,
+        // nine minutes of play, with the outcome already told.)
+        static constexpr float PENDING_BATTLE_DURATION = 10.0f / 24.0f;  // game days
 
         // Standing constants (MUST match Papyrus properties in IntelEngine_Battle.psc lines 40-47)
         static constexpr int KILL_STANDING_PENALTY_PER_SOLDIER = -5;
@@ -363,16 +460,19 @@ namespace IntelEngine {
         static constexpr int DEFEAT_ENEMY_PENALTY = -5;
         static constexpr int SPECTATOR_PENALTY = -5;
         static constexpr int SPECTATOR_PENALTY_THRESHOLD = 10;
-        static constexpr int AUTO_JOIN_STANDING_THRESHOLD = 20;
-        static constexpr int HOSTILE_STANDING_THRESHOLD = -40;  // faction attacks player on sight
+        static constexpr int AUTO_JOIN_STANDING_THRESHOLD = Battlefield::kFriendStanding;
+        static constexpr int HOSTILE_STANDING_THRESHOLD = Battlefield::kHostileStanding;  // faction attacks player on sight
+        static constexpr int NEUTRAL_KILL_PENALTY = -3;     // each soldier cut down by someone who took no side
+        static constexpr int NEUTRAL_KILL_PENALTY_MOST = -15;
+        static constexpr int DESERTION_PENALTY = -8;        // took a side and walked away from it
 
-        // Wave soldier counts — MUST match Papyrus GetWaveSoldierCount() in IntelEngine_Battle.psc
-        static constexpr int WAVE1_SOLDIERS = 6;   // vanguard
-        static constexpr int WAVE2_SOLDIERS = 5;   // first reinforcements
-        static constexpr int WAVE3_SOLDIERS = 4;   // second reinforcements
-        static constexpr int WAVE4_SOLDIERS = 4;   // reserves
-        static constexpr int WAVE5_SOLDIERS = 3;   // last stand
-        static constexpr int MAX_SOLDIERS_PER_SIDE = 22;
+        // Wave soldier counts: Battlefield::WaveSize (the script asks for the same numbers).
+        static constexpr int WAVE1_SOLDIERS = Battlefield::WaveSize(1);
+        static constexpr int WAVE2_SOLDIERS = Battlefield::WaveSize(2);
+        static constexpr int WAVE3_SOLDIERS = Battlefield::WaveSize(3);
+        static constexpr int WAVE4_SOLDIERS = Battlefield::WaveSize(4);
+        static constexpr int WAVE5_SOLDIERS = Battlefield::WaveSize(5);
+        static constexpr int MAX_SOLDIERS_PER_SIDE = Battlefield::kMaxPerSide;
 
         // Spawn distances
         static constexpr float SPAWN_DISTANCE = 400.f;
@@ -386,19 +486,6 @@ namespace IntelEngine {
         // Populated when battle ends, cleared when physical cleanup completes.
         std::vector<RE::FormID> cleanupFormIds_;
         mutable std::mutex cleanupMutex_;
-
-        // Hold crime faction FormIDs (Skyrim.esm) — removed from soldiers to prevent bounty
-        static constexpr RE::FormID kCrimeFactionIds[] = {
-            0x00029DB0,  // Whiterun
-            0x00029DB1,  // Rift
-            0x00029DB2,  // Reach
-            0x00029DB3,  // Eastmarch
-            0x00029DB4,  // Haafingar
-            0x00029DB5,  // Hjaalmarch
-            0x00029DB6,  // Pale
-            0x00029DB7,  // Falkreath
-            0x00029DB8   // Winterhold
-        };
     };
 
 }  // namespace IntelEngine

@@ -127,7 +127,7 @@ template<class... T> void error(T&&...) {}
         "\nvoid FactionPolitics::WritePoliticalStateFile() {}\n"
         # No quests of the game in this fixture: nobody is bound by a story of their own; and no talk of the day.
         "std::string FactionPolitics::BoundBy(const std::string&) const { return {}; }\n"
-        "void FactionPolitics::News(const std::string&, const std::string&, const std::string&, int) {}\n}\n", encoding="utf-8")
+        "void FactionPolitics::News(const std::string&, const std::string&, const std::string&, int, const std::string&) {}\n}\n", encoding="utf-8")
     context_start = source.index("        auto pe = PoliticalEngineBridge::GetSingleton()->Context();")
     context_end = source.index("        // Active wars", context_start)
     (work / "PEContext.inc").write_text(source[context_start:context_end])

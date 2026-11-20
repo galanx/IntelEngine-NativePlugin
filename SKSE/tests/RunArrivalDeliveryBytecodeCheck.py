@@ -1563,7 +1563,9 @@ def run_game_time_tick_checks(files, history, others):
             require(not direct, f"{script}.{name} still sets or clears the game-time timer itself")
     asked = sum(1 for functions in scripts.values() for _params, code, _locals in functions.values()
                 for op, args in code if op == "callmethod" and args[0][1] == "RequestGameTimeTick")
-    require(asked >= 6, f"expected the schedule, the story engine and the battle script to ask Core for the timer, found {asked} calls")
+    # (The battle script asked twice until 4.0: a battle that was announced waited for its hour and was then fought
+    # wherever the player stood. A battle gathers at a place now, and nothing of it waits on this timer.)
+    require(asked >= 4, f"expected the schedule and the story engine to ask Core for the timer, found {asked} calls")
     print("actual PEX RequestGameTimeTick: a later request leaves a sooner timer alone, a sooner one moves it, it is set again once due has passed; only Core registers")
 
 
