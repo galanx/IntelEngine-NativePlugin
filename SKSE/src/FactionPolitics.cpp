@@ -664,7 +664,7 @@ war_allowed:
     int FactionPolitics::RecordPoliticalEvent(const std::string& factionA, const std::string& factionB,
                                                const std::string& eventType, const std::string& description,
                                                int delta, float gameTime, const std::string& locationName,
-                                               const nlohmann::json& position) {
+                                               const nlohmann::json& position, const std::string& newsFrom) {
         auto* db = PoliticalDB::GetSingleton();
         if (!db || !db->IsReady()) return -1;
         if (!ValidateEvent(factionA, factionB, eventType, delta)) return -1;
@@ -684,12 +684,13 @@ war_allowed:
                 pendingPE_[std::to_string(eventId)] = description;
             }
             WritePoliticalStateFile();
-            News(factionA, eventType, description, eventId);
+            News(factionA, eventType, description, eventId, newsFrom);
         }
         return eventId;
     }
 
-    void FactionPolitics::News(const std::string& factionA, const std::string& eventType, const std::string& text, int eventId) {
+    void FactionPolitics::News(const std::string& factionA, const std::string& eventType, const std::string& text, int eventId,
+                               const std::string& from) {
         // How far word of it travels: a war declared or ended is heard in every hold within days, a battle in the
         // holds around, the smaller dealings of the great where they happened. The bookkeeping of the simulation and
         // the player's own tally are no news.
@@ -699,12 +700,14 @@ war_allowed:
         }
         float weight = 0.5f;
         if (eventType == "war_declaration" || eventType == "surrender" || eventType == "peace_treaty" || eventType == "war_ended") weight = 0.95f;
-        else if (eventType == "battle_result" || eventType == "battle_scheduled") weight = 0.8f;
+        else if (eventType == "battle_result" || eventType == "battle_scheduled" || eventType == "battle_gathering") weight = 0.8f;
         else if (eventType == "alliance_proposal" || eventType == "mutual_defense_pact" || eventType == "political_marriage" ||
                  eventType == "assassination_attempt") weight = 0.75f;
         else if (eventType == "espionage" || eventType == "sabotage") weight = 0.45f;   // whispered, not cried out
+        // Where the talk starts: where it happened when that is known (a battle's hold), else where the faction sits.
         const auto faction = GetFaction(factionA);
-        RumorBridge::GetSingleton()->NoteNews(text, faction ? faction->hold : std::string(), weight, static_cast<std::uint32_t>((std::max)(eventId, 0)));
+        RumorBridge::GetSingleton()->NoteNews(text, !from.empty() ? from : (faction ? faction->hold : std::string()), weight,
+                                              static_cast<std::uint32_t>((std::max)(eventId, 0)));
     }
 
     // =========================================================================
@@ -1189,6 +1192,7 @@ war_allowed:
             float warDays = currentGameTime - w.startTime;
             wj["war_days"] = static_cast<int>(warDays);
             const char* blocked = BattleResultBlockedReason(db->GetRecentEvents(10), w.factionA, w.factionB, currentGameTime);
+            if (!blocked && BattleManager::GetSingleton()->HasPendingBattle(w.factionA, w.factionB)) blocked = "the armies of this war are already drawn up for a battle";
             wj["battle_result_allowed_now"] = blocked ? std::string("no (") + blocked + ")" : "yes";
 
             auto battles = db->GetBattlesForWar(w.id, 5);
@@ -3054,10 +3058,52 @@ war_allowed:
         auto* cal = RE::Calendar::GetSingleton();
         float gameTime = cal ? cal->GetCurrentGameTime() : 0.f;
 
+        // A battle of a war is not told as fought before it is. The armies gather at the place first (a pending
+        // battle): word of that goes round, the player may go there and take a side, and what is recorded then is
+        // what happened on the field. Nobody there: it is decided as the DM wrote it when its time is up, and told
+        // then. (3.8 recorded the DM's outcome at once, told it to the leaders and the whole land, and recorded a
+        // second outcome when the battle was fought. A battle that was only announced was fought six to twelve hours
+        // later on the spot the player stood on, a tavern floor included, and needed no war.)
+        const auto the = [](const std::string& name) {
+            return (name.rfind("The ", 0) == 0 || name.rfind("the ", 0) == 0) ? "the " + name.substr(4) : "the " + name;
+        };
+        int pendingBattleId = -1;
+        std::string battlePlace, battleHold;
+        const bool announced = eventType == "battle_scheduled";
+        if (announced && GetActiveWarId(factionA, factionB) <= 0) {
+            logger::info("Politics DM: rejected battle_scheduled: {} and {} are not at war", factionA, factionB);
+            out["error"] = "battle_scheduled requires an active war";
+            return out.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
+        }
+        if (eventType == "battle_result" || announced) {
+            auto* battles = BattleManager::GetSingleton();
+            if (battles->HasPendingBattle(factionA, factionB)) {
+                logger::info("Politics DM: rejected {}: {} and {} are already drawn up for a battle", eventType, factionA, factionB);
+                out["error"] = "a battle of this war is already gathering";
+                return out.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
+            }
+            const std::string named = resp.contains("battle_location") && resp["battle_location"].is_string()
+                ? resp["battle_location"].get<std::string>() : std::string();
+            pendingBattleId = battles->AddPendingBattle(named, factionA, factionB, response);
+            if (pendingBattleId >= 0) {
+                std::tie(battlePlace, battleHold) = battles->PendingBattlePlace(pendingBattleId);
+                std::string first = the(GetFactionDisplayName(factionA));
+                first[0] = 'T';
+                eventType = "battle_gathering";
+                description = first + " and " + the(GetFactionDisplayName(factionB)) + " are drawing up against each other near " + battlePlace +
+                              ". There will be a battle there before the day is out.";
+                delta = 0;
+            } else if (announced) {
+                logger::info("Politics DM: battle_scheduled dropped: no place for it could be found");
+                out["error"] = "no place for the battle";
+                return out.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
+            }
+        }
+
         // Record event (handles validation, clamping, relation adjustment, state file)
         // ponytail: manifested events stay null because this row precedes spawn and the forward cursor cannot deliver updates;
         // upgrade after successful spawn or with an updated-events feed when that seam is available.
-        int eventId = RecordPoliticalEvent(factionA, factionB, eventType, description, delta, gameTime);
+        int eventId = RecordPoliticalEvent(factionA, factionB, eventType, description, delta, gameTime, battlePlace, nullptr, battleHold);
         if (eventId < 0) {
             logger::error("Politics DM: RecordPoliticalEvent FAILED for {} vs {} (type={})",
                 factionA, factionB, eventType);
@@ -3090,60 +3136,31 @@ war_allowed:
             logger::info("Politics: WAR ENDED — {} surrendered to {}", factionA, factionB);
         }
 
-        // --- Handle off-screen battle result (ONLY during active war) ---
-        // NOTE: GetActiveWar acquires PoliticalDB::mutex_. Safe here because
-        // ProcessPoliticalDMResponse is called from Papyrus thread, not from a DB write context.
-        if (eventType == "battle_result") {
-            auto war = PoliticalDB::GetSingleton()->GetActiveWar(factionA, factionB);
-            if (!war) {
-                logger::info("Politics: battle_result ignored — no active war between {} and {}", factionA, factionB);
-                out["acted"] = false;
-                return out.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
+        // --- A battle that gathers (see above) ---
+        if (pendingBattleId >= 0) {
+            out["pendingBattleId"] = pendingBattleId;
+            out["battleLocation"] = battlePlace;
+            out["startPendingPoll"] = true;
+            // Word of it reaches the player at once only in the hold where it happens; elsewhere it comes as talk.
+            if (BattleManager::GetSingleton()->PlayerIsInHold(battleHold)) {
+                out["notification"] = "Word reaches you: " + the(GetFactionDisplayName(factionA)) + " and " +
+                                      the(GetFactionDisplayName(factionB)) + " are drawing up for battle near " + battlePlace + ".";
             }
-
-            std::string battleLoc = resp.value("battle_location", "the field");
+            logger::info("Politics: {} and {} gather for battle near {} ({}), pending battle #{}", factionA, factionB, battlePlace,
+                         battleHold.empty() ? "no hold" : battleHold, pendingBattleId);
+        } else if (eventType == "battle_result") {
+            // No place by that name anywhere, and none to stand in for it: decided as written, unseen.
+            std::string battleLoc = resp.contains("battle_location") && resp["battle_location"].is_string()
+                ? resp["battle_location"].get<std::string>() : std::string();
             if (battleLoc.empty()) battleLoc = "the field";
-
-            int pendingId = BattleManager::GetSingleton()->AddPendingBattle(
-                battleLoc, factionA, factionB, response);
-
-            if (pendingId >= 0) {
-                out["pendingBattleId"] = pendingId;
-                out["battleLocation"] = battleLoc;
-                out["startPendingPoll"] = true;
-                // Notification text for Papyrus
-                std::string nameA = GetFactionDisplayName(factionA);
-                std::string nameB = GetFactionDisplayName(factionB);
-                out["notification"] = nameA + " forces engage " + nameB + " at " + battleLoc + "!";
-                logger::info("Politics: Pending battle #{} at {} — {} vs {}",
-                    pendingId, battleLoc, factionA, factionB);
-            } else {
-                // Location unresolvable — fall back to off-screen
-                std::string battleResult = resp.value("battle_result", "draw");
-                std::string victor = resp.value("battle_victor", "");
-                int lossesA = std::clamp(resp.value("attacker_losses", 0), 0, 30);
-                int lossesB = std::clamp(resp.value("defender_losses", 0), 0, 30);
-                RecordOffScreenBattle(factionA, factionB, battleLoc, battleResult,
-                    description, lossesA, lossesB, victor);
-                out["offScreenResolved"] = true;
-                logger::info("Politics: Off-screen battle at {} (location unresolvable)", battleLoc);
-            }
-        }
-
-        // --- Handle scheduled battle ---
-        if (eventType == "battle_scheduled") {
-            std::uniform_real_distribution<float> delayDist(6.f, 12.f);
-            thread_local std::mt19937 rng(std::random_device{}());
-            float delayHours = delayDist(rng);
-            float battleTime = gameTime + delayHours / 24.f;
-            int warId = GetActiveWarId(factionA, factionB);
-
-            out["scheduleBattle"] = true;
-            out["scheduleFactionA"] = factionA;
-            out["scheduleFactionB"] = factionB;
-            out["scheduleWarId"] = warId;
-            out["scheduleBattleTime"] = battleTime;
-            logger::info("Politics: Battle scheduled — {} vs {} in {:.1f}h", factionA, factionB, delayHours);
+            std::string battleResult = resp.value("battle_result", "draw");
+            std::string victor = resp.value("battle_victor", "");
+            int lossesA = std::clamp(resp.value("attacker_losses", 0), 0, 30);
+            int lossesB = std::clamp(resp.value("defender_losses", 0), 0, 30);
+            RecordOffScreenBattle(factionA, factionB, battleLoc, battleResult,
+                description, lossesA, lossesB, victor);
+            out["offScreenResolved"] = true;
+            logger::info("Politics: Off-screen battle at {} (location unresolvable)", battleLoc);
         }
 
         // --- Check manifestation ---

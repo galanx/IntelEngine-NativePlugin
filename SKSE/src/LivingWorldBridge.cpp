@@ -2,6 +2,7 @@
 #include "Safe.h"
 
 #include "StorylineBridge.h"
+#include "BattleManager.h"
 
 #include <algorithm>
 #include <cmath>
@@ -55,6 +56,9 @@ namespace IntelEngine {
             auto* player = RE::PlayerCharacter::GetSingleton();
             if (player && player->IsInCombat()) return true;
             if (InScene()) return true;
+            // Two armies drawn up or at each other's throats, or their dead still warm: nobody walks onto that field
+            // with a tale of their own (Uthgerd did, with a town matter, 2026-11-20).
+            if (BattleManager::GetSingleton()->IsFieldBusy()) return true;
             if (auto* ui = RE::UI::GetSingleton()) {
                 if (ui->GameIsPaused()) return true;
                 for (const auto menu : {"Dialogue Menu"sv, "OstimSceneMenu"sv, "Sleep/Wait Menu"sv, "BarterMenu"sv}) {

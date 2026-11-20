@@ -108,6 +108,7 @@ namespace IntelEngine {
         QuestBridge::GetSingleton()->Save(a_intfc);
         ArcBridge::GetSingleton()->Save(a_intfc);
         RumorBridge::GetSingleton()->Save(a_intfc);
+        BattleManager::GetSingleton()->Save(a_intfc);
     }
 
     void LoadCallback(SKSE::SerializationInterface* a_intfc) {
@@ -142,6 +143,8 @@ namespace IntelEngine {
                 ArcBridge::GetSingleton()->Load(a_intfc, version, length);
             } else if (type == kRumorRecordType) {
                 RumorBridge::GetSingleton()->Load(a_intfc, version, length);
+            } else if (type == kPendingBattleRecord) {
+                BattleManager::GetSingleton()->Load(a_intfc, version, length);
             }
         }
     }
@@ -167,6 +170,7 @@ namespace IntelEngine {
         QuestBridge::GetSingleton()->Revert();
         ArcBridge::GetSingleton()->Revert();
         RumorBridge::GetSingleton()->Revert();
+        BattleManager::GetSingleton()->Revert();
         ProximityMonitor::GetSingleton()->DisarmAll();
         logger::info("RevertCallback: Save ID and SlotTracker cleared (gen={})",
             tracker->loadGeneration.load(std::memory_order_relaxed));
@@ -461,6 +465,18 @@ namespace IntelEngine {
                         "Returns what this NPC has heard lately and could pass on (rumors going round their hold); empty when nothing.",
                         [](RE::Actor* actor) -> std::string { return RumorBridge::GetSingleton()->Lines(actor); });
                     logger::info("{} SkyrimNet decorator: get_intelengine_rumors", rumorsRegistered ? "Registered" : "Failed to register");
+                    // A soldier of a battle: what they know of where they stand (prompt submodule 0205_intel_battle), and
+                    // whether the player may still join their line by saying so (action JoinBattle).
+                    const bool battleRegistered = SkyrimNetAPI::RegisterDecorator(
+                        "get_intelengine_battle",
+                        "Returns what this NPC knows of the battle they are drawn up or fighting in right now; empty for everyone who is not a soldier of one.",
+                        [](RE::Actor* actor) -> std::string { return BattleManager::GetSingleton()->SoldierBrief(actor); });
+                    const bool battleSideRegistered = SkyrimNetAPI::RegisterDecorator(
+                        "get_intelengine_battle_side",
+                        "Returns the name of the army this NPC stands in when the player may still join its line by saying so; empty otherwise.",
+                        [](RE::Actor* actor) -> std::string { return BattleManager::GetSingleton()->SideOpenTo(actor); });
+                    logger::info("{} SkyrimNet decorators: get_intelengine_battle, get_intelengine_battle_side",
+                                 battleRegistered && battleSideRegistered ? "Registered" : "Failed to register");
                 }
 
                 // Register quest decorator with SkyrimNet (soft dependency — skipped if API unavailable)
