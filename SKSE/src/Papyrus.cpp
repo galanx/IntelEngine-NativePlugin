@@ -50,6 +50,7 @@
 #include "DashboardUIManager.h"
 #include "FactionPolitics.h"
 #include "FactionEditor.h"
+#include "Patrols.h"
 #include "PoliticalDB.h"
 #include "BattleManager.h"
 #include "ProcessUtils.h"
@@ -179,6 +180,9 @@ namespace IntelEngine::Papyrus {
     int GetFactionRelation(RE::StaticFunctionTag*, RE::BSFixedString, RE::BSFixedString);
     int AdjustFactionRelation(RE::StaticFunctionTag*, RE::BSFixedString, RE::BSFixedString, int);
     int GetPlayerFactionStanding(RE::StaticFunctionTag*, RE::BSFixedString);
+    RE::BSFixedString FactionPatrolDue(RE::StaticFunctionTag*);
+    void FactionPatrolSent(RE::StaticFunctionTag*);
+    void FactionPatrolTest(RE::StaticFunctionTag*, bool);
     int AdjustPlayerFactionStanding(RE::StaticFunctionTag*, RE::BSFixedString, int);
     bool IsFactionAtWar(RE::StaticFunctionTag*, RE::BSFixedString, RE::BSFixedString);
     int GetWarMorale(RE::StaticFunctionTag*, RE::BSFixedString, RE::BSFixedString, RE::BSFixedString);
@@ -623,6 +627,9 @@ namespace IntelEngine::Papyrus {
         a_vm->RegisterFunction("GetFactionRelation", SCRIPT_NAME, GetFactionRelation); ++count;
         a_vm->RegisterFunction("AdjustFactionRelation", SCRIPT_NAME, AdjustFactionRelation); ++count;
         a_vm->RegisterFunction("GetPlayerFactionStanding", SCRIPT_NAME, GetPlayerFactionStanding); ++count;
+        a_vm->RegisterFunction("FactionPatrolDue", SCRIPT_NAME, FactionPatrolDue); ++count;
+        a_vm->RegisterFunction("FactionPatrolSent", SCRIPT_NAME, FactionPatrolSent); ++count;
+        a_vm->RegisterFunction("FactionPatrolTest", SCRIPT_NAME, FactionPatrolTest); ++count;
         a_vm->RegisterFunction("AdjustPlayerFactionStanding", SCRIPT_NAME, AdjustPlayerFactionStanding); ++count;
         a_vm->RegisterFunction("IsFactionAtWar", SCRIPT_NAME, IsFactionAtWar); ++count;
         a_vm->RegisterFunction("GetWarMorale", SCRIPT_NAME, GetWarMorale); ++count;
@@ -4631,6 +4638,60 @@ namespace IntelEngine::Papyrus {
         auto* db = PoliticalDB::GetSingleton();
         if (!db->IsReady()) return 0;
         return db->GetPlayerStanding(factionId.c_str());
+    }
+
+    // 4.0: a faction that holds the player for an enemy sends men after them now and then (Patrols.h says why this
+    // is decided in code). Asked by the story engine at a moment the director lets land; the answer is the 3.8
+    // dungeon master's own for a faction ambush ({"ambushFaction":..,"ambushCount":..}), or nothing.
+    namespace {
+        std::atomic<float> g_lastPatrolDay{-1.0f};   // this session's; not known after a load, and then not held against them
+        std::atomic<bool> g_patrolAlways{false};     // test hook: every roll comes up, no rest between two
+    }
+
+    RE::BSFixedString FactionPatrolDue(RE::StaticFunctionTag*) {
+        static FrameStats stats;
+        FrameClock clock("Patrols: is a faction after the player", stats, FrameClock::Now(), 20);
+        auto* politics = FactionPolitics::GetSingleton();
+        auto* db = PoliticalDB::GetSingleton();
+        if (!politics->IsEnabled() || !db->IsReady()) return "";
+        std::string worst;
+        int standing = 0;
+        for (const auto& s : db->GetAllPlayerStandings()) {
+            if (s.factionId.rfind("PE_", 0) == 0) continue;   // another mod's realms: they field no soldiers of ours
+            if (s.standing < standing) {
+                standing = s.standing;
+                worst = s.factionId;
+            }
+        }
+        if (worst.empty() || standing > Patrols::kHostile) return "";
+        auto* calendar = RE::Calendar::GetSingleton();
+        const float now = calendar ? calendar->GetCurrentGameTime() : 0.0f;
+        static thread_local std::mt19937 rng{std::random_device{}()};
+        const std::uint32_t roll = static_cast<std::uint32_t>(rng() % 10000u);
+        const bool test = g_patrolAlways.load();
+        if (!test && !Patrols::Due(standing, now, g_lastPatrolDay.load(), roll)) {
+            logger::info("Patrols: {} holds the player for an enemy (standing {}): no patrol at this moment (one in {:.0f} of them, "
+                         "and not within {:.0f} days of the last)",
+                         worst, standing, 1.0f / Patrols::Chance(standing), Patrols::kRestDays);
+            return "";
+        }
+        const int size = Patrols::Size(standing, roll);
+        logger::info("Patrols: {} sends {} after the player (standing {}{})", worst, size, standing, test ? "; asked for by a test" : "");
+        nlohmann::json out;
+        out["ambushFaction"] = worst;
+        out["ambushCount"] = std::to_string(size);
+        return out.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace).c_str();
+    }
+
+    void FactionPatrolSent(RE::StaticFunctionTag*) {
+        auto* calendar = RE::Calendar::GetSingleton();
+        g_lastPatrolDay.store(calendar ? calendar->GetCurrentGameTime() : 0.0f);
+        LivingWorldBridge::GetSingleton()->OnPatrolSent();
+    }
+
+    void FactionPatrolTest(RE::StaticFunctionTag*, bool always) {
+        g_patrolAlways.store(always);
+        logger::info("Patrols: test: {}", always ? "every moment that may land is a patrol's" : "the roll and the rest count again");
     }
 
     int AdjustPlayerFactionStanding(RE::StaticFunctionTag*, RE::BSFixedString factionId, int delta) {

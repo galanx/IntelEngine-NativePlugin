@@ -1281,6 +1281,8 @@ namespace IntelEngine {
     void ArcBridge::Pace() {
         auto* player = RE::PlayerCharacter::GetSingleton();
         if (!player || !m_catalogued || !m_storiesOn.load()) return;
+        // "Quest" off in the settings: nobody brings the player their trouble, so no story of the town begins either.
+        if (m_switchesOff.load() & kSwitchRequests) return;
         const float now = NowDays();
         auto* cell = player->GetParentCell();
         auto* town = TownOf(cell && cell->GetLocation() ? cell->GetLocation() : player->GetCurrentLocation());
@@ -2655,6 +2657,15 @@ namespace IntelEngine {
         return false;
     }
 
+    void ArcBridge::StorySwitches(std::uint32_t off) {
+        if (m_switchesOff.exchange(off) != off) {
+            logger::info("Arcs: story types switched off in the settings:{}{}{}{}{}{}{}", off == 0 ? " none" : "",
+                         (off & kSwitchAmbush) ? " ambush" : "", (off & kSwitchStalker) ? " stalker" : "", (off & kSwitchRescue) ? " rescue" : "",
+                         (off & kSwitchRequests) ? " quest (no story of the town begins)" : "", (off & kSwitchClearOut) ? " clear-out" : "",
+                         (off & kSwitchFindItem) ? " find-an-item" : "");
+        }
+    }
+
     void ArcBridge::StoriesOn(bool on) {
         if (m_storiesOn.exchange(on) != on) {
             logger::info("Arcs: the Stories switch is {}: {}", on ? "on" : "off", on ? "the town's stories come again" : "no new story of the town begins; those open go on");
@@ -3519,6 +3530,9 @@ namespace IntelEngine {
         }
         std::int32_t ArcRankAfter(RE::StaticFunctionTag*, std::int32_t rank, bool closer) { return Hearts::RankAfter(rank, closer); }
         void ArcStoriesOn(RE::StaticFunctionTag*, bool on) { ArcBridge::GetSingleton()->StoriesOn(on); }
+        void ArcStorySwitches(RE::StaticFunctionTag*, std::int32_t off) {
+            ArcBridge::GetSingleton()->StorySwitches(static_cast<std::uint32_t>(off < 0 ? 0 : off));
+        }
         RE::Actor* ArcBystander(RE::StaticFunctionTag*, std::int32_t id, RE::Actor* asker) { return ArcBridge::GetSingleton()->Bystander(U(id), asker); }
         void ArcDebugSetOut(RE::StaticFunctionTag*, std::int32_t id) { ArcBridge::GetSingleton()->DebugSetOut(U(id)); }
         void ArcEarshot(RE::StaticFunctionTag*, float units) {
@@ -3612,6 +3626,7 @@ namespace IntelEngine {
         a_vm->RegisterFunction("ArcCompany", script, ArcCompany); ++count;
         a_vm->RegisterFunction("ArcEarshot", script, ArcEarshot); ++count;
         a_vm->RegisterFunction("ArcStoriesOn", script, ArcStoriesOn); ++count;
+        a_vm->RegisterFunction("ArcStorySwitches", script, ArcStorySwitches); ++count;
         a_vm->RegisterFunction("ArcBystander", script, ArcBystander); ++count;
         a_vm->RegisterFunction("ArcDebugSetOut", script, ArcDebugSetOut); ++count;
         a_vm->RegisterFunction("ArcHeart", script, ArcHeart); ++count;

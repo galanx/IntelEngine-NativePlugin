@@ -31,7 +31,7 @@ BASE = {
     "places": [{"key": "d1", "name": "Halted Stream Camp", "what": "a bandit camp", "heart": "a bandit chief", "far": "close by", "cleared": False, "holds": True, "outside": True, "signs": "cut down with plain steel, purse and boots gone"},
                {"key": "d2", "name": "Shimmermist Cave", "what": "a Falmer hive and a Dwemer hall", "heart": "a Dwarven centurion", "far": "half a day's walk", "cleared": True, "holds": False, "outside": False, "signs": "burns and clean deep cuts"}],
     "quests": ["Dragon Rising: Kill the dragon"], "told": ["crime: The Quiet Ledger - a ledger that lied"], "lean": "debt", "reward": 150,
-    "bar_ambush": False, "bar_brawl": True, "bar_stalk": False, "bar_places": False, "asker_knows": "met",
+    "bar_ambush": False, "bar_brawl": True, "bar_stalk": False, "bar_places": False, "bar_slay": False, "asker_knows": "met",
     "must_place": False, "must_captive": False, "bar_captive": False, "bar_examine": False, "must_mystery": False, "bar_haunt": False, "must_haunt": False, "thread": "", "rumored": False,
 }
 
@@ -54,6 +54,8 @@ CASES = {
                                    "not": [HEART, "With Ada:", TAKEN, "This story leads out into the world", "a Dwarven centurion. Cleared once already; something new has moved in. Someone may be held here."]}),
     "out into the world": (case(must_place=True), {"has": ["This story leads out into the world", "one act of a story"], "not": [HEART, TAKEN]}),
     "a rescue": (case(must_captive=True, lean="adventure"), {"has": [TAKEN, "who is held at one of the places below", '"do": "free"', "Close to Ysolda.", "close to Ysolda (nobody asks a stranger"], "not": [HEART]}),
+    "no master of a place to kill (clear-out switched off)": (case(bar_slay=True), {"has": ['"delve":', "At most two places in a story"], "not": ['"slay": ']}),
+    "no ambush and no shadow (switched off)": (case(bar_ambush=True, bar_stalk=True), {"has": ['"delve":', '"slay": '], "not": ['"ambush": someone of the story', '"stalk": someone']}),
     "nobody held this time": (case(bar_captive=True), {"has": ['"delve":'], "not": ['"free": someone of the story', TAKEN]}),
     "a hunt": (case(must_mystery=True, lean="mystery"), {"has": ["# Something is killing near", '"examine": what was left of a victim', '"name": after an "examine"', "leaves these signs on those it kills"], "not": [TAKEN]}),
     "talk in town": (case(rumored=True, thread="grief"), {"has": ["# This one begins as talk in town", '"rumor": "..."', "weave in a thread of grief"], "not": [TAKEN]}),

@@ -413,6 +413,35 @@ loaded, which the section after this one replaces with a rule for each person):
 - What it costs the player: one small decision call per reading (answered in about 0.3 s in the test), per person at
   most once every eight lines they say to the player.
 
+### What 3.8 had and 4.0 had lost: found by an audit, 2026-11-21/22
+
+The user asked whether 4.0 covers everything 3.8 had. 3.8 (`main`) was held against the branch feature by feature.
+Mended:
+
+- **The faction patrol** (`Patrols.h`, `PatrolsCheck`; natives `FactionPatrolDue` / `FactionPatrolSent`; the hook in
+  `IntelEngine_StoryEngine.TickScheduler`). The director judges people, each on their own reason; a faction is
+  nobody, so "faction_ambush" could only happen at Classic or when no candidate was judged at all. Now, at a moment
+  the director lets land (budget, rest after a big moment, no bad moment), the story engine first asks whether the
+  faction that stands worst with the player, at -40 or below, sends men: one such moment in five above -60, 35 in a
+  hundred above -80, every other one below; three to seven soldiers; not within two game days of the last (kept for
+  the session). The old handler does the rest with its own checks, and when it cannot (no spot to come from unseen,
+  a battle running) the dungeon master looks as usual and the budget is not charged. A patrol that went out is a
+  big moment (`LivingWorldBridge::OnPatrolSent`). The standings are read from the political database inside the
+  native, as `GetPlayerFactionStanding` always did; the frame cost is clocked ("Patrols: is a faction after the
+  player"). Test hook: `IntelEngine_Arcs.DebugPatrolAlways`.
+- **The story-type switches inside stories** (`ArcBridge::StorySwitches`, pushed by `IntelEngine_Arcs.Watch` about
+  once a minute): bits for ambush, stalker, rescue, quest, clear-out, find-an-item. `TaleAuthor` bars the steps
+  (`bar_ambush`, `bar_stalk`, `bar_captive`, new `bar_slay`), `QuestBridge::PlanFor` leaves out the bounty or the
+  keepsake, `ArcBridge::Pace` begins no story with "quest" off.
+- **Upgrade.** A 3.7.1 save loaded under this build holds level 2, interruptions 1, quest NPCs 1, pacing 1 (read by
+  pushing the script's values to the DLL again after setting the DLL's to zero).
+
+Left as designed, not mended: a battle no longer comes to the spot the player stands on at its hour, and the player
+is not joined to a side automatically at standing 20 (a battle is a gathering at a place; a commander asks). 3.8's
+"arriving in the middle of a battle" has no twin: the armies face each other for the hours of the gathering and the
+battle begins when the player comes, so within those hours it is always seen from its start; after them it is
+decided unseen. The 3.8 quests "clear out" and "find an item" are the bounty and the keepsake.
+
 ### Beside SkyrimNet Relationships: whose word counts, person by person (2026-11-21, night)
 
 Asked whether the reading should be the standard everywhere, I said no: SkyrimNet Relationships weighs every exchange

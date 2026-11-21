@@ -276,6 +276,18 @@ namespace IntelEngine {
                      m_state.picks, m_state.budget);
     }
 
+    void LivingWorldBridge::OnPatrolSent() {
+        if (IsClassic()) return;
+        std::scoped_lock lock(m_mutex);
+        const float now = NowDays();
+        LivingWorld::Refill(m_state, m_settings, now);
+        m_state.budget = std::max(0.0f, m_state.budget - 1.0f);
+        m_state.lastMomentDay = now;
+        m_state.lastBigDay = now;
+        ++m_state.picks;
+        logger::info("LivingWorld: a faction's patrol counted as a big moment (moments so far {}, budget {:.2f})", m_state.picks, m_state.budget);
+    }
+
     void LivingWorldBridge::SendSeam(LivingWorld::Seam seam) {
         auto* task = SKSE::GetTaskInterface();
         if (!task) return;
