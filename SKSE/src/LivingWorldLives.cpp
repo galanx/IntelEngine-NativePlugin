@@ -1,4 +1,5 @@
 #include "LivingWorldBridge.h"
+#include "BondBridge.h"
 #include "RumorBridge.h"
 #include "Safe.h"
 #include "QuestBridge.h"
@@ -1119,6 +1120,8 @@ namespace IntelEngine {
             });
             if (member && rank >= 3) return true;
         }
+        // No relationship mod: what was read from their memories of the player (Bonds.h): a confidant or more.
+        if (auto* bonds = BondBridge::GetSingleton(); bonds->Used() && Bonds::Close(bonds->Of(actor->GetFormID()))) return true;
         return false;
     }
 

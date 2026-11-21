@@ -1,6 +1,7 @@
 // IntelEngine: what stands between the player and someone, read from the game (HeartBridge.h, Hearts.h).
 
 #include "HeartBridge.h"
+#include "BondBridge.h"
 #include "Safe.h"
 
 #include "LivingWorldBridge.h"
@@ -225,6 +226,33 @@ namespace IntelEngine::HeartBridge {
             h.withChild = s.withChild;
             h.childIsPlayers = s.childIsPlayers;
             h.children = s.children;
+        }
+        // No relationship mod keeps it: what was read from their memories of the player counts (Bonds.h). The game's
+        // own rank and marriage stand; the reading can only add what the game does not know: a friendship that grew
+        // in talk, something of the heart, the player's answer to it. Somebody who has soured on the player is no
+        // friend, whatever the game's rank says.
+        if (!h.tracked) {
+            if (auto* bonds = BondBridge::GetSingleton(); bonds->Used()) {
+                if (const auto b = bonds->Of(actor->GetFormID()); Bonds::Judged(b)) {
+                    static_assert(static_cast<int>(Bonds::Lover) == static_cast<int>(Hearts::Lover) &&
+                                  static_cast<int>(Bonds::Friend) == static_cast<int>(Hearts::Friend));
+                    if (b.sour != Bonds::NotSour) {
+                        h.tier = std::min<std::uint8_t>(h.tier, Hearts::Acquaintance);
+                        h.sparked = false;
+                    } else {
+                        h.tier = std::max<std::uint8_t>(h.tier, b.standing);
+                        if (b.drawn) {
+                            h.sparked = true;
+                            h.stance = b.answer;
+                            if (b.answer < 0 && b.declinedAt >= 0.0f) {
+                                auto* calendar = RE::Calendar::GetSingleton();
+                                const float now = calendar ? calendar->GetCurrentGameTime() : 0.0f;
+                                h.refusedDays = std::max(0.0f, now - b.declinedAt);
+                            }
+                        }
+                    }
+                }
+            }
         }
         return h;
     }

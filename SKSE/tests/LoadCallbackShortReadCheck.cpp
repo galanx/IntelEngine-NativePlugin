@@ -30,6 +30,8 @@ struct FactionPolitics { int loads = 0; static FactionPolitics* GetSingleton() {
 namespace Ranks { constexpr uint32_t kRecordType = 'IERK'; }
 struct BattleManager { int loads = 0; static BattleManager* GetSingleton() { static BattleManager s; return &s; } void Load(SKSE::SerializationInterface*, uint32_t, uint32_t) { ++loads; } };
 struct LivingWorldBridge { int loads = 0; static LivingWorldBridge* GetSingleton() { static LivingWorldBridge s; return &s; } void Load(SKSE::SerializationInterface*, uint32_t, uint32_t) { ++loads; } };
+namespace Bonds { constexpr uint32_t kRecordType = 'IEBN'; }
+struct BondBridge { int loads = 0; static BondBridge* GetSingleton() { static BondBridge s; return &s; } void Load(SKSE::SerializationInterface*, uint32_t, uint32_t) { ++loads; } };
 #include "LoadCallback.inc"
 }
 using R = SKSE::SerializationInterface::Record;
@@ -39,6 +41,7 @@ int main() {
     using namespace IntelEngine; g_currentSaveID = "keep";
     SKSE::SerializationInterface bad{{rec(SAVE_ID_RECORD, 1, {1, 0}), rec(SAVE_ID_RECORD, 1, bytes(4, "xy")), rec(SAVE_ID_RECORD, 1, bytes(0)), rec(SAVE_ID_RECORD, 1, bytes(256)), rec(SAVE_ID_RECORD, 99), rec('IETK', 1)}};
     LoadCallback(&bad); assert(g_currentSaveID == "keep" && SlotTracker::GetSingleton()->loads == 1);
-    SKSE::SerializationInterface good{{rec(SAVE_ID_RECORD, 1, bytes(2, "ok")), rec('IETK', 1), rec('IELW', 1), rec('IESL', 1)}};
+    SKSE::SerializationInterface good{{rec(SAVE_ID_RECORD, 1, bytes(2, "ok")), rec('IETK', 1), rec('IELW', 1), rec('IESL', 1), rec('IEBN', 1)}};
     LoadCallback(&good); assert(g_currentSaveID == "ok" && SlotTracker::GetSingleton()->loads == 2 && LivingWorldBridge::GetSingleton()->loads == 1 && StorylineBridge::GetSingleton()->loads == 1);
+    assert(BondBridge::GetSingleton()->loads == 1);   // how people stand with the player comes back with the save
 }

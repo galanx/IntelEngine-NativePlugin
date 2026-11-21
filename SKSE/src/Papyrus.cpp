@@ -14,6 +14,8 @@
 #include "JsonKeys.h"
 #include "NPCIndex.h"
 #include "LivingWorldBridge.h"
+#include "BondBridge.h"
+#include "HeartBridge.h"
 #include "ItemNames.h"
 #include "StoryDirector.h"
 #include "StorylineBridge.h"
@@ -110,6 +112,9 @@ namespace IntelEngine::Papyrus {
     bool StorylineSetAbout(RE::StaticFunctionTag*, std::int32_t, RE::BSFixedString);
     RE::BSFixedString StorylineText(RE::StaticFunctionTag*, std::int32_t, RE::BSFixedString);
     void LivingWorldTrack(RE::StaticFunctionTag*);
+    bool BondJudge(RE::StaticFunctionTag*, RE::Actor*);
+    void BondPretendNoMod(RE::StaticFunctionTag*, bool);
+    RE::BSFixedString BondDescribe(RE::StaticFunctionTag*, RE::Actor*);
     RE::BSFixedString LivingWorldDebugAdventure(RE::StaticFunctionTag*, RE::Actor*);
     void LivingWorldMarkGreeted(RE::StaticFunctionTag*, RE::Actor*);
     RE::Actor* LivingWorldTakeOrder(RE::StaticFunctionTag*);
@@ -531,6 +536,9 @@ namespace IntelEngine::Papyrus {
         a_vm->RegisterFunction("StorylineSetAbout", SCRIPT_NAME, StorylineSetAbout); ++count;
         a_vm->RegisterFunction("StorylineText", SCRIPT_NAME, StorylineText); ++count;
         a_vm->RegisterFunction("LivingWorldTrack", SCRIPT_NAME, LivingWorldTrack); ++count;
+        a_vm->RegisterFunction("BondJudge", SCRIPT_NAME, BondJudge); ++count;
+        a_vm->RegisterFunction("BondPretendNoMod", SCRIPT_NAME, BondPretendNoMod); ++count;
+        a_vm->RegisterFunction("BondDescribe", SCRIPT_NAME, BondDescribe); ++count;
         a_vm->RegisterFunction("LivingWorldDebugAdventure", SCRIPT_NAME, LivingWorldDebugAdventure); ++count;
         a_vm->RegisterFunction("LivingWorldMarkGreeted", SCRIPT_NAME, LivingWorldMarkGreeted); ++count;
         a_vm->RegisterFunction("LivingWorldTakeOrder", SCRIPT_NAME, LivingWorldTakeOrder); ++count;
@@ -2653,7 +2661,22 @@ namespace IntelEngine::Papyrus {
 
     // ---------------------------------------------------------------- 4.0 lives of followers left behind
 
-    void LivingWorldTrack(RE::StaticFunctionTag*) { LivingWorldBridge::GetSingleton()->Track(); }
+    void LivingWorldTrack(RE::StaticFunctionTag*) {
+        LivingWorldBridge::GetSingleton()->Track();
+        BondBridge::GetSingleton()->Tick();   // how people stand with the player, where no relationship mod keeps it
+    }
+    bool BondJudge(RE::StaticFunctionTag*, RE::Actor* who) { return BondBridge::GetSingleton()->JudgeNow(who); }
+    void BondPretendNoMod(RE::StaticFunctionTag*, bool on) { BondBridge::GetSingleton()->Pretend(on); }
+    RE::BSFixedString BondDescribe(RE::StaticFunctionTag*, RE::Actor* who) {
+        if (!who) return "";
+        // What was read, and what comes of it where it is used: whether they count as close to the player, and the line
+        // a story's author is told about the two (empty when there is nothing to tell).
+        auto* bonds = BondBridge::GetSingleton();
+        const std::string line = bonds->Describe(who->GetFormID()) + (bonds->Used() ? "" : " [not used: a relationship mod is installed]") +
+                                 "; close to the player: " + (LivingWorldBridge::GetSingleton()->CloseToPlayer(who) ? "yes" : "no") +
+                                 "; a story's author is told: \"" + HeartBridge::WordsFor(who) + "\"";
+        return line.c_str();
+    }
     void LivingWorldMarkGreeted(RE::StaticFunctionTag*, RE::Actor* actor) {
         if (actor) LivingWorldBridge::GetSingleton()->MarkGreeted(actor->GetFormID());
     }

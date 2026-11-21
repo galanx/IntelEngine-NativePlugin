@@ -1,4 +1,5 @@
 #include "DialogueTracker.h"
+#include "BondBridge.h"
 #include "SkyrimNetAPI.h"
 #include "SpeechTracker.h"
 #include <nlohmann/json.hpp>
@@ -102,6 +103,8 @@ namespace IntelEngine {
             line.text = parsed.is_object() && parsed.contains("dialogue") && parsed["dialogue"].is_string() ? parsed["dialogue"].get<std::string>() : data;
             if (line.text.size() > 600) line.text.resize(600);
             if (!line.speaker || line.text.empty()) return;
+            // A line said to the player counts toward how well the two know each other (Bonds.h).
+            if (!player && line.target == 0x14) BondBridge::GetSingleton()->Heard(line.speaker);
             std::lock_guard<std::mutex> lock(mutex_);
             lines_.push_back(std::move(line));
             while (lines_.size() > 80) lines_.pop_front();

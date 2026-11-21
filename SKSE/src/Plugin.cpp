@@ -22,6 +22,7 @@
 #include "DialogueTracker.h"
 #include "SpeechTracker.h"
 #include "LivingWorldBridge.h"
+#include "BondBridge.h"
 #include "StorylineBridge.h"
 #include "QuestBridge.h"
 #include "ArcBridge.h"
@@ -111,6 +112,7 @@ namespace IntelEngine {
         BattleManager::GetSingleton()->Save(a_intfc);
         FactionPolitics::GetSingleton()->Save(a_intfc);
         FactionPolitics::GetSingleton()->SaveRanks(a_intfc);
+        BondBridge::GetSingleton()->Save(a_intfc);
     }
 
     void LoadCallback(SKSE::SerializationInterface* a_intfc) {
@@ -151,6 +153,8 @@ namespace IntelEngine {
                 FactionPolitics::GetSingleton()->Load(a_intfc, version, length);
             } else if (type == Ranks::kRecordType) {
                 FactionPolitics::GetSingleton()->LoadRanks(a_intfc, version, length);
+            } else if (type == Bonds::kRecordType) {
+                BondBridge::GetSingleton()->Load(a_intfc, version, length);
             }
         }
     }
@@ -180,6 +184,7 @@ namespace IntelEngine {
         FactionPolitics::GetSingleton()->ForgetHeldEvent();
         FactionPolitics::GetSingleton()->ForgetFallen();
         FactionPolitics::GetSingleton()->ForgetRanks();
+        BondBridge::GetSingleton()->Revert();
         ProximityMonitor::GetSingleton()->DisarmAll();
         logger::info("RevertCallback: Save ID and SlotTracker cleared (gen={})",
             tracker->loadGeneration.load(std::memory_order_relaxed));
