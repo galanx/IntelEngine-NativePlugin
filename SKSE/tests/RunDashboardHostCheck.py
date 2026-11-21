@@ -809,7 +809,13 @@ void testManager() {
     drainDirector();
     assert(resultCount()==4);
     auto serviceFailure=nlohmann::json::parse(host->calls.back().second);
-    assert(!serviceFailure["ok"] && serviceFailure["error"]=="Generation failed");
+    // SkyrimNet's own reason is passed on when it gives one (pull request 30); without one the plain words stay.
+    assert(!serviceFailure["ok"] && serviceFailure["error"]=="Generation failed: service unavailable");
+    generate();
+    if (directorCompletion) directorCompletion("",0);
+    drainDirector();
+    auto silentFailure=nlohmann::json::parse(host->calls.back().second);
+    assert(!silentFailure["ok"] && silentFailure["error"]=="Generation failed");
     generate();
     directorCompletion(R"({"narration":"Keep valid narrative","unexpected":false})",1); drainDirector();
     auto partialResult=nlohmann::json::parse(host->calls.back().second);

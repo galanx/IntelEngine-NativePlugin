@@ -16,8 +16,11 @@
 #include "NamedPlaceMatch.h"
 
 #include <cfloat>
+#include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <optional>
+#include <unordered_map>
 #include <unordered_set>
 #include <utility>
 #include <nlohmann/json.hpp>
@@ -106,18 +109,35 @@ namespace IntelEngine {
         // Add place names from Data/SKSE/Plugins/IntelEngine/placenames/*.tsv (english.tsv ships), so names
         // in another language resolve: English input on a German install, for one. The game's own names were
         // indexed above and stay first-wins.
+        // (4.0: each master is looked for once a file, not once a row. Asked for by a plugin's name the game walks
+        // its whole list of plugin files, which on a list of two thousand plugins is slow enough to matter fifteen
+        // hundred times over; and the time the files take is logged, since this runs again whenever the index is
+        // rebuilt.)
         std::error_code dirError;
         try {
             for (const auto& file : std::filesystem::directory_iterator("Data/SKSE/Plugins/IntelEngine/placenames", dirError)) {
                 if (file.path().extension() != ".tsv") continue;
+                const auto began = std::chrono::steady_clock::now();
                 std::ifstream in(file.path(), std::ios::binary);
                 std::uint32_t rows = 0, found = 0, added = 0;
+                // master's name -> the first form id of that plugin in this load order; nothing when it is not loaded
+                std::unordered_map<std::string, std::optional<RE::FormID>> masters;
                 for (std::string line; std::getline(in, line);) {
                     const auto row = ParsePlaceNameLine(line);
                     if (!row) continue;
                     rows++;
-                    auto* form = dataHandler->LookupForm(row->localId, row->master);
-                    if (!form) continue;  // master not loaded
+                    auto known = masters.find(row->master);
+                    if (known == masters.end()) {
+                        std::optional<RE::FormID> first;
+                        if (const auto* plugin = dataHandler->LookupModByName(row->master); plugin && plugin->compileIndex != 0xFF) {
+                            first = (static_cast<RE::FormID>(plugin->compileIndex) << 24) +
+                                    (static_cast<RE::FormID>(plugin->smallFileCompileIndex) << 12);
+                        }
+                        known = masters.emplace(row->master, first).first;
+                    }
+                    if (!known->second) continue;  // master not loaded
+                    auto* form = RE::TESForm::LookupByID(*known->second + row->localId);
+                    if (!form) continue;
                     auto* cell = row->type == 'C' ? form->As<RE::TESObjectCELL>() : nullptr;
                     const bool isLocation = row->type == 'L' && form->Is(RE::FormType::Location);
                     if (!isLocation && !(cell && cell->IsInteriorCell())) continue;
@@ -130,8 +150,9 @@ namespace IntelEngine {
                         added++;
                     }
                 }
-                logger::info("Place names {}: {} rows, {} forms found, {} names added",
-                             file.path().filename().string(), rows, found, added);
+                logger::info("Place names {}: {} rows, {} forms found, {} names added ({:.1f} ms)",
+                             file.path().filename().string(), rows, found, added,
+                             std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - began).count());
             }
         } catch (const std::exception& e) {
             logger::warn("Place-name files: {}", e.what());

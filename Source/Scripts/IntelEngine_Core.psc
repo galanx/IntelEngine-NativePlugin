@@ -1920,27 +1920,19 @@ Bool Function IsCarriageDriver(Actor npc)
 EndFunction
 
 Function DismissFollowerForTask(Actor npc)
-    {Prepare NPC for a new IntelEngine task by clearing ALL package overrides.
+    {Prepare NPC for a new IntelEngine task: take off what makes them follow the player (SkyrimNet's FollowPlayer
+    package, SeverActions' casual follow), IntelEngine's own package overrides and the vanilla follower flag.
 
-    Uses ActorUtil.ClearPackageOverride to remove the PapyrusUtil overrides of every mod, IntelEngine's own
-    included. (Since SkyrimNet got its package registry this no longer reaches the packages SkyrimNet runs
-    itself, such as TalkToPlayer at priority 30 or a FollowPlayer row: those sit below IntelEngine's 90 and
-    100 and lose to them without being removed.)
-    IntelEngine's task functions (GoToLocation, FetchNPC, etc.) immediately apply
-    their own packages after this call, so the NPC is never left without overrides.
+    Other mods' PapyrusUtil overrides stay. They used to be wiped here (ActorUtil.ClearPackageOverride), which cost
+    follower frameworks their packages with nothing to put them back (galanx/IntelEngine-GamePlugin#38, seen with
+    Nether's Follower Framework and without it). The wipe was for SkyrimNet's follow package: SetPlayerTeammate(false)
+    only clears the vanilla follower flag, and with that package still on her Ingrid followed the player for an hour
+    and a half instead of walking to the Western Watchtower. It is taken off by name now.
+    IntelEngine's task functions (GoToLocation, FetchNPC, etc.) apply their own packages right after this call.
+    (Doc comment after Gerkinfeltser's pull request #31, which made the same fix for 3.8.)
 
-    Why blanket clear instead of removing specific packages:
-    SkyrimNet's companion follow system uses its own package overrides that are
-    invisible to IntelEngine. SetPlayerTeammate(false) only clears the vanilla
-    follower flag — SkyrimNet's follow package stays active and overrides the
-    travel package, causing the NPC to follow the player instead of traveling.
-    Diagnosed via Ingrid's Western Watchtower trip where she followed the player
-    for 1.5 hours instead of walking to the destination, with no stuck detection
-    (she was moving, just not toward the destination).
-
-    Note: EvaluatePackage is NOT called here — callers apply their own packages
-    first, then evaluate. This prevents a brief gap where the NPC has no overrides
-    and reverts to default AI.}
+    Note: EvaluatePackage is NOT called here: callers apply their own packages first, then evaluate. This prevents
+    a brief gap where the NPC has no overrides and reverts to default AI.}
 
     ; What makes them follow the player is taken off by name: SkyrimNet's own follow, SeverActions' casual follow, and
     ; anything of IntelEngine's still on them. Every other mod's package overrides stay where they are. All of them
