@@ -2672,8 +2672,7 @@ namespace IntelEngine::Papyrus {
         // What was read, and what comes of it where it is used: whether they count as close to the player, and the line
         // a story's author is told about the two (empty when there is nothing to tell).
         auto* bonds = BondBridge::GetSingleton();
-        const std::string line = bonds->Describe(who->GetFormID()) + (bonds->Used() ? "" : " [not used: a relationship mod is installed]") +
-                                 "; close to the player: " + (LivingWorldBridge::GetSingleton()->CloseToPlayer(who) ? "yes" : "no") +
+        const std::string line = bonds->Describe(who->GetFormID()) + "; close to the player: " + (LivingWorldBridge::GetSingleton()->CloseToPlayer(who) ? "yes" : "no") +
                                  "; a story's author is told: \"" + HeartBridge::WordsFor(who) + "\"";
         return line.c_str();
     }

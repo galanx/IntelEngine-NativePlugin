@@ -371,7 +371,8 @@ The user: "we have no reliable fallback for bonds if the relationship mod is mis
 have with a specific npc and judging those memories if they ever hinted to friendship or a flirt". Without SkyrimNet
 Relationships the mod knew the game's own relationship rank, a marriage, and whether somebody once followed the
 player: nothing of a friendship that grew in talk, of a flirt, of a no. Now (`Bonds.h` the rules, `BondsCheck`;
-`BondBridge.cpp` the game side; used only while `SNRom_Integration.esp` is not loaded):
+`BondBridge.cpp` the game side; as first built it was meant to count only while `SNRom_Integration.esp` is not
+loaded, which the section after this one replaces with a rule for each person):
 
 - **Counted.** How often somebody has spoken to the player: SkyrimNet's count (`MemoryDB::TimesWithPlayer`) or
   IntelEngine's own (`DialogueTracker` tells `BondBridge::Heard` of every line whose target is the player; kept in
@@ -411,6 +412,53 @@ player: nothing of a friendship that grew in talk, of a flirt, of a no. Now (`Bo
   talk), the chat form, a game without SkyrimNet Relationships installed (the test switch stood in for that).
 - What it costs the player: one small decision call per reading (answered in about 0.3 s in the test), per person at
   most once every eight lines they say to the player.
+
+### Beside SkyrimNet Relationships: whose word counts, person by person (2026-11-21, night)
+
+Asked whether the reading should be the standard everywhere, I said no: SkyrimNet Relationships weighs every exchange
+as it happens, by that person's own character, with points that move slowly, and nothing of the heart begins there
+unless the person raises it and the player answers. A reading of what was said afterwards is the poorer witness. But
+that mod watches only followers and whom the player enrols; an innkeeper the player drinks with for a month was
+nobody to it, and so nobody to IntelEngine. The user left the choice to me ("decide whatever would make the gameplay
+feel more immersive and at more natural pacing"). The rule (`Bonds::See`, tested in `BondsCheck`):
+
+- **Whoever that mod watches** (a member of its bond faction `SNRom_Bond`, 0xD63): its word, and nothing is read
+  here. Its tier is read where tiers are read (`HeartBridge::HeartOf`, `CloseToPlayer`); new here is its **ill will**
+  (`SNRom_Enmity`, 0xD64: 1 disliked and 2 resentful count as cold, 3 enemy as a foe): somebody that mod holds in
+  ill will does not bring their trouble to the player, is no friend in a story's picture of the two, and no story of
+  the heart is told about them.
+- **Whoever it does not watch**: read here, for friendship and ill will only. The two questions of the heart are not
+  put (`ask_heart` false: the prompts drop them and the choice "lover"; a "lover" answered anyway is a confidant), and
+  nothing read of the heart earlier counts while that mod is installed. A courtship is that mod's to begin, by its
+  own rules; it is not begun here behind its back.
+- **No such mod**: as built the same day, the heart too.
+- **The seam.** That mod starts everybody it takes on as a stranger: a friend of a month would be a stranger
+  overnight, and stop being someone who may walk over to the player. What was read before stays, as a floor for
+  friendship (a confidant at most) and for ill will, until that mod's own tier has reached it (for ill will: until
+  it finds them on speaking terms), or its tier goes down from the highest it has shown (something happened that it
+  saw), or it reports ill will itself. From then its word alone (`Bond::handed`, kept with the save; record version
+  2, version 1 still read). Taken off its roster, they are read here again.
+- A reading that leaves the heart out leaves alone what was read of it before: remove the mod and it counts again.
+- Whoever is found watched is not asked about again for five minutes (`m_theirsUntil`), so a roster of a hundred
+  costs a hundred lookups in five minutes, not one a look each.
+
+**A defect of the first build, found only by playing it without the test switch:** whether that mod is installed was
+never known. The check waited for the game's records with `LookupForm<RE::TESForm>`, which answers nothing for any
+record (the typed lookup compares the form's type with "none"), so it stayed "too early to say" for ever, and in a
+game with SkyrimNet Relationships everybody would have been read, the heart too. The test switch
+(`DebugBondNoMod`) had stood in for the real thing in every run. Asked for as a faction now. The same pass found
+that "installed" was judged by a file being in the Data folder (`LookupModByName`): now by being in the load order,
+here and for the intimacy mods that open stories about an affair.
+
+Played on the test profile, which has SkyrimNet Relationships, without the switch: the mod found (its factions
+FE059D63 and FE059D64); Hulda, not on its roster, read by herself at her sixth line and again with the short
+prompt ("friend / none / unanswered, sure 0.82": friendship and ill will only); put on its roster by console at tier
+0 she still counted as a friend and a story's author was told so; at its tier 1 the same; at its tier 2 the log said
+she is that mod's to speak for from now; at its tier 1 again she was an acquaintance by its word, nothing held her
+up; its ill will 2 was read; taken off the roster she was a friend again as read. Saadia on the roster said six
+lines and was not read for as long as she was on it; off it she was read at the next look ("acquaintance", unsure,
+noted). Not played: a real enrolment through that mod's own hotkey and its points climbing by talk (the console set
+its faction ranks), a follower, the full Isekai profile.
 
 ### Places out in the world, played on foot (2026-11-19 evening)
 

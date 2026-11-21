@@ -1332,8 +1332,9 @@ namespace IntelEngine {
             if (!asker || asker->IsDead() || asker->IsDisabled()) continue;
             if (AskedWithin(asker->GetFormID(), kAskerRestDays)) continue;
             if (NPCIndex::BlockedForStories(asker)) continue;   // the user's own lists
-            // Somebody who dislikes the player, or wishes them harm, does not bring their trouble to them.
-            if (auto* bonds = BondBridge::GetSingleton(); bonds->Used() && !Bonds::WouldAsk(bonds->Of(asker->GetFormID()))) continue;
+            // Somebody who dislikes the player, or wishes them harm, does not bring their trouble to them: by what was
+            // read here, or by a relationship mod's own word for whoever it watches (Bonds::See).
+            if (BondBridge::GetSingleton()->Seen(asker).sour != Bonds::NotSour) continue;
             // Who would come to the player with it (Arcs.h, StaysPut): not a stranger unless the player is right
             // there, nobody with a post to keep, and nobody out of their own town after a player who is beyond its
             // houses. For the others their trouble becomes talk: the player hears of it (at the inn, from anyone) and
@@ -3112,8 +3113,9 @@ namespace IntelEngine {
         if (BondBridge::GetSingleton()->Times(id) >= A::kAcquaintedEvents || LivingWorldBridge::GetSingleton()->CloseToPlayer(actor)) {
             return 2;
         }
-        // (What was read of them while the count was that high stays true if SkyrimNet's history is cleared.)
-        if (auto* bonds = BondBridge::GetSingleton(); bonds->Used() && Bonds::Knows(bonds->Of(id))) return 2;
+        // (What was read of them while the count was that high stays true if SkyrimNet's history is cleared; and
+        // whoever a relationship mod holds as an acquaintance or more, or in ill will, has had to do with the player.)
+        if (BondBridge::GetSingleton()->Seen(actor).known) return 2;
         auto* player = RE::PlayerCharacter::GetSingleton();
         auto* npc = actor->GetActorBase();
         auto* pc = player ? player->GetActorBase() : nullptr;

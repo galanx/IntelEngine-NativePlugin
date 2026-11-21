@@ -61,18 +61,50 @@ namespace IntelEngine {
             return who->GetPosition().GetDistance(player->GetPosition()) <= kWith;
         }
 
-        // Is a relationship mod installed that keeps bonds itself? Looked up once the game's data is there (by a
-        // plugin's name the game walks its load order).
-        bool RelationshipMod() {
-            static std::atomic<int> known{-1};
-            if (const int k = known.load(); k >= 0) return k == 1;
-            auto* data = RE::TESDataHandler::GetSingleton();
-            if (!data || !data->LookupForm<RE::TESForm>(0x0C6472, "Skyrim.esm")) return false;   // too early to say
-            const bool there = data->LookupModByName(kRelationships) != nullptr;
-            known.store(there ? 1 : 0);
-            logger::info("Bonds: {}", there ? "SkyrimNet Relationships keeps how people stand with the player; nothing is read here"
-                                           : "no relationship mod is installed: how people stand with the player is read from what they remember");
-            return there;
+        // Is a relationship mod installed that keeps bonds itself, and by which factions does it say so? SkyrimNet
+        // Relationships: member of its bond faction = watched, the rank its tier (0 to 5); its enmity faction's rank 1
+        // disliked, 2 resentful, 3 enemy (its README invites other mods to read both). Looked up once the game's data
+        // is there: asked for by a plugin's name the game walks its whole load order.
+        constexpr RE::FormID kBondFaction = 0xD63;
+        constexpr RE::FormID kEnmityFaction = 0xD64;
+        constexpr double kTheirsAgainSeconds = 300.0;   // whoever that mod watches is asked about again this much later
+
+        struct Mod {
+            bool looked = false;
+            bool there = false;
+            RE::TESFaction* bond = nullptr;
+            RE::TESFaction* enmity = nullptr;
+        };
+        Mod TheMod() {
+            static Mod mod;
+            static std::mutex guard;
+            std::scoped_lock lock(guard);
+            if (!mod.looked) {
+                auto* data = RE::TESDataHandler::GetSingleton();
+                // (Too early to say until the game's own records are there. Asked for as a faction: asked for as a
+                // plain form the lookup answers nothing for any record, and this was never known: until 2026-11-21
+                // everybody was read here, the heart too, in a game with SkyrimNet Relationships installed; a test
+                // switch had stood in for the real thing.)
+                if (!data || !data->LookupForm<RE::TESFaction>(0x0C6472, "Skyrim.esm")) return mod;
+                // In the load order, not merely in the Data folder: a plugin that is there and unticked keeps nothing.
+                mod.there = data->LookupLoadedModByName(kRelationships) != nullptr || data->LookupLoadedLightModByName(kRelationships) != nullptr;
+                if (mod.there) {
+                    mod.bond = data->LookupForm<RE::TESFaction>(kBondFaction, kRelationships);
+                    mod.enmity = data->LookupForm<RE::TESFaction>(kEnmityFaction, kRelationships);
+                }
+                mod.looked = true;
+                if (!mod.there) {
+                    logger::info("Bonds: no relationship mod is installed: how people stand with the player is read from what they remember, the heart too");
+                } else if (mod.bond) {
+                    logger::info("Bonds: SkyrimNet Relationships speaks for whoever it watches (its factions {:08X}{}); everybody else is read here for "
+                                 "friendship and ill will, never for anything of the heart",
+                                 mod.bond->GetFormID(), mod.enmity ? std::format(" and {:08X}", mod.enmity->GetFormID()) : std::string(", none for ill will"));
+                } else {
+                    logger::warn("Bonds: SkyrimNet Relationships is installed but its bond faction was not found: nobody counts as watched by it; "
+                                 "everybody is read here for friendship and ill will, never for anything of the heart");
+                }
+            }
+            return mod;
         }
     }
 
@@ -81,11 +113,58 @@ namespace IntelEngine {
         return &instance;
     }
 
-    bool BondBridge::Used() const { return m_pretend.load() || !RelationshipMod(); }
-
     void BondBridge::Pretend(bool noRelationshipMod) {
         m_pretend.store(noRelationshipMod);
         logger::info("Bonds: test: {}", noRelationshipMod ? "going on as if no relationship mod were installed" : "the installed mods count again");
+    }
+
+    Bonds::Theirs BondBridge::TheirsOf(RE::Actor* who) const {
+        Bonds::Theirs theirs;
+        if (m_pretend.load()) return theirs;
+        const Mod mod = TheMod();
+        if (!mod.there) return theirs;
+        theirs.installed = true;
+        if (!who || !mod.bond) return theirs;
+        // One pass over what they belong to: the game's own record first, then what has changed since (joined, left,
+        // promoted). The last word counts, and a rank below nothing means they have left.
+        int bond = -1, enmity = -1;
+        who->VisitFactions([&](RE::TESFaction* faction, std::int8_t rank) {
+            if (faction == mod.bond) bond = rank < 0 ? -1 : rank;
+            else if (mod.enmity && faction == mod.enmity) enmity = rank < 0 ? -1 : rank;
+            return false;
+        });
+        if (bond < 0) return theirs;
+        theirs.tracked = true;
+        theirs.tier = static_cast<std::uint8_t>((std::min)(bond, 5));
+        theirs.ill = static_cast<std::uint8_t>(std::clamp(enmity, 0, 3));
+        return theirs;
+    }
+
+    Bonds::View BondBridge::Seen(RE::Actor* who) {
+        if (!who) return {};
+        const Bonds::Theirs theirs = TheirsOf(who);
+        Bonds::View view;
+        Bonds::Bond after;
+        bool handedNow = false;
+        {
+            std::scoped_lock lock(m_mutex);
+            const auto it = m_book.find(who->GetFormID());
+            if (it == m_book.end()) {
+                Bonds::Bond nothing;   // nobody is put in the book for being asked about
+                return Bonds::See(nothing, theirs);
+            }
+            const bool was = it->second.handed;
+            view = Bonds::See(it->second, theirs);
+            handedNow = it->second.handed && !was;
+            after = it->second;
+        }
+        if (handedNow) {
+            const char* raw = who->GetDisplayFullName();
+            logger::info("Bonds: {} is SkyrimNet Relationships' to speak for from now (its tier {}{}); what was read here before ({}) no longer "
+                         "stands in for it",
+                         raw && *raw ? raw : "someone", theirs.tier, theirs.ill ? std::format(", ill will {}", theirs.ill) : std::string(), Bonds::Word(after));
+        }
+        return view;
     }
 
     Bonds::Bond BondBridge::Of(std::uint32_t actor) const {
@@ -112,17 +191,31 @@ namespace IntelEngine {
 
     std::string BondBridge::Describe(std::uint32_t actor) const {
         const auto b = Of(actor);
-        if (!Bonds::Judged(b)) return "not read";
-        std::string out = Bonds::Word(b);
-        if (b.drawn) {
-            out += ", drawn to the player";
-            out += b.answer > 0 ? " and welcome" : b.answer < 0 ? ", turned down" : ", unanswered";
+        std::string out = "not read";
+        if (Bonds::Judged(b)) {
+            out = Bonds::Word(b);
+            if (b.drawn) {
+                out += ", drawn to the player";
+                out += b.answer > 0 ? " and welcome" : b.answer < 0 ? ", turned down" : ", unanswered";
+            }
+            out += std::format(" (read at day {:.1f}, {} times together)", b.judgedAt, b.eventsAt);
         }
-        return out + std::format(" (read at day {:.1f}, {} times together)", b.judgedAt, b.eventsAt);
+        // And whose word counts for them (the rule of Bonds::See, without touching its notes).
+        const Bonds::Theirs theirs = TheirsOf(RE::TESForm::LookupByID<RE::Actor>(actor));
+        if (!theirs.installed) return out + "; no relationship mod: all of it counts";
+        if (!theirs.tracked) return out + "; SkyrimNet Relationships does not watch them: friendship and ill will count as read, nothing of the heart";
+        out += std::format("; SkyrimNet Relationships watches them (tier {}, ill will {}): ", theirs.tier, theirs.ill);
+        Bonds::Bond copy = b;
+        const Bonds::View view = Bonds::See(copy, theirs);
+        if (!Bonds::Judged(b)) return out + "its word alone";
+        if (copy.handed) return out + "its word alone, it has caught up with what was read here";
+        return out + std::format("what was read here stays as a floor until it has caught up (counts as {}{})",
+                                 view.sour == Bonds::Foe ? "a foe" : view.sour == Bonds::Cold ? "cold" : view.standing >= Bonds::Confidant ? "a confidant"
+                                 : view.standing == Bonds::Friend ? "a friend" : view.standing == Bonds::Acquaintance ? "an acquaintance" : "a stranger",
+                                 theirs.tier > 0 ? ", its own tier where that is higher" : "");
     }
 
     void BondBridge::Tick() {
-        if (!Used()) return;
         static FrameStats stats;
         FrameClock clock("Bonds: a look at who is to be read", stats, FrameClock::Now(), 60);
         const double real = RealSeconds();
@@ -152,6 +245,8 @@ namespace IntelEngine {
                 const auto it = m_book.find(id);
                 const Bonds::Bond bond = it != m_book.end() ? it->second : Bonds::Bond{};
                 if (!Bonds::Due(bond, events, now)) continue;
+                // Whoever a relationship mod watches is its to speak for: found so a while ago, not asked about yet.
+                if (const auto theirs = m_theirsUntil.find(id); theirs != m_theirsUntil.end() && real < theirs->second) continue;
                 Bonds::Candidate c;
                 c.id = id;
                 c.events = events;
@@ -173,6 +268,13 @@ namespace IntelEngine {
                 auto& bond = m_book[c.id];
                 bond = Bonds::NothingToRead(bond, c.events, now);
                 bond.standing = Bonds::Stranger;
+                continue;
+            }
+            if (TheirsOf(actor).tracked) {
+                // A relationship mod watches them: not read here. (Seen keeps the notes of the seam for whoever was
+                // read before that mod took them on.)
+                m_theirsUntil[c.id] = real + kTheirsAgainSeconds;
+                Seen(actor);
                 continue;
             }
             c.with = WithPlayer(actor);
@@ -198,8 +300,11 @@ namespace IntelEngine {
         const std::string name = raw ? raw : "";
         const std::string player = PlayerName();
         const float now = NowDays();
-        logger::info("Bonds: reading what {} ({:08X}) remembers of the player ({} times together{})", name, id, events, forced ? ", asked for by a test" : "");
-        AsyncDispatch::Submit([this, id, name, player, events, now, forced]() mutable {
+        // Beside a relationship mod nothing of the heart is asked: that is its to begin and to keep.
+        const bool heartAsked = !TheirsOf(who).installed;
+        logger::info("Bonds: reading what {} ({:08X}) remembers of the player ({} times together{}{})", name, id, events,
+                     heartAsked ? "" : "; friendship and ill will only, the heart is SkyrimNet Relationships' to keep", forced ? "; asked for by a test" : "");
+        AsyncDispatch::Submit([this, id, name, player, events, now, forced, heartAsked]() mutable {
             // The worker: SkyrimNet's database is read here, never inside a frame.
             int count = 0;
             auto* db = MemoryDB::GetSingleton();
@@ -210,10 +315,11 @@ namespace IntelEngine {
             }
             const std::string memories = db->GetMemoriesAbout(id, player, Bonds::kMemories, count);
             const std::string talk = db->GetRecentDialogueForActor(id, Bonds::kExchanges);
-            const auto done = [this, id, events, now, count, hasTalk = !talk.empty()](const std::string& standing, const std::string& heart,
-                                                                                     const std::string& answer, float sure, const std::string& failure) {
+            const auto done = [this, id, events, now, count, heartAsked, hasTalk = !talk.empty()](const std::string& standing, const std::string& heart,
+                                                                                                 const std::string& answer, float sure,
+                                                                                                 const std::string& failure) {
                 if (auto* task = SKSE::GetTaskInterface()) {
-                    task->AddTask([=, this]() { Finish(id, standing, heart, answer, sure, events, now, count, hasTalk, failure); });
+                    task->AddTask([=, this]() { Finish(id, standing, heart, answer, sure, events, now, count, hasTalk, heartAsked, failure); });
                 } else {
                     m_busy.store(false);
                 }
@@ -224,6 +330,7 @@ namespace IntelEngine {
             ctx["player_name"] = player;
             ctx["memories"] = memories.empty() ? std::string("(none on record)") : memories;
             ctx["talk"] = talk.empty() ? std::string("(none on record)") : talk;
+            ctx["ask_heart"] = heartAsked;
             const std::string context = ctx.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
             // (The chat form gives its answers no weight: sure 0, so it is believed when it says the same twice.)
             const auto byChat = [context, done]() {
@@ -242,7 +349,7 @@ namespace IntelEngine {
             };
             if (!SkyrimNetAPI::SendCustomDecisionToLLM) return byChat();
             const bool queued = SkyrimNetAPI::SendCustomDecisionToLLM("intel_bond", context.c_str(), 4,
-                [done, byChat](const char*, const char* resultJson, int success) {
+                [done, byChat, heartAsked](const char*, const char* resultJson, int success) {
                     const auto json = nlohmann::json::parse(resultJson ? resultJson : "", nullptr, false);
                     if (!success) {
                         if (Safe::Text(json, "error") == "no_decisions_route") return byChat();   // no decision provider: the chat model reads it
@@ -267,7 +374,8 @@ namespace IntelEngine {
                     const std::string standing = choice("standing", "", sureOfStanding);
                     const std::string heart = choice("heart", "none", sureOfHeart);
                     const std::string answer = choice("answer", "unanswered", unused);
-                    done(standing, heart, answer, (std::min)(sureOfStanding, sureOfHeart), {});
+                    // Sure of it: of the standing and of the heart, or of the standing alone where the heart was not asked.
+                    done(standing, heart, answer, heartAsked ? (std::min)(sureOfStanding, sureOfHeart) : sureOfStanding, {});
                 });
             if (!queued) byChat();
         });
@@ -275,7 +383,7 @@ namespace IntelEngine {
     }
 
     void BondBridge::Finish(std::uint32_t actor, const std::string& standing, const std::string& heart, const std::string& answer, float sure,
-                            int events, float nowDays, int memories, bool talk, const std::string& failure) {
+                            int events, float nowDays, int memories, bool talk, bool heartAsked, const std::string& failure) {
         std::string was, is;
         Bonds::Reading read = Bonds::Reading::Unreadable;
         {
@@ -287,7 +395,7 @@ namespace IntelEngine {
                 for (auto& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
                 return s;
             };
-            if (failure.empty()) read = Bonds::Read(lower(standing), lower(heart), lower(answer), sure, bond, events, nowDays);
+            if (failure.empty()) read = Bonds::Read(lower(standing), lower(heart), lower(answer), sure, bond, events, nowDays, heartAsked);
             if (read == Bonds::Reading::Unreadable) bond = Bonds::NothingToRead(bond, events, nowDays);
             is = Bonds::Word(bond);
             if (bond.drawn) is += bond.answer > 0 ? ", drawn to the player and welcome" : bond.answer < 0 ? ", drawn to the player and turned down" : ", drawn to the player, unanswered";
@@ -325,7 +433,7 @@ namespace IntelEngine {
     }
 
     void BondBridge::Load(SKSE::SerializationInterface* intfc, std::uint32_t version, std::uint32_t length) {
-        if (version != Bonds::kRecordVersion || length > (1u << 17)) {
+        if (version < 1 || version > Bonds::kRecordVersion || length > (1u << 17)) {
             logger::warn("Bonds: skipping a co-save record of version {} ({} bytes)", version, length);
             return;
         }
@@ -335,7 +443,7 @@ namespace IntelEngine {
             return;
         }
         Bonds::Book saved;
-        if (!Bonds::Deserialize(bytes, saved)) {
+        if (!Bonds::Deserialize(bytes, saved, version)) {
             logger::warn("Bonds: the co-save record cannot be read: everybody is read anew");
             return;
         }
@@ -353,6 +461,7 @@ namespace IntelEngine {
     void BondBridge::Revert() {
         std::scoped_lock lock(m_mutex);
         m_book.clear();
+        m_theirsUntil.clear();
         m_lastRead = -1.0e9;
         m_lastCount = -1.0e9;
     }
