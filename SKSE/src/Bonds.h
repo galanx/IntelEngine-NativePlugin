@@ -23,6 +23,17 @@
 //  - the answer is kept with the save (record 'IEBN') and read again only when much more has passed between the two.
 // Nothing of anybody's state is written: this is IntelEngine's own note of what it read. Who may be part of a story
 // of the heart stays Hearts.h's to say (never a child, never kin, never against a no).
+//
+// Beside a relationship mod (SkyrimNet Relationships), person by person (See, below; 2026-11-21):
+//  - whoever that mod watches: its word, and nothing is read here. It weighs every exchange as it happens, by that
+//    person's own character, and nothing of the heart begins there unless they raise it and the player answers; a
+//    reading of what was said afterwards is the poorer witness;
+//  - whoever it does not watch (it watches followers, and whom the player chooses): the reading says friend,
+//    confidant, cold or foe, and nothing of the heart. An innkeeper the player has drunk with for a month is a friend
+//    in both games; a courtship is that mod's to begin, by its own rules, and is not begun here behind its back;
+//  - at the moment it takes somebody on it knows nothing of them yet (it starts everybody as a stranger): a friend of
+//    a month would be a stranger overnight. What was read before stays, as a floor for friendship and for ill will,
+//    until that mod's own tier has caught up, or goes down, or it reports ill will itself: from then its word alone.
 
 #include <cstddef>
 #include <cstdint>
@@ -47,6 +58,8 @@ namespace IntelEngine::Bonds {
         std::int32_t eventsAt = 0;          // how often the two had had to do with each other at the reading
         std::int32_t times = 0;             // lines they have said to the player, counted here since this was installed
         std::uint8_t noted = 0xFF;          // what the last reading said and was not yet believed (Code below); 0xFF: nothing
+        bool handed = false;                // a relationship mod watches them and its own word has caught up: the reading rests
+        std::uint8_t theirsSeen = 0;        // the highest tier that mod has shown for them since it took them on
     };
     constexpr std::uint8_t kNothingNoted = 0xFF;
 
@@ -99,15 +112,18 @@ namespace IntelEngine::Bonds {
     // decisions/intel_bond.prompt and intel_bond_chat.prompt), and how sure it was (the weight it gave its answers, 0
     // to 1; the chat form gives none: 0). Unreadable, and nothing changed, when the first answer is none of the names:
     // no reading is better than a guessed one.
+    // `heartAsked` false: the two questions of the heart were not put (a relationship mod is installed and keeps
+    // that): what was read of the heart before is left as it was, and "lover", which was not offered, is the closest
+    // friend the question knows.
     inline Reading Read(std::string_view standing, std::string_view heart, std::string_view answer, float sure, Bond& b, int eventsNow,
-                        float nowDays) {
+                        float nowDays, bool heartAsked = true) {
         Bond next = b;
         next.sour = NotSour;
         if (standing == "stranger") next.standing = Stranger;
         else if (standing == "acquaintance") next.standing = Acquaintance;
         else if (standing == "friend") next.standing = Friend;
         else if (standing == "confidant") next.standing = Confidant;
-        else if (standing == "lover") next.standing = Lover;
+        else if (standing == "lover") next.standing = heartAsked ? Lover : Confidant;
         else if (standing == "cold") {
             next.standing = Acquaintance;
             next.sour = Cold;
@@ -121,7 +137,9 @@ namespace IntelEngine::Bonds {
         const bool lovers = next.standing == Lover;
         const bool drawn = lovers || heart == "drawn";
         const bool welcomed = lovers || (drawn && answer == "welcomed");
-        if (b.answer == Declined && !welcomed) {
+        if (!heartAsked) {
+            // Not asked: nothing of the heart is changed by this reading.
+        } else if (b.answer == Declined && !welcomed) {
             // A no stands until the player is plainly read to have taken it back: a later reading that finds nothing
             // of the heart, or finds it unanswered, does not wipe it out (the talk it was said in has scrolled away).
             next.drawn = true;
@@ -165,6 +183,76 @@ namespace IntelEngine::Bonds {
     // Somebody who dislikes the player does not bring their trouble to them.
     inline constexpr bool WouldAsk(const Bond& b) { return b.sour == NotSour; }
 
+    // ------------------------------------------------------------------ beside a relationship mod
+
+    // What a relationship mod installed beside this one says of the same person (SkyrimNet Relationships: its bond
+    // faction's rank and its enmity faction's, which its README invites other mods to read).
+    struct Theirs {
+        bool installed = false;   // the mod is in the game
+        bool tracked = false;     // and watches this person
+        std::uint8_t tier = 0;    // its tier for them: 0 stranger, 1 acquaintance, 2 friend, 3 confidant, 4 lover, 5 beloved
+        std::uint8_t ill = 0;     // its ill will: 0 none, 1 disliked, 2 resentful, 3 enemy
+    };
+
+    // What the reading says of somebody where it counts (who is close, who knows the player, who would not ask them
+    // for help, a story's picture of the two): the part of it that is this mod's to say for that person.
+    struct View {
+        std::uint8_t standing = Stranger;   // a floor: the game's rank, or the relationship mod's tier, may say more
+        std::uint8_t sour = NotSour;
+        bool known = false;                 // they have had to do with each other
+        bool heart = false;                 // what was read of the heart counts too (no relationship mod keeps it)
+        bool theirs = false;                // a relationship mod watches them: it is not read here
+    };
+
+    inline constexpr std::uint8_t SourOf(std::uint8_t ill) { return ill >= 3 ? Foe : ill >= 1 ? Cold : NotSour; }
+
+    // The rule, person by person (the top of this file says why). It keeps two notes in the bond of somebody a
+    // relationship mod has taken on: the highest tier that mod has shown, and whether its word has caught up.
+    inline constexpr View See(Bond& b, const Theirs& t) {
+        View v;
+        const std::uint8_t friendship = b.standing < Confidant ? b.standing : static_cast<std::uint8_t>(Confidant);
+        if (!t.installed) {
+            // Nobody else keeps it: all that was read counts, the heart too.
+            v.heart = true;
+            if (Judged(b)) {
+                v.standing = b.standing;
+                v.sour = b.sour;
+                v.known = Knows(b);
+            }
+            return v;
+        }
+        if (!t.tracked) {
+            // Not one of those the mod watches (or no longer): friendship and ill will as read, nothing of the heart.
+            b.handed = false;
+            b.theirsSeen = 0;
+            if (Judged(b)) {
+                v.standing = friendship;
+                v.sour = b.sour;
+                v.known = Knows(b);
+            }
+            return v;
+        }
+        // Watched by the mod: its word. Its ill will is told here (its tier is read where tiers are read).
+        v.theirs = true;
+        v.sour = SourOf(t.ill);
+        v.known = t.tier >= Acquaintance || t.ill > 0;
+        if (!Judged(b) || b.handed) return v;
+        // It took them on after they were read here, and starts everybody as a stranger: what was read stays until
+        // its own word says as much (for ill will: until it finds them on speaking terms), or its tier goes down
+        // (something happened that it saw and the reading did not), or it reports ill will itself.
+        const bool readIll = b.sour != NotSour;
+        const bool caughtUp = readIll ? t.tier >= Acquaintance : t.tier >= friendship;
+        if (caughtUp || t.tier < b.theirsSeen || t.ill > 0) {
+            b.handed = true;
+            return v;
+        }
+        if (t.tier > b.theirsSeen) b.theirsSeen = t.tier;
+        v.standing = friendship;
+        v.sour = b.sour;
+        v.known = v.known || Knows(b);
+        return v;
+    }
+
     inline const char* Word(const Bond& b) {
         if (!Judged(b)) return "not read";
         if (b.sour == Foe) return "a foe";
@@ -197,7 +285,7 @@ namespace IntelEngine::Bonds {
     // ------------------------------------------------------------------ kept with the save (record 'IEBN')
 
     inline constexpr std::uint32_t kRecordType = 'IEBN';
-    inline constexpr std::uint32_t kRecordVersion = 1;
+    inline constexpr std::uint32_t kRecordVersion = 2;   // 2: handed, theirsSeen (a record of version 1 is still read)
     inline constexpr std::size_t kMost = 4096;
 
     using Book = std::map<std::uint32_t, Bond>;
@@ -226,11 +314,14 @@ namespace IntelEngine::Bonds {
             put32(static_cast<std::uint32_t>(b.eventsAt));
             put32(static_cast<std::uint32_t>(b.times));
             out.push_back(b.noted);
+            out.push_back(b.handed ? 1 : 0);
+            out.push_back(b.theirsSeen);
         }
         return out;
     }
 
-    inline bool Deserialize(const std::vector<std::uint8_t>& bytes, Book& book) {
+    inline bool Deserialize(const std::vector<std::uint8_t>& bytes, Book& book, std::uint32_t version = kRecordVersion) {
+        if (version < 1 || version > kRecordVersion) return false;
         std::size_t at = 0;
         const auto get32 = [&bytes, &at](std::uint32_t& v) {
             if (at + 4 > bytes.size()) return false;
@@ -262,8 +353,14 @@ namespace IntelEngine::Bonds {
             b.eventsAt = static_cast<std::int32_t>(events);
             b.times = static_cast<std::int32_t>(times);
             b.noted = bytes[at++];
+            if (version >= 2) {
+                if (at + 2 > bytes.size()) return false;
+                b.handed = bytes[at] != 0;
+                b.theirsSeen = bytes[at + 1];
+                at += 2;
+            }
             // What cannot be: a record written by something else, or damaged.
-            if (b.standing > Lover || b.sour > Foe || b.answer < Declined || b.answer > Welcomed) return false;
+            if (b.standing > Lover || b.sour > Foe || b.answer < Declined || b.answer > Welcomed || b.theirsSeen > 5) return false;
             loaded.emplace(id, b);
         }
         book = std::move(loaded);

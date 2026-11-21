@@ -1120,9 +1120,11 @@ namespace IntelEngine {
             });
             if (member && rank >= 3) return true;
         }
-        // No relationship mod: what was read from their memories of the player (Bonds.h): a confidant or more.
-        if (auto* bonds = BondBridge::GetSingleton(); bonds->Used() && Bonds::Close(bonds->Of(actor->GetFormID()))) return true;
-        return false;
+        // What was read from their memories of the player, where that is IntelEngine's to say for them (Bonds::See: no
+        // relationship mod, or one that does not watch them, or one that took them on and has not caught up yet): a
+        // confidant or more, and no ill will.
+        const Bonds::View read = BondBridge::GetSingleton()->Seen(actor);
+        return read.sour == Bonds::NotSour && read.standing >= Bonds::Confidant;
     }
 
     std::vector<LivingWorldBridge::OldCompanion> LivingWorldBridge::OldCompanions() const {

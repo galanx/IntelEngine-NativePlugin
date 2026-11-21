@@ -60,7 +60,11 @@ namespace IntelEngine::HeartBridge {
                     known.potentialMarriage = data->LookupForm<RE::TESFaction>(kPotentialMarriageFaction, "Skyrim.esm");
                     known.bond = data->LookupForm<RE::TESFaction>(kBondFaction, kRelationships);
                     known.marriage = data->LookupForm<RE::TESFaction>(kMarriageFaction, kRelationships);
-                    known.intimacyMod = data->LookupModByName("OStim.esp") != nullptr || data->LookupModByName("OStimNet.esp") != nullptr;
+                    // In the load order, not merely in the Data folder (a plugin that is there and unticked is no mod).
+                    const auto loaded = [data](const char* plugin) {
+                        return data->LookupLoadedModByName(plugin) != nullptr || data->LookupLoadedLightModByName(plugin) != nullptr;
+                    };
+                    known.intimacyMod = loaded("OStim.esp") || loaded("OStimNet.esp");
                     // Kept only once the game's own records are there: before that there is nothing to find.
                     known.looked = known.playerMarried != nullptr;
                 }
@@ -227,30 +231,29 @@ namespace IntelEngine::HeartBridge {
             h.childIsPlayers = s.childIsPlayers;
             h.children = s.children;
         }
-        // No relationship mod keeps it: what was read from their memories of the player counts (Bonds.h). The game's
-        // own rank and marriage stand; the reading can only add what the game does not know: a friendship that grew
-        // in talk, something of the heart, the player's answer to it. Somebody who has soured on the player is no
-        // friend, whatever the game's rank says.
-        if (!h.tracked) {
-            if (auto* bonds = BondBridge::GetSingleton(); bonds->Used()) {
-                if (const auto b = bonds->Of(actor->GetFormID()); Bonds::Judged(b)) {
-                    static_assert(static_cast<int>(Bonds::Lover) == static_cast<int>(Hearts::Lover) &&
-                                  static_cast<int>(Bonds::Friend) == static_cast<int>(Hearts::Friend));
-                    if (b.sour != Bonds::NotSour) {
-                        h.tier = std::min<std::uint8_t>(h.tier, Hearts::Acquaintance);
-                        h.sparked = false;
-                    } else {
-                        h.tier = std::max<std::uint8_t>(h.tier, b.standing);
-                        if (b.drawn) {
-                            h.sparked = true;
-                            h.stance = b.answer;
-                            if (b.answer < 0 && b.declinedAt >= 0.0f) {
-                                auto* calendar = RE::Calendar::GetSingleton();
-                                const float now = calendar ? calendar->GetCurrentGameTime() : 0.0f;
-                                h.refusedDays = std::max(0.0f, now - b.declinedAt);
-                            }
-                        }
-                    }
+        // What was read from their memories of the player (Bonds.h), as far as it is IntelEngine's to say for this
+        // person (Bonds::See). The game's own rank and marriage stand, and so does a relationship mod's tier; the
+        // reading can only add what they do not know: a friendship that grew in talk and, where no relationship mod
+        // is installed at all, something of the heart and the player's answer to it. Beside such a mod nothing of the
+        // heart ever comes from the reading: whoever it does not watch is a friend at most, and for whoever it has
+        // just taken on, what was read before stays a floor of friendship until its own tier has caught up. Somebody
+        // who has soured on the player (read here, or by that mod's own word) is no friend, whatever else says so.
+        static_assert(static_cast<int>(Bonds::Lover) == static_cast<int>(Hearts::Lover) &&
+                      static_cast<int>(Bonds::Friend) == static_cast<int>(Hearts::Friend));
+        auto* bonds = BondBridge::GetSingleton();
+        const Bonds::View read = bonds->Seen(actor);
+        if (read.sour != Bonds::NotSour) {
+            h.tier = std::min<std::uint8_t>(h.tier, Hearts::Acquaintance);
+            h.sparked = false;
+        } else {
+            h.tier = std::max<std::uint8_t>(h.tier, read.standing);
+            if (const auto b = bonds->Of(actor->GetFormID()); read.heart && Bonds::Judged(b) && b.drawn) {
+                h.sparked = true;
+                h.stance = b.answer;
+                if (b.answer < 0 && b.declinedAt >= 0.0f) {
+                    auto* calendar = RE::Calendar::GetSingleton();
+                    const float now = calendar ? calendar->GetCurrentGameTime() : 0.0f;
+                    h.refusedDays = std::max(0.0f, now - b.declinedAt);
                 }
             }
         }

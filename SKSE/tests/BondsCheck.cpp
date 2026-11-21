@@ -117,6 +117,107 @@ static void WhoIsReadNext() {
     Require(!Before(far, far), "nobody before themselves");
 }
 
+// Beside a relationship mod (SkyrimNet Relationships), person by person.
+static void BesideARelationshipMod() {
+    const float sure = 0.9f;
+    const Theirs none{};                          // no such mod in the game
+    const Theirs unwatched{true, false, 0, 0};    // the mod is there and does not watch this person
+    const auto watched = [](std::uint8_t tier, std::uint8_t ill = 0) { return Theirs{true, true, tier, ill}; };
+
+    // No mod: all that was read counts, the heart too.
+    Bond lover;
+    Read("lover", "drawn", "welcomed", sure, lover, 30, 5.0f);
+    View v = See(lover, none);
+    Require(v.standing == Lover && v.heart && v.known && !v.theirs && v.sour == NotSour, "no relationship mod: all that was read counts");
+    Bond unread;
+    v = See(unread, none);
+    Require(v.standing == Stranger && !v.known && v.heart, "nobody read: nothing known");
+
+    // The mod is there and does not watch them: friendship and ill will as read, nothing of the heart.
+    v = See(lover, unwatched);
+    Require(v.standing == Confidant && !v.heart && v.known && !v.theirs, "not watched by the mod: a close friend at most, and nothing of the heart");
+    Bond innkeeper;
+    Read("friend", "drawn", "unanswered", sure, innkeeper, 12, 3.0f);
+    v = See(innkeeper, unwatched);
+    Require(v.standing == Friend && !v.heart, "an innkeeper the player has drunk with is a friend in both games");
+    Bond cold;
+    Read("cold", "none", "unanswered", sure, cold, 9, 3.0f);
+    v = See(cold, unwatched);
+    Require(v.sour == Cold && v.known && !v.heart, "and somebody who has soured on the player has, in both");
+
+    // The questions of the heart are not put where the mod keeps it: what was read of the heart before is left alone.
+    Bond kept = innkeeper;
+    Require(Read("confidant", "none", "unanswered", sure, kept, 30, 6.0f, false) == Reading::Taken && kept.standing == Confidant && kept.drawn &&
+                kept.answer == Unanswered,
+            "a reading without the heart's questions changes nothing of the heart");
+    Bond refused;
+    Read("friend", "drawn", "declined", sure, refused, 12, 3.0f);
+    Require(Read("friend", "none", "unanswered", sure, refused, 30, 6.0f, false) == Reading::Taken && refused.answer == Declined && refused.declinedAt == 3.0f,
+            "nor of a no");
+    Bond named;
+    Require(Read("lover", "none", "unanswered", sure, named, 8, 1.0f, false) == Reading::Taken && named.standing == Confidant && !named.drawn,
+            "and 'lover', which was not offered, is a close friend and no more");
+
+    // Watched by the mod and never read here: its word alone.
+    Bond fresh;
+    v = See(fresh, watched(0));
+    Require(v.theirs && v.standing == Stranger && !v.known && v.sour == NotSour && !v.heart, "watched, a stranger there: nothing added");
+    v = See(fresh, watched(2));
+    Require(v.theirs && v.known && v.standing == Stranger, "its tier is read where tiers are read; here only that they know each other");
+    v = See(fresh, watched(0, 1));
+    Require(v.sour == Cold && v.known, "its ill will: disliked is cold");
+    v = See(fresh, watched(0, 2));
+    Require(v.sour == Cold, "resentful is cold");
+    v = See(fresh, watched(0, 3));
+    Require(v.sour == Foe, "an enemy is a foe");
+
+    // The seam: a friend of a month, taken on by the mod, which starts everybody as a stranger.
+    Bond friendOf;
+    Read("friend", "none", "unanswered", sure, friendOf, 40, 9.0f);
+    v = See(friendOf, watched(0));
+    Require(v.theirs && v.standing == Friend && v.known && !friendOf.handed, "what was read stays as a floor: still a friend the next morning");
+    v = See(friendOf, watched(1));
+    Require(v.standing == Friend && !friendOf.handed && friendOf.theirsSeen == 1, "while the mod's own tier climbs");
+    v = See(friendOf, watched(2));
+    Require(friendOf.handed && v.standing == Stranger && v.known, "its tier has caught up: from now its word alone");
+    v = See(friendOf, watched(1));
+    Require(friendOf.handed && v.standing == Stranger, "and when they fall out there, no old reading holds them up");
+
+    Bond fell;
+    Read("confidant", "none", "unanswered", sure, fell, 40, 9.0f);
+    See(fell, watched(0));
+    See(fell, watched(2));
+    Require(!fell.handed && fell.theirsSeen == 2, "a confidant read here, a friend there so far: the floor stands");
+    v = See(fell, watched(1));
+    Require(fell.handed && v.standing == Stranger, "its tier goes down: something happened that it saw; its word alone");
+
+    Bond soured;
+    Read("friend", "none", "unanswered", sure, soured, 40, 9.0f);
+    v = See(soured, watched(0, 1));
+    Require(soured.handed && v.sour == Cold && v.standing == Stranger, "it reports ill will itself: no floor of friendship under that");
+
+    Bond grudge;
+    Read("cold", "none", "unanswered", sure, grudge, 40, 9.0f);
+    v = See(grudge, watched(0));
+    Require(v.sour == Cold && !grudge.handed, "a grudge read here is not wiped out by being taken on");
+    v = See(grudge, watched(1));
+    Require(grudge.handed && v.sour == NotSour, "until the mod finds them on speaking terms");
+
+    Bond loverBefore;
+    Read("lover", "drawn", "welcomed", sure, loverBefore, 60, 9.0f);
+    v = See(loverBefore, watched(0));
+    Require(v.standing == Confidant && !v.heart, "the floor is one of friendship: nothing of the heart is carried over behind the mod's back");
+    v = See(loverBefore, watched(3));
+    Require(loverBefore.handed, "caught up at confidant");
+
+    // Taken off the mod's roster again: the reading counts again, and the notes of the seam are forgotten.
+    v = See(friendOf, unwatched);
+    Require(!friendOf.handed && friendOf.theirsSeen == 0 && v.standing == Friend && !v.theirs, "no longer watched: read here again, a friend as read");
+    // And the mod gone from the game: everything that was read, the heart too.
+    v = See(loverBefore, none);
+    Require(v.standing == Lover && v.heart, "the mod removed: all that was read counts again");
+}
+
 static void KeptWithTheSave() {
     Book book;
     Bond a, b;
@@ -124,11 +225,27 @@ static void KeptWithTheSave() {
     Read("foe", "none", "unanswered", 1.0f, b, 9, 3.25f);
     b.noted = 0x12;
     a.times = 14;
+    b.handed = true;
+    b.theirsSeen = 3;
     book.emplace(0x0001A66Eu, a);
     book.emplace(0xFE012345u, b);
     const auto bytes = Serialize(book);
     Book back;
     Require(Deserialize(bytes, back) && back.size() == 2, "the book comes back");
+    Require(back.at(0xFE012345u).handed && back.at(0xFE012345u).theirsSeen == 3 && !back.at(0x0001A66Eu).handed && back.at(0x0001A66Eu).theirsSeen == 0,
+            "with the notes of the seam beside a relationship mod");
+    {
+        // A record of version 1 (before those notes): still read, the notes empty.
+        std::vector<std::uint8_t> old;
+        const std::size_t entry = 4 + 4 + 4 + 4 + 4 + 4 + 1 + 2;   // as written now
+        old.insert(old.end(), bytes.begin(), bytes.begin() + 4);
+        for (std::size_t i = 0; i < 2; ++i) old.insert(old.end(), bytes.begin() + 4 + i * entry, bytes.begin() + 4 + (i + 1) * entry - 2);
+        Book before;
+        Require(Deserialize(old, before, 1) && before.size() == 2 && before.at(0xFE012345u).sour == Foe && !before.at(0xFE012345u).handed &&
+                    before.at(0xFE012345u).noted == 0x12,
+                "a record written before them is still read");
+        Require(!Deserialize(old, before, 2) && !Deserialize(bytes, before, 3), "and one of a version it does not know is refused");
+    }
     const Bond& x = back.at(0x0001A66Eu);
     Require(x.standing == Confidant && x.drawn && x.answer == Declined && x.judgedAt == 12.5f && x.declinedAt == 12.5f && x.eventsAt == 31,
             "with every field");
@@ -156,6 +273,7 @@ int main() {
         OneReadingIsNotBelievedOnItsWord();
         TheSameLadderAsHearts();
         WhoIsReadNext();
+        BesideARelationshipMod();
         KeptWithTheSave();
     } catch (const std::exception& e) {
         std::cerr << "BondsCheck FAILED: " << e.what() << "\n";
