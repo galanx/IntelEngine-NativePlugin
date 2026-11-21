@@ -150,6 +150,11 @@ public static class Program
                 faction.Relations.Add(own);
             }
             own.Reaction = CombatReaction.Ally;
+            // And what is done to a soldier of a battle is no crime to anybody: a comrade cut down by a stray blow was
+            // murder with the hold the field lies in, and brought its guards (1,000 gold, played 2026-11-21). The
+            // game has a mark for that, the one its bandits carry.
+            // (Murder and assault ignored by its members: bits 7 and 8 of the faction's flags.)
+            faction.Flags |= Faction.FactionFlag.DoNotReportCrimesAgainstMembers | (Faction.FactionFlag)(1 << 7) | (Faction.FactionFlag)(1 << 8);
             ++allied;
         }
         return allied;

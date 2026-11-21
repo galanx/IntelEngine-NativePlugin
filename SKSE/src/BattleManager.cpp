@@ -2228,6 +2228,61 @@ namespace IntelEngine {
         return activeBattle_ && activeBattle_->mustering;
     }
 
+    std::string BattleManager::IdleHands(int most) {
+        static FrameStats stats;
+        FrameClock clock("Battle: looking for idle hands", stats, FrameClock::Now(), 20);
+        nlohmann::json out;
+        nlohmann::json idle = nlohmann::json::array(), foe = nlohmann::json::array();
+        struct Man {
+            RE::Actor* actor = nullptr;
+            bool sideA = false;
+        };
+        std::vector<std::pair<RE::FormID, bool>> listed;
+        int playerSide = 0;         // 1: A, 2: B
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (activeBattle_ && !activeBattle_->mustering) {
+                for (const auto& a : activeBattle_->actors) {
+                    if (a.alive) listed.emplace_back(a.formId, a.factionId == activeBattle_->factionA);
+                }
+                if (!activeBattle_->playerSide.empty()) playerSide = activeBattle_->playerSide == activeBattle_->factionA ? 1 : 2;
+            }
+        }
+        std::vector<Man> men;
+        men.reserve(listed.size());
+        for (const auto& [id, sideA] : listed) {
+            auto* actor = RE::TESForm::LookupByID<RE::Actor>(id);
+            if (!actor || actor->IsDead() || actor->IsDisabled() || !actor->Is3DLoaded()) continue;
+            men.push_back({actor, sideA});
+        }
+        auto* player = RE::PlayerCharacter::GetSingleton();
+        int found = 0;
+        for (const auto& man : men) {
+            if (found >= most) break;
+            if (man.actor->IsInCombat()) continue;
+            // The soldiers who keep by the player stay by the player.
+            if (player && playerSide == (man.sideA ? 1 : 2) && man.actor->GetPosition().GetDistance(player->GetPosition()) < 500.f) continue;
+            const Man* nearest = nullptr;
+            float best = 6000.f;
+            for (const auto& other : men) {
+                if (other.sideA == man.sideA) continue;
+                const float distance = man.actor->GetPosition().GetDistance(other.actor->GetPosition());
+                if (distance < best) {
+                    best = distance;
+                    nearest = &other;
+                }
+            }
+            if (!nearest) continue;
+            idle.push_back(man.actor->GetFormID());
+            foe.push_back(nearest->actor->GetFormID());
+            ++found;
+        }
+        out["count"] = found;
+        out["idle"] = idle;
+        out["foe"] = foe;
+        return out.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
+    }
+
     std::string BattleManager::Verdict() const {
         nlohmann::json out;
         out["result"] = "draw";

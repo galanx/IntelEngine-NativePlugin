@@ -315,6 +315,10 @@ namespace IntelEngine {
         /** Who has the better of a battle that is not fought out (the player left, it went on too long).
          *  Returns JSON: {result, victor} (victor "" and result "draw" when neither). */
         std::string Verdict() const;
+        /** Soldiers who stand about while the battle is on, each with the enemy nearest to them: {count, idle: [ids],
+         *  foe: [ids]}, at most `most` of them. Those who came up later were sent to the middle of the field and
+         *  stood there in a knot when the fighting had moved on (seen 2026-11-21). Not the player's own file. */
+        std::string IdleHands(int most);
 
         /** A side called the player to its line and was turned down or not answered. */
         void NoteTurnedDown(const std::string& factionId);

@@ -250,6 +250,7 @@ namespace IntelEngine::Papyrus {
     RE::BSFixedString BattleReinforceLine(RE::StaticFunctionTag*, RE::BSFixedString, int, int, RE::Actor*);
     void BattleBeginFight(RE::StaticFunctionTag*);
     RE::BSFixedString BattleVerdict(RE::StaticFunctionTag*);
+    RE::BSFixedString BattleIdleHands(RE::StaticFunctionTag*, int);
     void BattleNoteTurnedDown(RE::StaticFunctionTag*, RE::BSFixedString);
     void BattleNotePlayerLeft(RE::StaticFunctionTag*);
     RE::BSFixedString BattleFieldInfo(RE::StaticFunctionTag*);
@@ -710,6 +711,7 @@ namespace IntelEngine::Papyrus {
         a_vm->RegisterFunction("BattleReinforceLine", SCRIPT_NAME, BattleReinforceLine); ++count;
         a_vm->RegisterFunction("BattleBeginFight", SCRIPT_NAME, BattleBeginFight); ++count;
         a_vm->RegisterFunction("BattleVerdict", SCRIPT_NAME, BattleVerdict); ++count;
+        a_vm->RegisterFunction("BattleIdleHands", SCRIPT_NAME, BattleIdleHands); ++count;
         a_vm->RegisterFunction("BattleNoteTurnedDown", SCRIPT_NAME, BattleNoteTurnedDown); ++count;
         a_vm->RegisterFunction("BattleNotePlayerLeft", SCRIPT_NAME, BattleNotePlayerLeft); ++count;
         a_vm->RegisterFunction("BattleFieldInfo", SCRIPT_NAME, BattleFieldInfo); ++count;
@@ -5554,6 +5556,10 @@ namespace IntelEngine::Papyrus {
     }
 
     void BattleBeginFight(RE::StaticFunctionTag*) { BattleManager::GetSingleton()->BeginFight(); }
+
+    RE::BSFixedString BattleIdleHands(RE::StaticFunctionTag*, int most) {
+        return RE::BSFixedString(BattleManager::GetSingleton()->IdleHands(most).c_str());
+    }
 
     RE::BSFixedString BattleVerdict(RE::StaticFunctionTag*) {
         return RE::BSFixedString(BattleManager::GetSingleton()->Verdict().c_str());

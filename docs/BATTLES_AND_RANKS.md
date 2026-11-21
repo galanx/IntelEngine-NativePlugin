@@ -59,6 +59,14 @@ elsewhere, and both are single frames, never two in a row.
   minutes instead of one.
 - Each army has reserves of its own (waves of 8, 5, 4, 3, 2). A wave comes up from behind its own line, from a
   walkable point the player cannot see (`ReservePoints`); when there is no such point nobody comes.
+- Nobody stands about while the battle is on: at every look the DLL names up to six soldiers who are not fighting,
+  each with the enemy nearest to them, and the script sets them on that enemy (`BattleIdleHands`,
+  `RouseIdleHands`). Everyone who came up after the lines had met was sent to the middle of the field, one spot for
+  all: with the fighting moved on they stood there in a knot, whole and idle, while their side lost (the user,
+  2026-11-21: "herded in one spot like chicken"). The soldiers who keep by the player are left to the player.
+- Those soldiers follow on the mod's follow package (`IntelEngine_FollowPlayerTaskPackage`), a few steps off. The
+  travel packages lead to the very spot their target stands on (radius 0): on those they walked into the player
+  for as long as the battle lasted.
 - Morale: a soldier lost costs 5, a captain 15, a champion 20; a side breaks at 25. The player's coming is worth
   10 to the side they join, over and above a full heart (`kHeartMost` 110; capped at 100 it was worth nothing to
   a side joined before the fight), and costs the other 5.
@@ -104,7 +112,9 @@ A hidden force and turncoats in one battle leave the champions out. What is in s
   comes at a jog; whoever leaves, at a walk or a run (`PaceFor`).
 - Someone of the player's side who is still standing comes over (from anywhere on the field), says what he
   thinks of it in his own words, and hands over the pay: `Battlefield::Pay`, raised by rank. Nothing is paid before
-  he has spoken.
+  he has spoken. He stops some 220 units off (`AllyStopsDistance`), turns to the player and stands while he
+  speaks. (His order to come to the player used to stay on him until he had spoken, and the words take their
+  time: he walked into the player again and again. The user, 2026-11-21.)
 - Standing: the side fought for, the side fought against, soldiers of a side the player was not at war with,
   a side turned down, walking away after taking a side.
 - The battle is recorded once, as it was fought, and word of it starts in the hold it was fought in. The player's
