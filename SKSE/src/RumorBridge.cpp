@@ -257,6 +257,20 @@ namespace IntelEngine {
         }).detach();
     }
 
+    std::vector<std::string> RumorBridge::TalkForTales(std::size_t most) {
+        std::vector<std::string> out;
+        const std::uint8_t hold = m_playerHold.load();
+        if (hold == R::NoHold || most == 0) return out;
+        const float now = m_now.load();
+        std::scoped_lock lock(m_mutex);
+        for (const R::Rumor* r : m_ledger.ForHold(hold, 0, now, 8u)) {
+            if (r->kind == R::Kind::Trouble || r->weight < 0.45f) continue;
+            out.push_back(TextIn(*r, hold));
+            if (out.size() >= most) break;
+        }
+        return out;
+    }
+
     std::string RumorBridge::Lines(RE::Actor* actor) {
         if (!actor || actor->IsPlayerRef()) return {};
         const auto hold = HoldOf(actor->GetCurrentLocation());

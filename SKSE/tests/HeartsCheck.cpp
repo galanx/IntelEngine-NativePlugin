@@ -168,8 +168,48 @@ static void GrowingCloserOrApart() {
     Require(RankAfter(2, false) == 1 && RankAfter(0, false) == 0 && RankAfter(-2, false) == -2, "apart: one step, never into enmity");
 }
 
+// A shy admirer: drawn to the player, never answered, and not one to come up and say it.
+static void AShyAdmirer() {
+    using namespace IntelEngine::Hearts;
+    Who who;
+    who.person = true;
+    Heart h;
+    h.tier = Friend;
+    h.sparked = true;
+    const Rules rules{};
+    Require(ShyAdmirer(who, h, rules, 1) && ShyAdmirer(who, h, rules, 2) && ShyAdmirer(who, h, rules, 0),
+            "a friend drawn to the player, unanswered, cautious or average: somebody comes in their stead");
+    Require(!ShyAdmirer(who, h, rules, 3) && !ShyAdmirer(who, h, rules, 4), "the bold ask for themselves");
+    Heart welcomed = h;
+    welcomed.stance = 1;
+    Require(!ShyAdmirer(who, welcomed, rules, 1), "welcomed already: there is no secret left");
+    Heart refused = h;
+    refused.stance = -1;
+    refused.refusedDays = 400.0f;
+    Require(!ShyAdmirer(who, refused, rules, 1), "turned down, however long ago: nobody is sent again");
+    Heart cool = h;
+    cool.tier = Acquaintance;
+    Require(!ShyAdmirer(who, cool, rules, 1), "an acquaintance is not yet somebody to send word for");
+    Heart unsparked = h;
+    unsparked.sparked = false;
+    Require(!ShyAdmirer(who, unsparked, rules, 1), "a friend who is not drawn to the player has nothing to hide");
+    Who child = who;
+    child.childlike = true;
+    Require(!ShyAdmirer(child, h, rules, 1), "never a child");
+    Who kin = who;
+    kin.kin = true;
+    Require(!ShyAdmirer(kin, h, rules, 1), "never kin");
+    Heart wed = h;
+    wed.wedElsewhere = true;
+    Require(!ShyAdmirer(who, wed, rules, 1), "never somebody wed to another");
+    Rules off = rules;
+    off.stories = false;
+    Require(!ShyAdmirer(who, h, off, 1), "nor where stories of the heart are switched off");
+}
+
 int main() {
     try {
+        AShyAdmirer();
         WhoMayBePartOfOne();
         WhatItWouldBeAbout();
         Affairs();

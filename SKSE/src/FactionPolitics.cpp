@@ -1917,6 +1917,41 @@ war_allowed:
         return Ranks::KnownAs(PlayerRecord(factionId), PlayerRank(factionId), Ranks::KindOf(faction->type), the);
     }
 
+    std::string FactionPolitics::TimesForTales(const std::string& player) {
+        if (!initialized_.load() || !enabled_.load()) return {};
+        auto* db = PoliticalDB::GetSingleton();
+        if (!db->IsReady()) return {};
+        const auto nameOf = [this](const std::string& id) {
+            const auto faction = GetFaction(id);
+            return faction ? faction->name : id;
+        };
+        std::string out;
+        int wars = 0;
+        for (const auto& w : db->GetActiveWars()) {
+            if (w.factionA.rfind("PE_", 0) == 0 || w.factionB.rfind("PE_", 0) == 0) continue;
+            out += "- " + nameOf(w.factionA) + " and " + nameOf(w.factionB) + " are at war" +
+                   (w.battlesFought > 0 ? " (" + std::to_string(w.battlesFought) + (w.battlesFought == 1 ? " battle" : " battles") + " fought so far)"
+                                        : std::string(" (no battle fought yet)")) + ".\n";
+            if (++wars >= 3) break;
+        }
+        int told = 0;
+        for (const auto& s : db->GetAllPlayerStandings()) {
+            if (s.factionId.rfind("PE_", 0) == 0 || !GetFaction(s.factionId)) continue;
+            std::string line = PlayerKnownAs(s.factionId);   // "a Veteran of the Imperial Legion: fought in 4 of their battles (3 won)"
+            if (!line.empty()) {
+                line = player + " is known as " + line + ".";
+            } else if (s.standing <= -40) {
+                line = nameOf(s.factionId) + ": they hold " + player + " for an enemy.";
+            } else if (s.standing >= 40) {
+                line = nameOf(s.factionId) + ": they think well of " + player + ".";
+            }
+            if (line.empty()) continue;
+            out += "- " + line + "\n";
+            if (++told >= 4) break;
+        }
+        return out;
+    }
+
     nlohmann::json FactionPolitics::RanksJson() {
         Ranks::Book book;
         {

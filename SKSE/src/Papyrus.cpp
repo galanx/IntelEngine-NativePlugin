@@ -4821,6 +4821,7 @@ namespace IntelEngine::Papyrus {
         out += ",\"quests\":" + QuestBridge::GetSingleton()->DashboardJson();
         out += ",\"asks\":" + StorylineBridge::GetSingleton()->DashboardJson();
         out += ",\"people\":" + LivingWorldBridge::GetSingleton()->DashboardJson();
+        out += ",\"bonds\":" + BondBridge::GetSingleton()->DashboardJson();
         // The player's name: the page says "you" where the engine's lines name them.
         auto* player = RE::PlayerCharacter::GetSingleton();
         const char* playerName = player ? player->GetDisplayFullName() : nullptr;

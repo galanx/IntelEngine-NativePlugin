@@ -5,6 +5,7 @@
 #include "AsyncDispatch.h"
 #include "FrameCost.h"
 #include "HeartBridge.h"
+#include "LivingWorldBridge.h"
 #include "MemoryDB.h"
 #include "Safe.h"
 #include "SkyrimNetAPI.h"
@@ -215,7 +216,59 @@ namespace IntelEngine {
                                  theirs.tier > 0 ? ", its own tier where that is higher" : "");
     }
 
+    std::string BondBridge::DashboardJson() const {
+        Bonds::Book book;
+        {
+            std::scoped_lock lock(m_mutex);
+            book = m_book;
+        }
+        struct Row {
+            std::string name, word, heart, source;
+            int standing = 0;
+            int sour = 0;
+        };
+        std::vector<Row> rows;
+        for (auto& [id, bond] : book) {
+            if (!Bonds::Judged(bond)) continue;
+            auto* actor = RE::TESForm::LookupByID<RE::Actor>(id);
+            if (!actor || actor->IsDead()) continue;
+            const Bonds::Theirs theirs = TheirsOf(actor);
+            Bonds::Bond copy = bond;   // the view only: the notes of the seam are Seen's to keep
+            const Bonds::View view = Bonds::See(copy, theirs);
+            if (view.theirs && copy.handed) continue;                         // a relationship mod speaks for them alone
+            if (view.standing < Bonds::Acquaintance && view.sour == Bonds::NotSour) continue;   // read, and still a stranger
+            Row row;
+            const char* name = actor->GetDisplayFullName();
+            row.name = name && *name ? name : "someone";
+            row.standing = view.standing;
+            row.sour = view.sour;
+            row.word = view.sour == Bonds::Foe ? "A foe" : view.sour == Bonds::Cold ? "Cold toward you" : view.standing >= Bonds::Lover ? "Lovers"
+                       : view.standing == Bonds::Confidant ? "A close friend" : view.standing == Bonds::Friend ? "A friend" : "An acquaintance";
+            if (view.heart && bond.drawn) {
+                row.heart = bond.answer > 0 ? "drawn to you, and welcome" : bond.answer < 0 ? "drawn to you; you turned them down" : "drawn to you; you have not answered";
+            }
+            row.source = !theirs.installed ? "Read from what passed between you"
+                         : theirs.tracked  ? "Read from what passed between you, until SkyrimNet Relationships has caught up"
+                                           : "Read from what passed between you (SkyrimNet Relationships does not watch them)";
+            rows.push_back(std::move(row));
+        }
+        std::sort(rows.begin(), rows.end(), [](const Row& a, const Row& b) {
+            if ((a.sour != 0) != (b.sour != 0)) return a.sour == 0;
+            if (a.standing != b.standing) return a.standing > b.standing;
+            return a.name < b.name;
+        });
+        if (rows.size() > 40) rows.resize(40);
+        nlohmann::json out = nlohmann::json::array();
+        for (const auto& row : rows) {
+            out.push_back({{"name", row.name}, {"word", row.word}, {"standing", row.standing}, {"sour", row.sour}, {"heart", row.heart}, {"source", row.source}});
+        }
+        return out.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
+    }
+
     void BondBridge::Tick() {
+        // At "Classic" the world is as it was before 4.0: nothing is read (a reading is a model call). What was read
+        // before still counts.
+        if (LivingWorldBridge::GetSingleton()->IsClassic()) return;
         static FrameStats stats;
         FrameClock clock("Bonds: a look at who is to be read", stats, FrameClock::Now(), 60);
         const double real = RealSeconds();
