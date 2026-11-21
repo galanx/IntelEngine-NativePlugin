@@ -736,6 +736,30 @@ namespace IntelEngine {
         return it != g_timesWithPlayer.end() ? it->second : 0;
     }
 
+    std::vector<std::pair<RE::FormID, int>> MemoryDB::TimesWithPlayerAll(int atLeast) const {
+        std::vector<std::pair<RE::FormID, int>> out;
+        std::scoped_lock lock(g_metMutex);
+        for (const auto& [id, times] : g_timesWithPlayer) {
+            if (times >= atLeast) out.emplace_back(id, times);
+        }
+        return out;
+    }
+
+    std::string MemoryDB::GetMemoriesAbout(RE::FormID formId, const std::string& about, int maxCount, int& count) {
+        count = 0;
+        if (!SkyrimNetAPI::GetMemoriesForActor) return "";
+        try {
+            const auto jsonStr = SkyrimNetAPI::GetMemoriesForActor(formId, maxCount, about.c_str());
+            const auto arr = nlohmann::json::parse(jsonStr, nullptr, false);
+            if (!arr.is_array() || arr.empty()) return "";
+            count = static_cast<int>(arr.size());
+            return FormatMemoriesFromJson(jsonStr, GetCurrentDBHours());
+        } catch (...) {
+            logger::warn("MemoryDB: GetMemoriesAbout exception for 0x{:08X}", formId);
+            return "";
+        }
+    }
+
     std::vector<PlayerRelationship> MemoryDB::GetPlayerRelationshipData() {
         auto rows = ReadPlayerRelationshipData();
         {
@@ -780,6 +804,13 @@ namespace IntelEngine {
             }
 
             logger::debug("MemoryDB: GetPlayerRelationshipData returned {} NPCs", result.size());
+            if (result.empty()) {
+                // Nobody at all is worth a line, once: a count that is always empty leaves everybody a stranger.
+                static std::atomic<bool> said{false};
+                if (!said.exchange(true)) {
+                    logger::info("MemoryDB: SkyrimNet names nobody the player has had to do with (its answer begins: {})", jsonStr.substr(0, 220));
+                }
+            }
             return result;
         } catch (...) {
             logger::warn("MemoryDB: GetPlayerRelationshipData exception");

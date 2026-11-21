@@ -3,6 +3,7 @@
 #include "RumorBridge.h"
 #include "Safe.h"
 #include "HeartBridge.h"
+#include "BondBridge.h"
 
 #include "CellAnalyzer.h"
 #include "ItemNames.h"
@@ -1331,6 +1332,8 @@ namespace IntelEngine {
             if (!asker || asker->IsDead() || asker->IsDisabled()) continue;
             if (AskedWithin(asker->GetFormID(), kAskerRestDays)) continue;
             if (NPCIndex::BlockedForStories(asker)) continue;   // the user's own lists
+            // Somebody who dislikes the player, or wishes them harm, does not bring their trouble to them.
+            if (auto* bonds = BondBridge::GetSingleton(); bonds->Used() && !Bonds::WouldAsk(bonds->Of(asker->GetFormID()))) continue;
             // Who would come to the player with it (Arcs.h, StaysPut): not a stranger unless the player is right
             // there, nobody with a post to keep, and nobody out of their own town after a player who is beyond its
             // houses. For the others their trouble becomes talk: the player hears of it (at the inn, from anyone) and
@@ -3106,9 +3109,11 @@ namespace IntelEngine {
         // to anyone since the game was started (the counter kept for refreshing bios was asked), and for anybody
         // SkyrimNet had seen with the player once: an innkeeper in whose inn the player had stood for a minute walked
         // out of town to find them (2026-11-21).
-        if (MemoryDB::GetSingleton()->TimesWithPlayer(id) >= A::kAcquaintedEvents || LivingWorldBridge::GetSingleton()->CloseToPlayer(actor)) {
+        if (BondBridge::GetSingleton()->Times(id) >= A::kAcquaintedEvents || LivingWorldBridge::GetSingleton()->CloseToPlayer(actor)) {
             return 2;
         }
+        // (What was read of them while the count was that high stays true if SkyrimNet's history is cleared.)
+        if (auto* bonds = BondBridge::GetSingleton(); bonds->Used() && Bonds::Knows(bonds->Of(id))) return 2;
         auto* player = RE::PlayerCharacter::GetSingleton();
         auto* npc = actor->GetActorBase();
         auto* pc = player ? player->GetActorBase() : nullptr;

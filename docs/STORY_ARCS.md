@@ -365,6 +365,53 @@ moved the game's rank 2 to 3 and wrote three memories and a rumour. What that ru
 - Not played: the other three leans, a refusal, someone a relationship mod really tracks, Fifi or a child (who must
   get no line), a story held back because one of the last two was of the heart.
 
+### How somebody stands with the player without a relationship mod (2026-11-21)
+
+The user: "we have no reliable fallback for bonds if the relationship mod is missing like how many memory records you
+have with a specific npc and judging those memories if they ever hinted to friendship or a flirt". Without SkyrimNet
+Relationships the mod knew the game's own relationship rank, a marriage, and whether somebody once followed the
+player: nothing of a friendship that grew in talk, of a flirt, of a no. Now (`Bonds.h` the rules, `BondsCheck`;
+`BondBridge.cpp` the game side; used only while `SNRom_Integration.esp` is not loaded):
+
+- **Counted.** How often somebody has spoken to the player: SkyrimNet's count (`MemoryDB::TimesWithPlayer`) or
+  IntelEngine's own (`DialogueTracker` tells `BondBridge::Heard` of every line whose target is the player; kept in
+  the bond record), whichever is larger. In the test game SkyrimNet's `GetPlayerContext` answered
+  `"relationships":[]` with the lines in its database, so a trigger that waited for it alone would never have come.
+  A count says "acquainted" and no more (six lines: `kFirstAt`, the same number as `Arcs::kAcquaintedEvents`).
+- **Read.** From the sixth line on, and again after eight more (and two game hours), the dialogue model is given what
+  that person remembers that has to do with the player (`GetMemoriesForActor` with the player's name as the query,
+  24 at most) and the last twelve exchanges between the two, and answers three questions by choosing a name
+  (`decisions/intel_bond.prompt`, chat form `intel_bond_chat.prompt` without a decision provider): how they stand
+  (stranger, acquaintance, friend, confidant, lover, cold, foe), whether anything of the heart is in it on their
+  side (none, drawn), and how the player answered (unanswered, welcomed, declined). No words are searched for: it
+  works in whatever language is played. The database is read on the worker; one reading at a time, 45 real seconds
+  apart; whoever is with the player first. Children are never read.
+- **Not believed on one word.** One and the same talk, read three times, came out friend, acquaintance, friend. A
+  reading is taken when the reader is sure (the weight it gives its own answers, the smaller of standing and heart,
+  at least 0.75) or when the reading before said the same; otherwise it is noted, how they stand stays as it was,
+  and they are read again after three more lines. Played: unsure "acquaintance" noted, the same again taken, two
+  more readings left it as it was.
+- **A no stands.** Once the player is read to have turned somebody down, later readings that find nothing of the
+  heart, or find it unanswered, do not wipe that out; only the player plainly taking it back does. The day of the no
+  is kept for `Hearts::SecondChance`.
+- **Where it counts.** `LivingWorldBridge::CloseToPlayer` (a confidant or more: who may come from afar, who hurries);
+  `ArcBridge::KnowsPlayer` (acquainted); the pacer (somebody cold or a foe does not bring their trouble to the
+  player); `HeartBridge::HeartOf`, which raises the tier above the game's own rank and sets the spark and the
+  player's answer, so a courtship can begin from a friendship that grew in talk. The game's rank and marriage stand;
+  who may be part of a story of the heart is still `Hearts.h`'s to say (never a child, never kin, never against a no).
+- **Kept** with the save (record `IEBN`), ids resolved again on load.
+- Test hooks (`IntelEngine_Arcs`): `DebugBond(actor)` reads somebody now, `DebugBondOf(actor)` says what was read and
+  what comes of it (close or not, the line a story's author is told), `DebugBondNoMod(true)` goes on as if no
+  relationship mod were installed (the test profile has one).
+- Played on the test profile (2026-11-21): Hulda after three friendly exchanges read "friend", "To Prisoner: a
+  friend." told to an author; Saadia, who holds an old refusal against the test character, answered a courting line
+  coldly and was read "cold / none", nothing of the heart told; after Hulda's sixth line a reading started by
+  itself; four readings came back after a save and a load. Not played: a reading of "drawn" in the game (nobody
+  courted the test character), a no and its taking back, a follower, memories on record (the test timeline had only
+  talk), the chat form, a game without SkyrimNet Relationships installed (the test switch stood in for that).
+- What it costs the player: one small decision call per reading (answered in about 0.3 s in the test), per person at
+  most once every eight lines they say to the player.
+
 ### Places out in the world, played on foot (2026-11-19 evening)
 
 Two hand-written tales, the test character walking by the game's pathfinding and fighting with real swings
