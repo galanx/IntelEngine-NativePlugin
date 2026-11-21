@@ -109,6 +109,8 @@ namespace IntelEngine {
         ArcBridge::GetSingleton()->Save(a_intfc);
         RumorBridge::GetSingleton()->Save(a_intfc);
         BattleManager::GetSingleton()->Save(a_intfc);
+        FactionPolitics::GetSingleton()->Save(a_intfc);
+        FactionPolitics::GetSingleton()->SaveRanks(a_intfc);
     }
 
     void LoadCallback(SKSE::SerializationInterface* a_intfc) {
@@ -145,6 +147,10 @@ namespace IntelEngine {
                 RumorBridge::GetSingleton()->Load(a_intfc, version, length);
             } else if (type == kPendingBattleRecord) {
                 BattleManager::GetSingleton()->Load(a_intfc, version, length);
+            } else if (type == kFallenLeadersRecord) {
+                FactionPolitics::GetSingleton()->Load(a_intfc, version, length);
+            } else if (type == Ranks::kRecordType) {
+                FactionPolitics::GetSingleton()->LoadRanks(a_intfc, version, length);
             }
         }
     }
@@ -171,6 +177,9 @@ namespace IntelEngine {
         ArcBridge::GetSingleton()->Revert();
         RumorBridge::GetSingleton()->Revert();
         BattleManager::GetSingleton()->Revert();
+        FactionPolitics::GetSingleton()->ForgetHeldEvent();
+        FactionPolitics::GetSingleton()->ForgetFallen();
+        FactionPolitics::GetSingleton()->ForgetRanks();
         ProximityMonitor::GetSingleton()->DisarmAll();
         logger::info("RevertCallback: Save ID and SlotTracker cleared (gen={})",
             tracker->loadGeneration.load(std::memory_order_relaxed));

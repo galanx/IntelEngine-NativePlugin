@@ -5,10 +5,12 @@ import SettingsTab from './components/SettingsTab';
 import DirectorTab from './components/DirectorTab';
 import ActionsTab from './components/ActionsTab';
 import PoliticsTab from './components/PoliticsTab';
+import WorldTab from './components/WorldTab';
 
 const TABS = [
   { id: 'tasks', label: 'Tasks', hint: 'What people are doing for you' },
   { id: 'story', label: 'Story', hint: 'The dungeon master and its stories' },
+  { id: 'world', label: 'World', hint: 'Talk of the day, your stories, your people' },
   { id: 'politics', label: 'Politics', hint: 'Factions, wars and alliances' },
   { id: 'director', label: 'Director', hint: 'Stage an event yourself' },
   { id: 'actions', label: 'Actions', hint: 'What NPCs are allowed to do' },
@@ -272,7 +274,11 @@ function App() {
   }, [stepTab]);
 
   const active = TABS.find(tab => tab.id === activeTab) || TABS[0];
-  const badges = { tasks: activeCount + scheduledCount };
+  const badges = {
+    tasks: activeCount + scheduledCount,
+    world: (state.world?.stories?.open?.length || 0) + (state.world?.quests?.length || 0) + (state.world?.asks?.length || 0),
+    politics: (state.politics?.field?.battle ? 1 : 0) + (state.politics?.field?.gatherings?.length || 0),
+  };
 
   return (
     <div className="ie-backdrop">
@@ -348,6 +354,7 @@ function App() {
                 sendAction={sendAction}
               />
             )}
+            {activeTab === 'world' && <WorldTab world={state.world} />}
             {activeTab === 'politics' && (
               <PoliticsTab
                 politics={state.politics}

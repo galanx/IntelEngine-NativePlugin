@@ -18,6 +18,7 @@
 #include "SlotTracker.h"
 #include "StringUtils.h"
 #include "FactionLeaderNameMatch.h"
+#include "SoldierTemplates.h"
 #include "DirectorActorResolution.h"
 #include "ProcessUtils.h"
 #include "Settings.h"
@@ -789,14 +790,29 @@ namespace IntelEngine {
     RE::FormID NPCIndex::FindFactionLeaderFormId(const std::string& searchTerm) {
         if (searchTerm.empty()) return 0;
 
-        std::shared_lock lock(m_mutex);
-        RE::FormID boundaryMatch = 0;
-        for (const auto& [indexedName, formId] : m_npcFormIds) {
-            if (!formId || !IsFactionLeaderNameMatch(indexedName, searchTerm)) continue;
-            if (indexedName.size() == searchTerm.size()) return formId;
-            if (!boundaryMatch) boundaryMatch = formId;
+        // A leader given by record ("0x0001327E", "MyMod.esp|0x000801"): that record, whatever the game calls it.
+        if (SoldierTemplates::Ref ref; SoldierTemplates::ParseRef(searchTerm, ref)) {
+            RE::TESForm* form = nullptr;
+            if (ref.plugin.empty()) {
+                form = RE::TESForm::LookupByID(ref.formId);
+            } else if (auto* data = RE::TESDataHandler::GetSingleton()) {
+                form = data->LookupForm(ref.formId, ref.plugin);
+            }
+            return form ? form->GetFormID() : 0;
         }
-        return boundaryMatch;
+
+        {
+            std::shared_lock lock(m_mutex);
+            RE::FormID boundaryMatch = 0;
+            for (const auto& [indexedName, formId] : m_npcFormIds) {
+                if (!formId || !IsFactionLeaderNameMatch(indexedName, searchTerm)) continue;
+                if (indexedName.size() == searchTerm.size()) return formId;
+                if (!boundaryMatch) boundaryMatch = formId;
+            }
+            if (boundaryMatch) return boundaryMatch;
+        }
+        // Nobody of that name: a game in another language. The shipped leaders are known by their records.
+        return KnownLeaderRecord(searchTerm);
     }
 
     RE::FormID NPCIndex::FindFormIdByName(const std::string& searchTerm) {

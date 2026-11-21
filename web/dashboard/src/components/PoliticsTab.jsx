@@ -1,7 +1,7 @@
 import withSections from './Section';
 import React from 'react';
 import GameTime from './GameTime';
-import FactionEditor from './FactionEditor';
+import FactionEditor, { hasUnsavedFactions } from './FactionEditor';
 
 const STATUS_COLORS = {
   Alliance: 'text-emerald-400',
@@ -22,23 +22,156 @@ const TYPE_LABELS = {
   political: 'Political',
 };
 
+// What each kind of event is called in the chronicle, and its colour (anything the list does not know is shown
+// under its own name).
+const EVENT_KINDS = {
+  war_declaration: ['War declared', 'text-red-400 border-red-500/60'],
+  battle_result: ['Battle', 'text-red-400 border-red-500/60'],
+  player_battle: ['Your part in it', 'text-amber-300 border-amber-400/60'],
+  friendly_fire: ['Your own side struck', 'text-orange-400 border-orange-500/60'],
+  battle_gathering: ['Armies gather', 'text-amber-400 border-amber-500/60'],
+  battle_scheduled: ['Armies gather', 'text-amber-400 border-amber-500/60'],
+  border_skirmish: ['Skirmish', 'text-orange-400 border-orange-500/60'],
+  brawl: ['Brawl', 'text-orange-400 border-orange-500/60'],
+  surrender: ['Surrender', 'text-emerald-400 border-emerald-500/60'],
+  war_ended: ['War over', 'text-emerald-400 border-emerald-500/60'],
+  peace_treaty: ['Peace', 'text-emerald-400 border-emerald-500/60'],
+  alliance_proposal: ['Alliance', 'text-emerald-400 border-emerald-500/60'],
+  mutual_defense_pact: ['Pact', 'text-emerald-400 border-emerald-500/60'],
+  political_marriage: ['Marriage', 'text-emerald-400 border-emerald-500/60'],
+  assassination_attempt: ['Attempt on a life', 'text-purple-400 border-purple-500/60'],
+  assassination: ['Assassination', 'text-purple-400 border-purple-500/60'],
+  leader_death: ['A leader falls', 'text-gray-300 border-gray-500/60'],
+  espionage: ['Spying', 'text-sky-400 border-sky-500/60'],
+  sabotage: ['Sabotage', 'text-sky-400 border-sky-500/60'],
+  player_kill: ['Your doing', 'text-amber-300 border-amber-400/60'],
+};
+const eventKind = (type) => EVENT_KINDS[type] || [String(type || 'event').replace(/_/g, ' '), 'text-gray-400 border-white/10'];
+
+const CIVIL_WAR = [
+  'The civil war is undecided: both sides are in the field.',
+  'A truce holds between the Empire and the Stormcloaks.',
+  'The civil war is over: the Empire holds Skyrim.',
+  'The civil war is over: the Stormcloaks hold Skyrim.',
+];
+
+const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
+const hours = (h) => (h < 1 ? 'within the hour' : h < 1.5 ? 'about an hour' : `about ${Math.round(h)} hours`);
+
+function Meter({ value, max = 100, tone }) {
+  const share = Math.max(0, Math.min(1, max > 0 ? value / max : 0));
+  return (
+    <div className="h-1.5 bg-white/5 rounded-full overflow-hidden">
+      <div className={`h-full ${tone} rounded-full transition-all`} style={{ width: `${share * 100}%` }} />
+    </div>
+  );
+}
+
 function MoraleBar({ value, label }) {
   const color = value > 60 ? 'bg-green-500' : value > 30 ? 'bg-yellow-500' : 'bg-red-500';
   return (
-    <div className="flex-1">
+    <div className="flex-1 min-w-0">
       <div className="flex justify-between text-[10px] mb-0.5">
         <span className="text-gray-400 truncate">{label}</span>
         <span className={value > 60 ? 'text-green-400' : value > 30 ? 'text-yellow-400' : 'text-red-400'}>{value}%</span>
       </div>
-      <div className="h-1.5 bg-white/5 rounded-full overflow-hidden">
-        <div className={`h-full ${color} rounded-full transition-all`} style={{ width: `${value}%` }} />
+      <Meter value={value} tone={color} />
+    </div>
+  );
+}
+
+// What a rank gives, from the feed's own numbers (Ranks.h): said the same way wherever it is shown.
+function perkWords(perk) {
+  if (!perk) return [];
+  const words = [];
+  if (perk.called) words.push('you are called to the line when their army gathers');
+  if (perk.pay > 0) words.push(`${perk.pay}% more pay after a battle won`);
+  if (perk.file > 0) words.push(`${perk.file} soldiers keep by you in battle`);
+  if (perk.word) words.push('the line waits for your word to charge');
+  if (perk.famous) words.push('your name is talked of beyond their own');
+  return words;
+}
+
+// One faction's view of the player: the standing, the rank on its ladder and what was done to earn it.
+function NameCard({ row, needed, perks }) {
+  const { name, standing, status, rank = 0, earnedRank = 0, renown = 0, titles = [], record, knownAs } = row;
+  const top = titles.length;                    // ranks above none
+  const floor = earnedRank > 0 ? needed[earnedRank - 1] ?? 0 : 0;
+  const ceiling = earnedRank < top ? needed[earnedRank] : null;
+  const nextTitle = earnedRank < top ? titles[earnedRank] : null;
+  const unhonoured = earnedRank > rank;         // earned, but they count the player an enemy
+  const deeds = [];
+  if (record) {
+    if (record.battles > 0) deeds.push(`${plural(record.battles, 'battle', 'battles')}${record.won > 0 ? `, ${record.won} won` : ''}`);
+    if (record.kills > 0) deeds.push(`${record.kills} cut down`);
+    if (record.champions > 0) deeds.push(plural(record.champions, 'champion slain', 'champions slain'));
+    if (record.captains > 0) deeds.push(plural(record.captains, 'captain slain', 'captains slain'));
+    if (record.saved > 0) deeds.push(plural(record.saved, 'life saved', 'lives saved'));
+    if (record.quests > 0) deeds.push(plural(record.quests, 'errand', 'errands'));
+    if (record.deserted > 0) deeds.push(plural(record.deserted, 'battle walked away from', 'battles walked away from'));
+  }
+  const has = perkWords(perks[rank - 1]);
+  const gains = perkWords(perks[earnedRank]).filter((word) => !perkWords(perks[earnedRank - 1]).includes(word));
+  return (
+    <div className={`slot-card rounded px-3 py-2 border-l-2 ${rank > 0 ? 'border-amber-400' : 'border-white/10'}`}>
+      <div className="flex items-baseline justify-between gap-2">
+        <span className="text-sm text-gray-100 font-medium truncate">{name}</span>
+        {standing !== undefined && (
+          <span className={`text-xs shrink-0 ${STATUS_COLORS[status] || 'text-gray-400'}`}>
+            {status} {standing > 0 ? '+' : ''}{standing}
+          </span>
+        )}
       </div>
+
+      <div className="flex items-baseline gap-2 mt-0.5">
+        <span className={`text-xs font-medium ${rank > 0 ? 'text-amber-300' : 'text-gray-500'}`}>
+          {rank > 0 ? titles[rank - 1] : earnedRank > 0 ? 'No rank honoured' : 'No rank yet'}
+        </span>
+        {top > 0 && (
+          <span className="text-[11px] tracking-widest" aria-hidden="true">
+            {titles.map((title, i) => (
+              <span key={i} title={title} className={i < rank ? 'text-amber-400' : i < earnedRank ? 'text-amber-400/40' : 'text-gray-600'}>{i < earnedRank ? '◆' : '◇'}</span>
+            ))}
+          </span>
+        )}
+      </div>
+
+      {top > 0 && (
+        <div className="mt-1.5">
+          <Meter value={ceiling === null ? 1 : renown - floor} max={ceiling === null ? 1 : ceiling - floor} tone="bg-amber-400" />
+          <div className="flex justify-between text-[10px] mt-0.5">
+            <span className="text-gray-400">{renown} renown</span>
+            <span className="text-gray-500">
+              {nextTitle ? `${ceiling - renown} more to ${nextTitle}` : 'the top of their ladder'}
+            </span>
+          </div>
+        </div>
+      )}
+
+      {unhonoured && (
+        <div className="text-[10px] text-orange-400 mt-1">
+          You earned the rank of {titles[earnedRank - 1]}, but they honour no rank while they count you an enemy.
+        </div>
+      )}
+      {knownAs && <div className="text-[11px] text-gray-300 italic leading-snug mt-1.5">Known among them as {knownAs}.</div>}
+      {deeds.length > 0 && <div className="text-[10px] text-gray-500 mt-1">{deeds.join(' · ')}</div>}
+      {has.length > 0 && <div className="text-[10px] text-emerald-400/90 mt-1">Your rank: {has.join('; ')}.</div>}
+      {nextTitle && gains.length > 0 && (
+        <div className="text-[10px] text-gray-500 mt-0.5">As {nextTitle}: {gains.join('; ')}.</div>
+      )}
+      {top > 0 && renown === 0 && (
+        <div className="text-[10px] text-gray-500 mt-1">
+          Fight at their side, cut down their enemies' champions, save one of their leaders or do them a service: that is how a name is made.
+        </div>
+      )}
     </div>
   );
 }
 
 function PoliticsTab({ politics, calendar, sendAction, knownNpcs = [] }) {
-  const [editing, setEditing] = React.useState(false);
+  const [editing, setEditing] = React.useState(() => hasUnsavedFactions());
+  const [allRelations, setAllRelations] = React.useState(false);
+  const [allEvents, setAllEvents] = React.useState(false);
   if (!politics || !politics.enabled) {
     return (
       <div className="p-3">
@@ -56,21 +189,127 @@ function PoliticsTab({ politics, calendar, sendAction, knownNpcs = [] }) {
   const events = politics.events || [];
   const wars = politics.wars || [];
   const standings = politics.player_standings || [];
+  const ranks = politics.player_ranks || [];
+  const needed = politics.rank_needed || [];
+  const perks = politics.rank_perks || [];
+  const field = politics.field || {};
+  const battle = field.battle;
+  const gatherings = field.gatherings || [];
 
   // Build faction name lookup
   const factionNames = {};
   const factionSides = {};
+  const factionById = {};
   for (const f of factions) {
     factionNames[f.id] = f.name;
     factionSides[f.id] = f.pe_side;
+    factionById[f.id] = f;
   }
+  const nameOf = (id) => factionNames[id] || id;
 
-  // Separate war events for special display
-  const warEvents = events.filter(e => e.type === 'war_declaration' || e.type === 'battle_result' || e.type === 'surrender');
-  const otherEvents = events.filter(e => e.type !== 'war_declaration' && e.type !== 'battle_result' && e.type !== 'surrender');
+  // The player's name with each faction: everyone who has a view of them or a deed of theirs on record, the
+  // highest rank first.
+  const nameRows = [];
+  const seen = new Set();
+  for (const r of ranks) {
+    const s = standings.find((x) => x.faction === r.faction);
+    seen.add(r.faction);
+    nameRows.push({
+      id: r.faction, name: r.name || nameOf(r.faction), standing: s?.standing, status: s?.status,
+      rank: r.rank, earnedRank: r.earned_rank, renown: r.renown, record: r, knownAs: r.known_as,
+      titles: factionById[r.faction]?.rank_titles || [],
+    });
+  }
+  for (const s of standings) {
+    if (seen.has(s.faction) || !factionById[s.faction] || factionById[s.faction].disbanded) continue;
+    nameRows.push({ id: s.faction, name: nameOf(s.faction), standing: s.standing, status: s.status, titles: factionById[s.faction].rank_titles || [] });
+  }
+  nameRows.sort((a, b) => (b.rank || 0) - (a.rank || 0) || (b.renown || 0) - (a.renown || 0) || Math.abs(b.standing || 0) - Math.abs(a.standing || 0));
+  // Those who have neither a view of the player nor a deed of theirs on record are one line, not a card each.
+  const known = nameRows.filter((row) => row.record || row.standing);
+  const strangers = nameRows.filter((row) => !row.record && !row.standing);
+
+  // Relations worth a look: anything but plain neutrality. The rest is a long list of nothing.
+  const notable = relations.filter((r) => r.war || r.trade || (r.status && r.status !== 'Neutral'));
+  const shownRelations = (allRelations ? relations : notable).slice().sort((a, b) => Math.abs(b.score) - Math.abs(a.score));
+
+  const shownEvents = allEvents ? events : events.slice(0, 8);
+  const civilWar = CIVIL_WAR[politics.civil_war];
 
   return (
     <div className="ie-page p-3 space-y-4">
+      {/* The player's own name with the factions: what the ladder is for */}
+      <section>
+        <h2 className="section-header mb-2">Your Name</h2>
+        {known.length === 0 ? (
+          <div className="text-xs text-gray-500 leading-relaxed">
+            Nobody has a view of you yet. Take a side when two armies meet, do a faction a service or save one of its
+            leaders, and it will remember.
+          </div>
+        ) : (
+          <div className="space-y-1.5">
+            {known.map((row) => <NameCard key={row.id} row={row} needed={needed} perks={perks} />)}
+          </div>
+        )}
+        {known.length > 0 && strangers.length > 0 && (
+          <div className="text-[10px] text-gray-500 leading-snug mt-2">
+            No view of you yet: {strangers.map((row) => row.name).join(', ')}.
+          </div>
+        )}
+      </section>
+
+      {/* A battle being fought, armies drawing up, the game's own war */}
+      {(battle || gatherings.length > 0 || civilWar) && (
+        <section>
+          <h2 className="section-header mb-2">
+            In the Field
+            {(battle || gatherings.length > 0) && <span className="ml-2 text-[10px] text-amber-400 font-normal">(now)</span>}
+          </h2>
+          <div className="space-y-2">
+            {battle && (
+              <div className="slot-card rounded px-3 py-2 border-l-2 border-red-500">
+                <div className="flex items-baseline justify-between gap-2 mb-1.5">
+                  <span className="text-sm text-red-400 font-medium truncate">
+                    {nameOf(battle.a)} against {nameOf(battle.b)}
+                  </span>
+                  <span className="text-[10px] text-amber-400 shrink-0 pulse-dot">
+                    {battle.phase === 'muster' ? 'drawn up, not yet fighting' : battle.skirmish ? 'a skirmish, now' : 'fighting now'}
+                  </span>
+                </div>
+                {battle.place && <div className="text-[10px] text-gray-500 mb-1.5">{battle.place}</div>}
+                <div className="flex gap-3">
+                  <MoraleBar value={battle.morale_a} label={`${nameOf(battle.a)} · ${battle.standing_a} standing`} />
+                  <MoraleBar value={battle.morale_b} label={`${nameOf(battle.b)} · ${battle.standing_b} standing`} />
+                </div>
+                <div className="text-[10px] text-gray-400 mt-1.5">
+                  {battle.player_side
+                    ? `Your side: ${nameOf(battle.player_side)}${battle.player_kills > 0 ? ` · ${battle.player_kills} cut down by your hand` : ''}`
+                    : battle.phase === 'muster'
+                      ? 'You have taken no side. Walk up to a line and its captain will call to you.'
+                      : 'You have taken no side.'}
+                </div>
+              </div>
+            )}
+            {gatherings.map((g, i) => (
+              <div key={i} className="slot-card rounded px-3 py-2 border-l-2 border-amber-500">
+                <div className="text-xs text-gray-200">
+                  Armies are drawing up{g.place ? ` near ${g.place}` : ''}: {nameOf(g.a)} against {nameOf(g.b)}.
+                </div>
+                {g.calls && (
+                  <div className="text-[11px] text-amber-300 mt-0.5">
+                    You are called to the line: {nameOf(g.calls)}. The place is marked in your journal.
+                  </div>
+                )}
+                <div className="text-[10px] text-gray-500 mt-0.5">
+                  It is decided without you in {hours(g.hours_left)}. Be there before, and you may choose a side.
+                </div>
+              </div>
+            ))}
+            {civilWar && <div className="text-[11px] text-gray-400 leading-snug">{civilWar}</div>}
+          </div>
+        </section>
+      )}
+
       {/* Active Wars */}
       {wars.length > 0 && (
         <section>
@@ -80,8 +319,8 @@ function PoliticsTab({ politics, calendar, sendAction, knownNpcs = [] }) {
           </h2>
           <div className="space-y-2">
             {wars.map((w, i) => {
-              const nameA = factionNames[w.faction_a] || w.faction_a;
-              const nameB = factionNames[w.faction_b] || w.faction_b;
+              const nameA = nameOf(w.faction_a);
+              const nameB = nameOf(w.faction_b);
               return (
                 <div key={i} className="slot-card rounded px-3 py-2 border-l-2 border-red-500">
                   <div className="flex items-center justify-between mb-2">
@@ -113,9 +352,9 @@ function PoliticsTab({ politics, calendar, sendAction, knownNpcs = [] }) {
                           const isAttackerVictory = b.result === 'attacker_victory';
                           const isDefenderVictory = b.result === 'defender_victory';
                           const victorName = isAttackerVictory
-                            ? (factionNames[b.attacker] || b.attacker)
+                            ? nameOf(b.attacker)
                             : isDefenderVictory
-                              ? (factionNames[b.defender] || b.defender)
+                              ? nameOf(b.defender)
                               : null;
                           return (
                             <div key={bi} className="flex items-start gap-1.5 text-[10px]">
@@ -140,25 +379,41 @@ function PoliticsTab({ politics, calendar, sendAction, knownNpcs = [] }) {
               );
             })}
           </div>
-
-          {/* War Events Timeline */}
-          {warEvents.length > 0 && (
-            <div className="mt-2 space-y-1">
-              {warEvents.map((e, i) => (
-                <div key={i} className="slot-card rounded px-3 py-1.5 border-l-2 border-red-500/30">
-                  <div className="flex items-center gap-2">
-                    <span className="text-[10px] text-red-400/70 shrink-0">
-                      {e.type === 'war_declaration' ? 'WAR' : e.type === 'surrender' ? 'PEACE' : 'BATTLE'}
-                    </span>
-                    <span className="text-xs text-gray-300 truncate">{e.description}</span>
-                  </div>
-                  <GameTime time={e.time} calendar={calendar} />
-                </div>
-              ))}
-            </div>
-          )}
         </section>
       )}
+
+      {/* Everything that happened, newest first, in one list */}
+      <section>
+        <h2 className="section-header mb-2">Chronicle</h2>
+        {events.length === 0 ? (
+          <div className="text-xs text-gray-500">Nothing has happened between the factions yet.</div>
+        ) : (
+          <div className="space-y-1.5">
+            {shownEvents.map((e, i) => {
+              const [label, tone] = eventKind(e.type);
+              return (
+                <div key={e.id ?? i} className={`slot-card rounded px-3 py-2 border-l-2 ${tone.split(' ')[1]}`}>
+                  <div className="flex items-baseline justify-between gap-2 mb-0.5">
+                    <span className={`text-[10px] uppercase tracking-wider ${tone.split(' ')[0]}`}>{label}</span>
+                    <span className="text-[10px] text-gray-500 truncate">
+                      {nameOf(e.faction_a)}
+                      {e.faction_b ? ` ↔ ${nameOf(e.faction_b)}` : ''}
+                      {e.delta ? <span className={`ml-1.5 font-medium ${e.delta > 0 ? 'text-green-400' : 'text-red-400'}`}>{e.delta > 0 ? '+' : ''}{e.delta}</span> : null}
+                    </span>
+                  </div>
+                  <div className="text-xs text-gray-300 leading-relaxed">{e.description}</div>
+                  <GameTime time={e.time} calendar={calendar} />
+                </div>
+              );
+            })}
+            {events.length > 8 && (
+              <button type="button" className="btn-icon" onClick={() => setAllEvents(!allEvents)}>
+                {allEvents ? 'Show the latest only' : `Show all ${events.length}`}
+              </button>
+            )}
+          </div>
+        )}
+      </section>
 
       {/* Faction Relations */}
       <section>
@@ -167,65 +422,62 @@ function PoliticsTab({ politics, calendar, sendAction, knownNpcs = [] }) {
           <div className="text-xs text-gray-500">No faction relations yet. Wait for the first political tick.</div>
         ) : (
           <div className="space-y-1">
-            {relations.map((r, i) => (
+            {shownRelations.length === 0 && (
+              <div className="text-xs text-gray-500">Nobody is at odds and nobody is close: every faction keeps to itself for now.</div>
+            )}
+            {shownRelations.map((r, i) => (
               <div key={i} className="slot-card rounded px-3 py-1.5 flex items-center justify-between">
                 <div className="flex items-center gap-2 flex-1 min-w-0">
                   <span className="text-xs text-gray-300 truncate" {...peSideProps(factionSides[r.a])}>
-                    {factionNames[r.a] || r.a}
+                    {nameOf(r.a)}
                   </span>
                   <span className="text-gray-600 text-[10px]">&harr;</span>
                   <span className="text-xs text-gray-300 truncate" {...peSideProps(factionSides[r.b])}>
-                    {factionNames[r.b] || r.b}
+                    {nameOf(r.b)}
                   </span>
                 </div>
                 <div className="flex items-center gap-2 ml-2 shrink-0">
-                  <span className={`text-xs font-medium ${STATUS_COLORS[r.status] || 'text-gray-400'}`}>
-                    {r.score > 0 ? '+' : ''}{r.score}
-                  </span>
+                  {r.war && <span className="text-[10px] text-red-400 uppercase tracking-wider">at war</span>}
+                  {r.trade && <span className="text-[10px] text-emerald-400 uppercase tracking-wider">trading</span>}
                   <span className={`text-[10px] ${STATUS_COLORS[r.status] || 'text-gray-500'}`}>
                     {r.status}
                   </span>
-                  {r.trade && <span className="text-[10px] text-emerald-400" title="Trade Active">$</span>}
-                  {r.war && <span className="text-[10px] text-red-400" title="At War">!</span>}
+                  <span className={`text-xs font-medium w-8 text-right ${STATUS_COLORS[r.status] || 'text-gray-400'}`}>
+                    {r.score > 0 ? '+' : ''}{r.score}
+                  </span>
                 </div>
               </div>
             ))}
+            {relations.length > notable.length && (
+              <button type="button" className="btn-icon" onClick={() => setAllRelations(!allRelations)}>
+                {allRelations ? 'Show only those that matter' : `Show all ${relations.length} (${relations.length - notable.length} neutral)`}
+              </button>
+            )}
           </div>
         )}
       </section>
-
-      {/* Player Standings */}
-      {standings.length > 0 && (
-        <section>
-          <h2 className="section-header mb-2">Player Standing</h2>
-          <div className="space-y-1">
-            {standings.map((s, i) => (
-              <div key={i} className="slot-card rounded px-3 py-1.5 flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <span className="text-xs text-gray-300">{factionNames[s.faction] || s.faction}</span>
-                  {s.title && <span className="text-[10px] text-gray-500 italic">{s.title}</span>}
-                </div>
-                <span className={`text-xs font-medium ${STATUS_COLORS[s.status] || 'text-gray-400'}`}>
-                  {s.standing > 0 ? '+' : ''}{s.standing}
-                </span>
-              </div>
-            ))}
-          </div>
-        </section>
-      )}
 
       {/* Factions Overview */}
       <section>
         <h2 className="section-header mb-2">Factions</h2>
         <div className="grid grid-cols-2 gap-1">
           {factions.map((f, i) => (
-            <div key={i} className="slot-card rounded px-2 py-1.5">
+            <div key={i} className={`slot-card rounded px-2 py-1.5 ${f.disbanded ? 'opacity-60' : ''}`}>
               <div className="text-xs text-gray-200 font-medium" {...peSideProps(f.pe_side)}>{f.name}</div>
               <div className="text-[10px] text-gray-500">
                 {TYPE_LABELS[f.type] || f.type} &middot; {f.hold}
               </div>
+              {f.disbanded && <div className="text-[10px] text-red-400 mt-0.5">Broken: its leaders are dead</div>}
               {f.leaders?.length > 0 && (
                 <div className="text-[10px] text-gray-400 mt-0.5">Leaders: {f.leaders.join(', ')}</div>
+              )}
+              {f.fallen_leaders?.length > 0 && (
+                <div className="text-[10px] text-gray-500 mt-0.5">Fallen: {f.fallen_leaders.join(', ')}</div>
+              )}
+              {f.bound_by && (
+                <div className="text-[10px] text-sky-400/80 mt-0.5" title="No war with it and no attempt on its people until that story of the game is over">
+                  Held by its own story: {f.bound_by}
+                </div>
               )}
               {f.pe_owned && (
                 <div className="text-[10px] text-amber-400 mt-0.5" title="Private: only you see this; NPCs and the AI don't">
@@ -242,40 +494,7 @@ function PoliticsTab({ politics, calendar, sendAction, knownNpcs = [] }) {
         <h2 className="section-header mb-2">Edit factions</h2>
         {editing
           ? <FactionEditor sendAction={sendAction} knownNpcs={knownNpcs} />
-          : <button type="button" className="btn-icon" onClick={() => setEditing(true)}>Add or change factions{'\u2026'}</button>}
-      </section>
-
-      {/* Recent Events (non-war) */}
-      <section>
-        <h2 className="section-header mb-2">Recent Events</h2>
-        {otherEvents.length === 0 && warEvents.length === 0 ? (
-          <div className="text-xs text-gray-500">No political events yet.</div>
-        ) : otherEvents.length === 0 ? (
-          <div className="text-xs text-gray-500">Only war events this period.</div>
-        ) : (
-          <div className="space-y-1.5">
-            {otherEvents.map((e, i) => (
-              <div key={i} className="slot-card rounded px-3 py-2">
-                <div className="flex items-center justify-between mb-0.5">
-                  <span className="text-[10px] text-gray-500">
-                    {e.type.replace(/_/g, ' ')}
-                  </span>
-                  <span className={`text-[10px] font-medium ${
-                    e.delta > 0 ? 'text-green-400' : e.delta < 0 ? 'text-red-400' : 'text-gray-500'
-                  }`}>
-                    {e.delta > 0 ? '+' : ''}{e.delta}
-                  </span>
-                </div>
-                <div className="text-xs text-gray-300 leading-relaxed">{e.description}</div>
-                <GameTime time={e.time} calendar={calendar} />
-                <div className="text-[10px] text-gray-600 mt-0.5">
-                  {factionNames[e.faction_a] || e.faction_a}
-                  {e.faction_b ? ` \u2194 ${factionNames[e.faction_b] || e.faction_b}` : ''}
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
+          : <button type="button" className="btn-icon" onClick={() => setEditing(true)}>Add or change factions{'…'}</button>}
       </section>
     </div>
   );

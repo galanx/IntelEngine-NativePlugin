@@ -29,6 +29,13 @@ namespace IntelEngine {
         /** kDataLoaded: the places a life can go (inns, dungeons, towns) are read from the game's data once, at the main
          *  menu. It used to be done on the first look after a save loaded, inside a frame of play. */
         void CatalogPlaces();
+        /** The towns and cities of the main world with their map markers (armies march off a field toward one). */
+        struct TownMark {
+            RE::FormID location = 0;
+            RE::FormID hold = 0;
+            RE::FormID marker = 0;
+        };
+        std::vector<TownMark> Towns();
 
         LivingWorld::Settings GetSettings() const;
         /** From the scripts: on load and whenever a living-world setting changes. */
@@ -132,6 +139,9 @@ namespace IntelEngine {
         std::string QuestTieLine(RE::Actor* actor) const;
         /** The record of one NPC, for tests and the log. */
         std::string Describe(RE::Actor* actor) const;
+        /** For the dashboard: those who follow the player or once did (name, with the player or not, and in a line
+         *  where they were parted from and what they have made of their life since). JSON. */
+        std::string DashboardJson() const;
         /** A fight, a conversation, a scene, a menu over the game: no ordinary moment lands now. */
         static bool IsBadMoment();
         /** Another mod's scene with the player in it has begun or ended (OStim's thread events, told by the script). */

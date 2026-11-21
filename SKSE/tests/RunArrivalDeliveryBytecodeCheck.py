@@ -225,6 +225,7 @@ class VM:
         if method == "StringEscapeJson":
             return json.dumps(args[0], ensure_ascii=False)[1:-1]
         if method == "IsPlayerInBlockedLocation": return False
+        if method == "BattleFieldBusy": return False     # no armies in the field in these fixtures
         if method == "IsPlayerInWhitelistedLocation": return True
         if method in ("HasStringValue", "HasIntValue", "HasFloatValue", "GetStringValue", "GetIntValue",
                       "GetFloatValue", "GetFormValue", "SetStringValue", "SetIntValue", "SetFloatValue",

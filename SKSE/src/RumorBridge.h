@@ -25,6 +25,9 @@ namespace IntelEngine {
         /** News of the world (politics): it begins in the hold a city or hold of this name lies in ("Solitude",
          *  "Haafingar"), or where the player last was when the name says nothing. Any thread. */
         std::uint32_t NoteNews(const std::string& text, const std::string& where, float weight, std::uint32_t ownerId);
+        /** The hold a name means: a hold's own name ("The Reach", "Whiterun Hold") or its capital's ("Markarth").
+         *  Rumors::NoHold for anything else. */
+        static std::uint8_t HoldByName(const std::string& where);
         /** Everything of one owner goes (a story given up, taken on or ended; a quest closed). Any thread. */
         void Withdraw(Rumors::Owner owner, std::uint32_t ownerId, Rumors::Kind only = Rumors::Kind{});
         /** The owners (ids) that have a rumor of this kind out: so their keeper can take it back when its time is over. */
@@ -44,6 +47,9 @@ namespace IntelEngine {
         /** What `teller` brings up to the player unasked, now counted as told; empty when there is nothing worth a word.
          *  The game's thread. */
         std::string BringUp(RE::Actor* teller);
+        /** For the dashboard: everything going round (a JSON array), each with where it is heard, whether that
+         *  is where the player is, how old it is and how often someone has brought it up to the player. */
+        std::string DashboardJson() const;
 
         void Save(SKSE::SerializationInterface* intfc);
         void Load(SKSE::SerializationInterface* intfc, std::uint32_t version, std::uint32_t length);

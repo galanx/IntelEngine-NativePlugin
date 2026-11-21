@@ -129,7 +129,7 @@ namespace IntelEngine {
         return id;
     }
 
-    std::uint32_t RumorBridge::NoteNews(const std::string& text, const std::string& where, float weight, std::uint32_t ownerId) {
+    std::uint8_t RumorBridge::HoldByName(const std::string& where) {
         static constexpr std::pair<const char*, std::uint8_t> kNames[] = {
             {"whiterun", R::Whiterun},   {"falkreath", R::Falkreath},   {"markarth", R::Reach},        {"reach", R::Reach},
             {"solitude", R::Haafingar},  {"haafingar", R::Haafingar},   {"morthal", R::Hjaalmarch},    {"hjaalmarch", R::Hjaalmarch},
@@ -137,13 +137,15 @@ namespace IntelEngine {
             {"eastmarch", R::Eastmarch}, {"riften", R::Rift},           {"rift", R::Rift}};
         std::string lower = where;
         for (auto& c : lower) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-        std::uint8_t hold = m_playerHold.load();
         for (const auto& [name, index] : kNames) {
-            if (lower.find(name) != std::string::npos) {
-                hold = index;
-                break;
-            }
+            if (lower.find(name) != std::string::npos) return index;
         }
+        return R::NoHold;
+    }
+
+    std::uint32_t RumorBridge::NoteNews(const std::string& text, const std::string& where, float weight, std::uint32_t ownerId) {
+        std::uint8_t hold = HoldByName(where);
+        if (hold == R::NoHold) hold = m_playerHold.load();
         if (hold >= R::kHolds) return 0;
         return Note(R::Kind::News, text, R::kHoldLocation[hold], 0, 0, R::Owner::Politics, ownerId, weight, false);
     }
@@ -348,6 +350,36 @@ namespace IntelEngine {
     }
 
     // ------------------------------------------------------------------ the co-save
+
+    std::string RumorBridge::DashboardJson() const {
+        const float now = NowDays();
+        const std::uint8_t here = m_playerHold.load();
+        std::vector<R::Rumor> all;
+        {
+            std::scoped_lock lock(m_mutex);
+            all = m_ledger.all;
+        }
+        nlohmann::json out = nlohmann::json::array();
+        for (const auto& r : all) {
+            nlohmann::json j;
+            j["id"] = r.id;
+            j["kind"] = r.kind == R::Kind::Deed ? "deed" : r.kind == R::Kind::Trouble ? "trouble" : r.kind == R::Kind::Life ? "life" : "news";
+            j["text"] = r.text;
+            j["from"] = HoldName(r.home);
+            nlohmann::json holds = nlohmann::json::array();
+            for (std::uint8_t h = 0; h < R::kHolds; ++h) {
+                if (r.heardIn & (1u << h)) holds.push_back(HoldName(h));
+            }
+            j["heard_in"] = std::move(holds);
+            j["here"] = here < R::kHolds && (r.heardIn & (1u << here)) != 0;
+            j["days"] = (std::max)(0.f, now - r.born);
+            j["told"] = r.told;
+            j["weight"] = r.weight;
+            if (r.lead) j["lead"] = NameOf(r.lead);
+            out.push_back(std::move(j));
+        }
+        return out.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
+    }
 
     void RumorBridge::Save(SKSE::SerializationInterface* intfc) {
         std::vector<std::uint8_t> bytes;

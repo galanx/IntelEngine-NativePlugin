@@ -13,6 +13,8 @@
 #include "Plugin.h"
 #include "PoliticalDB.h"
 
+#include <set>
+#include "Ranks.h"
 #include <nlohmann/json.hpp>
 #include <mutex>
 #include <optional>
@@ -21,6 +23,10 @@
 #include <vector>
 #include <unordered_map>
 #include <unordered_set>
+
+namespace SKSE {
+    class SerializationInterface;
+}
 
 namespace IntelEngine {
 
@@ -82,6 +88,9 @@ namespace IntelEngine {
         }
         return out;
     }
+
+    // Co-save record of the leaders the game has shown to be dead for good.
+    constexpr std::uint32_t kFallenLeadersRecord = 'IEFL';
 
     struct DefaultRelation {
         std::string factionA;
@@ -332,6 +341,68 @@ namespace IntelEngine {
                                             const std::string& factionB,
                                             const std::string& eventType);
 
+        /** What is seen is not told before it has happened. An event that is to be shown near the player (an attempt
+         *  on a leader's life, a skirmish) is held back here, unrecorded, until the script says how it went. */
+        struct HeldEvent {
+            bool set = false;
+            std::string factionA, factionB, eventType, description;
+            int delta = 0;
+            float gameTime = 0.f;
+        };
+        /** It could not be shown after all: it is recorded and told as it was written (it happened where nobody of
+         *  this tale was). */
+        void ManifestationFailed();
+        /** It was shown and has recorded itself (a skirmish does, like a battle): nothing more to record. */
+        void ManifestationDone();
+        /** How an attempt on a leader's life ended, as it was seen: "foiled" (the player killed the assassin before
+         *  the blow), "saved" (after it), "failed" (somebody else did), "killed" (the leader is dead), "slain_by_player"
+         *  (by the player's own hand), "escaped". Records it, tells it, moves the player's standing.
+         *  Returns JSON: {notification, thanks, reward, targetFact, witnessFact} */
+        std::string AssassinationOutcome(const std::string& targetFaction, const std::string& attackerFaction,
+                                         const std::string& leaderName, const std::string& outcome, const std::string& place,
+                                         const std::string& playerName, const std::string& hold);
+        /** Nothing is held back any more (a game is loaded). */
+        void ForgetHeldEvent();
+
+        // ---- the fallen
+        // A leader the game has shown to be dead for good is remembered as that, with the save. Whether a leader
+        // lives was asked of the game each time, and of a body the game no longer keeps (its cell reset, the corpse
+        // cleaned away) the answer is "nobody of that name": taken for alive. A faction that had lost its last
+        // leader came back to the table when the bodies were gone.
+        bool IsFallen(const std::string& factionId, const std::string& leaderName) const;
+        /** Returns true when this is news. shownName: what the game calls them (told in the game's language). */
+        bool MarkFallen(const std::string& factionId, const std::string& leaderName, const std::string& shownName);
+        /** Tells of the leaders found dead since the last time. Returns how many. */
+        int AnnounceFallen(float gameTime);
+        /** Has this faction lost every one of its leaders? It does nothing any more, and nothing is done to it. */
+        bool IsDisbanded(const std::string& factionId);
+        void Save(SKSE::SerializationInterface* intfc) const;
+        void Load(SKSE::SerializationInterface* intfc, std::uint32_t version, std::uint32_t length);
+        void ForgetFallen();
+
+        // ---- the ladder (Ranks.h): what the player has done for a faction, and the rank that earns them with it
+        Ranks::Record PlayerRecord(const std::string& factionId) const;
+        /** The rank the faction honours now (none while it takes the player for an enemy). */
+        int PlayerRank(const std::string& factionId);
+        /** What that rank is called with this faction ("Veteran", "Trusted Hand"); empty for no rank. */
+        std::string RankTitle(const std::string& factionId, int rank) const;
+        /** Something done for a faction. Returns the new rank when this lifted the player to it, else 0. */
+        int EarnRenown(const std::string& factionId, Ranks::Deed deed, int times = 1);
+        /** How the faction's own speak of the player: "a Veteran of the Imperial Legion: fought in 4 of their
+         *  battles (3 won)". Empty when there is nothing to say. */
+        std::string PlayerKnownAs(const std::string& factionId);
+        /** Everything about the ladder, for the dashboard: [{faction, name, rank, title, renown, next, ...}] */
+        nlohmann::json RanksJson();
+        void SaveRanks(SKSE::SerializationInterface* intfc) const;
+        void LoadRanks(SKSE::SerializationInterface* intfc, std::uint32_t version, std::uint32_t length);
+        void ForgetRanks();
+
+        /** Time passes between two factions that leave each other alone: old wounds close (a score below where the
+         *  two usually stand climbs back to it), warmth nobody tends fades (one above it sinks back, never below
+         *  nought). Once a game day, and only where nothing has happened between the two for three days and they are
+         *  not at war. Without it a score that had reached -100 or +100 stayed there for good. Returns how many moved. */
+        int DriftRelations(float gameTime);
+
         /** Confirm manifestation cooldown after Papyrus verified actors spawned.
          *  Called by Papyrus only when at least one actor was successfully created. */
         void ConfirmManifestationCooldown();
@@ -429,7 +500,7 @@ namespace IntelEngine {
                                   const std::string& location, const std::string& result,
                                   const std::string& narrative, int attackerLosses, int defenderLosses,
                                   const std::string& victor,
-                                  const nlohmann::json* physicalPosition = nullptr);
+                                  const nlohmann::json* physicalPosition = nullptr, const std::string& newsFrom = "");
 
         // =================================================================
         // Player Standing Mechanics
@@ -515,6 +586,14 @@ namespace IntelEngine {
         std::atomic<bool> peIntegration_{false};
         std::atomic<bool> peReactionsMoveRelations_{true};
         std::mutex peMutex_;
+        std::mutex heldMutex_;
+        HeldEvent held_;
+        mutable std::mutex fallenMutex_;
+        std::set<std::string> fallen_;                                      // "faction|leader's name as configured"
+        std::vector<std::pair<std::string, std::string>> fallenToTell_;     // faction, name as the game shows it
+        std::atomic<float> lastDriftTime_{0.0f};
+        mutable std::mutex ranksMutex_;
+        Ranks::Book ranks_;
         nlohmann::json pendingPE_ = nlohmann::json::object(), eligiblePE_ = nlohmann::json::object();
         std::string peLoadId_;
 

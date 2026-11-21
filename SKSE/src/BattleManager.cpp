@@ -15,6 +15,8 @@
 #include "NPCIndex.h"
 #include "PoliticalDB.h"
 #include "FrameCost.h"
+#include "Ranks.h"
+#include "LivingWorldBridge.h"
 
 #include <algorithm>
 #include <cmath>
@@ -34,6 +36,18 @@ namespace IntelEngine {
 
     namespace {
         constexpr float kDegPerRad = 180.f / Battlefield::kPi;
+
+        // A word a script passes as a key arrives in whatever capitals the game first met that word in: "stranger"
+        // came through as "Stranger" (the game has somebody of that name), matched nothing, and the killer's name
+        // came out empty. Keys from scripts are read without regard to capitals.
+        std::string Key(const std::string& word) {
+            std::string key = word;
+            for (auto& c : key) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            return key;
+        }
+        bool IsA(const std::string& side) { return side == "A" || side == "a"; }
+
+        void StripOwnFactions(RE::Actor* actor);        // further down, with the raising of soldiers
 
         double RealSeconds() { return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count(); }
 
@@ -109,7 +123,7 @@ namespace IntelEngine {
             ground.there = true;
             ground.height = height;
             const float water = tes->GetWaterHeight(pos, cell);
-            ground.wet = water > height + 60.f && water < 100000.f;
+            ground.wet = Battlefield::Wet(water, height);
             ground.walkable = Walkable(cell, RE::NiPoint3{at.x, at.y, height});
             return ground;
         }
@@ -180,6 +194,14 @@ namespace IntelEngine {
         battle.moraleB = 100;
         battle.currentWave = 0;
         battle.sideAFaction = factionA;      // side A is the battle's first faction, always
+        {
+            // Settled now, from the battle's own number and the hour: a save plays it one way.
+            auto* cal = RE::Calendar::GetSingleton();
+            const auto hour = static_cast<std::uint32_t>((cal ? cal->GetCurrentGameTime() : 0.f) * 24.f);
+            battle.twists = Battlefield::Plan(static_cast<std::uint32_t>(battle.id) * 2654435761u ^ hour, false);
+            logger::info("[BattleManager] Battle {} has in store: champion {}, hidden force {} (after {:.0f} s), turncoats {}", battle.id,
+                         battle.twists.champion, battle.twists.flank, battle.twists.flankAfter, battle.twists.turncoat);
+        }
         activeBattle_ = std::move(battle);
 
         logger::info("[BattleManager] Battle {} started: {} vs {} at {}",
@@ -208,6 +230,9 @@ namespace IntelEngine {
         }
         // Four minutes for the field to empty, if anyone was on it.
         if (activeBattle_->fieldSet && !activeBattle_->actors.empty()) quietUntil_.store(RealSeconds() + 240.0);
+        // And as long for what is done to those who are leaving it to stay no crime.
+        if (bountyWatched_) bountyWatchUntil_ = RealSeconds() + 240.0;
+        lastPlace_ = activeBattle_->locationName;
 
         activeBattle_.reset();
     }
@@ -241,7 +266,7 @@ namespace IntelEngine {
         BattleActor ba;
         ba.formId = actor->GetFormID();
         ba.factionId = factionId;
-        ba.tier = std::clamp(tier, 0, 2);
+        ba.tier = std::clamp(tier, 0, 3);            // 3: a champion
         ba.alive = true;
 
         activeBattle_->actors.push_back(ba);
@@ -292,9 +317,9 @@ namespace IntelEngine {
         if (!activeBattle_) return;
 
         if (factionId == activeBattle_->factionA) {
-            activeBattle_->moraleA = std::clamp(activeBattle_->moraleA + delta, 0, 100);
+            activeBattle_->moraleA = std::clamp(activeBattle_->moraleA + delta, 0, Battlefield::kHeartMost);
         } else if (factionId == activeBattle_->factionB) {
-            activeBattle_->moraleB = std::clamp(activeBattle_->moraleB + delta, 0, 100);
+            activeBattle_->moraleB = std::clamp(activeBattle_->moraleB + delta, 0, Battlefield::kHeartMost);
         }
     }
 
@@ -310,13 +335,13 @@ namespace IntelEngine {
     int BattleManager::GetWave(const std::string& side) const {
         std::lock_guard<std::mutex> lock(mutex_);
         if (!activeBattle_) return 0;
-        return side == "A" ? activeBattle_->waveA : activeBattle_->waveB;
+        return IsA(side) ? activeBattle_->waveA : activeBattle_->waveB;
     }
 
     void BattleManager::AdvanceWaveOf(const std::string& side) {
         std::lock_guard<std::mutex> lock(mutex_);
         if (!activeBattle_) return;
-        const bool isA = side == "A";
+        const bool isA = IsA(side);
         int& wave = isA ? activeBattle_->waveA : activeBattle_->waveB;
         ++wave;
         activeBattle_->currentWave = (std::max)(activeBattle_->waveA, activeBattle_->waveB);
@@ -380,18 +405,25 @@ namespace IntelEngine {
             if (!IsActorAlive(actor.formId)) {
                 actor.alive = false;
 
-                int tierPenalty = (actor.tier == 2) ? MORALE_PENALTY_LEADER :
-                                 (actor.tier == 1) ? MORALE_PENALTY_RECRUITED : MORALE_PENALTY_GENERIC;
+                int tierPenalty = (actor.tier == 3) ? Battlefield::kLossChampion
+                                : (actor.tier == 2) ? (std::max)(MORALE_PENALTY_LEADER, battle.lossPerSoldier) : battle.lossPerSoldier;
+                if (actor.tier == 3) battle.championFell = actor.factionId;
                 if (isA) penaltyA += tierPenalty;
                 else penaltyB += tierPenalty;
 
                 // Track player kills for end-of-battle standing adjustment
                 auto* deadActor = RE::TESForm::LookupByID<RE::Actor>(actor.formId);
                 if (deadActor) {
-                    auto* killer = deadActor->GetKiller();
+                    // Who killed them, from the actor's own record. (Actor::GetKiller of this library answers "nobody"
+                    // for anyone who is dead: its first line is `if (IsDead(false)) return nullptr`. Every kill the
+                    // player ever made in a battle was counted as nobody's: found 2026-11-20 with six Stormcloaks cut
+                    // down by hand and "killsB=0" in the log.)
+                    const auto killer = deadActor->GetActorRuntimeData().myKiller.get();
                     if (killer && killer->IsPlayerRef()) {
                         if (isA) battle.playerKillsA++;
                         else battle.playerKillsB++;
+                        if (actor.tier == 2) ++(isA ? battle.playerSlewCaptainsA : battle.playerSlewCaptainsB);
+                        if (actor.tier == 3) ++(isA ? battle.playerSlewChampionsA : battle.playerSlewChampionsB);
                     }
                 }
 
@@ -428,8 +460,8 @@ namespace IntelEngine {
         }
 
         // Apply accumulated morale penalties
-        if (penaltyA > 0) battle.moraleA = std::clamp(battle.moraleA - penaltyA, 0, 100);
-        if (penaltyB > 0) battle.moraleB = std::clamp(battle.moraleB - penaltyB, 0, 100);
+        if (penaltyA > 0) battle.moraleA = std::clamp(battle.moraleA - penaltyA, 0, Battlefield::kHeartMost);
+        if (penaltyB > 0) battle.moraleB = std::clamp(battle.moraleB - penaltyB, 0, Battlefield::kHeartMost);
 
         // Check morale thresholds (60, 40) — use string compound key to avoid hash collisions
         // Skip threshold 20: it triggers battle_over in the same poll, so a separate event is wasted
@@ -453,7 +485,7 @@ namespace IntelEngine {
         // Wave spawn conditions — compare alive now vs alive at wave start (not cumulative total).
         // This prevents prior-wave deaths from immediately triggering the next wave.
         auto shouldSpawnWave = [&battle](int waveStartAlive, int alive, int wave) -> bool {
-            if (battle.mustering || waveStartAlive == 0 || wave >= Battlefield::kWaves) return false;
+            if (battle.mustering || waveStartAlive == 0 || wave >= battle.waves) return false;
             float casualtyRate = 1.0f - (static_cast<float>(alive) / static_cast<float>(waveStartAlive));
             return casualtyRate >= WAVE_CASUALTY_THRESHOLD;
         };
@@ -470,8 +502,8 @@ namespace IntelEngine {
         bool playerOnA = (battle.playerSide == battle.factionA);
         bool playerOnB = (battle.playerSide == battle.factionB);
         // (An army with nobody standing is beaten once it has nobody left to send, not before.)
-        bool allDeadEndsA = (aliveA == 0 && battle.waveA >= Battlefield::kWaves && !playerOnA);
-        bool allDeadEndsB = (aliveB == 0 && battle.waveB >= Battlefield::kWaves && !playerOnB);
+        bool allDeadEndsA = (aliveA == 0 && battle.waveA >= battle.waves && !playerOnA);
+        bool allDeadEndsB = (aliveB == 0 && battle.waveB >= battle.waves && !playerOnB);
 
         // While the lines are only drawn up nothing is decided. After that an army is beaten when its heart is
         // gone or its last man is. Both in the same moment: whoever has the better of it, or nobody (the
@@ -480,7 +512,7 @@ namespace IntelEngine {
         const bool brokenB = !battle.mustering && (battle.moraleB <= MORALE_BATTLE_END_THRESHOLD || allDeadEndsB);
         if (brokenA && brokenB) {
             battleOver = true;
-            const int winner = Battlefield::Verdict(aliveA, aliveB, battle.moraleA, battle.moraleB);
+            const int winner = Battlefield::BrokeTogether(aliveA, aliveB, battle.moraleA, battle.moraleB);
             battleVictor = winner == 1 ? battle.factionA : (winner == 2 ? battle.factionB : std::string());
             battleResult = battleVictor.empty() ? std::string("draw") : battleVictor + "_victory";
         } else if (brokenA) {
@@ -495,7 +527,7 @@ namespace IntelEngine {
 
         // If all ENEMY soldiers are dead but player's side still has the player alive,
         // that's a victory for the player's side (player soloed the rest)
-        if (!battleOver && !battle.mustering && battle.waveA >= Battlefield::kWaves && battle.waveB >= Battlefield::kWaves) {
+        if (!battleOver && !battle.mustering && battle.waveA >= battle.waves && battle.waveB >= battle.waves) {
             if (playerOnA && aliveB == 0 && aliveA == 0) {
                 // All soldiers dead on both sides but player survived — player's side wins
                 battleOver = true;
@@ -524,7 +556,42 @@ namespace IntelEngine {
             result["commander_down"] = battle.commanderFell;         // said once
             battle.commanderFell.clear();
         }
+        if (!battle.championFell.empty()) {
+            result["champion_down"] = battle.championFell;
+            battle.championFell.clear();
+        }
+        if (!battleOver && !battle.mustering) {
+            // A champion comes up when the fighting has gone on a while.
+            if (battle.twists.champion != 0 && RealSeconds() - battle.fightBegan >= battle.twists.championAfter) {
+                std::string who;
+                if ((battle.twists.champion & 1) && !battle.championCalledA) {
+                    battle.championCalledA = true;
+                    who += "A";
+                }
+                if ((battle.twists.champion & 2) && !battle.championCalledB) {
+                    battle.championCalledB = true;
+                    who += "B";
+                }
+                if (!who.empty()) result["do_champion"] = who;
+            }
+            // The hidden force breaks cover when its time has come.
+            if (battle.twists.flank != 0 && !battle.flankDone && RealSeconds() - battle.fightBegan >= battle.twists.flankAfter) {
+                battle.flankDone = true;
+                result["do_flank"] = battle.twists.flank == 1 ? "A" : "B";
+            }
+            // Men turn their coats when their side's heart has sunk.
+            if (battle.twists.turncoat != 0 && !battle.turnDone) {
+                const bool ofA = battle.twists.turncoat == 1;
+                if ((ofA ? battle.moraleA : battle.moraleB) <= Battlefield::kTurnAtMorale && Battlefield::Turncoats(ofA ? aliveA : aliveB) > 0) {
+                    battle.turnDone = true;
+                    result["do_turn"] = ofA ? "A" : "B";
+                }
+            }
+        }
         if (battleOver) {
+            // How it stood when it was decided: the one line that says why a battle ended as it did.
+            logger::info("[BattleManager] Battle {} is decided ({}): {} heart {}, {} standing, wave {}; {} heart {}, {} standing, wave {}", battle.id,
+                         battleResult, battle.factionA, battle.moraleA, aliveA, battle.waveA, battle.factionB, battle.moraleB, aliveB, battle.waveB);
             result["result"] = battleResult;
             result["victor"] = battleVictor;
             result["player_kills_a"] = battle.playerKillsA;
@@ -544,10 +611,81 @@ namespace IntelEngine {
         return result.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
     }
 
+    // What happens in a battle is not the hold's business. A blow in the press that kills a man of the player's own
+    // side is murder to the game, and the bounty goes to the hold it happens in, whatever factions the dead man was
+    // in (played 2026-11-21 with a heavy hand: 1,000 gold in Whiterun, and three guards of the road on a Captain of
+    // the Legion in the middle of his battle). The ladder has its own price for such a blow (Ranks: StruckOwn), and
+    // word of it goes round. So what the player owes for violent crime is noted when they take a side, and what has
+    // come on top while the battle is fought, and for four minutes after while its field empties, is struck out
+    // again; the guards who came for it stand down. What was owed before stays owed, in every hold; theft and
+    // trespass are not looked at. (3.8 set "every hold's" bounty to nothing on every poll, with a list of ids of
+    // which one was a hold's: whoever owed Solitude gold lost the debt by joining a battle anywhere.)
+    void BattleManager::SnapshotBounty() {
+        auto* player = RE::PlayerCharacter::GetSingleton();
+        if (!player) return;
+        // Every faction that keeps a bounty, asked through the game's own calls. (The player's own table of crime gold
+        // was read first: on this version of the game it came back empty, and a bounty of 700 stayed. 2026-11-21.)
+        if (crimeFactions_.empty()) {
+            if (auto* data = RE::TESDataHandler::GetSingleton()) {
+                for (auto* faction : data->GetFormArray<RE::TESFaction>()) {
+                    if (faction && (static_cast<std::uint32_t>(faction->data.flags) & RE::FACTION_DATA::Flag::kTrackCrime) != 0) crimeFactions_.push_back(faction);
+                }
+            }
+        }
+        bountyBefore_.clear();
+        int owing = 0;
+        for (auto* faction : crimeFactions_) {
+            const auto owed = static_cast<float>(faction->GetCrimeGoldViolent());
+            bountyBefore_[faction->GetFormID()] = owed;
+            if (owed > 0.f) ++owing;
+        }
+        bountyWatched_ = true;
+        bountyWatchUntil_ = 0.0;
+        logger::info("Battle: what the player owes for violent crime is noted ({} factions keep a bounty, {} are owed one)", crimeFactions_.size(), owing);
+    }
+
+    void BattleManager::StrikeBattleBounty() {
+        if (!bountyWatched_) return;
+        if (bountyWatchUntil_ > 0.0 && RealSeconds() > bountyWatchUntil_) {
+            bountyWatched_ = false;
+            return;
+        }
+        auto* player = RE::PlayerCharacter::GetSingleton();
+        if (!player) return;
+        // Collected first: striking it out changes the table that is being read.
+        std::vector<std::pair<RE::TESFaction*, float>> over;
+        for (auto* faction : crimeFactions_) {
+            const auto before = bountyBefore_.find(faction->GetFormID());
+            const float owed = before == bountyBefore_.end() ? 0.f : before->second;
+            const auto now = static_cast<float>(faction->GetCrimeGoldViolent());
+            if (now > owed + 0.5f) over.emplace_back(faction, now - owed);
+        }
+        if (over.empty()) return;
+        for (const auto& [faction, extra] : over) {
+            faction->ModCrimeGold(-static_cast<std::int32_t>(std::lround(extra)), true);
+            logger::info("Battle: {:.0f} gold of bounty with {} for what happened in the battle is struck out", extra,
+                         faction->GetFullName() && *faction->GetFullName() ? faction->GetFullName() : "a hold");
+        }
+        // The guards who came for it stand down (nobody of the battle: its soldiers have their own reasons).
+        player->StopAlarmOnActor();
+        if (auto* lists = RE::ProcessLists::GetSingleton()) {
+            auto [sideA, sideB] = ResolveBattleFactions();
+            for (const auto& handle : lists->highActorHandles) {
+                const auto held = handle.get();
+                auto* actor = held.get();
+                if (!actor || actor->IsDead() || !actor->Is3DLoaded() || !actor->IsGuard()) continue;
+                if ((sideA && actor->IsInFaction(sideA)) || (sideB && actor->IsInFaction(sideB))) continue;
+                if (!actor->IsHostileToActor(player)) continue;
+                actor->SetBeenAttacked(false);
+                actor->GetActorRuntimeData().boolFlags.reset(RE::Actor::BOOL_FLAGS::kAngryWithPlayer);
+                actor->StopCombat();
+                logger::info("Battle: {} ({:08X}) stands down: a battle is no crime", actor->GetDisplayFullName(), actor->GetFormID());
+            }
+        }
+    }
+
     void BattleManager::SuppressBountyTick() {
-        // (3.8 also set "every hold's" bounty to nothing on every poll of a battle the player had joined. Of the nine
-        // ids it used one was a hold's crime faction, Haafingar: whoever owed Solitude gold lost the debt by joining a
-        // battle anywhere. The soldiers of a battle belong to no crime faction, so killing them was never a crime.)
+        StrikeBattleBounty();
         if (!suppressBattleBounty_) return;
 
         auto* player = RE::PlayerCharacter::GetSingleton();
@@ -595,19 +733,23 @@ namespace IntelEngine {
         std::string oldSide = activeBattle_->playerSide;
         activeBattle_->playerSide = factionId;
 
+        // What the player's coming is worth to the side they join, and costs the other. (Capped at 100 it was worth
+        // nothing to a side joined before the fight; and whoever changed sides left the first one its gain.)
+        const auto shift = [this](const std::string& side, int sign) {
+            int& own = side == activeBattle_->factionA ? activeBattle_->moraleA : activeBattle_->moraleB;
+            int& other = side == activeBattle_->factionA ? activeBattle_->moraleB : activeBattle_->moraleA;
+            own = std::clamp(own + sign * MORALE_PLAYER_JOIN_BOOST, 0, Battlefield::kHeartMost);
+            other = std::clamp(other - sign * MORALE_PLAYER_JOIN_ENEMY_PENALTY, 0, Battlefield::kHeartMost);
+        };
+        if (!oldSide.empty()) shift(oldSide, -1);
+
         if (!factionId.empty()) {
             activeBattle_->playerParticipated = true;
+            shift(factionId, +1);
+            if (!bountyWatched_ || bountyWatchUntil_ > 0.0) SnapshotBounty();
 
-            // Morale boost for allied side, penalty for enemy
-            if (factionId == activeBattle_->factionA) {
-                activeBattle_->moraleA = std::clamp(activeBattle_->moraleA + MORALE_PLAYER_JOIN_BOOST, 0, 100);
-                activeBattle_->moraleB = std::clamp(activeBattle_->moraleB - MORALE_PLAYER_JOIN_ENEMY_PENALTY, 0, 100);
-            } else {
-                activeBattle_->moraleB = std::clamp(activeBattle_->moraleB + MORALE_PLAYER_JOIN_BOOST, 0, 100);
-                activeBattle_->moraleA = std::clamp(activeBattle_->moraleA - MORALE_PLAYER_JOIN_ENEMY_PENALTY, 0, 100);
-            }
-
-            logger::info("[BattleManager] Player joined side: {}", factionId);
+            logger::info("[BattleManager] Player joined side: {} (hearts now {} {} / {} {})", factionId, activeBattle_->factionA, activeBattle_->moraleA,
+                         activeBattle_->factionB, activeBattle_->moraleB);
         } else {
             logger::info("[BattleManager] Player left battle (was: {})", oldSide);
         }
@@ -1027,6 +1169,8 @@ namespace IntelEngine {
         std::string factionA, factionB;
         int playerKillsA = 0, playerKillsB = 0;
         bool playerLeft = false;
+        bool skirmish = false;
+        int slewCaptainsA = 0, slewCaptainsB = 0, slewChampionsA = 0, slewChampionsB = 0;
         std::unordered_set<std::string> turnedDown;
         nlohmann::json physicalPosition = nullptr;
         {
@@ -1035,6 +1179,11 @@ namespace IntelEngine {
                 out["error"] = "no matching active battle";
                 return out.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
             }
+            skirmish = activeBattle_->skirmish;
+            slewCaptainsA = activeBattle_->playerSlewCaptainsA;
+            slewCaptainsB = activeBattle_->playerSlewCaptainsB;
+            slewChampionsA = activeBattle_->playerSlewChampionsA;
+            slewChampionsB = activeBattle_->playerSlewChampionsB;
             playerSideWas = activeBattle_->playerSide;
             factionA = activeBattle_->factionA;
             factionB = activeBattle_->factionB;
@@ -1062,6 +1211,31 @@ namespace IntelEngine {
         const int friendlyKills = fought ? (playerSideWas == factionA ? playerKillsA : playerKillsB) : 0;
         const int enemyKills = fought ? (playerSideWas == factionA ? playerKillsB : playerKillsA) : 0;
         const bool playerWon = fought && !drawn && !playerLeft && playerSideWas == victor;
+        // Captains and champions of the other side cut down by the player's own hand.
+        const int enemyCaptains = fought ? (playerSideWas == factionA ? slewCaptainsB : slewCaptainsA) : 0;
+        const int enemyChampions = fought ? (playerSideWas == factionA ? slewChampionsB : slewChampionsA) : 0;
+        // The ladder (Ranks.h): what was done in this battle is what the faction will know of the player.
+        const int rankBefore = fought ? fp->PlayerRank(playerSideWas) : 0;
+        std::string promoted;
+        if (fought) {
+            int risen = 0;
+            const auto earn = [&](Ranks::Deed deed, int times = 1) { risen = (std::max)(risen, fp->EarnRenown(playerSideWas, deed, times)); };
+            if (playerLeft) {
+                earn(Ranks::Deed::Deserted);
+            } else {
+                if (!skirmish) {
+                    earn(Ranks::Deed::Fought);
+                    if (playerWon) earn(Ranks::Deed::Won);
+                }
+                earn(Ranks::Deed::Kill, enemyKills);
+                earn(Ranks::Deed::Captain, enemyCaptains);
+                earn(Ranks::Deed::Champion, enemyChampions);
+            }
+            earn(Ranks::Deed::StruckOwn, friendlyKills);
+            if (risen > rankBefore && fp->PlayerRank(playerSideWas) >= risen) promoted = fp->RankTitle(playerSideWas, risen);
+        }
+        const int rankNow = fought ? fp->PlayerRank(playerSideWas) : 0;
+        const int pay = Ranks::Pay(Battlefield::Pay(playerWon, enemyKills) + (playerWon ? enemyChampions * Battlefield::kChampionPay : 0), rankNow);
         bool spectatorPenalized = false;
         std::string slighted;       // a side that called the player to its line in vain, and minds
 
@@ -1109,28 +1283,45 @@ namespace IntelEngine {
         auto* player = RE::PlayerCharacter::GetSingleton();
         std::string playerName = player ? player->GetDisplayFullName() : "the Dragonborn";
         std::string playerDesc = "someone matching the description of " + playerName;
+        // Word of it starts where it was fought. (It started where the first faction sits: a battle at Whiterun was
+        // first talked of in Solitude.)
+        // (Out on the field the player may stand in no named place at all, and it was told from the first faction's
+        // seat after all: then the place's name is given, which is no hold's, and the talk starts in the hold the
+        // player was last in.)
+        std::string foughtIn = player ? NPCIndex::GetNPCHoldName(player) : std::string();
+        if (foughtIn.empty()) foughtIn = locationName.empty() ? std::string("here") : locationName;
+        const std::string playerDescCap = "S" + playerDesc.substr(1);
 
         std::string narrative = drawn
             ? CapThe(nameA) + " and " + The(nameB) + " fought each other to a standstill at " + locationName + ", and both drew off"
             : CapThe(victorName) + " defeated " + The(loserName) + " at " + locationName;
+        if (skirmish) {
+            narrative = drawn ? "Men of " + The(nameA) + " and of " + The(nameB) + " came to blows near " + locationName + " and parted, neither the better for it"
+                              : "Men of " + The(victorName) + " and of " + The(loserName) + " came to blows near " + locationName + ", and those of " +
+                                    The(victorName) + " had the better of it";
+        }
         if (fought) {
-            narrative += ". " + playerDesc + " was seen fighting for " + The(fp->GetFactionDisplayName(playerSideWas));
+            narrative += ". S" + playerDesc.substr(1) + " was seen fighting for " + The(fp->GetFactionDisplayName(playerSideWas));
             if (enemyKills > 0) narrative += " and reportedly killed " + std::to_string(enemyKills) + " of the other side";
+            if (enemyChampions > 0) narrative += ", their champion among them";
+            else if (enemyCaptains > 0) narrative += ", their captain among them";
             if (playerLeft) narrative += ", but left the field before it was decided";
         } else if (playerKillsA + playerKillsB > 0) {
-            narrative += ". " + playerDesc + ", of neither side, was seen cutting down soldiers there";
+            narrative += ". S" + playerDesc.substr(1) + ", of neither side, was seen cutting down soldiers there";
         }
 
         // --- Record in political DB ---
         // Check for active war first. If war exists, record via RecordOffScreenBattle (updates war state).
         // If no war, record a single political event. Never both — prevents duplicate notifications.
         int warId = fp->GetActiveWarId(factionA, factionB);
-        if (warId > 0) {
-            fp->RecordOffScreenBattle(factionA, factionB, locationName, drawn ? "draw" : result, narrative, deadA, deadB, drawn ? std::string() : victor, &physicalPosition);
+        if (warId > 0 && !skirmish) {
+            fp->RecordOffScreenBattle(factionA, factionB, locationName, drawn ? "draw" : result, narrative, deadA, deadB, drawn ? std::string() : victor,
+                                      &physicalPosition, foughtIn);
         } else {
             // Single combined event with both factions — adjusts inter-faction relation via delta
-            int relationDelta = -10;  // battles worsen relations between the two factions
-            fp->RecordPoliticalEvent(factionA, factionB, "battle_result", narrative, relationDelta, gameTime, locationName, physicalPosition);
+            int relationDelta = skirmish ? -4 : -10;  // blood between them worsens things, a battle more than a scuffle
+            fp->RecordPoliticalEvent(factionA, factionB, skirmish ? "border_skirmish" : "battle_result", narrative, relationDelta, gameTime, locationName,
+                                     physicalPosition, foughtIn);
             logger::info("Battle: No active war — recorded battle_result event (relation {} between {} and {})",
                 relationDelta, factionA, factionB);
         }
@@ -1139,7 +1330,7 @@ namespace IntelEngine {
         if (fought) {
             int allyChange = playerLeft ? DESERTION_PENALTY : (playerWon ? VICTORY_ALLY_BONUS : DEFEAT_ALLY_BONUS);
             std::string allyName = fp->GetFactionDisplayName(playerSideWas);
-            std::string participationDesc = playerDesc + (playerLeft ? " took a place in the line of " : " fought for ") + The(allyName) +
+            std::string participationDesc = playerDescCap + (playerLeft ? " took a place in the line of " : " fought for ") + The(allyName) +
                 " at " + locationName + (playerLeft ? " and left it before the end" : (playerWon ? " (victory)" : (drawn ? " (no victor)" : " (defeat)")));
             fp->RecordPoliticalEvent(playerSideWas, "", "player_battle", participationDesc, allyChange, gameTime, locationName, physicalPosition);
         }
@@ -1147,13 +1338,16 @@ namespace IntelEngine {
         // Record friendly fire as a SEPARATE event (only if it happened)
         if (friendlyKills > 0) {
             int penalty = friendlyKills * KILL_STANDING_PENALTY_PER_SOLDIER;
-            std::string killDesc = playerDesc + " reportedly attacked " + std::to_string(friendlyKills) +
-                " allied " + fp->GetFactionDisplayName(playerSideWas) + " soldiers during the battle at " + locationName;
-            fp->RecordPoliticalEvent(playerSideWas, "", "friendly_fire", killDesc, penalty, gameTime, locationName, physicalPosition);
+            // ("someone ... reportedly attacked 1 allied Imperial Legion soldiers": they were killed, and one is one.)
+            std::string killDesc = playerDescCap + " cut down " +
+                (friendlyKills == 1 ? std::string("a soldier") : std::to_string(friendlyKills) + " soldiers") + " of their own side, " +
+                The(fp->GetFactionDisplayName(playerSideWas)) + ", during the battle at " + locationName;
+            fp->RecordPoliticalEvent(playerSideWas, "", "friendly_fire", killDesc, penalty, gameTime, locationName, physicalPosition, foughtIn);
         }
 
         // --- What those who saw it remember ---
-        std::string fact = "witnessed a battle between " + The(nameA) + " and " + The(nameB) + " at " + locationName + ". " +
+        std::string fact = std::string(skirmish ? "saw men of " : "witnessed a battle between ") + The(nameA) + (skirmish ? " and of " : " and ") + The(nameB) +
+            (skirmish ? " come to blows near " : " at ") + locationName + ". " +
             (drawn ? std::string("Neither side won it") : CapThe(victorName) + " won it");
         int totalCasualties = deadA + deadB;
         if (totalCasualties > 0) {
@@ -1172,6 +1366,7 @@ namespace IntelEngine {
 
         // --- Build return JSON ---
         out["playerSideWas"] = playerSideWas;
+        out["playerLeft"] = playerLeft;
         out["playerWon"] = playerWon;
         out["drawn"] = drawn;
         out["playerLeft"] = playerLeft;
@@ -1183,12 +1378,22 @@ namespace IntelEngine {
         out["playerKillsA"] = playerKillsA;
         out["playerKillsB"] = playerKillsB;
         out["enemyKills"] = enemyKills;
-        // What the winning side pays one who fought in its line (handed over by one of them, in person).
-        out["reward"] = Battlefield::Pay(playerWon, enemyKills);
+        // What the winning side pays one who fought in its line (handed over by one of them, in person): more for an
+        // enemy champion cut down, and more with rank.
+        out["reward"] = pay;
+        out["rank"] = rankNow;
+        out["rankTitle"] = fought ? fp->RankTitle(playerSideWas, rankNow) : std::string();
+        out["promoted"] = promoted;
+        out["championKills"] = enemyChampions;
+        out["captainKills"] = enemyCaptains;
+        lastPromotion_ = promoted;
 
         // What the player reads when it is over. (Nothing, when they are not there to see it.)
         if (playerLeft) {
             out["notification"] = "";
+        } else if (skirmish) {
+            out["notification"] = drawn ? std::string("The skirmish is over. Neither side had the better of it.")
+                                        : "The skirmish is over. " + CapThe(victorName) + " had the better of it.";
         } else if (drawn) {
             out["notification"] = "The fighting dies down. Neither side holds the field at " + locationName + ".";
         } else if (fought && playerWon) {
@@ -1209,8 +1414,9 @@ namespace IntelEngine {
         // faction until deferred cleanup finishes (all soldiers disabled). Same-faction
         // membership prevents retaliation from friendly fire. No ForEachLoadedActor sweep needed.
 
-        logger::info("Battle: Finalized — result={}, victor={}, playerSide={}, killsA={}, killsB={}, left={}, pay={}",
-            result, victor, playerSideWas, playerKillsA, playerKillsB, playerLeft, Battlefield::Pay(playerWon, enemyKills));
+        logger::info("Battle: Finalized — result={}, victor={}, playerSide={}, killsA={}, killsB={}, left={}, pay={}, rank {} -> {}{}",
+            result, victor, playerSideWas, playerKillsA, playerKillsB, playerLeft, pay, rankBefore, rankNow,
+            promoted.empty() ? std::string() : " (" + promoted + ")");
         return out.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
     }
 
@@ -1396,6 +1602,10 @@ namespace IntelEngine {
 
         if (enemy.empty() || enemy == alliedFaction) {
             out["failReason"] = "no war enemy for " + alliedFaction;
+            return out.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
+        }
+        if (fp->IsDisbanded(alliedFaction) || fp->IsDisbanded(enemy)) {
+            out["failReason"] = "one of the two is no more";
             return out.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
         }
         // Two armies in the field means a war. (A "configured rival" used to do: the Companions drew up twenty-two
@@ -1604,6 +1814,11 @@ namespace IntelEngine {
         const bool hasPlace = place && place != player && place->GetWorldspace() == world;
         const Battlefield::Vec placeAt = hasPlace ? Battlefield::Vec{place->GetPositionX(), place->GetPositionY()} : me;
         const float z = player->GetPositionZ();
+        int lineSize = Battlefield::WaveSize(1);        // how many of a side are to be drawn up (fewer in a skirmish)
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (activeBattle_) lineSize = activeBattle_->lineSize;
+        }
         std::string why = "no ground to stand on";
         for (const auto& c : Battlefield::Candidates(me, facing, hasPlace, placeAt)) {
             const auto field = Battlefield::Draw(c.centre, c.axis, 1, 1);
@@ -1627,6 +1842,29 @@ namespace IntelEngine {
                 std::fabs(mid.height - b.height) > Battlefield::kMaxRise) {
                 why = "too steep";
                 continue;
+            }
+            // Every place somebody is to stand at, not the middles alone: a stream runs where the middle is dry.
+            // (Height and water only: two cheap questions a spot, asked of the few places that got this far.)
+            {
+                const int size = lineSize;
+                const auto lines = Battlefield::Draw(c.centre, c.axis, size, size);
+                bool standsInWater = false;
+                for (const auto* line : {&lines.a, &lines.b}) {
+                    for (const auto& spot : line->spots) {
+                        const RE::NiPoint3 pos{spot.x, spot.y, z};
+                        float height = 0.f;
+                        auto* spotCell = tes->GetCell(pos);
+                        if (!spotCell || !tes->GetLandHeight(pos, height) || Battlefield::Wet(tes->GetWaterHeight(pos, spotCell), height)) {
+                            standsInWater = true;
+                            break;
+                        }
+                    }
+                    if (standsInWater) break;
+                }
+                if (standsInWater) {
+                    why = "water where the lines would stand";
+                    continue;
+                }
             }
             bool crowded = false;
             for (const auto& p : people) {
@@ -1672,7 +1910,7 @@ namespace IntelEngine {
         nlohmann::json out;
         out["success"] = false;
         out["count"] = 0;
-        const bool isA = side == "A";
+        const bool isA = IsA(side);
         std::string factionId;
         Battlefield::Vec centre;
         float axis = 0.f, z = 0.f;
@@ -1692,7 +1930,11 @@ namespace IntelEngine {
             out["error"] = "battle factions not found in IntelEngine.esp";
             return out.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
         }
-        const int total = Battlefield::WaveSize(1);
+        int total = Battlefield::WaveSize(1);
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (activeBattle_) total = activeBattle_->lineSize;
+        }
         first = std::clamp(first, 0, total);
         count = std::clamp(count, 0, total - first);
         // Whoever is left in a battle side from before is the player only by mistake: the two are enemies, and a
@@ -1705,7 +1947,8 @@ namespace IntelEngine {
         const auto field = Battlefield::Draw(centre, axis, total, total);
         const auto& line = isA ? field.a : field.b;
         const std::vector<Battlefield::Vec> spots(line.spots.begin() + first, line.spots.begin() + first + count);
-        const auto soldiers = RaiseSoldiers(factionId, isA ? battleFactionA : battleFactionB, spots, line.facing, z, player, true, first == 0);
+        const auto who = NextOf(isA, factionId, first, count, total, player);
+        const auto soldiers = RaiseSoldiers(factionId, isA ? battleFactionA : battleFactionB, spots, line.facing, z, player, true, first == 0, true, &who);
         nlohmann::json ids = nlohmann::json::array();
         for (auto* s : soldiers) ids.push_back(s->GetFormID());
         out["success"] = true;
@@ -1719,18 +1962,20 @@ namespace IntelEngine {
         return out.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
     }
 
-    std::string BattleManager::ReinforceLine(const std::string& side, int first, int count, RE::Actor* player) {
+    std::string BattleManager::ReinforceLine(const std::string& side, int first, int count, RE::Actor* player, int kind) {
+        const bool flank = kind == 1;
         static FrameStats stats;
         FrameClock clock("Battle: bringing up soldiers", stats, FrameClock::Now(), 60);
         nlohmann::json out;
         out["success"] = false;
         out["count"] = 0;
         out["formIds"] = nlohmann::json::array();
-        const bool isA = side == "A";
+        const bool isA = IsA(side);
         std::string factionId;
         Battlefield::Vec centre, point;
         float axis = 0.f, z = 0.f;
         int have = 0;
+        bool bringsChampion = false;
         {
             std::lock_guard<std::mutex> lock(mutex_);
             if (!activeBattle_ || !activeBattle_->fieldSet || !player) {
@@ -1741,13 +1986,26 @@ namespace IntelEngine {
             centre = {activeBattle_->fieldX, activeBattle_->fieldY};
             axis = activeBattle_->fieldAxis;
             z = activeBattle_->fieldZ;
-            point = isA ? Battlefield::Vec{activeBattle_->reserveAX, activeBattle_->reserveAY}
+            point = flank ? Battlefield::Vec{activeBattle_->flankX, activeBattle_->flankY}
+                  : isA ? Battlefield::Vec{activeBattle_->reserveAX, activeBattle_->reserveAY}
                         : Battlefield::Vec{activeBattle_->reserveBX, activeBattle_->reserveBY};
             for (const auto& a : activeBattle_->actors) {
                 if (a.factionId == factionId) ++have;
             }
+            // A side's champion comes up alone (once).
+            bringsChampion = kind == 2 && (isA ? activeBattle_->championA : activeBattle_->championB) == 0;
         }
-        count = (std::min)(count, MAX_SOLDIERS_PER_SIDE - have);
+        if (kind == 2 && !bringsChampion) {
+            out["success"] = true;
+            return out.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
+        }
+        // (The hidden force and a champion are over and above what a side brings up in its waves.)
+        if (kind == 2) {
+            first = 0;
+            count = 1;
+        } else {
+            count = (std::min)(count, MAX_SOLDIERS_PER_SIDE + (flank ? Battlefield::kFlankSize : 0) - have);
+        }
         if (count <= 0) {
             out["success"] = true;           // everybody this side has is on the field already
             return out.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
@@ -1768,7 +2026,10 @@ namespace IntelEngine {
             // come from, or it is all rock and water there): nobody comes this time, rather than out of thin air next
             // to the player (it happened: 685 units off, in plain view, 2026-11-20).
             bool found = false;
-            for (const auto& at : Battlefield::ReservePoints(line, me, Battlefield::Norm(player->GetAngleZ() * kDegPerRad))) {
+            const float looking = Battlefield::Norm(player->GetAngleZ() * kDegPerRad);
+            // Those who come up come from behind their own line; a hidden force from out to one side of the other's.
+            const auto places = flank ? Battlefield::FlankPoints(isA ? field.b : field.a, me, looking) : Battlefield::ReservePoints(line, me, looking);
+            for (const auto& at : places) {
                 const Ground ground = GroundAt(tes, at, z);
                 if (!ground.walkable || ground.wet) continue;
                 point = at;
@@ -1780,9 +2041,13 @@ namespace IntelEngine {
                 out["success"] = true;
                 return out.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
             }
-            logger::info("Battle: more of {} come up behind their line, {:.0f} units from the player", factionId, Battlefield::Dist(me, point));
+            logger::info("Battle: more of {} come {}, {:.0f} units from the player", factionId,
+                         flank ? "out of hiding on the flank" : "up behind their line", Battlefield::Dist(me, point));
             std::lock_guard<std::mutex> lock(mutex_);
-            if (activeBattle_) {
+            if (activeBattle_ && flank) {
+                activeBattle_->flankX = point.x;
+                activeBattle_->flankY = point.y;
+            } else if (activeBattle_) {
                 (isA ? activeBattle_->reserveAX : activeBattle_->reserveBX) = point.x;
                 (isA ? activeBattle_->reserveAY : activeBattle_->reserveBY) = point.y;
             }
@@ -1790,10 +2055,21 @@ namespace IntelEngine {
         std::vector<Battlefield::Vec> spots;
         for (int i = 0; i < count; ++i) spots.push_back(Battlefield::ReserveSpot(point, line.facing, (std::max)(first, 0) + i));
 
-        const auto soldiers = RaiseSoldiers(factionId, isA ? battleFactionA : battleFactionB, spots, line.facing, z, player, false, false);
+        // (A champion is rolled by themself, so that a wave's group being made at the same time is left as it is.)
+        const auto who = kind == 2 ? RollFor(factionId, 1, player)
+                                   : NextOf(isA, factionId, first, count, (std::max)(count, flank ? Battlefield::kFlankSize : Battlefield::WaveSize(GetWave(side) + 1)), player);
+        // A hidden force looks at the line it falls on.
+        const float looks = flank ? Battlefield::Bearing(point, (isA ? field.b : field.a).centre) : line.facing;
+        const auto soldiers = RaiseSoldiers(factionId, isA ? battleFactionA : battleFactionB, spots, looks, z, player, false, false, true, &who, bringsChampion);
         nlohmann::json ids = nlohmann::json::array();
         for (auto* s : soldiers) ids.push_back(s->GetFormID());
         out["count"] = static_cast<int>(soldiers.size());
+        if (bringsChampion && !soldiers.empty()) {
+            out["champion"] = nlohmann::json::array({soldiers[0]->GetFormID()});
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (activeBattle_) (isA ? activeBattle_->championA : activeBattle_->championB) = soldiers[0]->GetFormID();
+            logger::info("Battle: a champion of {} comes up", factionId);
+        }
         out["formIds"] = ids;
         {
             // The battle may have ended while they were made: they are switched off, and the script removes them
@@ -1808,10 +2084,142 @@ namespace IntelEngine {
         return out.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
     }
 
+    void BattleManager::SetSkirmish(int size) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (!activeBattle_) return;
+        activeBattle_->skirmish = true;
+        activeBattle_->twists = Battlefield::Twists{};       // a skirmish is what it looks like
+        activeBattle_->lineSize = std::clamp(size, 2, 6);
+        activeBattle_->waves = 1;
+        // A handful breaks when one of them is left standing. (Counted by the head it took the last man's death:
+        // four against four was fought until one side had nobody, 2026-11-20.)
+        const int others = (std::max)(1, activeBattle_->lineSize - 1);
+        activeBattle_->lossPerSoldier = (75 + others - 1) / others;
+        logger::info("[BattleManager] Battle {} is a skirmish of {} a side", activeBattle_->id, activeBattle_->lineSize);
+    }
+
+    void BattleManager::StripFactions(RE::Actor* actor) { StripOwnFactions(actor); }
+
+    RE::Actor* BattleManager::RaiseLoner(const std::string& factionId, Battlefield::Vec at, float facingDeg, RE::Actor* player) {
+        static FrameStats stats;
+        FrameClock clock("Battle: making one who comes alone", stats, FrameClock::Now(), 20);
+        const auto made = RaiseSoldiers(factionId, nullptr, {at}, facingDeg, player ? player->GetPositionZ() : 0.f, player, true, false, false);
+        return made.empty() ? nullptr : made.front();
+    }
+
+    bool BattleManager::PickApproach(RE::Actor* player, RE::Actor* target, Battlefield::Vec& at) const {
+        auto* tes = RE::TES::GetSingleton();
+        auto* cell = player ? player->GetParentCell() : nullptr;
+        if (!tes || !cell || cell->IsInteriorCell() || !target) return false;
+        const Battlefield::Vec me{player->GetPositionX(), player->GetPositionY()};
+        const Battlefield::Vec them{target->GetPositionX(), target->GetPositionY()};
+        const float facing = Battlefield::Norm(player->GetAngleZ() * kDegPerRad);
+        float best = -1.f;
+        for (const float distance : {2600.f, 3400.f}) {
+            for (float bearing = 0.f; bearing < 360.f; bearing += 45.f) {
+                const Battlefield::Vec spot = Battlefield::Along(them, bearing, distance);
+                const float fromMe = Battlefield::Dist(me, spot);
+                const bool inView = Battlefield::Apart(Battlefield::Bearing(me, spot), facing) <= Battlefield::kViewHalfAngle;
+                if (fromMe < Battlefield::kReserveClear || fromMe > 7600.f || (inView && fromMe < Battlefield::kNearInView)) continue;
+                const Ground ground = GroundAt(tes, spot, player->GetPositionZ());
+                if (!ground.walkable || ground.wet) continue;
+                if (fromMe > best) {
+                    best = fromMe;
+                    at = spot;
+                }
+            }
+        }
+        return best > 0.f;
+    }
+
+    std::string BattleManager::PickAmbush(RE::Actor* player) const {
+        nlohmann::json out;
+        out["ok"] = false;
+        auto* tes = RE::TES::GetSingleton();
+        auto* cell = player ? player->GetParentCell() : nullptr;
+        auto* world = player ? player->GetWorldspace() : nullptr;
+        if (!tes || !cell || !world || cell->IsInteriorCell()) {
+            out["reason"] = "the player is indoors";
+            return out.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
+        }
+        if (world->parentWorld) {
+            out["reason"] = "the player is inside a walled town";
+            return out.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
+        }
+        const Battlefield::Vec me{player->GetPositionX(), player->GetPositionY()};
+        if (DoorNear(tes, me, Battlefield::kClearOfHouses)) {
+            out["reason"] = "houses";
+            return out.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
+        }
+        Battlefield::Vec at;
+        if (!PickApproach(player, player, at)) {
+            out["reason"] = "nowhere to come from unseen";
+            return out.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
+        }
+        float height = player->GetPositionZ();
+        tes->GetLandHeight(RE::NiPoint3{at.x, at.y, height}, height);
+        out["ok"] = true;
+        out["x"] = at.x;
+        out["y"] = at.y;
+        out["z"] = height;
+        logger::info("Battle: a band can come for the player from {:.0f} units off, out of their sight", Battlefield::Dist(me, at));
+        return out.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
+    }
+
+    RE::TESFaction* BattleManager::EnemySide() const { return ResolveBattleFactions().second; }
+
+    std::string BattleManager::TurnCoats(const std::string& side) {
+        nlohmann::json out;
+        nlohmann::json ids = nlohmann::json::array();
+        out["count"] = 0;
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (!activeBattle_) {
+            out["formIds"] = ids;
+            return out.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
+        }
+        auto& battle = *activeBattle_;
+        const bool isA = IsA(side);
+        const std::string& from = isA ? battle.factionA : battle.factionB;
+        const std::string& to = isA ? battle.factionB : battle.factionA;
+        int alive = 0;
+        for (const auto& a : battle.actors) {
+            if (a.alive && a.factionId == from) ++alive;
+        }
+        int turn = Battlefield::Turncoats(alive);
+        int turned = 0;
+        // The last who came are the first to go: not the captain, not a champion.
+        for (auto it = battle.actors.rbegin(); it != battle.actors.rend() && turned < turn; ++it) {
+            if (!it->alive || it->factionId != from || it->tier != 0) continue;
+            it->factionId = to;
+            ids.push_back(it->formId);
+            ++turned;
+        }
+        if (turned > 0) {
+            int& morale = isA ? battle.moraleA : battle.moraleB;
+            morale = std::clamp(morale - Battlefield::kLossBetrayed, 0, Battlefield::kHeartMost);
+            logger::info("[BattleManager] Battle {}: {} of {} turn their coats and fight for {}", battle.id, turned, from, to);
+        }
+        out["count"] = turned;
+        out["formIds"] = ids;
+        return out.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
+    }
+
+    void BattleManager::SetTwists(int champion, int flank, int turncoat) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (!activeBattle_) return;
+        activeBattle_->twists.champion = std::clamp(champion, 0, 3);
+        activeBattle_->twists.flank = std::clamp(flank, 0, 2);
+        activeBattle_->twists.turncoat = std::clamp(turncoat, 0, 2);
+        activeBattle_->twists.flankAfter = 20.f;
+        activeBattle_->twists.championAfter = 30.f;
+        logger::info("[BattleManager] Battle {} (test): champion {}, hidden force {}, turncoats {}", activeBattle_->id, champion, flank, turncoat);
+    }
+
     void BattleManager::BeginFight() {
         std::lock_guard<std::mutex> lock(mutex_);
         if (!activeBattle_ || !activeBattle_->mustering) return;
         activeBattle_->mustering = false;
+        activeBattle_->fightBegan = RealSeconds();
         logger::info("[BattleManager] Battle {}: the lines meet", activeBattle_->id);
     }
 
@@ -1874,8 +2282,9 @@ namespace IntelEngine {
         if (!activeBattle_->playerSide.empty()) activeBattle_->playerLeft = true;
     }
 
-    std::string BattleManager::Say(const std::string& what, const std::string& a, const std::string& b, const std::string& name, int number,
+    std::string BattleManager::Say(const std::string& asked, const std::string& a, const std::string& b, const std::string& name, int number,
                                    int other) const {
+        const std::string what = Key(asked);
         auto* fp = FactionPolitics::GetSingleton();
         std::string place;
         bool fighting = false;
@@ -1884,6 +2293,8 @@ namespace IntelEngine {
             if (activeBattle_) {
                 place = activeBattle_->locationName;
                 fighting = !activeBattle_->mustering;
+            } else {
+                place = lastPlace_;         // the battle is over: its place is still what is spoken of
             }
         }
         if (place.empty()) place = "here";
@@ -1892,6 +2303,35 @@ namespace IntelEngine {
 
         // ---- what the player reads
         if (what == "drawn_up") return "Two armies are drawn up near " + place + ": " + theA + " and " + theB + ".";
+        if (what == "ambush") return "Men of " + theA + " are coming for you.";
+        // A rank's name with its article: "a Veteran", "an Auxiliary".
+        const auto aRank = [](const std::string& title) {
+            if (title.empty()) return std::string();
+            const char first = static_cast<char>(std::tolower(static_cast<unsigned char>(title[0])));
+            return std::string(first == 'a' || first == 'e' || first == 'i' || first == 'o' || first == 'u' ? "an " : "a ") + title;
+        };
+        if (what == "champion_name") return "Champion of " + theA;
+        if (what == "champion_comes") return "A champion of " + theA + " takes the field.";
+        if (what == "champion_fell") return "The champion of " + theA + " has fallen.";
+        if (what == "flank") return "A second force of " + theA + " breaks from cover on the flank!";
+        if (what == "treachery") return "Treachery! Men of " + theA + " turn on their own.";
+        // What a man who has turned his coat is called from then on: he still wears his old side's armour, and with
+        // his old name on him nobody could tell him from the comrades he is cutting down (seen 2026-11-21).
+        if (what == "turncoat_name") return "Turncoat";
+        if (what == "promoted") return CapThe(fp->GetFactionDisplayName(a)) + " now count you " + aRank(name) + ".";      // name: the rank
+        if (what == "file") return std::string(number >= 4 ? "Four" : "Two") + " soldiers of " + theA + " keep by your side.";
+        if (what == "word_body") return "The line of " + theA + " waits for your word, " + name + ".";            // name: the rank
+        if (what == "word_charge") return "Charge!";
+        if (what == "word_hold") return "Hold a little longer";
+        if (what == "champion_cry") {
+            return "is the champion of " + theA + ", come up into the battle against " + theB + " near " + place +
+                   "; bellows a challenge of a few words across the field" + (name.empty() ? std::string() : ", at " + name + " above all");
+        }
+        if (what == "turncoat_cry") {
+            return "has just turned on their own side, " + theA + ", in the middle of the battle near " + place + ", and fights for " + theB +
+                   " now; shouts a few words of why, or of scorn, at their old comrades";
+        }
+        if (what == "skirmish_met") return "Men of " + theA + " and of " + theB + " have run into each other near " + place + ".";
         if (what == "broke_out") return "Fighting has broken out near " + place + ".";
         if (what == "stand_with") return "You stand with " + theA + ".";
         if (what == "captain_fell") return "The captain of " + theA + " has fallen.";
@@ -1907,6 +2347,7 @@ namespace IntelEngine {
         if (what == "choice_join") return "Stand with " + theA;
         if (what == "choice_out") return "Stay out of it";
         if (what == "commander_name") return fp->GetFactionDisplayName(a) + " Captain";
+        if (what == "stranger") return "Stranger";
 
         // ---- what somebody is given to say, in their own words (told to the model; a: their side, b: the other)
         if (what == "hail") {
@@ -1915,9 +2356,17 @@ namespace IntelEngine {
                    (fighting ? ", in the thick of a battle against " + theB + " near " + place
                              : ", drawn up for battle against " + theB + " near " + place + ", moments before the lines meet") +
                    ", sees " + name + " close by (" +
-                   (number > 0 ? "whom they know as a friend of their side" : "a stranger to them, but another blade is welcome") +
+                   (fp->PlayerRank(a) > 0 ? "whom they know as " + aRank(fp->RankTitle(a, fp->PlayerRank(a))) + " of their own, and greet as that"
+                    : number > 0 ? std::string("whom they know as a friend of their side") : std::string("a stranger to them, but another blade is welcome")) +
                    ") and calls out to them, in a few words and as a soldier would: will they stand with " + theA +
                    " today, or keep out of the way?";
+        }
+        if (what == "warn_off") {
+            // They know this person as an officer of the army across the field.
+            return "leads the soldiers of " + theA + ", drawn up for battle against " + theB + " near " + place + ", moments before the lines meet, sees " +
+                   name + " come near their line, whom they know as " + aRank(fp->RankTitle(b, fp->PlayerRank(b))) + " of " + theB +
+                   ", the enemy they are about to fight; shouts a few words at them across the gap, of scorn or of warning, as a soldier would to an "
+                   "enemy officer who walks up to the wrong line";
         }
         if (what == "cry") {
             return "leads the soldiers of " + theA + ", drawn up for battle against " + theB + " near " + place +
@@ -1929,6 +2378,10 @@ namespace IntelEngine {
             if (number > 0) told += " (" + name + " cut down " + std::to_string(number) + " of the enemy)";
             told += ", and comes over, weary and glad, to thank them in a few words";
             if (other > 0) told += " and to press their share of the pay into their hand: " + std::to_string(other) + " gold";
+            if (!lastPromotion_.empty()) {
+                told += ". Tells them, too, that from today they are counted " + aRank(lastPromotion_) + " of " + theA;
+                lastPromotion_.clear();
+            }
             return told;
         }
         if (what == "after_drawn") {
@@ -1991,7 +2444,9 @@ namespace IntelEngine {
         line += The(fp->GetFactionDisplayName(foe)) + " near " + place + ". ";
         line += mustering ? "The lines have not met yet; it will begin at any moment." : "The fighting is on.";
         if (playerSide == own) {
-            line += " " + name + " fights in your line.";
+            const int rank = fp->PlayerRank(own);
+            line += rank > 0 ? " " + name + ", known to you all as " + fp->RankTitle(own, rank) + " of your side, fights in your line."
+                             : " " + name + " fights in your line.";
         } else if (playerSide == foe) {
             line += " " + name + " fights for the enemy.";
         } else if (Battlefield::WouldHave(fp->GetPlayerStanding(own))) {
@@ -2000,6 +2455,147 @@ namespace IntelEngine {
             line += " Your side knows " + name + " for an enemy.";
         }
         return line;
+    }
+
+    std::string BattleManager::CallerOf(const std::string& factionA, const std::string& factionB) {
+        auto* fp = FactionPolitics::GetSingleton();
+        const int who = Ranks::Caller(fp->PlayerRank(factionA), fp->PlayerRank(factionB));
+        return who == 1 ? factionA : who == 2 ? factionB : std::string();
+    }
+
+    RE::TESObjectREFR* BattleManager::WayHome(const std::string& factionId, Battlefield::Vec field, Battlefield::Vec away, bool beaten, RE::FormID notTo) {
+        static FrameStats stats;
+        FrameClock clock("Battle: where an army marches off to", stats, FrameClock::Now(), 20);
+        // What its own call home: the place named in its entry (a town, or a hold: then any town of that hold).
+        std::string home;
+        if (const auto faction = FactionPolitics::GetSingleton()->GetFaction(factionId)) home = faction->hold;
+        const auto same = [](const char* name, const std::string& wanted) {
+            if (!name || wanted.empty() || std::strlen(name) != wanted.size()) return false;
+            for (std::size_t i = 0; i < wanted.size(); ++i) {
+                if (std::tolower(static_cast<unsigned char>(name[i])) != std::tolower(static_cast<unsigned char>(wanted[i]))) return false;
+            }
+            return true;
+        };
+        std::vector<Battlefield::Town> towns;
+        for (const auto& mark : LivingWorldBridge::GetSingleton()->Towns()) {
+            const auto* marker = RE::TESForm::LookupByID<RE::TESObjectREFR>(mark.marker);
+            if (!marker) continue;
+            Battlefield::Town town;
+            town.at = {marker->GetPositionX(), marker->GetPositionY()};
+            town.id = mark.marker;
+            if (!home.empty()) {
+                const auto* location = RE::TESForm::LookupByID<RE::BGSLocation>(mark.location);
+                const auto* hold = RE::TESForm::LookupByID<RE::BGSLocation>(mark.hold);
+                town.home = same(location ? location->GetFullName() : nullptr, home) || same(hold ? hold->GetFullName() : nullptr, home);
+            }
+            towns.push_back(town);
+        }
+        const int pick = Battlefield::MarchTo(towns, field, away, beaten, notTo);
+        auto* to = pick < 0 ? nullptr : RE::TESForm::LookupByID<RE::TESObjectREFR>(towns[static_cast<std::size_t>(pick)].id);
+        if (to) {
+            const auto& town = towns[static_cast<std::size_t>(pick)];
+            const auto* location = to->GetCurrentLocation();
+            logger::info("Battle: {} {} toward {} ({:.0f} units off{}; {} towns known)", factionId, beaten ? "run" : "march off",
+                         location && location->GetFullName() ? location->GetFullName() : "a town", Battlefield::Dist(field, town.at),
+                         town.home ? ", their home" : "", towns.size());
+        } else {
+            logger::info("Battle: no town for {} to march off to ({} known): a point far off instead", factionId, towns.size());
+        }
+        return to;
+    }
+
+    std::string BattleManager::Call() {
+        // (Copied out first: asking the ladder takes the politics locks, never under the gatherings' own.)
+        std::vector<PendingBattle> pending;
+        {
+            std::lock_guard<std::mutex> lock(pendingMutex_);
+            pending = pendingBattles_;
+        }
+        for (auto& pb : pending) {
+            const auto who = CallerOf(pb.factionA, pb.factionB);
+            if (who.empty()) continue;
+            if (!pb.marker) {
+                // Where it is: the place's own map marker, as when the gathering was made.
+                auto* resolver = LocationResolver::GetSingleton();
+                std::string name = pb.locationName;
+                auto* location = resolver->ResolveLocation(name);
+                auto* mark = location ? std::as_const(location->worldLocMarker).get().get() : nullptr;
+                if (!mark) mark = resolver->FindTravelTarget(pb.locationName);
+                if (!mark) continue;
+                pb.marker = mark->GetFormID();
+                pb.location = location ? location->GetFormID() : 0;
+                std::lock_guard<std::mutex> lock(pendingMutex_);
+                for (auto& kept : pendingBattles_) {
+                    if (kept.id == pb.id) {
+                        kept.marker = pb.marker;
+                        kept.location = pb.location;
+                    }
+                }
+            }
+            nlohmann::json out;
+            out["id"] = pb.id;
+            out["faction"] = who;
+            out["place"] = pb.locationName;
+            out["location"] = nlohmann::json::array({pb.location});
+            out["marker"] = nlohmann::json::array({pb.marker});
+            return out.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
+        }
+        return "{}";
+    }
+
+    void BattleManager::SetCallText(const std::string& factionId, const std::string& place) {
+        auto* quest = RE::TESForm::LookupByEditorID<RE::TESQuest>("IntelEngine_Call");
+        if (!quest) return;
+        auto* fp = FactionPolitics::GetSingleton();
+        const std::string text = "Stand with " + The(fp->GetFactionDisplayName(factionId)) + " near " + place + " before the battle is decided";
+        for (auto* objective : quest->objectives) {
+            if (objective && objective->index == 0) objective->displayText = text.c_str();
+        }
+    }
+
+    nlohmann::json BattleManager::DashboardJson(float nowGameDays) const {
+        nlohmann::json out = nlohmann::json::object();
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (activeBattle_) {
+                const auto& b = *activeBattle_;
+                int standA = 0, standB = 0;
+                for (const auto& a : b.actors) {
+                    if (a.alive) ++(a.factionId == b.factionA ? standA : standB);
+                }
+                nlohmann::json j;
+                j["a"] = b.factionA;
+                j["b"] = b.factionB;
+                j["place"] = b.locationName;
+                j["phase"] = b.mustering ? "muster" : "fight";
+                j["skirmish"] = b.skirmish;
+                j["morale_a"] = (std::min)(b.moraleA, Battlefield::kHeartFull);      // shown as a share of a whole heart
+                j["morale_b"] = (std::min)(b.moraleB, Battlefield::kHeartFull);
+                j["standing_a"] = standA;
+                j["standing_b"] = standB;
+                j["player_side"] = b.playerSide;
+                j["player_kills"] = b.playerKillsA + b.playerKillsB;
+                out["battle"] = std::move(j);
+            }
+        }
+        nlohmann::json gatherings = nlohmann::json::array();
+        std::vector<PendingBattle> pending;
+        {
+            std::lock_guard<std::mutex> lock(pendingMutex_);
+            pending = pendingBattles_;
+        }
+        for (const auto& pb : pending) {
+            nlohmann::json j;
+            j["a"] = pb.factionA;
+            j["b"] = pb.factionB;
+            j["place"] = pb.locationName;
+            j["hold"] = pb.hold;
+            j["hours_left"] = (std::max)(0.f, (pb.deadline - nowGameDays) * 24.f);
+            if (const auto who = CallerOf(pb.factionA, pb.factionB); !who.empty()) j["calls"] = who;
+            gatherings.push_back(std::move(j));
+        }
+        out["gatherings"] = std::move(gatherings);
+        return out;
     }
 
     std::string BattleManager::FieldInfo() const {
@@ -2123,6 +2719,31 @@ namespace IntelEngine {
         }
     }  // namespace
 
+    std::vector<RE::TESBoundObject*> BattleManager::NextOf(bool sideA, const std::string& factionId, int first, int count, int whole,
+                                                           RE::Actor* player) {
+        std::vector<RE::TESBoundObject*> next;
+        bool roll = first <= 0;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (!activeBattle_) return next;
+            if ((sideA ? activeBattle_->rolledA : activeBattle_->rolledB).empty()) roll = true;
+        }
+        if (roll) {
+            auto rolled = RollFor(factionId, (std::max)(whole, count), player);
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (!activeBattle_) return next;
+            (sideA ? activeBattle_->rolledA : activeBattle_->rolledB) = std::move(rolled);
+        }
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (!activeBattle_) return next;
+        auto& left = sideA ? activeBattle_->rolledA : activeBattle_->rolledB;
+        while (count-- > 0 && !left.empty()) {
+            next.push_back(left.back());
+            left.pop_back();
+        }
+        return next;
+    }
+
     RE::TESBoundObject* BattleManager::TemplateOf(const std::string& templateId) const {
         {
             std::lock_guard<std::mutex> lock(templatesMutex_);
@@ -2180,14 +2801,15 @@ namespace IntelEngine {
 
     std::vector<RE::Actor*> BattleManager::RaiseSoldiers(const std::string& factionId, RE::TESFaction* battleFaction,
                                                           const std::vector<Battlefield::Vec>& spots, float facingDeg, float fallbackZ,
-                                                          RE::Actor* player, bool standDown, bool commander) {
+                                                          RE::Actor* player, bool standDown, bool commander, bool ofABattle,
+                                                          const std::vector<RE::TESBoundObject*>* who, bool champion) {
         std::vector<RE::Actor*> soldiers;
         auto* tes = RE::TES::GetSingleton();
         auto* data = RE::TESDataHandler::GetSingleton();
         auto* world = player ? player->GetWorldspace() : nullptr;
         if (!tes || !data || !world || spots.empty()) return soldiers;
 
-        const auto bases = RollFor(factionId, static_cast<int>(spots.size()), player);
+        const auto bases = who ? *who : RollFor(factionId, static_cast<int>(spots.size()), player);
         // Each is made where they are to stand, looking the way their line looks. (3.8 made them all on one spot,
         // the player's when the place of the battle was not at hand, and moved them afterwards.)
         const RE::NiPoint3 rotation{0.f, 0.f, Battlefield::Norm(facingDeg) / kDegPerRad};
@@ -2197,7 +2819,14 @@ namespace IntelEngine {
             if (!cell || cell->IsInteriorCell()) continue;          // off the loaded ground: nobody is made there
             float height = 0.f;
             if (tes->GetLandHeight(at, height)) at.z = height + 6.f;
-            const auto handle = data->CreateReferenceAtLocation(bases[i], at, rotation, cell, world, nullptr, nullptr, RE::ObjectRefHandle(), true, true);
+            // The game's own making of a person (their record, what they carry, their mind) is timed by itself: it is
+            // most of what a soldier costs, and nothing here can make it less.
+            RE::ObjectRefHandle handle;
+            {
+                static FrameStats made;
+                FrameClock clock("Battle: the game making one soldier", made, FrameClock::Now(), 60);
+                handle = data->CreateReferenceAtLocation(bases[i], at, rotation, cell, world, nullptr, nullptr, RE::ObjectRefHandle(), true, true);
+            }
             const auto ref = handle.get();
             auto* actor = ref ? ref->As<RE::Actor>() : nullptr;
             if (!actor) continue;
@@ -2207,15 +2836,20 @@ namespace IntelEngine {
             // At the muster they start nothing; those who come later come to fight. Nobody runs before the army breaks.
             actor->AsActorValueOwner()->SetActorValue(RE::ActorValue::kAggression, standDown ? 0.f : 1.f);
             actor->AsActorValueOwner()->SetActorValue(RE::ActorValue::kConfidence, 4.f);
-            actor->AsActorValueOwner()->SetActorValue(RE::ActorValue::kAttackDamageMult, Battlefield::kBlowForce);
-            if (const float health = actor->AsActorValueOwner()->GetPermanentActorValue(RE::ActorValue::kHealth); health > 0.f) {
-                actor->AsActorValueOwner()->ModActorValue(RE::ACTOR_VALUE_MODIFIER::kPermanent, RE::ActorValue::kHealth,
-                                                          health * (Battlefield::kHardiness - 1.f));
+            // A soldier of a battle strikes with part of their force and stands more than they would. A champion (the
+            // first of a group that brings one) strikes with all of it and stands three times a soldier's measure.
+            const bool isChampion = champion && i == 0;
+            if (ofABattle) {
+                actor->AsActorValueOwner()->SetActorValue(RE::ActorValue::kAttackDamageMult, isChampion ? Battlefield::kChampionForce : Battlefield::kBlowForce);
+                if (const float health = actor->AsActorValueOwner()->GetPermanentActorValue(RE::ActorValue::kHealth); health > 0.f) {
+                    actor->AsActorValueOwner()->ModActorValue(RE::ACTOR_VALUE_MODIFIER::kPermanent, RE::ActorValue::kHealth,
+                                                              health * ((isChampion ? Battlefield::kChampionHardiness : Battlefield::kHardiness) - 1.f));
+                }
             }
             StripOwnFactions(actor);
             if (battleFaction) actor->AddToFaction(battleFaction, 0);
 
-            RegisterActor(actor, factionId, (commander && i == 0) ? 2 : 0);
+            if (ofABattle) RegisterActor(actor, factionId, isChampion ? 3 : (commander && i == 0) ? 2 : 0);
             soldiers.push_back(actor);
         }
         return soldiers;
@@ -2239,7 +2873,7 @@ namespace IntelEngine {
         int alive = 0;
 
         if (activeBattle_) {
-            const auto& targetFaction = (side == "A") ? activeBattle_->factionA : activeBattle_->factionB;
+            const auto& targetFaction = (IsA(side)) ? activeBattle_->factionA : activeBattle_->factionB;
             for (const auto& actor : activeBattle_->actors) {
                 if (actor.factionId == targetFaction) {
                     formIds.push_back(actor.formId);
@@ -2258,7 +2892,7 @@ namespace IntelEngine {
         std::lock_guard<std::mutex> lock(mutex_);
         if (!activeBattle_) return 0;
 
-        const auto& targetFaction = (side == "A") ? activeBattle_->factionA : activeBattle_->factionB;
+        const auto& targetFaction = (IsA(side)) ? activeBattle_->factionA : activeBattle_->factionB;
         int dead = 0;
         for (const auto& actor : activeBattle_->actors) {
             if (actor.factionId == targetFaction && !actor.alive) dead++;

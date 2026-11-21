@@ -25,6 +25,9 @@ struct ArcBridge { int loads = 0; static ArcBridge* GetSingleton() { static ArcB
 constexpr uint32_t kRumorRecordType = 'IERU';
 struct RumorBridge { int loads = 0; static RumorBridge* GetSingleton() { static RumorBridge s; return &s; } void Load(SKSE::SerializationInterface*, uint32_t, uint32_t) { ++loads; } };
 constexpr uint32_t kPendingBattleRecord = 'IEPB';
+constexpr uint32_t kFallenLeadersRecord = 'IEFL';
+struct FactionPolitics { int loads = 0; static FactionPolitics* GetSingleton() { static FactionPolitics s; return &s; } void Load(SKSE::SerializationInterface*, uint32_t, uint32_t) { ++loads; } void LoadRanks(SKSE::SerializationInterface*, uint32_t, uint32_t) { ++loads; } };
+namespace Ranks { constexpr uint32_t kRecordType = 'IERK'; }
 struct BattleManager { int loads = 0; static BattleManager* GetSingleton() { static BattleManager s; return &s; } void Load(SKSE::SerializationInterface*, uint32_t, uint32_t) { ++loads; } };
 struct LivingWorldBridge { int loads = 0; static LivingWorldBridge* GetSingleton() { static LivingWorldBridge s; return &s; } void Load(SKSE::SerializationInterface*, uint32_t, uint32_t) { ++loads; } };
 #include "LoadCallback.inc"

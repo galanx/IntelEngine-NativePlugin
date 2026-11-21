@@ -119,6 +119,8 @@ namespace IntelEngine {
             return m_keepsakes;
         }
 
+        /** For the dashboard: the quests the player has taken on (title, who gave it, where, days left, the reward). JSON. */
+        std::string DashboardJson() const;
         void Save(SKSE::SerializationInterface* intfc);
         void Load(SKSE::SerializationInterface* intfc, std::uint32_t version, std::uint32_t length);
         void Revert();
