@@ -57,6 +57,9 @@ namespace IntelEngine {
         std::string OtherMemoryFor(std::uint32_t id) const;
         int OfferedGold(std::uint32_t id, int playerLevel) const;
 
+        /** For the dashboard: what people have asked of the player and is still open (who, what in a line, days
+         *  left, the gold offered). JSON. */
+        std::string DashboardJson() const;
         void Save(SKSE::SerializationInterface* intfc);
         void Load(SKSE::SerializationInterface* intfc, std::uint32_t version, std::uint32_t length);
         void Revert();

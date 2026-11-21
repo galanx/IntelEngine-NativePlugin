@@ -8,6 +8,7 @@
 #include "SkyrimNetAPI.h"
 
 #include <cmath>
+#include <nlohmann/json.hpp>
 #include <thread>
 
 namespace IntelEngine {
@@ -313,6 +314,9 @@ namespace IntelEngine {
             text = Storylines::OwnerMemory(asked);
             const auto cut = text.find(", and {player} did it.");
             if (cut != std::string::npos) text = text.substr(0, cut);
+            // A meeting still to come is one that was asked for. (It read "met {player} at {place} as we had agreed;
+            // still open": the memory of a meeting kept, said of one that has not happened.)
+            if (pick->kind == Storylines::Kind::Meeting) text = "I asked {player} to meet me at {place}";
             if (!text.empty()) {
                 text += pick->stage == Storylines::Stage::ReturnTo ? "; {player} has done it but not come back yet"
                                                                  : "; still open";
@@ -408,6 +412,34 @@ namespace IntelEngine {
         std::scoped_lock lock(m_mutex);
         const auto* s = m_book.Find(id);
         return s ? Storylines::OfferedGold(*s, playerLevel) : 0;
+    }
+
+    std::string StorylineBridge::DashboardJson() const {
+        const float now = NowDays();
+        struct Row {
+            std::uint32_t id, owner, gold;
+            float deadline;
+            bool done;
+        };
+        std::vector<Row> rows;
+        {
+            std::scoped_lock lock(m_mutex);
+            for (const auto& s : m_book.all) {
+                if (Storylines::IsOpen(s)) rows.push_back({s.id, s.owner, s.promised, s.deadline, s.stage == Storylines::Stage::ReturnTo});
+            }
+        }
+        nlohmann::json out = nlohmann::json::array();
+        for (const auto& row : rows) {
+            nlohmann::json j;
+            j["id"] = row.id;
+            j["who"] = NameOf(row.owner);
+            j["line"] = BusinessLine(row.owner);   // takes the lock itself
+            j["done"] = row.done;
+            if (row.deadline > 0.f) j["days_left"] = (std::max)(0.f, row.deadline - now);
+            if (row.gold) j["gold"] = row.gold;
+            out.push_back(std::move(j));
+        }
+        return out.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
     }
 
     void StorylineBridge::Save(SKSE::SerializationInterface* intfc) {

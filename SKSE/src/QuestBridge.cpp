@@ -1223,6 +1223,28 @@ namespace IntelEngine {
 
     // ------------------------------------------------------------------ save data
 
+    std::string QuestBridge::DashboardJson() const {
+        const float now = NowDays();
+        nlohmann::json out = nlohmann::json::array();
+        {
+            std::scoped_lock lock(m_mutex);
+            for (const auto& q : m_book.all) {
+                if (q.phase != Q::Phase::Open) continue;
+                nlohmann::json j;
+                j["id"] = q.id;
+                j["title"] = q.title;
+                j["kind"] = q.tmpl == Q::Template::Keepsake ? "keepsake" : q.tmpl == Q::Template::Bounty ? "bounty" : q.tmpl == Q::Template::Venture ? "venture" : "request";
+                j["who"] = NameOf(q.giver);
+                j["where"] = PlaceName(q.place);
+                j["days"] = (std::max)(0.f, now - q.opened);
+                if (q.deadline > 0.f) j["days_left"] = (std::max)(0.f, q.deadline - now);
+                if (q.gold) j["gold"] = q.gold;
+                out.push_back(std::move(j));
+            }
+        }
+        return out.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
+    }
+
     void QuestBridge::Save(SKSE::SerializationInterface* intfc) {
         std::vector<std::uint8_t> bytes;
         {

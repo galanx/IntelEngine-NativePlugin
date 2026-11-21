@@ -336,6 +336,15 @@ namespace IntelEngine {
         if (!m_catalogued) BuildCatalogue();
     }
 
+    std::vector<LivingWorldBridge::TownMark> LivingWorldBridge::Towns() {
+        if (!m_catalogued) BuildCatalogue();        // the main menu has done it; this is for a caller that comes before
+        std::scoped_lock lock(m_mutex);
+        std::vector<TownMark> out;
+        out.reserve(m_towns.size());
+        for (const auto& spot : m_towns) out.push_back({spot.location, spot.hold, spot.ref});
+        return out;
+    }
+
     const LivingWorldBridge::Spot* LivingWorldBridge::FindSpot(RE::FormID location) const {
         for (const auto* list : {&m_inns, &m_dungeons, &m_towns}) {
             for (const auto& spot : *list) {
@@ -1109,6 +1118,29 @@ namespace IntelEngine {
             return Fill(line, life, player ? Safe::Name(player->GetDisplayFullName()) : "");
         }
         return {};
+    }
+
+    std::string LivingWorldBridge::DashboardJson() const {
+        std::vector<std::pair<RE::FormID, std::uint16_t>> people;
+        {
+            std::scoped_lock lock(m_mutex);
+            for (const auto& life : m_lives) {
+                if (life.flags & (LivingWorld::kWithPlayer | LivingWorld::kWasFollower)) people.emplace_back(life.actor, life.flags);
+            }
+        }
+        nlohmann::json out = nlohmann::json::array();
+        for (const auto& [id, flags] : people) {
+            auto* actor = RE::TESForm::LookupByID<RE::Actor>(id);
+            if (!actor) continue;
+            nlohmann::json j;
+            j["name"] = Safe::Name(actor->GetDisplayFullName());
+            j["with_you"] = (flags & LivingWorld::kWithPlayer) != 0 && (flags & LivingWorld::kWaitOrder) == 0;
+            j["waiting"] = (flags & LivingWorld::kWaitOrder) != 0;
+            j["dead"] = actor->IsDead();
+            j["line"] = DirectorLifeLine(id);   // takes the lock itself
+            out.push_back(std::move(j));
+        }
+        return out.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
     }
 
     std::string LivingWorldBridge::Describe(RE::Actor* actor) const {

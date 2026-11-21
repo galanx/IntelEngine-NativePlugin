@@ -111,7 +111,10 @@ public static class Program
         var cutLoose = AddCutLoose(mod);
         var examine = AddWord(mod, Examine, "Examine");
         var layToRest = AddWord(mod, LayToRest, "Lay to rest");
+        var call = AddCallQuest(mod);
+        int alliedSides = AllyBattleSides(mod);
         mod.WriteToBinary(output);
+        Console.WriteLine($"battle sides allied to themselves: {alliedSides}");
         Console.WriteLine($"{ThreadQuest} [{quest.FormKey.ID:X6}]: {quest.Aliases.Count} aliases, {quest.Objectives.Count} objectives -> {output}");
         Console.WriteLine($"{LifeSandbox} [{lifeSandbox.FormKey.ID:X6}], {LivesQuest} [{lives.FormKey.ID:X6}]");
         Console.WriteLine($"{QuestKeeper} [{keeper.FormKey.ID:X6}], journal quests " +
@@ -122,7 +125,34 @@ public static class Program
         Console.WriteLine($"{CutLoose} [{cutLoose.FormKey.ID:X6}]");
         Console.WriteLine($"{Examine} [{examine.FormKey.ID:X6}]");
         Console.WriteLine($"{LayToRest} [{layToRest.FormKey.ID:X6}]");
+        Console.WriteLine($"{CallQuest} [{call.FormKey.ID:X6}]: {call.Aliases.Count} aliases, {call.Objectives.Count} objective, {call.Stages.Count} stages");
         return 0;
+    }
+
+    // The two armies of a battle. Each was the other's enemy and nothing to itself: comrades were strangers to each
+    // other, and the player, once in a side, a stranger to its soldiers. One stray blow in the press was an assault:
+    // the soldier struck turned on the player, and the line with him (played 2026-11-21 with a heavy hand: 335 times
+    // in three minutes a soldier of the player's own side had to be made to forget it, two of them were cut down,
+    // the guards on the road took it for murder, and the battle was lost over it). Allied to itself, a side's people
+    // stand by each other and take a comrade's stray blow for what it is (the script marks the player's side with
+    // IgnoreFriendlyHits besides).
+    static int AllyBattleSides(SkyrimMod mod)
+    {
+        int allied = 0;
+        foreach (var editorId in new[] { "IntelEngine_BattleSideA", "IntelEngine_BattleSideB" })
+        {
+            var faction = mod.Factions.FirstOrDefault(f => f.EditorID == editorId);
+            if (faction == null) continue;
+            var own = faction.Relations.FirstOrDefault(r => r.Target.FormKey == faction.FormKey);
+            if (own == null)
+            {
+                own = new Relation { Target = new FormLink<IRelatableGetter>(faction.FormKey) };
+                faction.Relations.Add(own);
+            }
+            own.Reaction = CombatReaction.Ally;
+            ++allied;
+        }
+        return allied;
     }
 
     // What the player's key does to someone a story holds bound: the crosshair says "Cut loose" where the game would
@@ -417,6 +447,52 @@ public static class Program
             quest.Objectives.Add(objective);
         }
         foreach (var (stage, text, flag) in QuestLog)
+        {
+            // Flags always set: without them the entry has no QSDT header and the game shows no log text.
+            var entry = new QuestLogEntry { Entry = text, Flags = flag ?? (QuestLogEntry.Flag)0 };
+            quest.Stages.Add(new QuestStage { Index = stage, LogEntries = { entry } });
+        }
+        quest.VirtualMachineAdapter = null;
+        return quest;
+    }
+
+    // The call to the line: when armies gather, a faction the player holds a rank with calls its own (BattleManager::
+    // Call, IntelEngine_Battle.psc TendCall). A journal quest with the place marked; the DLL says the objective's words
+    // ("Stand with the Imperial Legion near Rorikstead ..."), the script sets the stage that says how it went.
+    public const string CallQuest = "IntelEngine_Call";
+    public static readonly (ushort stage, string text, QuestLogEntry.Flag? flag)[] CallLog =
+    {
+        (10, "Armies are drawing up near <Alias=Place>, and those I serve have called everyone of theirs to the line. I am expected there before the battle is decided.", null),
+        (100, "I answered the call and stood in the line near <Alias=Place>.", QuestLogEntry.Flag.CompleteQuest),
+        (150, "I was called to the line near <Alias=Place>, and stood with the other side.", QuestLogEntry.Flag.FailQuest),
+        (160, "I came to the field near <Alias=Place> and took no side.", QuestLogEntry.Flag.FailQuest),
+        (170, "I stood in the line near <Alias=Place>, and walked away before it was over.", QuestLogEntry.Flag.FailQuest),
+        (200, "The battle near <Alias=Place> was decided without me.", QuestLogEntry.Flag.FailQuest),
+        (210, "The armies near <Alias=Place> parted with nothing decided.", QuestLogEntry.Flag.CompleteQuest),
+    };
+
+    static Quest AddCallQuest(SkyrimMod mod)
+    {
+        var quest = mod.Quests.FirstOrDefault(q => q.EditorID == CallQuest);
+        if (quest == null)
+        {
+            quest = mod.Quests.AddNew();
+            quest.EditorID = CallQuest;
+        }
+        quest.Name = "Called to the Line";
+        quest.Type = Quest.TypeEnum.SideQuest;
+        quest.Priority = 50;
+        quest.Flags = Quest.Flag.AllowRepeatedStages;
+        quest.Aliases.Clear();
+        quest.Objectives.Clear();
+        quest.Stages.Clear();
+        uint nextAlias = 0;
+        var marker = AddAlias(quest, ref nextAlias, "Marker", QuestAlias.TypeEnum.Reference);   // 0: the place's map marker
+        AddAlias(quest, ref nextAlias, "Place", QuestAlias.TypeEnum.Location);                  // 1
+        var objective = new QuestObjective { Index = 0, DisplayText = "Stand in the line near <Alias=Place> before the battle is decided" };
+        objective.Targets.Add(new QuestObjectiveTarget { AliasID = (int)marker.ID });
+        quest.Objectives.Add(objective);
+        foreach (var (stage, text, flag) in CallLog)
         {
             // Flags always set: without them the entry has no QSDT header and the game shows no log text.
             var entry = new QuestLogEntry { Entry = text, Flags = flag ?? (QuestLogEntry.Flag)0 };

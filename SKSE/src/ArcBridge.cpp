@@ -3139,6 +3139,39 @@ namespace IntelEngine {
 
     // ------------------------------------------------------------------ save data
 
+    std::string ArcBridge::DashboardJson() const {
+        const float now = NowDays();
+        nlohmann::json open = nlohmann::json::array();
+        int planned = 0;
+        {
+            std::scoped_lock lock(m_mutex);
+            for (const auto& a : m_book.all) {
+                if (a.phase == A::Phase::Planned) ++planned;
+                if (a.phase != A::Phase::Open) continue;
+                nlohmann::json j;
+                j["id"] = a.id;
+                j["title"] = Fill(a.title, a);
+                j["kind"] = a.pattern == A::Pattern::Tale    ? (a.genre.empty() ? std::string("tale") : a.genre)
+                            : a.pattern == A::Pattern::Thief ? std::string("theft")
+                            : a.pattern == A::Pattern::Feud  ? std::string("feud")
+                            : a.pattern == A::Pattern::Murder ? std::string("murder")
+                                                              : std::string("story");
+                j["who"] = NameOf(a.cast[A::RAsker]);
+                j["where"] = PlaceName(a.place);
+                if (!a.story.empty()) j["log"] = Fill(a.story, a);
+                else if (!a.opening.empty()) j["log"] = Fill(a.opening, a);
+                j["days"] = (std::max)(0.f, now - a.opened);
+                if (a.deadline > 0.f) j["days_left"] = (std::max)(0.f, a.deadline - now);
+                if (a.gold) j["gold"] = a.gold;
+                open.push_back(std::move(j));
+            }
+        }
+        nlohmann::json out;
+        out["open"] = std::move(open);
+        out["planned"] = planned;
+        return out.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
+    }
+
     void ArcBridge::Save(SKSE::SerializationInterface* intfc) {
         std::vector<std::uint8_t> bytes;
         {

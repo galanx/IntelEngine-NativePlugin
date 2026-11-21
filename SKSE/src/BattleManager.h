@@ -43,6 +43,8 @@ namespace IntelEngine {
         std::string resultJson;             // full DM response JSON for post-resolution
         RE::FormID worldspace = 0;          // the world the place lies in (0: indoors, never fought in view)
         std::string hold;                   // the hold it lies in, by its name in the game: where word of it starts
+        // Where it is, for the journal of someone called to it (found again from the name when asked; not saved).
+        RE::FormID location = 0, marker = 0;
     };
 
     class BattleManager {
@@ -222,7 +224,18 @@ namespace IntelEngine {
          *  the player is least likely to see it, switched off: the script lets them fade in and sends them on.
          *  first: their number in the group that comes up together (0 picks where the group comes from).
          *  Returns JSON: {success, count, formIds, error} */
-        std::string ReinforceLine(const std::string& side, int first, int count, RE::Actor* player);
+        std::string ReinforceLine(const std::string& side, int first, int count, RE::Actor* player, int kind = 0);
+        // kind: 0 those who come up behind their own line; 1 a hidden force, out to one side of the other's line; 2 the
+        // side's champion, alone, from behind their own line.
+
+        /** Some of one side's living turn their coats (Battlefield::Turncoats): from now on they count, live and die
+         *  for the other side. The script changes their battle side and sets them on their old comrades.
+         *  Returns JSON: {count, formIds} */
+        std::string TurnCoats(const std::string& side);
+
+        /** Test hook: what the active battle has in store, said outright (champion: 0 none, 1 side A, 2 side B, 3
+         *  both; flank and turncoat: 0, 1 or 2). */
+        void SetTwists(int champion, int flank, int turncoat);
 
         /** Calculate mid-battle state for late-arriving player.
          *  Returns JSON: {soldiersPerSide, moraleLossA, moraleLossB} */
@@ -270,6 +283,31 @@ namespace IntelEngine {
          *  Returns JSON: {success, count, formIds, commander: [id] (with number 0), error} */
         std::string MusterLine(const std::string& side, int first, int count, RE::Actor* player);
 
+        /** The active battle is a skirmish: `size` a side (2 to 6), nobody held back, told and recorded as a clash of a
+         *  few and not as a battle. To be said before the lines are drawn up. (A brawl or a border skirmish used to
+         *  be made around the player: one band 800 units in front of their eyes, the other behind their back, both
+         *  in the same battle side, so that nothing but the first order to fight made them enemies.) */
+        void SetSkirmish(int size);
+
+        /** One person of a faction's soldiers made at a spot of the world around the player, switched off, in no
+         *  faction at all and starting nothing: somebody who comes for one man (an assassin). */
+        RE::Actor* RaiseLoner(const std::string& factionId, Battlefield::Vec at, float facingDeg, RE::Actor* player);
+
+        /** A spot to come from for somebody who is to walk up to `target` unseen: on ground that can be walked, out of
+         *  the player's sight or far off. False: there is none. */
+        bool PickApproach(RE::Actor* player, RE::Actor* target, Battlefield::Vec& at) const;
+
+        /** Takes an actor out of every faction they came with (their record's and those given since). */
+        static void StripFactions(RE::Actor* actor);
+
+        /** Where a band that comes for the player themselves can come from: out of doors, not in or by a town or a
+         *  house, from a spot the player does not see and that can be walked from.
+         *  Returns JSON: {ok, x, y, z, reason} */
+        std::string PickAmbush(RE::Actor* player) const;
+
+        /** The side enemies of the player are put into (Intel_BattleSideB): one band, hostile to nobody by itself. */
+        RE::TESFaction* EnemySide() const;
+
         /** The lines have met: from now on the battle can be won and lost. */
         void BeginFight();
         bool IsMustering() const;
@@ -289,7 +327,7 @@ namespace IntelEngine {
          *  Imperial Legion", put together in a script, came out as "The Imperial Legion" in the middle of a sentence
          *  (2026-11-20), and would again for any name the game already holds with a capital.
          *  what: see the function. a, b: faction ids. name: someone's name. number, other: counts. */
-        std::string Say(const std::string& what, const std::string& a, const std::string& b, const std::string& name, int number,
+        std::string Say(const std::string& asked, const std::string& a, const std::string& b, const std::string& name, int number,
                         int other) const;
 
         /** For SkyrimNet (decorator get_intelengine_battle_side): the name of the army this soldier stands in, when
@@ -302,6 +340,22 @@ namespace IntelEngine {
         /** The field of the active battle.
          *  Returns JSON: {set, x, y, z, axis, mustering, commanderA: [id], commanderB: [id]} */
         std::string FieldInfo() const;
+        /** For the dashboard: the battle on the field now (who, where, drawn up or fighting, how each side stands)
+         *  and the armies drawing up somewhere (who, where, how long before it is decided without the player).
+         *  Nothing of what a battle has in store. Any thread. */
+        nlohmann::json DashboardJson(float nowGameDays) const;
+        /** The gathering one of whose armies calls the player (they hold a rank with it: Ranks::Caller), for the
+         *  journal: {id, faction, place, location: [id], marker: [id]}; "{}" when nobody calls. */
+        std::string Call();
+        /** Where an army goes when the battle is over: a town's marker to march toward (Battlefield::MarchTo: home if
+         *  it is far enough, else the nearest town; the beaten never through the army that beat them). field: where
+         *  it was fought; away: from the other army toward this one. Null: no town to march to (another world). */
+        RE::TESObjectREFR* WayHome(const std::string& factionId, Battlefield::Vec field, Battlefield::Vec away, bool beaten, RE::FormID notTo);
+        /** The words of the call's objective in the journal, set on the quest (not kept by the game: said again after
+         *  a load). */
+        void SetCallText(const std::string& factionId, const std::string& place);
+        /** Which of two factions calls the player to its line, "" when neither. */
+        static std::string CallerOf(const std::string& factionA, const std::string& factionB);
 
         /** The side ("A" or "B") a political faction stands on in the active battle: the battle's first faction is
          *  side A (Intel_BattleSideA), the other side B. (3.8 put "the player's side" on A, but only on one of the two
@@ -406,6 +460,22 @@ namespace IntelEngine {
             bool unseen = false;             // the player has gone: nobody is watching
             std::string commanderFell;       // a side whose commander has just fallen, until the poll has said so
             float reserveAX = 0.f, reserveAY = 0.f, reserveBX = 0.f, reserveBY = 0.f;   // where the group now coming up comes from
+            // Who is still to be made of the group now being drawn up or brought up: rolled once for the whole
+            // group, made one a call (asking the list for one at a time cost more than making them: 0.5 to 0.85 ms).
+            std::vector<RE::TESBoundObject*> rolledA, rolledB;
+            // What it has in store (Battlefield::Plan), and what of that has happened.
+            Battlefield::Twists twists;
+            double fightBegan = 0.0;                    // real seconds
+            bool flankDone = false, turnDone = false, championCalledA = false, championCalledB = false;
+            RE::FormID championA = 0, championB = 0;
+            float flankX = 0.f, flankY = 0.f;           // where the hidden force breaks cover
+            std::string championFell, sprung, turning;  // said by the poll, once each
+            // Captains and champions of each side cut down by the player's own hand.
+            int playerSlewCaptainsA = 0, playerSlewCaptainsB = 0, playerSlewChampionsA = 0, playerSlewChampionsB = 0;
+            int lineSize = Battlefield::WaveSize(1);    // how many of a side are drawn up
+            int waves = Battlefield::kWaves;            // how many waves a side has in all
+            int lossPerSoldier = Battlefield::kLossSoldier;
+            bool skirmish = false;
         };
         /** The people a faction raises: `count` of its soldier template (its first ally's, the bandits', when its own
          *  yields nobody). */
@@ -420,7 +490,11 @@ namespace IntelEngine {
          *  at the muster). commander: the first of them leads the side. */
         std::vector<RE::Actor*> RaiseSoldiers(const std::string& factionId, RE::TESFaction* battleFaction,
                                               const std::vector<Battlefield::Vec>& spots, float facingDeg, float fallbackZ,
-                                              RE::Actor* player, bool standDown, bool commander);
+                                              RE::Actor* player, bool standDown, bool commander, bool ofABattle = true,
+                                              const std::vector<RE::TESBoundObject*>* who = nullptr, bool champion = false);
+        /** The next `count` of the group rolled for a side of the active battle (rolled now, `whole` of them, when
+         *  `first` is 0 or nothing is left). */
+        std::vector<RE::TESBoundObject*> NextOf(bool sideA, const std::string& factionId, int first, int count, int whole, RE::Actor* player);
 
         /** Resolve Intel_BattleSideA and Intel_BattleSideB factions from IntelEngine.esp.
          *  Returns {nullptr, nullptr} if ESP not found. */
@@ -436,7 +510,17 @@ namespace IntelEngine {
         mutable std::mutex mutex_;
         int nextBattleId_ = 1;
         std::atomic<bool> suppressBattleBounty_{false};  // set during active battle with player
+        // What the player owed each crime faction for violent crime when they took a side, and until when what has
+        // come on top is struck out again (StrikeBattleBounty). The game's thread only.
+        std::unordered_map<RE::FormID, float> bountyBefore_;
+        std::vector<RE::TESFaction*> crimeFactions_;     // every faction that keeps a bounty (read from the game's data once)
+        bool bountyWatched_ = false;
+        double bountyWatchUntil_ = 0.0;          // real seconds; 0: while the battle is fought
+        void SnapshotBounty();
+        void StrikeBattleBounty();
         std::atomic<double> quietUntil_{0.0};            // real seconds (steady clock): the aftermath of the last battle
+        std::string lastPlace_;                          // where the last battle was fought (spoken of after it is over)
+        mutable std::string lastPromotion_;              // the rank the last battle lifted the player to, until it has been said
 
         // Non-battle actors modified during battle (guards added to battle faction + teammate).
         // Tracked for reliable cleanup — ForEachLoadedActor misses unloaded actors.

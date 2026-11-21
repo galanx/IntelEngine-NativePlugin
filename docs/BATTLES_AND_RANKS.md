@@ -1,0 +1,173 @@
+# Battles, the ladder and the call to the line (4.0)
+
+How a battle comes about, how it is fought, what it leaves behind, and what the player gets out of standing in one.
+The rules are in two pure headers with their own checks (`Battlefield.h` / `BattlefieldCheck`, `Ranks.h` /
+`RanksCheck`); `BattleManager` applies them to the game, `IntelEngine_Battle.psc` runs the scene.
+
+3.8 put both armies down round the spot the player stood on, a tavern floor included, with the outcome already
+written; a battle was over in a minute and the player was told the result wherever they were. None of that is left.
+
+## 1. How a battle comes about
+
+- **Armies gather.** When the political dungeon master has two factions at war fight (`battle_result`,
+  `battle_scheduled`), nothing is fought yet: `AddPendingBattle` records a gathering near a named place (its
+  worldspace and hold with it) that stands for ten game hours. It is recorded and told as `battle_gathering`: the
+  holds hear that armies are drawing up before the day is out.
+- **The player comes near** (within 6,500 units, same worldspace, outdoors): the gathering becomes a battle on the
+  ground there, if there is ground for it.
+- **Nobody comes:** when the ten hours are up it is decided unseen, as the dungeon master wrote it (or by the
+  strength of the two sides), and told then. A player in that hold is told; everyone else hears it as talk.
+- Gatherings come back with the save (co-save record `IEPB`).
+- A brawl or a border skirmish between two factions is the same thing in small: `StartSkirmish`, two to six a side,
+  nobody held back, recorded as men of the two coming to blows and not as a battle.
+
+## 2. The field
+
+`BattleManager::PickField` looks for ground round the player: `Battlefield::Candidates` gives places up to 5,600
+units out, no nearer than 4,500 where the player is looking and 3,200 where they are not; each is tested on the game's own data: land height and water, a navmesh triangle under each
+end of both lines, no door within 1,500, nobody of the loaded people within 1,900, not inside a walled town. The two
+lines are drawn across the player's line of sight, so both are seen from the side.
+
+Nobody is drawn up in water: any water more than 12 units over the ground counts (`Battlefield::Wet`; it was 60, and
+a ford is shallower than that), and it is asked of every soldier's spot in both lines, not of the middles alone.
+Played 2026-11-21: the Legion stood knee-deep under the bridge at Honningbrew; the same gathering now draws up on
+the dry ground beside the meadery.
+
+Soldiers are made at their own spot in the line, disabled, and faded in by the script, one per call with a frame
+between: nobody appears where the player is looking from close by, and no frame makes more than one.
+Measured: one soldier costs 0.3 to 0.85 ms of the frame it is made in (the game's own making of an actor is 0.5 to
+0.8 of that); `PickField` 0.8 to 1.1 ms, once a battle. Both are over the half millisecond the mod holds itself to
+elsewhere, and both are single frames, never two in a row.
+
+## 3. Muster, the hail, the charge
+
+- The lines stand (`SetDontMove`, no aggression) while the player can still choose.
+- A captain of the nearer line calls to a player who comes within 1,500 units, in his own words (a SkyrimNet
+  narration), and a choice opens: stand with one side, the other, or stay out of it. Turning a side down costs a
+  little standing with it. `JoinBattle` in conversation does the same by talk.
+- A captain does not call over somebody his army knows as an officer of the other one (the third rank and up with
+  the enemy, and higher than with his own: `KnownOfficerOf`). He shouts at them instead, once (`warn_off`), and
+  nothing begins by it. Going over to the other side stays the player's own choice in their own captain's window.
+  (Played 2026-11-21: a Captain of the Legion walking to their line was greeted by the Stormcloak captain as a
+  stranger whose blade was welcome.)
+- The charge comes 45 seconds after the player has watched the lines (150 at most; 15 and 60 for a skirmish).
+  From the rank of Captain the line waits for the player's word.
+
+## 4. The fight
+
+- A soldier strikes at 0.35 of the game's damage and stands 1.75 times as much: a line holds for two to three
+  minutes instead of one.
+- Each army has reserves of its own (waves of 8, 5, 4, 3, 2). A wave comes up from behind its own line, from a
+  walkable point the player cannot see (`ReservePoints`); when there is no such point nobody comes.
+- Morale: a soldier lost costs 5, a captain 15, a champion 20; a side breaks at 25. The player's coming is worth
+  10 to the side they join, over and above a full heart (`kHeartMost` 110; capped at 100 it was worth nothing to
+  a side joined before the fight), and costs the other 5.
+- Both armies breaking between one look and the next (the looks are three seconds apart) is a battle fought out:
+  the side with more men standing keeps the field, with as many each the stouter heart, and only with both the
+  same is it drawn (`Battlefield::BrokeTogether`). Seven against five used to be called a standstill.
+- A battle that has gone on for ten minutes, or that the player has left behind (9,000 units for 25 seconds), is
+  decided as it stands (`Battlefield::Verdict`, which wants a clear lead).
+- The log says how it stood when it was decided: "Battle 1 is decided (ImperialFaction_victory): ImperialFaction
+  heart 45, 6 standing, wave 3; StormcloakFaction heart 25, 7 standing, wave 2".
+- The two battle sides are allied to themselves in the plugin file, and the soldiers of the player's side ignore
+  friendly hits (`TrustOwnSide`): a stray blow in the press is no assault. Before, one such blow turned the
+  soldier struck and his line on the player (335 times in three minutes, played with a heavy hand).
+- What happens in a battle is not the hold's business: what the player owes a hold for violent crime is noted when
+  they take a side, and what comes on top during the fight and for four minutes after is struck out again; guards
+  who came for it stand down (`StrikeBattleBounty`). Older debts, theft and trespass are untouched. Cutting down
+  one's own still costs renown and standing, and is told.
+- Kills are credited by the game's own record of who killed whom (`myKiller`; CommonLib's `GetKiller()` returns
+  nothing for someone dead).
+
+### What a battle may have in store (`Battlefield::Plan`, never in a skirmish)
+
+| | chance | what happens |
+|---|---|---|
+| A champion | 28% one side, 28% the other, 12% both | After 40 to 75 seconds of fighting a champion comes up from behind the line: three times a soldier's hardiness, nearly twice a soldier's force (0.6 of the game's damage; at full damage one champion cut down twelve in a minute and the battle was over in 69 seconds), named "Champion of the ...". Against the player's side, he goes for the player. Cutting one down is worth 200 gold and 12 renown; his fall costs his side 20 morale. |
+| A hidden force | 30% | After 30 to 70 seconds four more of one side break cover out to one side of the other's line. |
+| Turncoats | 16% | When a side's morale is down to 70 a third of its living (three at most) change sides, and it loses 10 more. They are called "Turncoat" from then on: they still wear their old side's armour. |
+
+A hidden force and turncoats in one battle leave the champions out. What is in store is never shown anywhere
+(not on the dashboard either): it is seen when it happens. `DebugTwists` forces it for a test.
+
+## 5. Afterwards
+
+- The beaten run, the winners walk off, the bodies lie for six game hours. Each army goes toward a town, by the
+  roads (`Battlefield::MarchTo`, `BattleManager::WayHome`): its home (the faction's `hold`) if that is at least
+  16,000 units off, else the nearest town that is; the beaten never through the army that beat them. The old
+  point 14,000 units off in a straight line is kept for where there is no town (another world): near Honningbrew
+  it lay in the mountain and nobody took a step.
+- Their travel orders are the battle's own. Core's sweep of stale packages asks `IntelEngine_Battle.HoldsActor`;
+  it used to release every soldier it saw on two rounds, who then stood where they were
+  (`RunPackageOwnershipCheck.py` holds every script that hands out travel packages to this).
+- Nobody is given the travel package they are already on (the game does not begin it anew): whoever comes up,
+  comes at a jog; whoever leaves, at a walk or a run (`PaceFor`).
+- Someone of the player's side who is still standing comes over (from anywhere on the field), says what he
+  thinks of it in his own words, and hands over the pay: `Battlefield::Pay`, raised by rank. Nothing is paid before
+  he has spoken.
+- Standing: the side fought for, the side fought against, soldiers of a side the player was not at war with,
+  a side turned down, walking away after taking a side.
+- The battle is recorded once, as it was fought, and word of it starts in the hold it was fought in. The player's
+  part is in the telling ("...was seen fighting for the Imperial Legion, and reportedly killed 7 of the other
+  side, their champion among them").
+
+## 6. The ladder (`Ranks.h`, co-save record `IERK`)
+
+What the player does for a faction earns renown with it (`Ranks::Worth`): a battle fought 6, won 6 more, each enemy
+cut down 1, a captain 6, a champion 12, a leader's life saved from an assassin 10, a service done 8. Walking away
+from a battle after taking a side costs 15, striking one's own side 4. Renown gives a rank; what the ranks are called
+depends on what kind of body the faction is.
+
+| renown | an army | a guild | a house |
+|---|---|---|---|
+| 10 | Auxiliary | Associate | Hired Blade |
+| 30 | Sworn Sword | Trusted Hand | Retainer |
+| 70 | Veteran | Veteran | Trusted Retainer |
+| 130 | Captain | Lieutenant | Sworn Captain |
+| 220 | Champion | Right Hand | Champion of the House |
+
+What a rank gives:
+
+- **From the first rank: the call to the line** (section 7).
+- Pay after a battle won: a quarter more with each rank.
+- From the second rank two soldiers keep by the player in a battle, from the fourth four.
+- From the fourth rank the line waits for the player's word to charge.
+- From the third rank the name is known beyond the faction: `political_state.json` carries `player_known`, and
+  every NPC's political awareness (prompt 0810) says what the player is talked of as. The faction's own people
+  know the whole record (`known_as`: "a Sworn Sword of the Imperial Legion: fought in 3 of their battles (2 won),
+  cut down 1 champion of their enemies").
+- A faction that counts the player an enemy honours no rank; the renown stays.
+
+## 7. The call to the line
+
+When armies gather and the player holds a rank with one of them, that faction calls its own: a journal entry
+"Called to the Line" with the objective "Stand with the Imperial Legion near Rorikstead before the battle is
+decided" and the place marked on the map (`BattleManager::Call`, `IntelEngine_Battle.psc` `TendCall`, the quest
+`IntelEngine_Call` built by `esp/EspBuilder`). With a rank on both sides the one the player stands higher with
+calls; with equal ranks neither does, and the choice is theirs.
+
+The journal says how it went: stood in the line, stood with the other side, came and took no side, walked away
+before it was over, the battle was decided without them, or the armies parted with nothing decided (their war
+ended first). Not coming costs nothing but the entry.
+
+Somebody who is already close by when the armies gather is called when they are drawn up (`CallAtMuster`), and the
+journal points at their side's commander.
+
+## 8. On the dashboard
+
+- **Politics, "Your Name":** each faction's view of the player: standing, rank on its ladder, renown and how
+  much is missing to the next rank, what the rank gives and what the next one adds, the record, and the sentence
+  its people know them by.
+- **Politics, "In the Field":** a battle being fought (drawn up or fighting, each side's morale and how many
+  stand, the player's side) and armies gathering (where, how long before it is decided without the player,
+  whether the player is called). Nothing of what a battle has in store.
+- **Politics, "Chronicle":** everything that happened between the factions in one list, newest first (the last 24).
+- **World:** the talk of the day the player has heard, the stories and quests they have taken on, what people
+  have asked of them, and those who follow them or once did. What has not reached the player stays hidden unless
+  "Show everything (spoilers)" is switched on.
+
+## 9. Test hooks (`IntelEngine_Battle.psc`)
+
+`StartBattleImmediate(a, b, 0)`, `DebugSkirmish(a, b, size)`, `DebugTwists(champion, flank, turncoat)`,
+`DebugDidFor(faction, times)` (a service done: 8 renown each), `DebugGathering(place, a, b)`,
+`DebugAssassination(targetFaction, attackerFaction)`.

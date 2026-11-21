@@ -17,6 +17,10 @@ const blank = () => ({ id: '', name: '', type: 'military', hold: 'Whiterun', sky
 const idFromName = name => { const words = name.replace(/[^A-Za-z0-9 ]/g, ' ').split(' ').filter(Boolean);
   const joined = words.map(w => w[0].toUpperCase() + w.slice(1)).join(''); return joined ? (/faction$/i.test(joined) ? joined : joined + 'Faction') : ''; };
 
+// Changes not saved yet outlive the page being left for another one: they used to be lost by a look at another tab.
+let kept = null;
+export const hasUnsavedFactions = () => !!kept;
+
 function Field({ label, hint, children }) {
   return (<div className="mb-2"><div className="text-[11px] text-gray-300 mb-0.5">{label}</div>{children}
     {hint && <div className="text-[10px] text-gray-500 leading-tight mt-0.5">{hint}</div>}</div>);
@@ -73,13 +77,20 @@ export default function FactionEditor({ sendAction, knownNpcs = [] }) {
     window.factionEditorResult = json => {
       let data; try { data = typeof json === 'string' ? JSON.parse(json) : json; } catch { return; }
       setBusy(false);
-      if (data.do === 'open') { setCatalog(data.catalog || {}); setFactions(data.factions || []); setDirty(false); return; }
+      if (data.do === 'open') {
+        setCatalog(data.catalog || {});
+        if (kept) { setFactions(kept.factions); setSelected(Math.min(kept.selected, kept.factions.length - 1)); setDirty(true); }
+        else { setFactions(data.factions || []); setDirty(false); }
+        return;
+      }
       setStatus({ ok: !!data.ok, error: data.error || '', warnings: data.warnings || [] });
       if (data.ok) { setFactions(data.factions || []); setDirty(false); }
     };
     sendAction('factionEditor', { do: 'open' });
     return () => { delete window.factionEditorResult; };
   }, [sendAction]);
+
+  useEffect(() => { if (factions) kept = dirty ? { factions, selected } : null; }, [factions, selected, dirty]);
 
   const npcOptions = useMemo(() => knownNpcs.map(name => ({ id: name })), [knownNpcs]);
   if (!factions || !catalog) return <div className="text-xs text-gray-500 py-2">Reading your load order{'…'}</div>;
@@ -93,7 +104,7 @@ export default function FactionEditor({ sendAction, knownNpcs = [] }) {
     setSelected(s => Math.max(0, s - 1)); setDirty(true); setStatus(null); };
   const save = () => { setBusy(true); setStatus(null);
     sendAction('factionEditor', { do: 'save', factions: factions.map(({ isNew, idTouched, ...f }) => f) }); };
-  const discard = () => { setBusy(true); setStatus(null); sendAction('factionEditor', { do: 'open' }); };
+  const discard = () => { kept = null; setBusy(true); setStatus(null); sendAction('factionEditor', { do: 'open' }); };
   const others = factions.filter((_, i) => i !== selected && factions[i].id);
   const toggle = (key, id) => change({ [key]: current[key].includes(id) ? current[key].filter(x => x !== id) : [...current[key], id],
     ...(key === 'rivals' ? { allies: current.allies.filter(x => x !== id) } : { rivals: current.rivals.filter(x => x !== id) }) });
@@ -103,7 +114,7 @@ export default function FactionEditor({ sendAction, knownNpcs = [] }) {
     <div className="flex items-center gap-2 mb-2">
       <button type="button" className={pill(dirty)} disabled={!dirty || busy} onClick={save}>{busy ? 'Working…' : 'Save'}</button>
       <button type="button" className={pill(false)} disabled={!dirty || busy} onClick={discard}>Discard changes</button>
-      <span className="text-[10px] text-gray-500">{dirty ? 'Not saved yet.' : 'Saved factions are in use at once. The old file is kept as factions.yaml.bak.'}</span>
+      <span className="text-[10px] text-gray-500">{dirty ? 'Not saved yet. Your changes are kept while you look at other pages.' : 'Saved factions are in use at once. The old file is kept as factions.yaml.bak.'}</span>
     </div>
     {status && !status.ok && <div className="text-[11px] text-red-400 mb-2">Not saved: {status.error}</div>}
     {status && status.ok && <div className="text-[11px] text-green-400 mb-2">Saved.</div>}
@@ -111,11 +122,12 @@ export default function FactionEditor({ sendAction, knownNpcs = [] }) {
 
     <div className="flex gap-2">
       <div className="w-56 shrink-0 space-y-1">
-        {factions.map((f, i) => (<div key={i} onClick={() => setSelected(i)}
-          className={`slot-card rounded px-2 py-1 cursor-pointer ${i === selected ? 'border-amber-400/50' : ''}`}>
-          <div className="text-xs text-gray-200 truncate">{f.name || 'New faction'}</div>
+        {/* Buttons, so that the keyboard and the pad can choose one too (they were plain boxes: mouse only). */}
+        {factions.map((f, i) => (<button type="button" key={i} onClick={() => setSelected(i)} aria-pressed={i === selected}
+          className={`slot-card rounded px-2 py-1 cursor-pointer block w-full text-left ${i === selected ? 'border-amber-400/50' : ''}`}>
+          <div className="text-xs text-gray-200 truncate">{f.name || 'New faction'}{f.isNew ? <span className="text-amber-300"> {'·'} new</span> : null}</div>
           <div className="text-[10px] text-gray-500 truncate">{TYPE_LABELS[f.type] || f.type} {'·'} {f.hold}</div>
-        </div>))}
+        </button>))}
         <button type="button" className={pill(false) + ' w-full'} onClick={add}>+ Add a faction</button>
       </div>
 

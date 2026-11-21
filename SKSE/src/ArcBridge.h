@@ -185,6 +185,9 @@ namespace IntelEngine {
         /** Whether a tale is being written now. */
         bool Writing() const { return m_taleBusy.load(); }
 
+        /** For the dashboard: the stories the player has taken on (title, who asked, where, the journal's log so far,
+         *  the days left) and how many are on their way. Never what is behind one. JSON. */
+        std::string DashboardJson() const;
         void Save(SKSE::SerializationInterface* intfc);
         void Load(SKSE::SerializationInterface* intfc, std::uint32_t version, std::uint32_t length);
         void Revert();

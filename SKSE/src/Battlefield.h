@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <vector>
 
 namespace IntelEngine::Battlefield {
@@ -99,6 +100,10 @@ namespace IntelEngine::Battlefield {
     // ---- how they stand
 
     inline constexpr float kLineGap = 1400.f;           // from one front rank to the other
+    // Water this far above the ground is water to stand in: no line is drawn up there. (It was sixty: a ford is
+    // shallower than that, and the Legion stood knee-deep under the bridge at Honningbrew, 2026-11-21.)
+    inline constexpr float kWetAbove = 12.f;
+    inline constexpr bool Wet(float water, float ground) { return water > ground + kWetAbove && water < 100000.f; }
     inline constexpr float kFile = 115.f;               // shoulder to shoulder
     inline constexpr float kRank = 150.f;               // one rank behind the other
     inline constexpr int kFront = 6;                    // soldiers in a rank
@@ -215,6 +220,11 @@ namespace IntelEngine::Battlefield {
     inline constexpr int kBreakAt = 25;
     inline constexpr int kPlayerJoins = 10;         // what the player's coming is worth to a side
     inline constexpr int kPlayerJoinsEnemy = 5;     // and costs the other
+    // A heart can be fuller than full by what the player's coming is worth. (It was capped at 100: whoever took a
+    // side while the lines still stood, which is when one is asked, gave that side nothing. Played 2026-11-20: the
+    // player's side and the other broke in the same moment, at 25 each.)
+    inline constexpr int kHeartFull = 100;
+    inline constexpr int kHeartMost = kHeartFull + kPlayerJoins;
     // Soldiers of a battle strike each other, and the player, with this much of their usual force. At full force two
     // lines of the game's soldiers cut each other down in a minute (watched 2026-11-20: forty-four people, sixty
     // seconds); a battle should last long enough to be walked into, fought in and turned.
@@ -230,6 +240,146 @@ namespace IntelEngine::Battlefield {
         if (moraleA >= moraleB + 25) return 1;
         if (moraleB >= moraleA + 25) return 2;
         return 0;
+    }
+
+    // Both armies broke between one look and the next (the looks are three seconds apart, and two lines that wear
+    // each other down evenly lose heart evenly). That battle was fought out: whoever has more men standing keeps the
+    // field, with as many each the stouter heart, and only with both the same is it nobody's. (It went by Verdict,
+    // which wants a clear lead: seven standing against five was called a standstill, and both walked off.)
+    inline constexpr int BrokeTogether(int aliveA, int aliveB, int moraleA, int moraleB) {
+        if (aliveA != aliveB) return aliveA > aliveB ? 1 : 2;
+        if (moraleA != moraleB) return moraleA > moraleB ? 1 : 2;
+        return 0;
+    }
+
+    // ---- what a battle has in store
+
+    // Not every battle is two lines wearing each other down. Some armies bring a champion; some keep a second force
+    // out of sight on the flank; in some, men turn their coats when it goes badly. Which, is settled when the armies
+    // gather (from the battle's own number, so a save plays it one way) and is nobody's secret for ever: a champion
+    // is seen coming, the hidden force breaks cover with a shout, and whoever listens to the talk before a battle may
+    // have heard of either. A skirmish is what it looks like.
+    struct Twists {
+        int champion = 0;           // which side fields a champion: 0 none, 1 side A, 2 side B, 3 both
+        int flank = 0;              // which side has a second force hidden on the flank
+        int turncoat = 0;           // which side some men will desert, to fight for the other
+        float flankAfter = 0.f;     // seconds of fighting before the hidden force breaks cover
+        float championAfter = 0.f;  // seconds of fighting before a champion comes up
+    };
+
+    inline constexpr std::uint32_t Scramble(std::uint32_t x) {
+        x ^= x >> 16;
+        x *= 0x7feb352dU;
+        x ^= x >> 15;
+        x *= 0x846ca68bU;
+        x ^= x >> 16;
+        return x;
+    }
+
+    inline Twists Plan(std::uint32_t seed, bool skirmish) {
+        Twists t;
+        if (skirmish) return t;
+        const std::uint32_t a = Scramble(seed ^ 0x51ED270Bu), b = Scramble(seed ^ 0xC2B2AE35u), c = Scramble(seed ^ 0x27D4EB2Fu);
+        const std::uint32_t champion = a % 100u;
+        t.champion = champion < 28u ? 1 : champion < 56u ? 2 : champion < 68u ? 3 : 0;
+        t.championAfter = 40.f + static_cast<float>((a >> 12) % 35u);
+        if (b % 100u < 30u) {
+            t.flank = ((b >> 8) & 1u) ? 1 : 2;
+            t.flankAfter = 30.f + static_cast<float>((b >> 12) % 40u);
+        }
+        if (c % 100u < 16u) t.turncoat = ((c >> 8) & 1u) ? 1 : 2;
+        // Not everything at once: where there is a hidden force and treachery too, nobody brings a champion besides.
+        if (t.flank != 0 && t.turncoat != 0) t.champion = 0;
+        return t;
+    }
+
+    inline constexpr int kFlankSize = 4;                // the hidden force
+    inline constexpr int kTurncoatsMost = 3;            // who change sides, at most
+    inline constexpr int kTurnAtMorale = 70;            // they do it when their side's heart has sunk to this
+    inline constexpr int kLossChampion = 20;            // what a champion's fall costs their side
+    inline constexpr int kLossBetrayed = 10;            // and what being betrayed costs
+    // A champion stands three times what a soldier does and strikes harder (kChampionForce). They come up by themselves when
+    // the fighting has gone on for a while (Twists::championAfter). (First they came with their side's second wave:
+    // a side that was winning never called its second wave, so the champion of the stronger army never came.)
+    inline constexpr float kChampionHardiness = 3.0f;
+    // What a champion strikes with: nearly twice a soldier's force (kBlowForce), not the game's full force. (At full
+    // force, close on three times a soldier's, one champion decided a battle by himself: played 2026-11-21, twelve of
+    // the Legion cut down in the minute after he came up, none of his own side lost, over in sixty-nine seconds.)
+    inline constexpr float kChampionForce = 0.6f;
+    inline constexpr int kChampionPay = 200;            // what the winning side pays for an enemy champion cut down
+    // How many of a side's living turn their coats: a third of them, three at most, and never so many that none is left.
+    inline constexpr int Turncoats(int alive) {
+        const int third = alive / 3;
+        const int most = third > kTurncoatsMost ? kTurncoatsMost : third;
+        return alive - most < 2 ? 0 : most;
+    }
+
+    // Where a hidden force breaks cover: out to one side of the line it falls on (the other side's), best first, by
+    // the same rule as those who come up from behind: never close to the player, never before their eyes unless far.
+    inline std::vector<Vec> FlankPoints(const Line& enemy, Vec player, float playerFacing) {
+        const Vec tries[] = {Along(enemy.centre, enemy.facing + 90.f, 2400.f), Along(enemy.centre, enemy.facing - 90.f, 2400.f),
+                             Along(enemy.centre, enemy.facing + 90.f, 3200.f), Along(enemy.centre, enemy.facing - 90.f, 3200.f),
+                             Along(Along(enemy.centre, enemy.facing, -1200.f), enemy.facing + 90.f, 2400.f),
+                             Along(Along(enemy.centre, enemy.facing, -1200.f), enemy.facing - 90.f, 2400.f)};
+        struct Scored {
+            Vec at;
+            float score;
+        };
+        std::vector<Scored> scored;
+        for (const Vec& at : tries) {
+            const float distance = Dist(player, at);
+            if (distance < kReserveClear || distance > 7600.f) continue;
+            const bool inView = Apart(Bearing(player, at), playerFacing) <= kViewHalfAngle;
+            float score = (std::min)(distance, 5000.f);
+            if (inView && distance < kNearInView) score -= 3000.f;
+            scored.push_back({at, score});
+        }
+        std::stable_sort(scored.begin(), scored.end(), [](const Scored& l, const Scored& r) { return l.score > r.score; });
+        std::vector<Vec> out;
+        for (const auto& s : scored) out.push_back(s.at);
+        return out;
+    }
+
+    // ---- where an army goes when it is over
+
+    // The beaten run, the winners walk off: toward a town, by the roads the game's people travel on. (They were sent to
+    // a point fourteen thousand units off in a straight line. On the plain by Whiterun that point can be walked to; by
+    // Honningbrew it lies in the mountain, and with no way to it nobody took a step: fifteen soldiers of both armies
+    // stood where the fighting had stopped, minutes after it, the beaten among the winners. Played 2026-11-21.)
+    // Home if it is far enough to march to; else the nearest town that is. The beaten never run through the army
+    // that beat them: for them a town on the far side of the enemy comes last.
+    struct Town {
+        Vec at;
+        std::uint32_t id = 0;       // the town's marker
+        bool home = false;          // of the army in question
+    };
+    inline constexpr float kMarchFar = 16000.f;         // nearer than this is no marching off: they would arrive in view
+    // field: where the battle was. away: from the other army toward this one (need not be of length one).
+    // Returns the place in the list, -1 when there is none to march to.
+    inline int MarchTo(const std::vector<Town>& towns, Vec field, Vec away, bool beaten, std::uint32_t notTo) {
+        const float awayLength = std::sqrt(away.x * away.x + away.y * away.y);
+        int best = -1;
+        float bestScore = 0.f;
+        for (std::size_t i = 0; i < towns.size(); ++i) {
+            const Town& town = towns[i];
+            if (town.id == 0 || town.id == notTo) continue;
+            const float distance = Dist(field, town.at);
+            if (distance < kMarchFar) continue;
+            float score = distance;
+            // Through the enemy: more than a hundred degrees off the way that leads away from them.
+            bool through = false;
+            if (awayLength > 0.f) {
+                const float dot = ((town.at.x - field.x) * away.x + (town.at.y - field.y) * away.y) / (distance * awayLength);
+                through = dot < -0.1736f;
+            }
+            if (beaten && through) score += 400000.f;
+            else if (town.home) score -= 200000.f;
+            if (best < 0 || score < bestScore) {
+                best = static_cast<int>(i);
+                bestScore = score;
+            }
+        }
+        return best;
     }
 
     // ---- the player

@@ -701,6 +701,7 @@ war_allowed:
         float weight = 0.5f;
         if (eventType == "war_declaration" || eventType == "surrender" || eventType == "peace_treaty" || eventType == "war_ended") weight = 0.95f;
         else if (eventType == "battle_result" || eventType == "battle_scheduled" || eventType == "battle_gathering") weight = 0.8f;
+        else if (eventType == "assassination" || eventType == "leader_death") weight = 0.9f;     // a leader dead: the land hears of it
         else if (eventType == "alliance_proposal" || eventType == "mutual_defense_pact" || eventType == "political_marriage" ||
                  eventType == "assassination_attempt") weight = 0.75f;
         else if (eventType == "espionage" || eventType == "sabotage") weight = 0.45f;   // whispered, not cried out
@@ -780,6 +781,7 @@ war_allowed:
     template <typename ResolveFn>
     static nlohmann::json BuildFactionJsonCore(const FactionConfig& f, ResolveFn resolveLeader) {
         nlohmann::json aliveLeaders = nlohmann::json::array();
+        nlohmann::json fallenLeaders = nlohmann::json::array();
         int resolved = 0;
         int permanentlyDead = 0;
         for (const auto& leaderName : f.leaderNames) {
@@ -792,6 +794,7 @@ war_allowed:
             ++resolved;
             if (liveness.second) {
                 ++permanentlyDead;
+                fallenLeaders.push_back(leaderName);
                 continue;
             }
             aliveLeaders.push_back(leaderName);
@@ -810,6 +813,7 @@ war_allowed:
         fj["hold"] = f.hold;
         if (!f.skyrimFactionId.empty()) fj["skyrim_faction_id"] = f.skyrimFactionId;
         fj["leaders"] = aliveLeaders;
+        if (!fallenLeaders.empty()) fj["fallen_leaders"] = fallenLeaders;
         return fj;
     }
 
@@ -817,12 +821,15 @@ war_allowed:
         // Engine-touch variant: resolves liveness via NPCIndex + Actor methods.
         // Essential NPCs can't permanently die (bleedout ≠ death), so never exclude them.
         auto* npcIndex = NPCIndex::GetSingleton();
-        return BuildFactionJsonCore(f, [npcIndex](const std::string& name) -> std::pair<bool, bool> {
+        return BuildFactionJsonCore(f, [self = GetSingleton(), &f, npcIndex](const std::string& name) -> std::pair<bool, bool> {
+            if (self->IsFallen(f.id, name)) return {true, true};
             auto* actor = npcIndex
                 ? npcIndex->GetActorFromFormId(npcIndex->FindFactionLeaderFormId(name))
                 : nullptr;
             if (!actor) return {false, false};
-            return {true, actor->IsDead() && !actor->IsEssential()};
+            const bool dead = actor->IsDead() && !actor->IsEssential();
+            if (dead) self->MarkFallen(f.id, name, name);
+            return {true, dead};
         });
     }
 
@@ -1013,6 +1020,13 @@ war_allowed:
                     float dist = std::sqrt(dx * dx + dy * dy + dz * dz);
                     if (dist < NEARBY_LEADER_DISTANCE) e.nearby = true;
                 }
+            }
+            // Dead for good is remembered (see MarkFallen), and whoever is remembered as dead is dead here too.
+            if (e.confirmedDead) {
+                MarkFallen(info.factionId, info.name, leader ? leader->GetDisplayFullName() : info.name);
+            } else if (IsFallen(info.factionId, info.name)) {
+                e.wasResolved = true;
+                e.confirmedDead = true;
             }
             snap.leaders.push_back(std::move(e));
         }
@@ -1254,6 +1268,8 @@ war_allowed:
             sj["standing"] = ps.standing;
             sj["status"] = GetRelationStatus(ps.standing);
             if (!ps.title.empty()) sj["title"] = ps.title;
+            if (const int rank = PlayerRank(ps.factionId); rank > 0) sj["rank"] = RankTitle(ps.factionId, rank);
+            if (const auto known = PlayerKnownAs(ps.factionId); !known.empty()) sj["known_as"] = known;
             standingsJson[ps.factionId] = sj;
         }
         state["player_standings"] = standingsJson;
@@ -1265,6 +1281,7 @@ war_allowed:
             auto* memDB = MemoryDB::GetSingleton();
             nlohmann::json leadersJson = nlohmann::json::array();
             for (const auto& e : snap.leaders) {
+                if (e.confirmedDead) continue;       // the dead are named with their faction (fallen_leaders), not among those who act
                 nlohmann::json leaderEntry;
                 leaderEntry["name"] = e.name;
                 leaderEntry["faction"] = e.factionId;
@@ -1363,6 +1380,34 @@ war_allowed:
             }
             dashboard["factions"] = factionsJson;
         }
+        // What the page says of each beside its name: the story of the game that binds it (no war with it till that
+        // is over), and what its ranks are called. (Asked outside the lock above: both take locks of their own.)
+        if (dashboard.contains("factions")) {
+            for (auto& fj : dashboard["factions"]) {
+                const auto id = fj.value("id", std::string());
+                if (const auto story = BoundBy(id); !story.empty()) fj["bound_by"] = story;
+                nlohmann::json titles = nlohmann::json::array();
+                for (int rank = 1; rank < Ranks::kRanks; ++rank) titles.push_back(RankTitle(id, rank));
+                fj["rank_titles"] = std::move(titles);
+            }
+        }
+        {
+            nlohmann::json needed = nlohmann::json::array();
+            for (int rank = 1; rank < Ranks::kRanks; ++rank) needed.push_back(Ranks::kNeeded[rank]);
+            dashboard["rank_needed"] = std::move(needed);
+            // What each rank gives, from the rules themselves (Ranks.h), so the page never says otherwise.
+            nlohmann::json perks = nlohmann::json::array();
+            for (int rank = 1; rank < Ranks::kRanks; ++rank) {
+                nlohmann::json p;
+                p["pay"] = Ranks::Pay(100, rank) - 100;
+                p["file"] = Ranks::FileSize(rank);
+                p["word"] = Ranks::GivesTheWord(rank);
+                p["famous"] = Ranks::Famous(rank);
+                p["called"] = Ranks::Called(rank);
+                perks.push_back(std::move(p));
+            }
+            dashboard["rank_perks"] = std::move(perks);
+        }
 
         auto allRelations = db->GetAllRelations();
         nlohmann::json relationsJson = nlohmann::json::array();
@@ -1378,7 +1423,8 @@ war_allowed:
         }
         dashboard["relations"] = relationsJson;
 
-        auto recentEvents = db->GetRecentEvents(10);
+        // (Ten used to be all the page could show: a battle day filled it and the war's beginning was gone.)
+        auto recentEvents = db->GetRecentEvents(24);
         nlohmann::json eventsJson = nlohmann::json::array();
         for (const auto& e : recentEvents) {
             nlohmann::json ej;
@@ -1440,6 +1486,15 @@ war_allowed:
             standingsJson.push_back(sj);
         }
         dashboard["player_standings"] = standingsJson;
+        dashboard["player_ranks"] = RanksJson();
+
+        // The battle on the field and the armies drawing up; how the game's own civil war stands.
+        {
+            auto* calendar = RE::Calendar::GetSingleton();
+            dashboard["field"] = BattleManager::GetSingleton()->DashboardJson(calendar ? calendar->GetCurrentGameTime() : 0.f);
+        }
+        dashboard["civil_war"] = static_cast<int>(vanillaWar_.load());
+        dashboard["civil_war_side"] = vanillaAllegiance_.load();
 
         dashboard["enabled"] = enabled_.load();
         dashboard["tick_hours"] = tickIntervalHours_.load();
@@ -1660,6 +1715,13 @@ war_allowed:
             eventType != "border_skirmish") {
             return "";
         }
+        // Nothing is shown of a faction that is no more (its leaders all dead).
+        {
+            std::lock_guard<std::mutex> lock(configMutex_);
+            for (const auto& f : factions_) {
+                if ((f.id == factionA || f.id == factionB) && FactionToJson(f).empty()) return "";
+            }
+        }
 
         // Guard: no active battle (shared soldier factions would conflict)
         if (BattleManager::GetSingleton()->IsBattleActive()) {
@@ -1701,10 +1763,19 @@ war_allowed:
         // Determine attacker/target based on which faction's hold the player is in
         std::string attackerFaction, targetFaction;
         bool matchedHold = false;
+        // A faction's `hold` is its capital's name ("Markarth"); the player's is the hold's ("The Reach"). Compared
+        // as written they were never the same, and nothing was ever shown because the player was in a faction's
+        // hold: only because one of its leaders happened to stand within 5,000 units.
+        const auto inHoldOf = [&playerHold](const std::optional<FactionConfig>& cfg) {
+            if (!cfg || cfg->hold.empty()) return false;
+            if (cfg->hold == playerHold) return true;
+            const auto theirs = RumorBridge::HoldByName(cfg->hold);
+            return theirs != Rumors::NoHold && theirs == RumorBridge::HoldByName(playerHold);
+        };
 
         // For assassination: factionA attacks factionB
         if (eventType == "assassination_attempt") {
-            if (cfgB && !cfgB->hold.empty() && playerHold == cfgB->hold) {
+            if (inHoldOf(cfgB)) {
                 attackerFaction = factionA;
                 targetFaction = factionB;
                 matchedHold = true;
@@ -1712,11 +1783,11 @@ war_allowed:
         }
         // For brawl/border_skirmish: either side's hold works
         else if (eventType == "brawl" || eventType == "border_skirmish") {
-            if (cfgB && !cfgB->hold.empty() && playerHold == cfgB->hold) {
+            if (inHoldOf(cfgB)) {
                 attackerFaction = factionA;
                 targetFaction = factionB;
                 matchedHold = true;
-            } else if (cfgA && !cfgA->hold.empty() && playerHold == cfgA->hold) {
+            } else if (inHoldOf(cfgA)) {
                 attackerFaction = factionB;
                 targetFaction = factionA;
                 matchedHold = true;
@@ -1795,6 +1866,374 @@ war_allowed:
                      spawnDefenders ? ", " + std::to_string(defenderCount) + " defenders" : "");
 
         return result.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
+    }
+
+    Ranks::Record FactionPolitics::PlayerRecord(const std::string& factionId) const {
+        std::lock_guard<std::mutex> lock(ranksMutex_);
+        const auto it = ranks_.find(factionId);
+        return it == ranks_.end() ? Ranks::Record{} : it->second;
+    }
+
+    int FactionPolitics::PlayerRank(const std::string& factionId) {
+        const auto record = PlayerRecord(factionId);
+        if (record.renown <= 0) return 0;
+        return Ranks::Honoured(record.renown, GetPlayerStanding(factionId), -40);
+    }
+
+    std::string FactionPolitics::RankTitle(const std::string& factionId, int rank) const {
+        const auto faction = GetFaction(factionId);
+        return Ranks::Title(Ranks::KindOf(faction ? faction->type : std::string()), rank);
+    }
+
+    int FactionPolitics::EarnRenown(const std::string& factionId, Ranks::Deed deed, int times) {
+        if (factionId.empty() || times <= 0 || !GetFaction(factionId)) return 0;
+        int before = 0, after = 0, renown = 0;
+        {
+            std::lock_guard<std::mutex> lock(ranksMutex_);
+            auto& record = ranks_[factionId];
+            before = Ranks::RankOf(record.renown);
+            Ranks::Earn(record, deed, times);
+            after = Ranks::RankOf(record.renown);
+            renown = record.renown;
+        }
+        if (after > before) {
+            logger::info("Politics: the player rises to {} with {} (renown {})", RankTitle(factionId, after), factionId, renown);
+            return after;
+        }
+        return 0;
+    }
+
+    std::string FactionPolitics::PlayerKnownAs(const std::string& factionId) {
+        const auto faction = GetFaction(factionId);
+        if (!faction) return {};
+        const std::string name = faction->name;
+        const std::string the = (name.rfind("The ", 0) == 0 || name.rfind("the ", 0) == 0) ? "the " + name.substr(4) : "the " + name;
+        return Ranks::KnownAs(PlayerRecord(factionId), PlayerRank(factionId), Ranks::KindOf(faction->type), the);
+    }
+
+    nlohmann::json FactionPolitics::RanksJson() {
+        Ranks::Book book;
+        {
+            std::lock_guard<std::mutex> lock(ranksMutex_);
+            book = ranks_;
+        }
+        nlohmann::json out = nlohmann::json::array();
+        for (const auto& [factionId, r] : book) {
+            const auto faction = GetFaction(factionId);
+            if (!faction) continue;
+            const int rank = PlayerRank(factionId);
+            nlohmann::json entry;
+            entry["faction"] = factionId;
+            entry["name"] = faction->name;
+            entry["rank"] = rank;
+            entry["title"] = RankTitle(factionId, rank);
+            entry["earned_rank"] = Ranks::RankOf(r.renown);
+            entry["earned_title"] = RankTitle(factionId, Ranks::RankOf(r.renown));
+            entry["renown"] = r.renown;
+            entry["to_next"] = Ranks::ToNext(r.renown);
+            entry["next_title"] = RankTitle(factionId, Ranks::RankOf(r.renown) + 1);
+            entry["battles"] = r.battles;
+            entry["won"] = r.won;
+            entry["kills"] = r.kills;
+            entry["champions"] = r.champions;
+            entry["captains"] = r.captains;
+            entry["saved"] = r.saved;
+            entry["quests"] = r.quests;
+            entry["deserted"] = r.deserted;
+            entry["known_as"] = PlayerKnownAs(factionId);
+            out.push_back(entry);
+        }
+        return out;
+    }
+
+    void FactionPolitics::SaveRanks(SKSE::SerializationInterface* intfc) const {
+        std::vector<std::uint8_t> bytes;
+        {
+            std::lock_guard<std::mutex> lock(ranksMutex_);
+            bytes = Ranks::Serialize(ranks_);
+        }
+        if (!intfc->OpenRecord(Ranks::kRecordType, Ranks::kRecordVersion)) {
+            logger::error("Politics: could not open the co-save record of the ladder");
+            return;
+        }
+        intfc->WriteRecordData(bytes.data(), static_cast<std::uint32_t>(bytes.size()));
+    }
+
+    void FactionPolitics::LoadRanks(SKSE::SerializationInterface* intfc, std::uint32_t version, std::uint32_t length) {
+        if (version != Ranks::kRecordVersion || length > (1u << 16)) {
+            logger::warn("Politics: skipping a co-save record of the ladder of version {} ({} bytes)", version, length);
+            return;
+        }
+        std::vector<std::uint8_t> bytes(length);
+        if (length > 0 && intfc->ReadRecordData(bytes.data(), length) != length) {
+            logger::warn("Politics: the co-save record of the ladder is short: nothing is known of what the player has done");
+            return;
+        }
+        std::lock_guard<std::mutex> lock(ranksMutex_);
+        if (!Ranks::Deserialize(bytes, ranks_)) {
+            logger::warn("Politics: the co-save record of the ladder cannot be read");
+            return;
+        }
+        logger::info("Politics: what the player has done for {} faction(s) comes back with the save", ranks_.size());
+    }
+
+    void FactionPolitics::ForgetRanks() {
+        std::lock_guard<std::mutex> lock(ranksMutex_);
+        ranks_.clear();
+    }
+
+    bool FactionPolitics::IsFallen(const std::string& factionId, const std::string& leaderName) const {
+        std::lock_guard<std::mutex> lock(fallenMutex_);
+        return fallen_.count(factionId + "|" + leaderName) > 0;
+    }
+
+    bool FactionPolitics::MarkFallen(const std::string& factionId, const std::string& leaderName, const std::string& shownName) {
+        std::lock_guard<std::mutex> lock(fallenMutex_);
+        if (!fallen_.insert(factionId + "|" + leaderName).second) return false;
+        fallenToTell_.emplace_back(factionId, shownName.empty() ? leaderName : shownName);
+        logger::info("Politics: {} of {} is dead, and is remembered as that", leaderName, factionId);
+        return true;
+    }
+
+    int FactionPolitics::AnnounceFallen(float gameTime) {
+        std::vector<std::pair<std::string, std::string>> tell;
+        {
+            std::lock_guard<std::mutex> lock(fallenMutex_);
+            tell.swap(fallenToTell_);
+        }
+        if (tell.empty()) return 0;
+        auto* db = PoliticalDB::GetSingleton();
+        const auto recent = db && db->IsReady() ? db->GetRecentEvents(20) : std::vector<FactionEvent>{};
+        int told = 0;
+        for (const auto& [factionId, name] : tell) {
+            // A murder that was seen has been told already, with who is thought to be behind it.
+            bool toldAlready = false;
+            for (const auto& e : recent) {
+                if (e.eventType == "assassination" && e.factionB == factionId && gameTime - e.gameTime < 2.0f) toldAlready = true;
+            }
+            if (toldAlready) continue;
+            const std::string faction = GetFactionDisplayName(factionId);
+            const std::string theirs = (faction.rfind("The ", 0) == 0 || faction.rfind("the ", 0) == 0) ? "the " + faction.substr(4) : "the " + faction;
+            if (RecordPoliticalEvent(factionId, "", "leader_death", name + " of " + theirs + " is dead.", 0, gameTime) >= 0) ++told;
+        }
+        return told;
+    }
+
+    bool FactionPolitics::IsDisbanded(const std::string& factionId) {
+        if (factionId.empty()) return false;
+        std::lock_guard<std::mutex> lock(configMutex_);
+        for (const auto& f : factions_) {
+            if (f.id == factionId) return !f.leaderNames.empty() && FactionToJson(f).empty();
+        }
+        return false;
+    }
+
+    void FactionPolitics::ForgetFallen() {
+        std::lock_guard<std::mutex> lock(fallenMutex_);
+        fallen_.clear();
+        fallenToTell_.clear();
+        lastDriftTime_.store(0.0f);
+    }
+
+    void FactionPolitics::Save(SKSE::SerializationInterface* intfc) const {
+        std::vector<std::string> fallen;
+        {
+            std::lock_guard<std::mutex> lock(fallenMutex_);
+            fallen.assign(fallen_.begin(), fallen_.end());
+        }
+        if (!intfc->OpenRecord(kFallenLeadersRecord, 1)) {
+            logger::error("Politics: could not open the co-save record of the fallen");
+            return;
+        }
+        const auto count = static_cast<std::uint32_t>(fallen.size());
+        intfc->WriteRecordData(&count, sizeof(count));
+        for (const auto& key : fallen) {
+            const auto size = static_cast<std::uint32_t>(key.size());
+            intfc->WriteRecordData(&size, sizeof(size));
+            if (size) intfc->WriteRecordData(key.data(), size);
+        }
+    }
+
+    void FactionPolitics::Load(SKSE::SerializationInterface* intfc, std::uint32_t version, std::uint32_t length) {
+        if (version != 1 || length > (1u << 16)) {
+            logger::warn("Politics: skipping a co-save record of the fallen of version {} ({} bytes)", version, length);
+            return;
+        }
+        std::vector<std::uint8_t> bytes(length);
+        if (length > 0 && intfc->ReadRecordData(bytes.data(), length) != length) {
+            logger::warn("Politics: the co-save record of the fallen is short: nobody is remembered as dead");
+            return;
+        }
+        std::size_t at = 0;
+        const auto get32 = [&bytes, &at](std::uint32_t& v) {
+            if (at + sizeof(v) > bytes.size()) return false;
+            std::memcpy(&v, bytes.data() + at, sizeof(v));
+            at += sizeof(v);
+            return true;
+        };
+        std::uint32_t count = 0;
+        if (!get32(count) || count > 512) return;
+        std::set<std::string> loaded;
+        for (std::uint32_t i = 0; i < count; ++i) {
+            std::uint32_t size = 0;
+            if (!get32(size) || size > bytes.size() - at) break;
+            loaded.emplace(reinterpret_cast<const char*>(bytes.data() + at), size);
+            at += size;
+        }
+        std::lock_guard<std::mutex> lock(fallenMutex_);
+        fallen_ = std::move(loaded);
+        fallenToTell_.clear();
+        logger::info("Politics: {} leader(s) are remembered as dead", fallen_.size());
+    }
+
+    int FactionPolitics::DriftRelations(float gameTime) {
+        auto* db = PoliticalDB::GetSingleton();
+        if (!db || !db->IsReady()) return 0;
+        const float last = lastDriftTime_.load();
+        if (last > 0.f && gameTime >= last && gameTime - last < 1.0f) return 0;         // once a game day
+        lastDriftTime_.store(gameTime);
+
+        constexpr float kQuietDays = 3.0f;
+        constexpr int kHeal = 3, kCool = 2;
+        std::vector<DefaultRelation> usual;
+        {
+            std::lock_guard<std::mutex> lock(configMutex_);
+            usual = defaultRelations_;
+        }
+        const auto recent = db->GetRecentEvents(60);
+        int moved = 0;
+        for (const auto& rel : db->GetAllRelations()) {
+            if (rel.warActive || db->GetActiveWar(rel.factionA, rel.factionB)) continue;
+            int base = 0;
+            for (const auto& u : usual) {
+                if ((u.factionA == rel.factionA && u.factionB == rel.factionB) || (u.factionA == rel.factionB && u.factionB == rel.factionA)) base = u.relation;
+            }
+            // Has anything happened between the two lately? (Newest first: the first of theirs decides.)
+            bool quiet = true;
+            for (const auto& e : recent) {
+                if (!((e.factionA == rel.factionA && e.factionB == rel.factionB) || (e.factionA == rel.factionB && e.factionB == rel.factionA))) continue;
+                quiet = gameTime - e.gameTime >= kQuietDays;
+                break;
+            }
+            if (!quiet) continue;
+            int delta = 0;
+            if (rel.relationScore < base) delta = (std::min)(kHeal, base - rel.relationScore);
+            else if (rel.relationScore > base && rel.relationScore > 0) delta = -(std::min)(kCool, rel.relationScore - (std::max)(base, 0));
+            if (delta == 0) continue;
+            // (A row of its own: the scores are rebuilt from the rows on every load. This kind is never shown or told.)
+            db->RecordEvent(rel.factionA, rel.factionB, "relation_adjustment", "Time passes", delta, gameTime);
+            db->AdjustRelation(rel.factionA, rel.factionB, delta);
+            ++moved;
+        }
+        if (moved > 0) logger::info("Politics: time passes: {} pair(s) of factions drift back toward where they usually stand", moved);
+        return moved;
+    }
+
+    void FactionPolitics::ManifestationFailed() {
+        HeldEvent held;
+        {
+            std::lock_guard lock(heldMutex_);
+            held = held_;
+            held_ = HeldEvent{};
+        }
+        if (!held.set) return;
+        logger::info("Politics: {} between {} and {} could not be shown: it is told as it was written", held.eventType, held.factionA, held.factionB);
+        RecordPoliticalEvent(held.factionA, held.factionB, held.eventType, held.description, held.delta, held.gameTime);
+    }
+
+    void FactionPolitics::ManifestationDone() {
+        std::lock_guard lock(heldMutex_);
+        held_ = HeldEvent{};
+    }
+
+    void FactionPolitics::ForgetHeldEvent() { ManifestationDone(); }
+
+    std::string FactionPolitics::AssassinationOutcome(const std::string& targetFaction, const std::string& attackerFaction,
+                                                      const std::string& leaderName, const std::string& how, const std::string& place,
+                                                      const std::string& playerName, const std::string& hold) {
+        // (A key from a script: read without regard to capitals, see BattleManager's Key.)
+        std::string outcome = how;
+        for (auto& c : outcome) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        nlohmann::json out;
+        HeldEvent held;
+        {
+            std::lock_guard lock(heldMutex_);
+            held = held_;
+            held_ = HeldEvent{};
+        }
+        const auto the = [](const std::string& name) {
+            return (name.rfind("The ", 0) == 0 || name.rfind("the ", 0) == 0) ? "the " + name.substr(4) : "the " + name;
+        };
+        const std::string theirs = the(GetFactionDisplayName(targetFaction));
+        const std::string senders = the(GetFactionDisplayName(attackerFaction));
+        const std::string where = place.empty() ? std::string() : " in " + place;
+        const std::string someone = "someone matching the description of " + playerName;
+        const bool byPlayer = outcome == "foiled" || outcome == "saved";
+        const bool dead = outcome == "killed" || outcome == "slain_by_player";
+
+        // What is told of it: what was seen, and whom people take to be behind it.
+        std::string told;
+        if (outcome == "foiled") {
+            told = "A killer came for " + leaderName + " of " + theirs + where + ", sent by " + senders + " it is said, and " + someone +
+                   " cut the killer down before the blow fell.";
+        } else if (outcome == "saved") {
+            told = "A killer attacked " + leaderName + " of " + theirs + where + ", sent by " + senders + " it is said. " + leaderName +
+                   " lives: " + someone + " cut the killer down.";
+        } else if (outcome == "failed") {
+            told = "A killer attacked " + leaderName + " of " + theirs + where + ", sent by " + senders + " it is said, and was cut down. " +
+                   leaderName + " lives.";
+        } else if (outcome == "killed") {
+            told = leaderName + " of " + theirs + " was murdered" + where + " by a killer who is said to have been sent by " + senders + ".";
+        } else if (outcome == "slain_by_player") {
+            told = leaderName + " of " + theirs + " was murdered" + where + ". A killer sent by " + senders + ", it is said, had come for them, and " +
+                   someone + " struck the blow.";
+        } else {
+            told = "A killer attacked " + leaderName + " of " + theirs + where + ", sent by " + senders + " it is said, and got away. " +
+                   leaderName + " lives.";
+        }
+
+        auto* cal = RE::Calendar::GetSingleton();
+        const float now = cal ? cal->GetCurrentGameTime() : held.gameTime;
+        // What it does between the two: as the event was written when there was one, more when somebody died.
+        int delta = held.set ? held.delta : -10;
+        if (dead) delta = (std::min)(delta, -20);
+        RecordPoliticalEvent(attackerFaction, targetFaction, dead ? "assassination" : "assassination_attempt", told, delta, now, place, nullptr, hold);
+
+        // What it does to how the two think of the player.
+        int reward = 0;
+        if (byPlayer) {
+            AdjustPlayerStanding(targetFaction, 12);
+            AdjustPlayerStanding(attackerFaction, -6);
+            reward = 300;
+            if (const int risen = EarnRenown(targetFaction, Ranks::Deed::Saved); risen > 0) out["promoted"] = RankTitle(targetFaction, risen);
+        } else if (outcome == "slain_by_player") {
+            AdjustPlayerStanding(targetFaction, -30);
+            AdjustPlayerStanding(attackerFaction, 10);
+        }
+        if (byPlayer || outcome == "slain_by_player") WritePoliticalStateFile();
+
+        // What the player reads, and what is given to people to remember and to say.
+        if (outcome == "foiled") out["notification"] = "The attempt on " + leaderName + "'s life is foiled.";
+        else if (outcome == "saved") out["notification"] = leaderName + " lives. The killer is dead.";
+        else if (outcome == "failed") out["notification"] = "The attempt on " + leaderName + "'s life has failed.";
+        else if (outcome == "killed") out["notification"] = leaderName + " is dead.";
+        else if (outcome == "escaped") out["notification"] = "The killer has got away.";
+        else out["notification"] = "";
+        out["reward"] = reward;
+        out["thanks"] = byPlayer
+            ? "has just escaped an attempt on their life: a killer came for them, sent by " + senders + " as they suspect, and " + playerName +
+                  (outcome == "foiled" ? " cut the killer down before the blow fell" : " cut the killer down in the middle of the attack") +
+                  ". Shaken and grateful, thanks " + playerName + " in a few words and presses a reward into their hand: " +
+                  std::to_string(reward) + " gold"
+            : std::string();
+        out["targetFact"] = dead ? std::string()
+                                 : "was attacked by a killer" + where + " and lived" + (byPlayer ? "; " + playerName + " cut the killer down" : std::string());
+        out["witnessFact"] = "saw a killer come for " + leaderName + where +
+                             (dead ? ", and saw " + leaderName + " die"
+                                   : byPlayer ? ", and saw " + playerName + " cut the killer down"
+                                              : outcome == "escaped" ? ", and saw the killer get away" : ", and saw the killer cut down");
+        logger::info("Politics: the attempt on {} ({}) by {} ended: {}", leaderName, targetFaction, attackerFaction, outcome);
+        return out.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
     }
 
     void FactionPolitics::ConfirmManifestationCooldown() {
@@ -2323,7 +2762,39 @@ war_allowed:
         int decayRate = moraleDecayPerTick_.load();
         nlohmann::json updates = nlohmann::json::array();
 
+        // Nobody wins the game's own civil war here (EndWar names no victor for it while the game has not decided it):
+        // then nobody "surrendered" either. The line used to say so all the same.
+        const auto undecided = [this](const std::string& a, const std::string& b) {
+            const auto fa = GetFaction(a), fb = GetFaction(b);
+            return fa && fb && !VanillaWar::MayNameWinner(VanillaWar::SideOf(fa->skyrimFactionId), VanillaWar::SideOf(fb->skyrimFactionId),
+                                                          static_cast<VanillaWar::State>(vanillaWar_.load()));
+        };
+        const auto stoppedForNow = [this](const std::string& a, const std::string& b) {
+            return GetFactionDisplayName(a) + " and " + GetFactionDisplayName(b) + " have stopped fighting for now. Neither has won.";
+        };
+
         for (auto& war : activeWars) {
+            // A war against a faction that is no more is over.
+            const bool goneA = IsDisbanded(war.factionA), goneB = IsDisbanded(war.factionB);
+            if (goneA || goneB) {
+                const std::string victor = (goneA && goneB) ? std::string() : (goneA ? war.factionB : war.factionA);
+                const std::string& gone = goneA ? war.factionA : war.factionB;
+                const std::string& other = goneA ? war.factionB : war.factionA;
+                nlohmann::json over;
+                over["war_id"] = war.id;
+                over["faction_a"] = war.factionA;
+                over["faction_b"] = war.factionB;
+                over["ended"] = true;
+                over["victor"] = victor;
+                over["end_reason"] = "disbanded";
+                EndWar(war.factionA, war.factionB, victor, gameTime);
+                RecordPoliticalEvent(war.factionA, war.factionB, "ceasefire",
+                    "With its leaders dead, " + GetFactionDisplayName(gone) + " fights no more. Its war with " + GetFactionDisplayName(other) + " is over.",
+                    0, gameTime);
+                logger::info("FactionPolitics: War #{} ended: {} is no more", war.id, gone);
+                updates.push_back(over);
+                continue;
+            }
             // Apply morale decay to both sides
             int newMoraleA = (std::max)(0, war.factionAMorale - decayRate);
             int newMoraleB = (std::max)(0, war.factionBMorale - decayRate);
@@ -2360,17 +2831,21 @@ war_allowed:
                 update["ended"] = true;
                 update["victor"] = war.factionB;
                 update["end_reason"] = "surrender";
+                const bool open = undecided(war.factionA, war.factionB);
                 EndWar(war.factionA, war.factionB, war.factionB, gameTime);
-                RecordPoliticalEvent(war.factionA, war.factionB, "surrender",
-                    GetFactionDisplayName(war.factionA) + " surrendered to " + GetFactionDisplayName(war.factionB) + ".", 0, gameTime);
+                RecordPoliticalEvent(war.factionA, war.factionB, open ? "ceasefire" : "surrender",
+                    open ? stoppedForNow(war.factionA, war.factionB)
+                         : GetFactionDisplayName(war.factionA) + " surrendered to " + GetFactionDisplayName(war.factionB) + ".", 0, gameTime);
                 logger::info("FactionPolitics: War #{} ended — {} surrendered to {}", war.id, war.factionA, war.factionB);
             } else if (bCollapsed) {
                 update["ended"] = true;
                 update["victor"] = war.factionA;
                 update["end_reason"] = "surrender";
+                const bool open = undecided(war.factionA, war.factionB);
                 EndWar(war.factionA, war.factionB, war.factionA, gameTime);
-                RecordPoliticalEvent(war.factionB, war.factionA, "surrender",
-                    GetFactionDisplayName(war.factionB) + " surrendered to " + GetFactionDisplayName(war.factionA) + ".", 0, gameTime);
+                RecordPoliticalEvent(war.factionB, war.factionA, open ? "ceasefire" : "surrender",
+                    open ? stoppedForNow(war.factionA, war.factionB)
+                         : GetFactionDisplayName(war.factionB) + " surrendered to " + GetFactionDisplayName(war.factionA) + ".", 0, gameTime);
                 logger::info("FactionPolitics: War #{} ended — {} surrendered to {}", war.id, war.factionB, war.factionA);
             } else {
                 // Update morale in DB
@@ -2476,7 +2951,7 @@ war_allowed:
                                                 const std::string& location, const std::string& result,
                                                 const std::string& narrative, int attackerLosses,
                                                 int defenderLosses, const std::string& victor,
-                                                const nlohmann::json* physicalPosition) {
+                                                const nlohmann::json* physicalPosition, const std::string& newsFrom) {
         auto* db = PoliticalDB::GetSingleton();
         if (!db->IsReady()) return -1;
 
@@ -2527,7 +3002,7 @@ war_allowed:
                         physicalPosition ? narrative : "Battle resolved", -10, gameTime, "",
                         physicalPosition ? location : "", physicalPosition ? *physicalPosition : nullptr);
         db->AdjustRelation(factionA, factionB, -10);
-        if (physicalPosition) News(factionA, "battle_result", narrative, battleId);
+        if (physicalPosition) News(factionA, "battle_result", narrative, battleId, newsFrom);
 
         WritePoliticalStateFile();
         return battleId;
@@ -2645,7 +3120,22 @@ war_allowed:
                 sj["faction_name"] = getName(ps.factionId);
                 sj["standing"] = ps.standing;
                 sj["status"] = GetRelationStatus(ps.standing);
+                // What the player has done for them, and the rank it earned: their own know it.
+                if (const auto known = PlayerKnownAs(ps.factionId); !known.empty()) sj["known_as"] = known;
                 standingsJson.push_back(sj);
+            }
+            // And from Veteran on, so does everybody else: the best-known of the player's names is talked of.
+            {
+                std::string talked;
+                int best = 0;
+                for (const auto& ps : playerStandings) {
+                    const int rank = PlayerRank(ps.factionId);
+                    if (rank > best && Ranks::Famous(rank)) {
+                        best = rank;
+                        talked = PlayerKnownAs(ps.factionId);
+                    }
+                }
+                if (!talked.empty()) state["player_known"] = talked;
             }
             if (!standingsJson.empty()) {
                 state["player_standings"] = standingsJson;
@@ -3005,6 +3495,15 @@ war_allowed:
             return out.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
         }
 
+        // A faction that has lost every one of its leaders does nothing any more, and nothing is done to it. (It was
+        // left out of the list the DM chooses from and of the wars declared by rule, and went on in everything else.)
+        for (const auto& id : {factionA, factionB}) {
+            if (!id.empty() && IsDisbanded(id)) {
+                logger::warn("Politics DM: rejected {}: {} is no more (its leaders are all dead)", eventType, id);
+                out["error"] = "a faction of this event is no more";
+                return out.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
+            }
+        }
         // Live 2026-11-10: a Director surrender with no IE war still logged "WAR ENDED"; reject it before recording.
         if (eventType == "surrender" && !PoliticalDB::GetSingleton()->GetActiveWar(factionA, factionB)) {
             logger::warn("Politics DM: rejected surrender — no active war between {} and {}", factionA, factionB);
@@ -3100,10 +3599,24 @@ war_allowed:
             }
         }
 
-        // Record event (handles validation, clamping, relation adjustment, state file)
-        // ponytail: manifested events stay null because this row precedes spawn and the forward cursor cannot deliver updates;
-        // upgrade after successful spawn or with an updated-events feed when that seam is available.
-        int eventId = RecordPoliticalEvent(factionA, factionB, eventType, description, delta, gameTime, battlePlace, nullptr, battleHold);
+        // What is to be seen is not told before it has happened: an attempt on a leader's life or a skirmish that can
+        // be shown near the player is held back, unrecorded, and the script says how it went (AssassinationOutcome; a
+        // skirmish records itself as a battle does) or that it could not be shown (ManifestationFailed: told as
+        // written). It used to be recorded and told at once as the DM wrote it, to the land and to the leaders of
+        // both factions, the victim among them, and then acted out.
+        std::string manifestJson;
+        if (!skirmishFromBattle && (eventType == "assassination_attempt" || eventType == "brawl" || eventType == "border_skirmish")) {
+            manifestJson = CheckEventManifestation(factionA, factionB, eventType);
+        }
+        int eventId = 0;
+        if (!manifestJson.empty()) {
+            std::lock_guard lock(heldMutex_);
+            held_ = HeldEvent{true, factionA, factionB, eventType, description, delta, gameTime};
+            logger::info("Politics DM: {} between {} and {} is held back: it is to be seen first", eventType, factionA, factionB);
+        } else {
+            // Record event (handles validation, clamping, relation adjustment, state file)
+            eventId = RecordPoliticalEvent(factionA, factionB, eventType, description, delta, gameTime, battlePlace, nullptr, battleHold);
+        }
         if (eventId < 0) {
             logger::error("Politics DM: RecordPoliticalEvent FAILED for {} vs {} (type={})",
                 factionA, factionB, eventType);
@@ -3119,7 +3632,8 @@ war_allowed:
         out["eventType"] = eventType;
         out["factionA"] = factionA;
         out["factionB"] = factionB;
-        out["description"] = description;
+        // (Nothing is given to the leaders to know of an event that is still to be seen.)
+        out["description"] = manifestJson.empty() ? description : std::string();
 
         // --- Handle war declaration ---
         if (eventType == "war_declaration") {
@@ -3163,14 +3677,8 @@ war_allowed:
             logger::info("Politics: Off-screen battle at {} (location unresolvable)", battleLoc);
         }
 
-        // --- Check manifestation ---
-        if (!skirmishFromBattle && (eventType == "assassination_attempt" || eventType == "brawl" ||
-            eventType == "border_skirmish")) {
-            std::string manifestJson = CheckEventManifestation(factionA, factionB, eventType);
-            if (!manifestJson.empty()) {
-                out["manifestJson"] = manifestJson;
-            }
-        }
+        // --- What is to be seen (held back above) ---
+        if (!manifestJson.empty()) out["manifestJson"] = manifestJson;
 
         // --- Apply player standing changes from DM response ---
         if ((!reaction || moveReactionRelations) && resp.contains("player_standing_changes") && resp["player_standing_changes"].is_array()) {
@@ -3193,7 +3701,9 @@ war_allowed:
         int vanillaSynced = SyncVanillaFactionStandings();
         int decayed = DecayPlayerStandings(1);
         int crimeChanges = CheckCrimeGoldStandings();
-        if (decayed > 0 || crimeChanges > 0 || vanillaSynced > 0) {
+        const int drifted = DriftRelations(gameTime);
+        AnnounceFallen(gameTime);
+        if (decayed > 0 || crimeChanges > 0 || vanillaSynced > 0 || drifted > 0) {
             WritePoliticalStateFile();
         }
         out["decayed"] = decayed;
@@ -3208,7 +3718,10 @@ war_allowed:
         int vanillaSynced = SyncVanillaFactionStandings();
         int decayed = DecayPlayerStandings(1);
         int crimeChanges = CheckCrimeGoldStandings();
-        if (decayed > 0 || crimeChanges > 0 || vanillaSynced > 0) {
+        const float nowDays = RE::Calendar::GetSingleton() ? RE::Calendar::GetSingleton()->GetCurrentGameTime() : 0.f;
+        const int drifted = DriftRelations(nowDays);
+        AnnounceFallen(nowDays);
+        if (decayed > 0 || crimeChanges > 0 || vanillaSynced > 0 || drifted > 0) {
             WritePoliticalStateFile();
         }
         out["decayed"] = decayed;

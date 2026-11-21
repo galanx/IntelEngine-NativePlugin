@@ -127,7 +127,19 @@ template<class... T> void error(T&&...) {}
         "\nvoid FactionPolitics::WritePoliticalStateFile() {}\n"
         # No quests of the game in this fixture: nobody is bound by a story of their own; and no talk of the day.
         "std::string FactionPolitics::BoundBy(const std::string&) const { return {}; }\n"
-        "void FactionPolitics::News(const std::string&, const std::string&, const std::string&, int, const std::string&) {}\n}\n", encoding="utf-8")
+        "void FactionPolitics::News(const std::string&, const std::string&, const std::string&, int, const std::string&) {}\n"
+        # Nobody has died in this fixture, and no time passes between the factions.
+        "bool FactionPolitics::IsFallen(const std::string&, const std::string&) const { return false; }\n"
+        "bool FactionPolitics::MarkFallen(const std::string&, const std::string&, const std::string&) { return false; }\n"
+        "int FactionPolitics::AnnounceFallen(float) { return 0; }\n"
+        "bool FactionPolitics::IsDisbanded(const std::string&) { return false; }\n"
+        "int FactionPolitics::DriftRelations(float) { return 0; }\n"
+        # The player has done nothing for anybody in this fixture.
+        "int FactionPolitics::PlayerRank(const std::string&) { return 0; }\n"
+        "std::string FactionPolitics::RankTitle(const std::string&, int) const { return {}; }\n"
+        "std::string FactionPolitics::PlayerKnownAs(const std::string&) { return {}; }\n"
+        "int FactionPolitics::EarnRenown(const std::string&, Ranks::Deed, int) { return 0; }\n"
+        "nlohmann::json FactionPolitics::RanksJson() { return nlohmann::json::array(); }\n}\n", encoding="utf-8")
     context_start = source.index("        auto pe = PoliticalEngineBridge::GetSingleton()->Context();")
     context_end = source.index("        // Active wars", context_start)
     (work / "PEContext.inc").write_text(source[context_start:context_end])

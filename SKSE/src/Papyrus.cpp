@@ -20,6 +20,7 @@
 #include "QuestBridge.h"
 #include "ArcBridge.h"
 #include "RumorBridge.h"
+#include "FrameCost.h"
 #include "PlaceTargets.h"
 #include "ItemIndex.h"
 #include <random>
@@ -179,6 +180,7 @@ namespace IntelEngine::Papyrus {
     RE::BSFixedString GetRelationStatus(RE::StaticFunctionTag*, RE::BSFixedString, RE::BSFixedString);
     RE::BSFixedString BuildPoliticalContext(RE::StaticFunctionTag*, float);
     RE::BSFixedString BuildPoliticalDashboardJson(RE::StaticFunctionTag*);
+    RE::BSFixedString BuildWorldDashboardJson(RE::StaticFunctionTag*);
     int RecordPoliticalEvent(RE::StaticFunctionTag*, RE::BSFixedString, RE::BSFixedString,
                              RE::BSFixedString, RE::BSFixedString, int, float);
     bool IsPoliticsEnabled(RE::StaticFunctionTag*);
@@ -216,6 +218,19 @@ namespace IntelEngine::Papyrus {
     RE::Actor* GetAssassinationTarget(RE::StaticFunctionTag*);
     RE::BSFixedString GetAssassinationLeaderName(RE::StaticFunctionTag*);
     void TriggerAssassinationAttack(RE::StaticFunctionTag*);
+    void ManifestationFailed(RE::StaticFunctionTag*);
+    void ManifestationDone(RE::StaticFunctionTag*);
+    RE::BSFixedString AssassinationOutcome(RE::StaticFunctionTag*, RE::BSFixedString, RE::BSFixedString, RE::BSFixedString, RE::BSFixedString);
+    void BattleSetSkirmish(RE::StaticFunctionTag*, int);
+    RE::BSFixedString BattlePickAmbush(RE::StaticFunctionTag*, RE::Actor*);
+    bool BattleFieldBusy(RE::StaticFunctionTag*);
+    RE::BSFixedString BattleFlankLine(RE::StaticFunctionTag*, RE::BSFixedString, int, int, RE::Actor*);
+    RE::BSFixedString BattleTurnCoats(RE::StaticFunctionTag*, RE::BSFixedString);
+    RE::BSFixedString BattleChampionLine(RE::StaticFunctionTag*, RE::BSFixedString, RE::Actor*);
+    void BattleSetTwists(RE::StaticFunctionTag*, int, int, int);
+    int PlayerFactionRank(RE::StaticFunctionTag*, RE::BSFixedString);
+    RE::BSFixedString PlayerRankTitle(RE::StaticFunctionTag*, RE::BSFixedString);
+    RE::BSFixedString PlayerDidFor(RE::StaticFunctionTag*, RE::BSFixedString, RE::BSFixedString);
 
     // Faction query forward declarations
     bool IsHighStatusNPC(RE::StaticFunctionTag*, RE::Actor*);
@@ -238,6 +253,10 @@ namespace IntelEngine::Papyrus {
     void BattleNoteTurnedDown(RE::StaticFunctionTag*, RE::BSFixedString);
     void BattleNotePlayerLeft(RE::StaticFunctionTag*);
     RE::BSFixedString BattleFieldInfo(RE::StaticFunctionTag*);
+    RE::BSFixedString BattleCall(RE::StaticFunctionTag*);
+    RE::TESObjectREFR* BattleWayHome(RE::StaticFunctionTag*, RE::BSFixedString, float, float, float, float, bool, RE::TESObjectREFR*);
+    void BattleTendBounty(RE::StaticFunctionTag*);
+    void BattleCallText(RE::StaticFunctionTag*, RE::BSFixedString, RE::BSFixedString);
     RE::BSFixedString BattleSay(RE::StaticFunctionTag*, RE::BSFixedString, RE::BSFixedString, RE::BSFixedString, RE::BSFixedString, int, int);
     int GetBattleWaveOf(RE::StaticFunctionTag*, RE::BSFixedString);
     void AdvanceBattleWaveOf(RE::StaticFunctionTag*, RE::BSFixedString);
@@ -601,6 +620,7 @@ namespace IntelEngine::Papyrus {
         a_vm->RegisterFunction("GetRelationStatus", SCRIPT_NAME, GetRelationStatus); ++count;
         a_vm->RegisterFunction("BuildPoliticalContext", SCRIPT_NAME, BuildPoliticalContext); ++count;
         a_vm->RegisterFunction("BuildPoliticalDashboardJson", SCRIPT_NAME, BuildPoliticalDashboardJson); ++count;
+        a_vm->RegisterFunction("BuildWorldDashboardJson", SCRIPT_NAME, BuildWorldDashboardJson); ++count;
         a_vm->RegisterFunction("RecordPoliticalEvent", SCRIPT_NAME, RecordPoliticalEvent); ++count;
         a_vm->RegisterFunction("GetPoliticalEventsAfter", SCRIPT_NAME, GetPoliticalEventsAfter); ++count;
         a_vm->RegisterFunction("GetFactionsJson", SCRIPT_NAME, GetFactionsJson); ++count;
@@ -656,6 +676,19 @@ namespace IntelEngine::Papyrus {
         a_vm->RegisterFunction("GetAssassinationTarget", SCRIPT_NAME, GetAssassinationTarget); ++count;
         a_vm->RegisterFunction("GetAssassinationLeaderName", SCRIPT_NAME, GetAssassinationLeaderName); ++count;
         a_vm->RegisterFunction("TriggerAssassinationAttack", SCRIPT_NAME, TriggerAssassinationAttack); ++count;
+        a_vm->RegisterFunction("ManifestationFailed", SCRIPT_NAME, ManifestationFailed); ++count;
+        a_vm->RegisterFunction("ManifestationDone", SCRIPT_NAME, ManifestationDone); ++count;
+        a_vm->RegisterFunction("AssassinationOutcome", SCRIPT_NAME, AssassinationOutcome); ++count;
+        a_vm->RegisterFunction("BattleSetSkirmish", SCRIPT_NAME, BattleSetSkirmish); ++count;
+        a_vm->RegisterFunction("BattlePickAmbush", SCRIPT_NAME, BattlePickAmbush); ++count;
+        a_vm->RegisterFunction("BattleFieldBusy", SCRIPT_NAME, BattleFieldBusy); ++count;
+        a_vm->RegisterFunction("BattleFlankLine", SCRIPT_NAME, BattleFlankLine); ++count;
+        a_vm->RegisterFunction("BattleTurnCoats", SCRIPT_NAME, BattleTurnCoats); ++count;
+        a_vm->RegisterFunction("BattleChampionLine", SCRIPT_NAME, BattleChampionLine); ++count;
+        a_vm->RegisterFunction("BattleSetTwists", SCRIPT_NAME, BattleSetTwists); ++count;
+        a_vm->RegisterFunction("PlayerFactionRank", SCRIPT_NAME, PlayerFactionRank); ++count;
+        a_vm->RegisterFunction("PlayerRankTitle", SCRIPT_NAME, PlayerRankTitle); ++count;
+        a_vm->RegisterFunction("PlayerDidFor", SCRIPT_NAME, PlayerDidFor); ++count;
 
         // NPC Status Check
         a_vm->RegisterFunction("IsHighStatusNPC", SCRIPT_NAME, IsHighStatusNPC); ++count;
@@ -680,6 +713,10 @@ namespace IntelEngine::Papyrus {
         a_vm->RegisterFunction("BattleNoteTurnedDown", SCRIPT_NAME, BattleNoteTurnedDown); ++count;
         a_vm->RegisterFunction("BattleNotePlayerLeft", SCRIPT_NAME, BattleNotePlayerLeft); ++count;
         a_vm->RegisterFunction("BattleFieldInfo", SCRIPT_NAME, BattleFieldInfo); ++count;
+        a_vm->RegisterFunction("BattleCall", SCRIPT_NAME, BattleCall); ++count;
+        a_vm->RegisterFunction("BattleWayHome", SCRIPT_NAME, BattleWayHome); ++count;
+        a_vm->RegisterFunction("BattleTendBounty", SCRIPT_NAME, BattleTendBounty); ++count;
+        a_vm->RegisterFunction("BattleCallText", SCRIPT_NAME, BattleCallText); ++count;
         a_vm->RegisterFunction("BattleSay", SCRIPT_NAME, BattleSay); ++count;
         a_vm->RegisterFunction("GetBattleWaveOf", SCRIPT_NAME, GetBattleWaveOf); ++count;
         a_vm->RegisterFunction("AdvanceBattleWaveOf", SCRIPT_NAME, AdvanceBattleWaveOf); ++count;
@@ -3781,11 +3818,20 @@ namespace IntelEngine::Papyrus {
                 for (int i = 0; i < count; ++i) resolvedBases.push_back(base);
             }
 
+            // They are the enemy the player was sent against: one band (a side of its own), in none of the factions
+            // they came with, and out for blood. Left as the game made them they kept those factions: the Thalmor
+            // of such a quest stood there as the neutrals the game makes them, and the player had to strike first,
+            // at people a guard might count as citizens.
+            auto* band = BattleManager::GetSingleton()->EnemySide();
             for (auto* resolvedBase : resolvedBases) {
                 auto spawned = location->PlaceObjectAtMe(resolvedBase, true);
                 if (spawned) {
                     auto* actor = spawned->As<RE::Actor>();
-                    if (actor) result.push_back(actor);
+                    if (!actor) continue;
+                    BattleManager::StripFactions(actor);
+                    if (band) actor->AddToFaction(band, 0);
+                    actor->AsActorValueOwner()->SetActorValue(RE::ActorValue::kAggression, 2.f);
+                    result.push_back(actor);
                 }
             }
             logger::info("[IntelEngine] SpawnQuestEnemies: {} faction '{}' soldiers spawned at {}",
@@ -4679,6 +4725,25 @@ namespace IntelEngine::Papyrus {
         return RE::BSFixedString(FactionPolitics::GetSingleton()->GetFactionsJson().c_str());
     }
 
+    // The dashboard's World page: the talk of the day, the stories and quests the player has taken on, what people
+    // have asked of them, and their people. Asked for only while the page is open (a refresh), never in play.
+    RE::BSFixedString BuildWorldDashboardJson(RE::StaticFunctionTag*) {
+        static FrameStats stats;
+        const auto began = FrameClock::Now();
+        FrameClock clock("Dashboard: the World page's state", stats, began, 20, 0.5);
+        std::string out = "{\"rumors\":" + RumorBridge::GetSingleton()->DashboardJson();
+        out += ",\"stories\":" + ArcBridge::GetSingleton()->DashboardJson();
+        out += ",\"quests\":" + QuestBridge::GetSingleton()->DashboardJson();
+        out += ",\"asks\":" + StorylineBridge::GetSingleton()->DashboardJson();
+        out += ",\"people\":" + LivingWorldBridge::GetSingleton()->DashboardJson();
+        // The player's name: the page says "you" where the engine's lines name them.
+        auto* player = RE::PlayerCharacter::GetSingleton();
+        const char* playerName = player ? player->GetDisplayFullName() : nullptr;
+        out += ",\"player\":" + nlohmann::json(std::string(playerName ? playerName : "")).dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
+        out += "}";
+        return RE::BSFixedString(out.c_str());
+    }
+
     RE::BSFixedString BuildPoliticalDashboardJson(RE::StaticFunctionTag*) {
         auto* politics = FactionPolitics::GetSingleton();
         if (!politics->IsReady()) return RE::BSFixedString("{}");
@@ -4737,6 +4802,13 @@ namespace IntelEngine::Papyrus {
                 return false;
             });
 
+            if (!bestMatch) {
+                // Nobody of that name is about. By record: a game in another language ("Legatin Rikke"), or a leader
+                // the configuration gives by record.
+                auto* npcIndex = NPCIndex::GetSingleton();
+                auto* byRecord = npcIndex->GetActorFromFormId(npcIndex->FindFactionLeaderFormId(leaderName));
+                if (byRecord && !byRecord->IsDead()) bestMatch = byRecord;
+            }
             if (bestMatch) {
                 result.push_back(bestMatch);
                 logger::info("GetFactionLeaderActors: '{}' -> '{}' (FormID=0x{:08X}, sameCell={})",
@@ -4808,7 +4880,8 @@ namespace IntelEngine::Papyrus {
             return nullptr;
         }
 
-        // 1. Find leader in player's cell/proximity
+        // 1. Whom: a leader of that faction in the player's room, or near them out of doors. Not somebody who
+        // travels with the player, not a child, not somebody in the middle of a scene of the game's.
         auto leaders = GetFactionLeaderActors(nullptr, targetFaction);
         RE::Actor* target = nullptr;
         auto* playerCell = player->GetSaveParentCell();
@@ -4816,12 +4889,14 @@ namespace IntelEngine::Papyrus {
         bool isInterior = playerCell && playerCell->IsInteriorCell();
 
         for (auto* leader : leaders) {
-            if (!leader || leader->IsDead()) continue;
+            if (!leader || leader->IsDead() || leader->IsDisabled() || !leader->Is3DLoaded()) continue;
+            if (leader->IsPlayerTeammate() || leader->IsChild() || leader->GetCurrentScene()) continue;
             if (isInterior) {
                 auto* leaderCell = leader->GetSaveParentCell();
                 if (!leaderCell) leaderCell = leader->GetParentCell();
                 if (leaderCell == playerCell) { target = leader; break; }
             } else {
+                if (leader->GetWorldspace() != player->GetWorldspace()) continue;
                 auto ppos = player->GetPosition();
                 auto lpos = leader->GetPosition();
                 float dx = ppos.x - lpos.x, dy = ppos.y - lpos.y, dz = ppos.z - lpos.z;
@@ -4837,71 +4912,129 @@ namespace IntelEngine::Papyrus {
         logger::info("ExecuteAssassination: target={} ({}), attacker={}",
             target->GetDisplayFullName(), targetFacId, attackerFacId);
 
-        // 2. Find spawn point: nearest door to leader, or behind leader if no door
-        RE::TESObjectREFR* spawnAnchor = target->As<RE::TESObjectREFR>();
-        std::vector<RE::TESObjectREFR*> doors = CellAnalyzer::GetSingleton()->GetDoors(player);
-        float bestDist = 999999.f;
-        RE::NiPoint3 tgtPos = target->GetPosition();
-        for (auto* door : doors) {
-            if (!door) continue;
-            RE::NiPoint3 dpos = door->GetPosition();
-            float dx = dpos.x - tgtPos.x, dy = dpos.y - tgtPos.y, dz = dpos.z - tgtPos.z;
-            float dist = std::sqrt(dx*dx + dy*dy + dz*dz);
-            if (dist < bestDist) {
-                bestDist = dist;
-                spawnAnchor = door;
+        // 2. Where the killer comes from. Never out of thin air in the player's view (they used to be made at the
+        // nearest door whether the player was looking at it or not, and on top of the leader when there was no door).
+        // Dressed as one of the leader's own people: the target faction's soldiers.
+        RE::Actor* assassin = nullptr;
+        auto* battles = BattleManager::GetSingleton();
+        if (isInterior) {
+            // Through a door of the room: made on its far side when that is at hand, so that they come in by it; at
+            // the door itself only when the player is not looking at it.
+            RE::TESObjectREFR* door = nullptr;
+            float bestDist = 999999.f;
+            const RE::NiPoint3 tgtPos = target->GetPosition();
+            for (auto* candidate : CellAnalyzer::GetSingleton()->GetDoors(player)) {
+                if (!candidate || !candidate->extraList.HasType(RE::ExtraDataType::kTeleport)) continue;
+                const float dist = candidate->GetPosition().GetDistance(tgtPos);
+                if (dist < bestDist) {
+                    bestDist = dist;
+                    door = candidate;
+                }
             }
-        }
-        if (spawnAnchor != target->As<RE::TESObjectREFR>()) {
-            logger::info("ExecuteAssassination: spawning at door nearest to leader (dist={:.0f})", bestDist);
+            RE::TESObjectREFR* from = nullptr;
+            if (door) {
+                auto* teleport = door->extraList.GetByType<RE::ExtraTeleport>();
+                auto* farSide = (teleport && teleport->teleportData) ? teleport->teleportData->linkedDoor.get().get() : nullptr;
+                bool unused = false;
+                if (farSide && farSide->GetParentCell() && !farSide->IsDisabled()) {
+                    from = farSide;
+                    logger::info("ExecuteAssassination: the killer starts beyond the door nearest to the leader ({:.0f} units from them)", bestDist);
+                } else if (!player->HasLineOfSight(door, unused)) {
+                    from = door;
+                    logger::info("ExecuteAssassination: the killer starts at the door nearest to the leader, which the player does not see");
+                }
+            }
+            if (!from) {
+                logger::info("ExecuteAssassination: no way into the room that the player would not see the killer appear at");
+                return nullptr;
+            }
+            auto made = SpawnBattleSoldiers(nullptr, RE::BSFixedString(targetFacId + ":1"), from);
+            assassin = made.empty() ? nullptr : made.front();
         } else {
-            // No doors found — spawn at leader position (Papyrus will offset 500 units behind)
-            logger::info("ExecuteAssassination: no doors — spawning near leader");
+            Battlefield::Vec at;
+            if (!battles->PickApproach(player, target, at)) {
+                logger::info("ExecuteAssassination: nowhere for the killer to come from unseen");
+                return nullptr;
+            }
+            const float facing = Battlefield::Bearing(at, Battlefield::Vec{target->GetPositionX(), target->GetPositionY()});
+            assassin = battles->RaiseLoner(targetFacId, at, facing, player);
         }
-
-        // Single assassin
-        // Infiltrators — spawn using TARGET faction template so they blend in
-        std::string spawnArg = targetFacId + ":1";
-        auto soldiers = SpawnBattleSoldiers(nullptr,
-            RE::BSFixedString(spawnArg), spawnAnchor);
-
-        if (soldiers.empty()) {
-            logger::error("ExecuteAssassination: SpawnBattleSoldiers returned empty");
+        if (!assassin) {
+            logger::error("ExecuteAssassination: nobody could be made");
             return nullptr;
         }
 
-        // 3. Setup: strip factions, set kIgnoreFriendlyHits, passive aggression
+        // 3. In no faction at all (nobody's friend, nobody's crime to kill), and starting nothing until the blow.
+        BattleManager::StripFactions(assassin);
+        assassin->formFlags |= RE::TESForm::RecordFlags::kIgnoreFriendlyHits;
+        assassin->AsActorValueOwner()->SetActorValue(RE::ActorValue::kAggression, 0.f);
+        assassin->AsActorValueOwner()->SetActorValue(RE::ActorValue::kConfidence, 4.f);
+
         s_assassinFormIds.clear();
+        s_assassinFormIds.push_back(assassin->GetFormID());
         s_assassinTargetFormId = target->GetFormID();
         s_assassinLeaderName = target->GetDisplayFullName();
-
-        RE::Actor* assassin = nullptr;
-        for (auto* soldier : soldiers) {
-            if (!soldier) continue;
-
-            // Strip ALL factions — factionless means no crime consequences
-            std::vector<RE::TESFaction*> toRemove;
-            soldier->VisitFactions([&](RE::TESFaction* fac, std::int8_t) -> bool {
-                if (fac) toRemove.push_back(fac);
-                return false;
-            });
-            for (auto* fac : toRemove) {
-                soldier->AddToFaction(fac, -1);
-            }
-            soldier->formFlags |= RE::TESForm::RecordFlags::kIgnoreFriendlyHits;
-            soldier->AsActorValueOwner()->SetActorValue(RE::ActorValue::kAggression, 0.f);
-            soldier->AsActorValueOwner()->SetActorValue(RE::ActorValue::kConfidence, 4.f);
-
-            s_assassinFormIds.push_back(soldier->GetFormID());
-            assassin = soldier;
-
-            logger::info("ExecuteAssassination: soldier {:08X} ready (factionless, aggression 0)",
-                soldier->GetFormID());
-        }
-
-        logger::info("ExecuteAssassination: assassin={:08X}, target={}",
-            assassin ? assassin->GetFormID() : 0, target->GetDisplayFullName());
+        logger::info("ExecuteAssassination: assassin={:08X}, target={}", assassin->GetFormID(), target->GetDisplayFullName());
         return assassin;
+    }
+
+    void ManifestationFailed(RE::StaticFunctionTag*) { FactionPolitics::GetSingleton()->ManifestationFailed(); }
+
+    void ManifestationDone(RE::StaticFunctionTag*) { FactionPolitics::GetSingleton()->ManifestationDone(); }
+
+    RE::BSFixedString AssassinationOutcome(RE::StaticFunctionTag*, RE::BSFixedString targetFaction, RE::BSFixedString attackerFaction,
+                                           RE::BSFixedString leaderName, RE::BSFixedString outcome) {
+        auto* player = RE::PlayerCharacter::GetSingleton();
+        const std::string place = player ? std::string(GetActorParentLocationName(nullptr, player).c_str()) : std::string();
+        const std::string name = player ? player->GetDisplayFullName() : "a stranger";
+        const std::string hold = player ? NPCIndex::GetNPCHoldName(player) : std::string();
+        return RE::BSFixedString(FactionPolitics::GetSingleton()->AssassinationOutcome(
+            targetFaction.c_str(), attackerFaction.c_str(), leaderName.c_str(), outcome.c_str(), place, name, hold).c_str());
+    }
+
+    void BattleSetSkirmish(RE::StaticFunctionTag*, int size) { BattleManager::GetSingleton()->SetSkirmish(size); }
+
+    bool BattleFieldBusy(RE::StaticFunctionTag*) { return BattleManager::GetSingleton()->IsFieldBusy(); }
+
+    RE::BSFixedString BattleFlankLine(RE::StaticFunctionTag*, RE::BSFixedString side, int first, int count, RE::Actor* player) {
+        return RE::BSFixedString(BattleManager::GetSingleton()->ReinforceLine(side.c_str(), first, count, player, 1).c_str());
+    }
+
+    RE::BSFixedString BattleChampionLine(RE::StaticFunctionTag*, RE::BSFixedString side, RE::Actor* player) {
+        return RE::BSFixedString(BattleManager::GetSingleton()->ReinforceLine(side.c_str(), 0, 1, player, 2).c_str());
+    }
+
+    RE::BSFixedString BattleTurnCoats(RE::StaticFunctionTag*, RE::BSFixedString side) {
+        return RE::BSFixedString(BattleManager::GetSingleton()->TurnCoats(side.c_str()).c_str());
+    }
+
+    void BattleSetTwists(RE::StaticFunctionTag*, int champion, int flank, int turncoat) {
+        BattleManager::GetSingleton()->SetTwists(champion, flank, turncoat);
+    }
+
+    int PlayerFactionRank(RE::StaticFunctionTag*, RE::BSFixedString factionId) {
+        return FactionPolitics::GetSingleton()->PlayerRank(factionId.c_str());
+    }
+
+    RE::BSFixedString PlayerRankTitle(RE::StaticFunctionTag*, RE::BSFixedString factionId) {
+        auto* fp = FactionPolitics::GetSingleton();
+        return RE::BSFixedString(fp->RankTitle(factionId.c_str(), fp->PlayerRank(factionId.c_str())).c_str());
+    }
+
+    RE::BSFixedString PlayerDidFor(RE::StaticFunctionTag*, RE::BSFixedString factionId, RE::BSFixedString deed) {
+        // (A key from a script: read without regard to capitals.)
+        std::string what = deed.c_str();
+        for (auto& c : what) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        auto* fp = FactionPolitics::GetSingleton();
+        int risen = 0;
+        if (what == "quest") risen = fp->EarnRenown(factionId.c_str(), Ranks::Deed::Quest);
+        else if (what == "saved") risen = fp->EarnRenown(factionId.c_str(), Ranks::Deed::Saved);
+        if (risen > 0) fp->WritePoliticalStateFile();
+        return RE::BSFixedString(risen > 0 ? fp->RankTitle(factionId.c_str(), risen).c_str() : "");
+    }
+
+    RE::BSFixedString BattlePickAmbush(RE::StaticFunctionTag*, RE::Actor* player) {
+        return RE::BSFixedString(BattleManager::GetSingleton()->PickAmbush(player).c_str());
     }
 
     RE::Actor* GetAssassinationTarget(RE::StaticFunctionTag*) {
@@ -5431,6 +5564,21 @@ namespace IntelEngine::Papyrus {
     }
 
     void BattleNotePlayerLeft(RE::StaticFunctionTag*) { BattleManager::GetSingleton()->NotePlayerLeft(); }
+
+    RE::BSFixedString BattleCall(RE::StaticFunctionTag*) {
+        return RE::BSFixedString(BattleManager::GetSingleton()->Call().c_str());
+    }
+
+    void BattleTendBounty(RE::StaticFunctionTag*) { BattleManager::GetSingleton()->SuppressBountyTick(); }
+
+    RE::TESObjectREFR* BattleWayHome(RE::StaticFunctionTag*, RE::BSFixedString factionId, float x, float y, float dirX, float dirY, bool beaten,
+                                     RE::TESObjectREFR* notTo) {
+        return BattleManager::GetSingleton()->WayHome(factionId.c_str(), {x, y}, {dirX, dirY}, beaten, notTo ? notTo->GetFormID() : 0);
+    }
+
+    void BattleCallText(RE::StaticFunctionTag*, RE::BSFixedString factionId, RE::BSFixedString place) {
+        BattleManager::GetSingleton()->SetCallText(factionId.c_str(), place.c_str());
+    }
 
     RE::BSFixedString BattleFieldInfo(RE::StaticFunctionTag*) {
         return RE::BSFixedString(BattleManager::GetSingleton()->FieldInfo().c_str());
