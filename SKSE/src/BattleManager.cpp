@@ -1775,12 +1775,47 @@ namespace IntelEngine {
         return out.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
     }
 
+    namespace {
+        // The search for a field keeps its place between calls: one call looks for a quarter of a millisecond and
+        // says "looking", the next goes on where that one stopped. (In one go it took 0.7 to 1.1 ms of a frame on a
+        // small mod list and 1.5 to 1.7 on a big one: every question about the ground walks the navmesh of a cell.)
+        // The game's thread only.
+        struct FieldSearch {
+            bool on = false;
+            FrameClock::Time began;
+            RE::FormID world = 0;
+            Battlefield::Vec me{};
+            float z = 0.f;
+            int lineSize = 0;
+            std::vector<Battlefield::Vec> people;
+            std::vector<Battlefield::Candidate> candidates;
+            std::size_t next = 0;
+            int step = 0;               // how far the candidate at `next` has been looked at
+            Ground mid, a, b;
+            std::string why;
+            int looks = 0;
+            double spent = 0.0;         // ms of all its looks together
+            double longest = 0.0;       // and of the longest one
+        };
+        FieldSearch g_field;
+        constexpr double kFieldLookMs = 0.1;      // then whatever the question under way still takes: a look stays under half a millisecond
+    }
+
     std::string BattleManager::PickField(RE::Actor* player, RE::TESObjectREFR* place) {
         static FrameStats stats;
-        FrameClock clock("Battle: looking for a field", stats, FrameClock::Now(), 20);
+        const auto began = FrameClock::Now();
+        FrameClock clock("Battle: one look for a field", stats, began, 60);
+        auto& s = g_field;
         nlohmann::json out;
         out["ok"] = false;
-        const auto fail = [&out](const std::string& reason) {
+        const auto spentNow = [&began]() { return std::chrono::duration<double, std::milli>(FrameClock::Now() - began).count(); };
+        const auto tally = [&]() {
+            const double ms = spentNow();
+            s.spent += ms;
+            s.longest = (std::max)(s.longest, ms);
+        };
+        const auto fail = [&](const std::string& reason) {
+            s.on = false;
             out["reason"] = reason;
             return out.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
         };
@@ -1791,63 +1826,105 @@ namespace IntelEngine {
         // A town behind its walls is a small world of its own, hung onto the big one: no armies in its streets.
         if (world->parentWorld) return fail("the player is inside a walled town");
 
-        // Everybody who is not of a battle: where they are, no battle is fought.
-        auto [sideA, sideB] = ResolveBattleFactions();
-        std::vector<Battlefield::Vec> people;
-        // (Those the game runs in full around the player. The helper for "loaded actors" also walks the lists of people
-        // the game only keeps track of, a thousand and more of them all over the world: by itself that took over a
-        // millisecond here, and a stranger in another land with the same coordinates would have counted as near.)
-        if (auto* lists = RE::ProcessLists::GetSingleton()) {
-            for (const auto& handle : lists->highActorHandles) {
-                const auto held = handle.get();
-                auto* actor = held.get();
-                if (!actor || actor == player || !actor->Is3DLoaded() || actor->IsDead() || actor->IsDisabled()) continue;
-                if (actor->IsPlayerTeammate() || actor->GetWorldspace() != world) continue;
-                if (!actor->HasKeywordString("ActorTypeNPC")) continue;
-                if ((sideA && actor->IsInFaction(sideA)) || (sideB && actor->IsInFaction(sideB))) continue;
-                people.push_back({actor->GetPositionX(), actor->GetPositionY()});
-            }
-        }
-
         const Battlefield::Vec me{player->GetPositionX(), player->GetPositionY()};
-        const float facing = Battlefield::Norm(player->GetAngleZ() * kDegPerRad);
-        const bool hasPlace = place && place != player && place->GetWorldspace() == world;
-        const Battlefield::Vec placeAt = hasPlace ? Battlefield::Vec{place->GetPositionX(), place->GetPositionY()} : me;
-        const float z = player->GetPositionZ();
-        int lineSize = Battlefield::WaveSize(1);        // how many of a side are to be drawn up (fewer in a skirmish)
-        {
-            std::lock_guard<std::mutex> lock(mutex_);
-            if (activeBattle_) lineSize = activeBattle_->lineSize;
+        // A search begun elsewhere or long ago is no use: begin again.
+        if (s.on && (s.world != world->GetFormID() || Battlefield::Dist(s.me, me) > 600.f ||
+                     std::chrono::duration<double>(began - s.began).count() > 20.0)) {
+            s.on = false;
         }
-        std::string why = "no ground to stand on";
-        for (const auto& c : Battlefield::Candidates(me, facing, hasPlace, placeAt)) {
+        if (!s.on) {
+            s = FieldSearch{};
+            s.on = true;
+            s.began = began;
+            s.world = world->GetFormID();
+            s.me = me;
+            s.z = player->GetPositionZ();
+            s.why = "no ground to stand on";
+            // Everybody who is not of a battle: where they are, no battle is fought.
+            auto [sideA, sideB] = ResolveBattleFactions();
+            // (Those the game runs in full around the player. The helper for "loaded actors" also walks the lists of
+            // people the game only keeps track of, a thousand and more of them all over the world: by itself that took
+            // over a millisecond here, and a stranger in another land with the same coordinates would have counted as
+            // near.)
+            if (auto* lists = RE::ProcessLists::GetSingleton()) {
+                for (const auto& handle : lists->highActorHandles) {
+                    const auto held = handle.get();
+                    auto* actor = held.get();
+                    if (!actor || actor == player || !actor->Is3DLoaded() || actor->IsDead() || actor->IsDisabled()) continue;
+                    if (actor->IsPlayerTeammate() || actor->GetWorldspace() != world) continue;
+                    if (!actor->HasKeywordString("ActorTypeNPC")) continue;
+                    if ((sideA && actor->IsInFaction(sideA)) || (sideB && actor->IsInFaction(sideB))) continue;
+                    s.people.push_back({actor->GetPositionX(), actor->GetPositionY()});
+                }
+            }
+            const float facing = Battlefield::Norm(player->GetAngleZ() * kDegPerRad);
+            const bool hasPlace = place && place != player && place->GetWorldspace() == world;
+            const Battlefield::Vec placeAt = hasPlace ? Battlefield::Vec{place->GetPositionX(), place->GetPositionY()} : me;
+            s.candidates = Battlefield::Candidates(me, facing, hasPlace, placeAt);
+            s.lineSize = Battlefield::WaveSize(1);      // how many of a side are to be drawn up (fewer in a skirmish)
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (activeBattle_) s.lineSize = activeBattle_->lineSize;
+        }
+        ++s.looks;
+        const float z = s.z;
+        while (s.next < s.candidates.size()) {
+            if (spentNow() >= kFieldLookMs) {
+                tally();
+                out["reason"] = "looking";
+                return out.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
+            }
+            const auto& c = s.candidates[s.next];
+            const auto no = [&s](const char* why) {
+                s.why = why;
+                ++s.next;
+                s.step = 0;
+            };
             const auto field = Battlefield::Draw(c.centre, c.axis, 1, 1);
-            const Ground mid = GroundAt(tes, c.centre, z), a = GroundAt(tes, field.a.centre, z), b = GroundAt(tes, field.b.centre, z);
-            if (!mid.there || !a.there || !b.there) {
-                why = "the ground there is not in the world";
+            const auto bad = [&](const Ground& g) {
+                if (!g.there) return no("the ground there is not in the world"), true;
+                if (g.wet) return no("water"), true;
+                if (!g.walkable) return no("no ground to walk on"), true;
+                return false;
+            };
+            if (s.step == 0) {                  // the middle
+                s.mid = GroundAt(tes, c.centre, z);
+                if (!bad(s.mid)) s.step = 1;
                 continue;
             }
-            if (mid.wet || a.wet || b.wet) {
-                why = "water";
+            if (s.step == 1) {                  // one line
+                s.a = GroundAt(tes, field.a.centre, z);
+                if (bad(s.a)) continue;
+                if (std::fabs(s.mid.height - s.a.height) > Battlefield::kMaxRise) {
+                    no("too steep");
+                    continue;
+                }
+                s.step = 2;
                 continue;
             }
-            // Both lines, the middle, and the ground each line has to cross to get there.
-            const Ground wayA = GroundAt(tes, Battlefield::Along(c.centre, c.axis, -Battlefield::kLineGap / 4.f), z);
-            const Ground wayB = GroundAt(tes, Battlefield::Along(c.centre, c.axis, Battlefield::kLineGap / 4.f), z);
-            if (!mid.walkable || !a.walkable || !b.walkable || !wayA.walkable || !wayB.walkable || wayA.wet || wayB.wet) {
-                why = "no ground to walk on";
+            if (s.step == 2) {                  // the other
+                s.b = GroundAt(tes, field.b.centre, z);
+                if (bad(s.b)) continue;
+                if (std::fabs(s.a.height - s.b.height) > Battlefield::kMaxRise || std::fabs(s.mid.height - s.b.height) > Battlefield::kMaxRise) {
+                    no("too steep");
+                    continue;
+                }
+                s.step = 3;
                 continue;
             }
-            if (std::fabs(a.height - b.height) > Battlefield::kMaxRise || std::fabs(mid.height - a.height) > Battlefield::kMaxRise ||
-                std::fabs(mid.height - b.height) > Battlefield::kMaxRise) {
-                why = "too steep";
+            if (s.step == 3 || s.step == 4) {   // the ground each line has to cross to get to the middle
+                const float along = (s.step == 3 ? -1.f : 1.f) * Battlefield::kLineGap / 4.f;
+                const Ground way = GroundAt(tes, Battlefield::Along(c.centre, c.axis, along), z);
+                if (!way.walkable || way.wet) {
+                    no("no ground to walk on");
+                    continue;
+                }
+                ++s.step;
                 continue;
             }
-            // Every place somebody is to stand at, not the middles alone: a stream runs where the middle is dry.
-            // (Height and water only: two cheap questions a spot, asked of the few places that got this far.)
-            {
-                const int size = lineSize;
-                const auto lines = Battlefield::Draw(c.centre, c.axis, size, size);
+            if (s.step == 5) {
+                // Every place somebody is to stand at, not the middles alone: a stream runs where the middle is dry.
+                // (Height and water only: two cheap questions a spot, asked of the few places that got this far.)
+                const auto lines = Battlefield::Draw(c.centre, c.axis, s.lineSize, s.lineSize);
                 bool standsInWater = false;
                 for (const auto* line : {&lines.a, &lines.b}) {
                     for (const auto& spot : line->spots) {
@@ -1862,23 +1939,25 @@ namespace IntelEngine {
                     if (standsInWater) break;
                 }
                 if (standsInWater) {
-                    why = "water where the lines would stand";
+                    no("water where the lines would stand");
                     continue;
                 }
-            }
-            bool crowded = false;
-            for (const auto& p : people) {
-                if (Battlefield::Dist(p, c.centre) < Battlefield::kClearOfPeople) {
-                    crowded = true;
-                    break;
+                bool crowded = false;
+                for (const auto& p : s.people) {
+                    if (Battlefield::Dist(p, c.centre) < Battlefield::kClearOfPeople) {
+                        crowded = true;
+                        break;
+                    }
                 }
-            }
-            if (crowded) {
-                why = "people about";
+                if (crowded) {
+                    no("people about");
+                    continue;
+                }
+                s.step = 6;
                 continue;
             }
             if (DoorNear(tes, c.centre, Battlefield::kClearOfHouses)) {
-                why = "houses";
+                no("houses");
                 continue;
             }
             {
@@ -1887,21 +1966,27 @@ namespace IntelEngine {
                     activeBattle_->fieldSet = true;
                     activeBattle_->fieldX = c.centre.x;
                     activeBattle_->fieldY = c.centre.y;
-                    activeBattle_->fieldZ = mid.height;
+                    activeBattle_->fieldZ = s.mid.height;
                     activeBattle_->fieldAxis = c.axis;
                 }
             }
             out["ok"] = true;
             out["x"] = c.centre.x;
             out["y"] = c.centre.y;
-            out["z"] = mid.height;
+            out["z"] = s.mid.height;
             out["axis"] = c.axis;
-            logger::info("Battle: a field {:.0f} units from the player ({}), lines along {:.0f} degrees; {} people about, none near it",
-                         Battlefield::Dist(me, c.centre), c.inView ? "where they look" : "out of their view", c.axis, people.size());
+            tally();
+            logger::info("Battle: a field {:.0f} units from the player ({}), lines along {:.0f} degrees; {} people about, none near it "
+                         "(found in {} looks, {:.2f} ms of the game's frames in all, the longest {:.2f} ms)",
+                         Battlefield::Dist(s.me, c.centre), c.inView ? "where they look" : "out of their view", c.axis, s.people.size(),
+                         s.looks, s.spent, s.longest);
+            s.on = false;
             return out.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
         }
-        logger::info("Battle: no field near the player ({})", why);
-        return fail(why);
+        tally();
+        logger::info("Battle: no field near the player ({}; {} looks, {:.2f} ms in all, the longest {:.2f} ms)", s.why, s.looks, s.spent,
+                     s.longest);
+        return fail(s.why);
     }
 
     std::string BattleManager::MusterLine(const std::string& side, int first, int count, RE::Actor* player) {
@@ -2427,6 +2512,8 @@ namespace IntelEngine {
             return "leads the soldiers of " + theA + ", drawn up for battle against " + theB + " near " + place +
                    ", and now gives the word to charge: a battle cry of a few words, shouted to the line";
         }
+        // The pay of a battle won when nobody of the player's side could bring it over (number: the gold).
+        if (what == "pay_sent") return CapThe(fp->GetFactionDisplayName(a)) + " send your pay on to you: " + std::to_string(number) + " gold.";
         if (what == "after_won") {
             // number: enemies this person cut down; other: the gold they are paid.
             std::string told = "has just won the battle near " + place + " against " + theB + ", with " + name + " fighting in the same line";

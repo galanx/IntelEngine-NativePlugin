@@ -527,7 +527,11 @@ namespace IntelEngine::Tales {
                 b.effectRole = person(rest(1), where.c_str());
                 const auto* who = personOf(b.effectRole);
                 if (b.effectRole == A::RAsker || (who && !who->canJail)) {
-                    fail(where + ": " + rest(1) + " cannot be " + (words[0] == "jail" ? "taken by the guard" : "sent away"));
+                    // (Both are named: told only "cannot be sent away", the author's second attempt had the same
+                    // person taken by the guard instead, and a good story was thrown away. Full mod list, 2026-11-21.)
+                    fail(where + ": " + rest(1) + " cannot be " + (words[0] == "jail" ? "taken by the guard" : "sent away") +
+                         ", nor " + (words[0] == "jail" ? "sent away" : "taken by the guard") +
+                         " (their line has no such \"May\"): give that branch another consequence, or none");
                     return;
                 }
                 b.effect = words[0] == "jail" ? A::Effect::Jail : A::Effect::Leave;

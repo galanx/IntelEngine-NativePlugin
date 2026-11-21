@@ -214,6 +214,9 @@ namespace IntelEngine {
         // (Track; only that function touches these). A load starts it over (m_scanEpoch, from Revert).
         std::vector<RE::ActorHandle> m_scanHandles;         // the pass under way
         std::size_t m_scanAt = 0;
+        bool m_collecting = false;                          // the handles of the next pass are being gathered
+        int m_collectTier = 0;                              // which of the game's four lists, and how far into it
+        std::uint32_t m_collectAt = 0;
         std::vector<RE::FormID> m_scanFound;                // teammates found in it so far
         std::vector<RE::FormID> m_servingIds;               // the last pass that was finished
         bool m_servingKnown = false;

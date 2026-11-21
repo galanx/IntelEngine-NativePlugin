@@ -35,9 +35,15 @@ the dry ground beside the meadery.
 
 Soldiers are made at their own spot in the line, disabled, and faded in by the script, one per call with a frame
 between: nobody appears where the player is looking from close by, and no frame makes more than one.
-Measured: one soldier costs 0.3 to 0.85 ms of the frame it is made in (the game's own making of an actor is 0.5 to
-0.8 of that); `PickField` 0.8 to 1.1 ms, once a battle. Both are over the half millisecond the mod holds itself to
-elsewhere, and both are single frames, never two in a row.
+The search goes over as many frames as it needs: one call of `PickField` looks for a tenth of a millisecond, finishes
+the question it is on (every question about the ground walks a cell's navmesh), answers "looking", and the script
+asks again a frame later (`FindingField` keeps the poll off the battle meanwhile: it would take a battle without
+lines for one left over, and close it). On the full Isekai list, 2026-11-21: six looks, 0.77 ms in all, the longest
+0.22 ms. In one go the search had taken 0.8 to 1.1 ms on the small test list and 1.5 to 1.7 ms on the full one.
+
+Making a soldier is still over the half millisecond the mod holds itself to: 0.3 to 0.85 ms of its frame on the test
+list, 1.0 to 1.4 ms on the full one, of which the game's own making of an actor is 0.8 to 1.0. One frame at a time,
+never two in a row.
 
 ## 3. Muster, the hail, the charge
 
@@ -112,9 +118,29 @@ A hidden force and turncoats in one battle leave the champions out. What is in s
   comes at a jog; whoever leaves, at a walk or a run (`PaceFor`).
 - Someone of the player's side who is still standing comes over (from anywhere on the field), says what he
   thinks of it in his own words, and hands over the pay: `Battlefield::Pay`, raised by rank. Nothing is paid before
-  he has spoken. He stops some 220 units off (`AllyStopsDistance`), turns to the player and stands while he
-  speaks. (His order to come to the player used to stay on him until he had spoken, and the words take their
-  time: he walked into the player again and again. The user, 2026-11-21.)
+  he has spoken. He stops a few steps off, turns to the player and stands while he speaks. (His order to come to
+  the player used to stay on him until he had spoken, and the words take their time: he walked into the player
+  again and again. The user, 2026-11-21.)
+- He comes the way a companion follows: on `IntelEngine_FollowPlayerTaskPackage`, which has no place to get to. On
+  the travel order, with the player as its place, the order did not take for somebody fresh out of the fight: on
+  the full Isekai list the Legion's captain walked on with the march, past the player and off toward Riverwood,
+  twice in three battles, and a battle won paid nothing. If he does not turn within four seconds he is told again
+  another way (the travel order at a run; then with his AI switched off and on and told to follow; then the other
+  pace), and the log says each step (`Battle: ... is to come over`, `comes over`, `has not taken`). The time he is
+  given is by the clock and as long as the way: 25 s and a second for every 60 units, at most 110.
+- The pay of a battle won is never lost: when nobody of the player's side is left, none is near, or the one who set
+  out did not get there, it is sent on and the player is told (`PaySentOn`, `BattleSay("pay_sent")`).
+- Somebody who was sent off and stands (`StandingAbout`, every look of the aftermath): told again after two looks
+  without a step, again another way after four, with a step aside if nobody is looking (one caught on a fence's
+  corner walked off as soon as he was brushed against), and after five he rests where he is on the sandbox
+  package. Seen on the full list: a beaten Stormcloak in a farm's fenced cabbage patch, on his order to run and not
+  moving; three soldiers standing 3,700 to 4,700 units off at two and at five minutes.
+- Only what has left the loaded area is taken out of the game. A soldier or a body the game still holds, however
+  far off and unseen, is left alone: switching a loaded body off and deleting it takes its skeleton apart while
+  other code works on it. On the full list that ended in a crash inside the hair-and-cloth physics
+  (`hdt::ActorManager::setSkeletonsActive`, walking the skeleton of a male soldier) eighteen seconds after a soldier
+  2,500 units off had been removed. It had been done from 7,000 units since 3.8.1. The walkers leave the loaded
+  area on their own way to a town; one who cannot get away stays, resting, until the player has gone.
 - Standing: the side fought for, the side fought against, soldiers of a side the player was not at war with,
   a side turned down, walking away after taking a side.
 - The battle is recorded once, as it was fought, and word of it starts in the hold it was fought in. The player's
