@@ -506,12 +506,21 @@ namespace IntelEngine {
         request->pool.rumored = request->rumored && written.empty();
         request->afar = afar;
         request->otherHold = taleSeed && taleSeed->otherHold;
+        const auto atPeople = std::chrono::steady_clock::now();
         // ---- the people: the asker, then those of the town the game ties to them, then the town's known faces
         struct Candidate {
             const Folk* folk;
             int score;
         };
         std::vector<Candidate> others;
+        // (Where the time of this part goes, for the log line: on a big mod list it was 2.35 ms of one frame.)
+        double msScore = 0.0, msUsable = 0.0, msWords = 0.0, msHeart = 0.0, msQuests = 0.0;
+        const auto lap = [](std::chrono::steady_clock::time_point& t) {
+            const auto now = std::chrono::steady_clock::now();
+            const double ms = std::chrono::duration<double, std::milli>(now - t).count();
+            t = now;
+            return ms;
+        };
         auto* askerBase = asker->GetActorBase();
         const auto seed = A::detail::Mix(asker->GetFormID(), static_cast<std::uint32_t>(NowDays() * 1440.0f));
         for (const auto& f : m_folk) {
@@ -525,9 +534,16 @@ namespace IntelEngine {
             others.push_back({&f, score});
         }
         std::sort(others.begin(), others.end(), [](const Candidate& x, const Candidate& y) { return x.score > y.score; });
+        msScore = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - atPeople).count();
 
         nlohmann::json people = nlohmann::json::array();
         const auto add = [&](const Folk& f, bool isAsker) {
+            auto t = std::chrono::steady_clock::now();
+            struct Tally {
+                double& into;
+                std::chrono::steady_clock::time_point& t;
+                ~Tally() { into += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t).count(); }
+            } rest{msQuests, t};          // whatever is left when the function ends, by any way out
             auto* actor = RE::TESForm::LookupByID<RE::Actor>(f.ref);
             if (!actor) return false;
             std::string reason;
@@ -552,6 +568,7 @@ namespace IntelEngine {
             // 2026-11-19, of a test in which Ysolda asked after Nazeem: "it kinda doesn't make sense").
             person.close = !isAsker && ((askerBase && npc && RE::BGSRelationship::GetRelationship(askerBase, npc)) ||
                                         (f.home != 0 && f.home == me->home));
+            msUsable += lap(t);
             if (person.name.empty()) return false;
             nlohmann::json j;
             j["key"] = person.key;
@@ -572,11 +589,13 @@ namespace IntelEngine {
             if (person.close) j["close"] = true;
             j["may"] = can;
             j["ties"] = TiesOf(npc);
+            msWords += lap(t);
             // What stands between them and the player, as the game and its mods keep it: fact for the author, so no
             // story gives the player's wife another love or reopens what the player turned down.
             if (auto* whoRef = RE::TESForm::LookupByID<RE::Actor>(f.ref)) {
                 if (const auto heart = HeartBridge::WordsFor(whoRef); !heart.empty()) j["heart"] = heart;
             }
+            msHeart += lap(t);
             // Who holds office in the hold (the jarl, the steward) has a part in Skyrim's own story: a tale may bring a
             // matter before them, never make them the guilty one (the first model-written politics tale made the
             // jarl's steward a secret smuggler, 2026-11-19).
@@ -637,6 +656,7 @@ namespace IntelEngine {
             logger::info("Tales: no tale for {}: too few free people in {}", asker->GetDisplayFullName(), NameOf(me->town));
             return false;
         }
+        const auto atCompanions = std::chrono::steady_clock::now();
         // ---- old companions: former followers living a life of their own, wherever it has taken them. A story may
         // lead the player to them (a talk with someone out at a ruin is a journey there) or have them seek the player
         // out; they are never jailed, sent away or fought, and nothing is hidden with them (the user, 2026-11-19:
@@ -678,6 +698,7 @@ namespace IntelEngine {
         }
         request->pool.items = ItemChoices();
 
+        const auto atPlaces = std::chrono::steady_clock::now();
         // ---- places out in the world in the town's hold, the nearest first, at most two of a kind
         nlohmann::json places = nlohmann::json::array();
         {
@@ -760,6 +781,7 @@ namespace IntelEngine {
         auto* player = RE::PlayerCharacter::GetSingleton();
         request->pool.gold = A::RewardGold(A::Pattern::Thief, player ? player->GetLevel() : 10);
 
+        const auto atGenre = std::chrono::steady_clock::now();
         // The genre to lean toward: one not told lately, in an order of the day.
         std::vector<std::string> fresh;
         for (const auto* g : kGenres) {
@@ -968,10 +990,16 @@ namespace IntelEngine {
         m_taleBusy.store(true);
         g_requestAt = real;
         g_request = request;
-        logger::info("Tales: asking for a tale of {} in {} ({} people, {} places, {} items, leaning {}, {} told before; {:.2f} ms)",
+        const auto ended = std::chrono::steady_clock::now();
+        const auto part = [](auto from, auto to) { return std::chrono::duration<double, std::milli>(to - from).count(); };
+        logger::info("Tales: asking for a tale of {} in {} ({} people, {} places, {} items, leaning {}, {} told before; {:.2f} ms "
+                     "of the game's frame: {:.2f} before the people, {:.2f} the people ({:.2f} choosing among the town, {:.2f} who may "
+                     "do what, {:.2f} work and ties, {:.2f} the heart, {:.2f} the game's quests and the rest), {:.2f} old companions, "
+                     "{:.2f} the places, {:.2f} the rest)",
                      request->pool.people[0].name, NameOf(me->town), request->pool.people.size(), request->pool.sites.size(),
-                     request->pool.items.size(), lean, told.size(),
-                     std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count());
+                     request->pool.items.size(), lean, told.size(), part(started, ended), part(started, atPeople),
+                     part(atPeople, atCompanions), msScore, msUsable, msWords, msHeart, msQuests, part(atCompanions, atPlaces),
+                     part(atPlaces, atGenre), part(atGenre, ended));
         if (!written.empty()) {
             std::string who;
             for (const auto& p : request->pool.people) {

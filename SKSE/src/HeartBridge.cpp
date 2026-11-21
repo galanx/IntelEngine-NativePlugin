@@ -6,7 +6,9 @@
 #include "LivingWorldBridge.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cctype>
+#include <chrono>
 #include <mutex>
 #include <unordered_map>
 
@@ -35,17 +37,55 @@ namespace IntelEngine::HeartBridge {
         std::mutex g_mutex;
         std::unordered_map<RE::FormID, Script> g_told;
 
-        // The rank in a faction, -1 when not a member.
-        int RankIn(RE::Actor* actor, RE::TESFaction* faction) {
-            if (!actor || !faction) return -1;
-            // The game's own record is looked at first, then what has changed since (joined, left, promoted): the
-            // last word counts, and a rank below nothing means they have left.
-            int rank = -1;
+        // The factions that say how it stands, and whether an intimacy mod is installed. Looked up once: asked for by
+        // a plugin's name, the game walks its whole load order, and on a big mod list four such walks a person were
+        // most of the time a story's request took in its frame (1.7 of 4.2 ms for ten people, 2026-11-21). The load
+        // order does not change while the game runs.
+        struct Known {
+            bool looked = false;
+            RE::TESFaction* playerMarried = nullptr;
+            RE::TESFaction* potentialMarriage = nullptr;
+            RE::TESFaction* bond = nullptr;
+            RE::TESFaction* marriage = nullptr;
+            bool intimacyMod = false;
+        };
+        Known TheKnown() {
+            static Known known;
+            static std::mutex guard;
+            std::scoped_lock lock(guard);
+            if (!known.looked) {
+                if (auto* data = RE::TESDataHandler::GetSingleton()) {
+                    known.playerMarried = data->LookupForm<RE::TESFaction>(kPlayerMarriedFaction, "Skyrim.esm");
+                    known.potentialMarriage = data->LookupForm<RE::TESFaction>(kPotentialMarriageFaction, "Skyrim.esm");
+                    known.bond = data->LookupForm<RE::TESFaction>(kBondFaction, kRelationships);
+                    known.marriage = data->LookupForm<RE::TESFaction>(kMarriageFaction, kRelationships);
+                    known.intimacyMod = data->LookupModByName("OStim.esp") != nullptr || data->LookupModByName("OStimNet.esp") != nullptr;
+                    // Kept only once the game's own records are there: before that there is nothing to find.
+                    known.looked = known.playerMarried != nullptr;
+                }
+            }
+            return known;
+        }
+
+        // The ranks in those factions, -1 when not a member: one pass over what somebody belongs to. The game's own
+        // record is looked at first, then what has changed since (joined, left, promoted): the last word counts, and a
+        // rank below nothing means they have left.
+        struct Ranks {
+            int playerMarried = -1, potentialMarriage = -1, bond = -1, marriage = -1;
+        };
+        Ranks RanksOf(RE::Actor* actor, const Known& known) {
+            Ranks ranks;
+            if (!actor) return ranks;
             actor->VisitFactions([&](RE::TESFaction* f, std::int8_t r) {
-                if (f == faction) rank = r;
+                if (!f) return false;
+                const int rank = r < 0 ? -1 : r;
+                if (f == known.playerMarried) ranks.playerMarried = rank;
+                else if (f == known.potentialMarriage) ranks.potentialMarriage = rank;
+                else if (f == known.bond) ranks.bond = rank;
+                else if (f == known.marriage) ranks.marriage = rank;
                 return false;
             });
-            return rank < 0 ? -1 : rank;
+            return ranks;
         }
 
         // The game's own rank between the two: 4 lover .. 0 acquaintance .. -4 archnemesis.
@@ -58,13 +98,26 @@ namespace IntelEngine::HeartBridge {
         // The game's own sign that the player is looking for someone: without it the people one can marry say nothing
         // of the kind, and neither does a story (nobody is courted who did not ask to be).
         bool PlayerWearsAmuletOfMara() {
+            // (Asked for every person of a story's request in one frame: the player's things are gone through once a
+            // quarter of a second, not once a person.)
+            static std::atomic<long long> lookedAt{0};
+            static std::atomic<bool> worn{false};
+            const long long now = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+            if (lookedAt.load() != 0 && now - lookedAt.load() < 250) return worn.load();
+            bool found = false;
             auto* player = RE::PlayerCharacter::GetSingleton();
             auto* changes = player ? player->GetInventoryChanges() : nullptr;
-            if (!changes || !changes->entryList) return false;
-            for (auto* entry : *changes->entryList) {
-                if (entry && entry->object && entry->object->GetFormID() == kAmuletOfMara && entry->IsWorn()) return true;
+            if (changes && changes->entryList) {
+                for (auto* entry : *changes->entryList) {
+                    if (entry && entry->object && entry->object->GetFormID() == kAmuletOfMara && entry->IsWorn()) {
+                        found = true;
+                        break;
+                    }
+                }
             }
-            return false;
+            worn.store(found);
+            lookedAt.store(now == 0 ? 1 : now);
+            return found;
         }
 
         bool WedToSomeoneElse(RE::TESNPC* npc, RE::TESNPC* pc) {
@@ -131,25 +184,25 @@ namespace IntelEngine::HeartBridge {
     Hearts::Heart HeartOf(RE::Actor* actor) {
         Hearts::Heart h;
         auto* player = RE::PlayerCharacter::GetSingleton();
-        auto* data = RE::TESDataHandler::GetSingleton();
         auto* base = actor ? actor->GetActorBase() : nullptr;
-        if (!actor || !base || !player || !data || actor == player) return h;
+        if (!actor || !base || !player || actor == player) return h;
         auto* pc = player->GetActorBase();
-        const bool wedToPlayer = RankIn(actor, data->LookupForm<RE::TESFaction>(kPlayerMarriedFaction, "Skyrim.esm")) >= 0;
+        const Known known = TheKnown();
+        const Ranks ranks = RanksOf(actor, known);
+        const bool wedToPlayer = ranks.playerMarried >= 0;
         const bool wedElsewhere = WedToSomeoneElse(base, pc);
         // Without a relationship mod the game's own rule stands in: someone it lets the player marry, on friendly
         // terms, while the player wears an Amulet of Mara.
-        const bool candidate = RankIn(actor, data->LookupForm<RE::TESFaction>(kPotentialMarriageFaction, "Skyrim.esm")) >= 0 &&
-                               PlayerWearsAmuletOfMara();
+        const bool candidate = ranks.potentialMarriage >= 0 && PlayerWearsAmuletOfMara();
         h = Hearts::FromTheGame(GameRank(base, pc), candidate, wedToPlayer, wedElsewhere);
 
         // A relationship mod keeps it: its word counts, the game's rank was only the fallback.
-        if (const int tier = RankIn(actor, data->LookupForm<RE::TESFaction>(kBondFaction, kRelationships)); tier >= 0) {
+        if (const int tier = ranks.bond; tier >= 0) {
             h.tracked = true;
             h.tier = static_cast<std::uint8_t>(std::min(tier, 5));
             h.sparked = false;   // its own flag decides (told by the script below)
         }
-        switch (RankIn(actor, data->LookupForm<RE::TESFaction>(kMarriageFaction, kRelationships))) {
+        switch (ranks.marriage) {
             case 1: h.wed = Hearts::Wed::Engaged; break;
             case 2: h.wed = Hearts::Wed::Married; break;
             case 3: case 4: case 6: h.wed = wedToPlayer ? Hearts::Wed::Married : Hearts::Wed::Ended; break;
@@ -180,8 +233,7 @@ namespace IntelEngine::HeartBridge {
         Hearts::Rules rules;
         rules.stories = !LivingWorldBridge::GetSingleton()->IsClassic();
         // The user's own condition for affairs: only where an intimacy mod is installed.
-        auto* data = RE::TESDataHandler::GetSingleton();
-        rules.affairs = data && (data->LookupModByName("OStim.esp") != nullptr || data->LookupModByName("OStimNet.esp") != nullptr);
+        rules.affairs = TheKnown().intimacyMod;
         return rules;
     }
 

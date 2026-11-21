@@ -376,27 +376,54 @@ namespace IntelEngine {
             m_servingIds.clear();
             m_scanAt = 0;
             m_servingKnown = false;
+            m_collecting = false;
         }
-        if (m_scanAt >= m_scanHandles.size()) {
+        if (!m_collecting && m_scanAt >= m_scanHandles.size()) {
             m_scanHandles.clear();
             m_scanFound.clear();
             m_scanAt = 0;
-            if (auto* lists = RE::ProcessLists::GetSingleton()) {
-                for (const auto* tier : {&lists->highActorHandles, &lists->middleHighActorHandles, &lists->middleLowActorHandles,
-                                         &lists->lowActorHandles}) {
-                    for (const auto& handle : *tier) m_scanHandles.push_back(handle);
+            m_collecting = true;
+            m_collectTier = 0;
+            m_collectAt = 0;
+        }
+        if (m_collecting) {
+            // Gathering the handles is work of its own on a big load order (copying 9,800 of them took 0.49 ms of one
+            // frame, 2026-11-21): a part a look, like the asking. A list that changes between two looks may be read
+            // with one actor twice or one missed; the next pass has them.
+            auto* lists = RE::ProcessLists::GetSingleton();
+            const RE::BSTArray<RE::ActorHandle>* tiers[4] = {lists ? &lists->highActorHandles : nullptr,
+                                                             lists ? &lists->middleHighActorHandles : nullptr,
+                                                             lists ? &lists->middleLowActorHandles : nullptr,
+                                                             lists ? &lists->lowActorHandles : nullptr};
+            bool outOfTime = false;
+            while (lists && m_collectTier < 4 && !outOfTime) {
+                const auto& tier = *tiers[m_collectTier];
+                while (m_collectAt < tier.size()) {
+                    m_scanHandles.push_back(tier[m_collectAt]);
+                    ++m_collectAt;
+                    if ((m_collectAt & 255u) == 0 && cost.Now() >= kScanMs) {
+                        outOfTime = true;
+                        break;
+                    }
+                }
+                if (m_collectAt >= tier.size()) {
+                    ++m_collectTier;
+                    m_collectAt = 0;
                 }
             }
+            if (!lists || m_collectTier >= 4) m_collecting = false;
         }
-        while (m_scanAt < m_scanHandles.size()) {
-            if (auto actor = m_scanHandles[m_scanAt].get(); actor && actor->IsPlayerTeammate()) m_scanFound.push_back(actor->GetFormID());
-            ++m_scanAt;
-            if ((m_scanAt & 63u) == 0 && cost.Now() >= kScanMs) break;
-        }
-        if (m_scanAt >= m_scanHandles.size()) {
-            m_servingIds = m_scanFound;
-            m_scanCount = static_cast<int>(m_scanHandles.size());
-            m_servingKnown = true;
+        if (!m_collecting) {
+            while (m_scanAt < m_scanHandles.size()) {
+                if (auto actor = m_scanHandles[m_scanAt].get(); actor && actor->IsPlayerTeammate()) m_scanFound.push_back(actor->GetFormID());
+                ++m_scanAt;
+                if ((m_scanAt & 63u) == 0 && cost.Now() >= kScanMs) break;
+            }
+            if (m_scanAt >= m_scanHandles.size()) {
+                m_servingIds = m_scanFound;
+                m_scanCount = static_cast<int>(m_scanHandles.size());
+                m_servingKnown = true;
+            }
         }
         std::vector<RE::Actor*> serving;
         const int loaded = m_scanCount;
