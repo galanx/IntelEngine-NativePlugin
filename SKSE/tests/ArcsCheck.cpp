@@ -355,6 +355,41 @@ static void SaveData() {
     Require(!Deserialize(v1, untouched, 4), "a version 1 record read as version 4 is refused, not misread");
 }
 
+static void WhoGoes() {
+    // An innkeeper the player has never spoken with, the player out at a farm of her town (played 2026-11-21).
+    Going innkeeper;
+    innkeeper.post = true;
+    Require(StaysPut(innkeeper) == Stays::Post, "an innkeeper does not leave her inn to look for anyone");
+    innkeeper.inTown = true;
+    innkeeper.knows = 2;
+    Require(StaysPut(innkeeper) == Stays::Post, "not even for someone she knows, across town");
+    innkeeper.with = true;
+    Require(StaysPut(innkeeper) == Stays::No, "but she speaks up when the player stands at her counter");
+    Going stranger;
+    stranger.inTown = true;
+    Require(StaysPut(stranger) == Stays::Stranger, "a stranger does not go looking for the player");
+    stranger.askingAround = true;
+    Require(StaysPut(stranger) == Stays::No, "unless as someone asking round their town for anyone");
+    stranger.inTown = false;
+    Require(StaysPut(stranger) == Stays::OutOfTown, "and never beyond its houses");
+    stranger.with = true;
+    Require(StaysPut(stranger) == Stays::No, "a stranger with trouble may take a chance on the stranger beside them");
+    Going friendly;
+    friendly.knows = 2;
+    Require(StaysPut(friendly) == Stays::OutOfTown, "who knows the player waits while the player is out of town");
+    friendly.inTown = true;
+    Require(StaysPut(friendly) == Stays::No, "and comes across town when the player is in it");
+    Going heard = friendly;
+    heard.knows = 1;
+    Require(StaysPut(heard) == Stays::No, "so does someone whose town has heard what the player did there");
+    Going sent;
+    sent.sent = true;
+    sent.post = true;
+    Require(StaysPut(sent) == Stays::No, "who was let come by the director's rule had a reason worth the road");
+    static_assert(kAcquaintedEvents > 2, "a greeting and a word back are no acquaintance");
+    static_assert((Flag::Sent & (Flag::Rumored | Flag::Deferred | Flag::CameFar | Flag::Heart)) == 0, "a bit of its own");
+}
+
 static void Words() {
     Arc a = Make(Pattern::Murder);
     a.phase = Phase::Open;
@@ -381,6 +416,7 @@ int main() {
         BookRules();
         SaveData();
         Words();
+        WhoGoes();
         std::cout << "ArcsCheck: all passed\n";
         return 0;
     } catch (const std::exception& e) {

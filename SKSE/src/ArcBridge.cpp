@@ -1017,6 +1017,11 @@ namespace IntelEngine {
         }
     }
 
+    namespace {
+        bool With(RE::Actor* who, float within);   // both further down, with the rule on who goes to the player
+        bool KeepsPost(RE::Actor* who);
+    }
+
     std::vector<std::uint32_t> ArcBridge::Lapse() {
         bool reconcile = false;
         std::vector<std::uint32_t> ids;
@@ -1065,12 +1070,29 @@ namespace IntelEngine {
                                       !(cell->IsInteriorCell() && cell != theirCell) && theirCell->IsInteriorCell() == cell->IsInteriorCell() &&
                                       asker->GetPosition().GetDistance(player->GetPosition()) <= 3000.0f;
                     if (!closeBy) {
+                        // Who knows the player and held back only because the player was out of town: with the player
+                        // back among its houses they come across it, as they would have.
+                        if (pending.awaits && PlayerInTownProper(a.place) && !KeepsPost(asker) && !CellAnalyzer::GetSingleton()->IsPlayerInOwnHome() &&
+                            !LivingWorldBridge::GetSingleton()->IsBadMoment() && A::QuietFor(m_book.LastBeat(a.id), NowDays(), A::kQuietHoursOwed) &&
+                            !StandsBy(a)) {
+                            pending.awaits = false;
+                            pending.offerSent = true;
+                            const auto arcId = a.id;
+                            const RE::FormID askerId = a.cast[A::RAsker];
+                            logger::info("Arcs: #{} the player is back in town: {} comes over, and the offer goes out", arcId, NameOf(askerId));
+                            if (auto* task = SKSE::GetTaskInterface()) {
+                                task->AddTask([this, arcId, askerId]() {
+                                    if (auto* found = RE::TESForm::LookupByID<RE::Actor>(askerId)) SendOffer(arcId, found);
+                                });
+                            }
+                            continue;
+                        }
                         // Talk in town for a good part of a day, and nobody came: some set out to find someone
-                        // themselves (Arcs.h, SetsOut). Through their own town only, by day, never into the player's
-                        // own home, and with the manners of any visitor. They ask on the way (the script's AskAround).
+                        // themselves (Arcs.h, SetsOut). Through their own town only (among its houses: not out to its
+                        // farms), by day, never into the player's own home, never from a post they keep, and with the
+                        // manners of any visitor. They ask on the way (the script's AskAround).
                         if ((a.flags & A::Flag::Rumored) && !pending.setOut && (pending.setOutForced || A::MaySetOutNow(a, NowDays(), HourNow()))) {
-                            auto* town = TownOf(cell && cell->GetLocation() ? cell->GetLocation() : player->GetCurrentLocation());
-                            if (town && town->GetFormID() == a.place && !CellAnalyzer::GetSingleton()->IsPlayerInOwnHome() &&
+                            if (PlayerInTownProper(a.place) && !KeepsPost(asker) && !CellAnalyzer::GetSingleton()->IsPlayerInOwnHome() &&
                                 !LivingWorldBridge::GetSingleton()->IsBadMoment() &&
                                 A::QuietFor(m_book.LastBeat(a.id), NowDays(), A::kQuietHoursOwed) && !StandsBy(a)) {
                                 pending.setOut = true;
@@ -1136,6 +1158,125 @@ namespace IntelEngine {
         return ids;
     }
 
+    namespace {
+        // With the player: the same room, or out of doors in the same world and this near.
+        bool With(RE::Actor* who, float within) {
+            auto* player = RE::PlayerCharacter::GetSingleton();
+            if (!who || !player || !who->Is3DLoaded()) return false;
+            auto* theirs = who->GetParentCell();
+            auto* cell = player->GetParentCell();
+            if (!theirs || !cell || theirs->IsInteriorCell() != cell->IsInteriorCell()) return false;
+            if (cell->IsInteriorCell() && cell != theirs) return false;
+            if (who->GetWorldspace() != player->GetWorldspace()) return false;
+            return who->GetPosition().GetDistance(player->GetPosition()) <= within;
+        }
+
+        // Somebody with a post to keep: who sells (a merchant at a stall, an innkeeper at her counter), who guards, who
+        // holds office. They do not leave it to look for anyone; they speak when the player is with them.
+        bool KeepsPost(RE::Actor* who) {
+            if (!who) return false;
+            return who->GetVendorFaction() != nullptr || who->IsGuard() || InFaction(who, kJobJarl) || InFaction(who, kJobSteward) ||
+                   InFaction(who, kJobInnkeeper) || InFaction(who, kJobMerchant);
+        }
+    }
+
+    bool ArcBridge::PlayerInTownProper(RE::FormID townId) {
+        auto* player = RE::PlayerCharacter::GetSingleton();
+        auto* cell = player ? player->GetParentCell() : nullptr;
+        if (!cell) return false;
+        auto* here = TownOf(cell->GetLocation() ? cell->GetLocation() : player->GetCurrentLocation());
+        if (!here || (townId && here->GetFormID() != townId)) return false;
+        const RE::FormID town = here->GetFormID();
+        if (cell->IsInteriorCell()) {
+            // Indoors: where the player last stood under the sky says whether this house is one of the town's. (Not
+            // seen yet, a save loaded indoors: taken for one.)
+            const auto last = m_outdoorTown.load();
+            return last == town || last == 0xFFFFFFFFu;
+        }
+        bool proper = false;
+        if (auto* world = player->GetWorldspace(); world && world->parentWorld) {
+            proper = true;                       // behind the walls, in the town's own little world
+        } else if (world) {
+            // An open town reaches a little way round its marker. A walled one has nothing of its own out here: its
+            // farms, its meadery and its stables are the hold's.
+            bool walled = false;
+            if (const auto it = m_walled.find(town); it != m_walled.end()) {
+                walled = it->second;
+            } else {
+                if (auto* data = RE::TESDataHandler::GetSingleton()) {
+                    for (auto* w : data->GetFormArray<RE::TESWorldSpace>()) {
+                        if (w && w->parentWorld && w->location && TownOf(w->location) == here) {
+                            walled = true;
+                            break;
+                        }
+                    }
+                }
+                m_walled[town] = walled;
+            }
+            if (!walled) {
+                auto* marker = std::as_const(here->worldLocMarker).get().get();
+                proper = !marker || (marker->GetWorldspace() == world &&
+                                     marker->GetPosition().GetDistance(player->GetPosition()) <= A::kTownReach);
+            }
+        }
+        m_outdoorTown.store(proper ? town : 0u);
+        return proper;
+    }
+
+    A::Stays ArcBridge::WhyStays(std::uint32_t id, RE::Actor* asker, bool& knowsPlayer) {
+        knowsPlayer = false;
+        A::Going going;
+        RE::FormID town = 0;
+        {
+            std::scoped_lock lock(m_mutex);
+            const auto* a = m_book.Find(id);
+            if (!a || !asker) return A::Stays::No;
+            town = a->place;
+            going.sent = (a->flags & (A::Flag::CameFar | A::Flag::Sent)) != 0;
+            if (const auto it = m_pending.find(id); it != m_pending.end()) going.askingAround = it->second.setOut || it->second.sought;
+        }
+        going.with = With(asker, A::kWithPlayer);
+        going.post = KeepsPost(asker);
+        going.inTown = PlayerInTownProper(town);
+        going.knows = KnowsPlayer(asker, town);
+        knowsPlayer = going.knows > 0;
+        return A::StaysPut(going);
+    }
+
+    void ArcBridge::OfferWaits(std::uint32_t id, A::Stays why, bool knowsPlayer) {
+        bool talk = false;
+        RE::FormID askerId = 0, town = 0, home = 0;
+        {
+            std::scoped_lock lock(m_mutex);
+            auto* a = m_book.Find(id);
+            if (!a || a->phase != A::Phase::Planned) return;
+            auto& pending = m_pending[id];
+            pending.offerSent = false;
+            pending.deferredAt = RealSeconds();
+            // Who knows the player and held back only because the player is out of town comes once the player is back.
+            pending.awaits = why == A::Stays::OutOfTown && knowsPlayer;
+            a->deadline = std::max(a->deadline, NowDays() + 4.0f);   // it keeps for a few days
+            talk = (a->flags & A::Flag::Rumored) == 0;
+            a->flags |= A::Flag::Deferred | A::Flag::Rumored;
+            askerId = a->cast[A::RAsker];
+            town = a->place;
+            if (const Folk* me = FolkOf(askerId)) home = me->home;
+            logger::info("Arcs: #{} {} does not go looking for the player ({}): the story waits until the two meet", id, NameOf(askerId),
+                         why == A::Stays::Post ? "they have a post to keep" : why == A::Stays::OutOfTown ? "the player is not in their town"
+                                                                                                          : "they have never had to do with the player");
+        }
+        if (!talk) return;
+        // What troubles them goes round as talk, with where to find them: the innkeeper brings it up, anyone may
+        // mention it, and the player may go to them or not.
+        std::string hook = NameOf(askerId) + " has trouble, and has been asking around for someone who will look into it.";
+        auto* homeCell = home ? RE::TESForm::LookupByID<RE::TESObjectCELL>(home) : nullptr;
+        if (const char* homeName = homeCell ? homeCell->GetFullName() : nullptr; homeName && *homeName) {
+            hook += " " + NameOf(askerId) + " lives at " + homeName + ".";
+        }
+        RumorBridge::GetSingleton()->Note(Rumors::Kind::Trouble, hook, town, 0, askerId, Rumors::Owner::Arc, id, 0.65f, true);
+        logger::info("Arcs: #{} becomes talk in town: {}", id, hook);
+    }
+
     void ArcBridge::Pace() {
         auto* player = RE::PlayerCharacter::GetSingleton();
         if (!player || !m_catalogued || !m_storiesOn.load()) return;
@@ -1173,6 +1314,8 @@ namespace IntelEngine {
         std::sort(folk.begin(), folk.end(), [seed](const Folk* x, const Folk* y) {
             return A::detail::Mix(seed, x->ref) < A::detail::Mix(seed, y->ref);
         });
+        const auto started = std::chrono::steady_clock::now();
+        const auto spent = [&] { return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count(); };
         // Those who have had to do with the player come first (the order of the hour among them is kept).
         std::unordered_map<RE::FormID, int> knows;
         for (const auto* f : folk) {
@@ -1181,25 +1324,25 @@ namespace IntelEngine {
         }
         std::stable_sort(folk.begin(), folk.end(), [&](const Folk* x, const Folk* y) { return knows[x->ref] > knows[y->ref]; });
         int tries = 0;
-        const auto started = std::chrono::steady_clock::now();
-        const auto spent = [&] { return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count(); };
+        const bool inTown = PlayerInTownProper(townId);
         for (const auto* f : folk) {
             if (++tries > 6) break;
             auto* asker = RE::TESForm::LookupByID<RE::Actor>(f->ref);
             if (!asker || asker->IsDead() || asker->IsDisabled()) continue;
             if (AskedWithin(asker->GetFormID(), kAskerRestDays)) continue;
             if (NPCIndex::BlockedForStories(asker)) continue;   // the user's own lists
-            // A stranger who has heard nothing of the player does not go looking for them: only when the player is
-            // right there, where a stranger with trouble might take a chance on a stranger.
+            // Who would come to the player with it (Arcs.h, StaysPut): not a stranger unless the player is right
+            // there, nobody with a post to keep, and nobody out of their own town after a player who is beyond its
+            // houses. For the others their trouble becomes talk: the player hears of it (at the inn, from anyone) and
+            // may go to them. Before, such a story was simply never told.
             TaleSeed talk;
-            if (knows[f->ref] == 0) {
-                const bool there = asker->Is3DLoaded() && asker->GetWorldspace() == player->GetWorldspace() &&
-                                   asker->GetParentCell() && cell && asker->GetParentCell()->IsInteriorCell() == cell->IsInteriorCell() &&
-                                   (!cell->IsInteriorCell() || asker->GetParentCell() == cell) &&
-                                   asker->GetPosition().GetDistance(player->GetPosition()) < 2500.0f;
-                // Elsewhere in town their trouble becomes talk: the player hears of it (at the inn, from anyone) and
-                // may go to them. Before, such a story was simply never told.
-                if (!there) talk.rumored = true;
+            {
+                A::Going going;
+                going.with = With(asker, 2500.0f);
+                going.post = KeepsPost(asker);
+                going.inTown = inTown;
+                going.knows = knows[f->ref];
+                if (A::StaysPut(going) != A::Stays::No) talk.rumored = true;
             }
             // A tale the dungeon master writes for them, when a model can be asked; its answer brings the offer.
             if (RequestTale(asker, {}, talk.rumored ? &talk : nullptr)) {
@@ -1214,14 +1357,7 @@ namespace IntelEngine {
             logger::info("Arcs: #{} begins in {} after {:.1f} hours there: {} comes to the player ({:.2f} ms)", id, PlaceName(townId),
                          (now - m_paceSince) * 24.0f, NameOf(f->ref), spent());
             m_paceSince = now;
-            if (auto* source = SKSE::GetModCallbackEventSource()) {
-                SKSE::ModCallbackEvent event{};
-                event.eventName = "IntelEngine_ArcOffer";
-                event.strArg = "";
-                event.numArg = static_cast<float>(id);
-                event.sender = asker;
-                source->SendEvent(&event);
-            }
+            SendOffer(id, asker);   // by the one door every offer goes out of: its manners hold here too
             return;
         }
         logger::info("Arcs: nobody in {} has a story for the player now ({:.2f} ms)", PlaceName(townId), spent());
@@ -2965,16 +3101,26 @@ namespace IntelEngine {
     int ArcBridge::KnowsPlayer(RE::Actor* actor, RE::FormID town) const {
         if (!actor) return 0;
         const RE::FormID id = actor->GetFormID();
-        if (MemoryDB::GetSingleton()->HasMetPlayer(id) || DialogueTracker::GetSingleton()->GetCount(id) > 0 ||
-            LivingWorldBridge::GetSingleton()->CloseToPlayer(actor)) {
+        // Has had to do with the player: the two have talked, not once in passing (SkyrimNet counts what passed
+        // between them), or the player once travelled with them. It used to be true for anybody who had said one line
+        // to anyone since the game was started (the counter kept for refreshing bios was asked), and for anybody
+        // SkyrimNet had seen with the player once: an innkeeper in whose inn the player had stood for a minute walked
+        // out of town to find them (2026-11-21).
+        if (MemoryDB::GetSingleton()->TimesWithPlayer(id) >= A::kAcquaintedEvents || LivingWorldBridge::GetSingleton()->CloseToPlayer(actor)) {
             return 2;
         }
         auto* player = RE::PlayerCharacter::GetSingleton();
         auto* npc = actor->GetActorBase();
         auto* pc = player ? player->GetActorBase() : nullptr;
         if (npc && pc && RE::BGSRelationship::GetRelationship(npc, pc)) return 2;   // the game itself ties them
-        // What the player did in their town went round it: an earlier story there that ended and was talked about.
         std::scoped_lock lock(m_mutex);
+        // A story of theirs the player took on: they have had to do with each other since.
+        if (std::any_of(m_book.all.begin(), m_book.all.end(), [&](const A::Arc& a) {
+                return a.cast[A::RAsker] == id && (a.phase == A::Phase::Open || (a.phase == A::Phase::Ended && a.node > 0));
+            })) {
+            return 2;
+        }
+        // What the player did in their town went round it: an earlier story there that ended and was talked about.
         const bool heard = town && std::any_of(m_book.all.begin(), m_book.all.end(), [&](const A::Arc& a) {
             return a.place == town && a.phase == A::Phase::Ended && a.rumor != 0;
         });
@@ -3355,6 +3501,9 @@ namespace IntelEngine {
         bool ArcInWilds(RE::StaticFunctionTag*, RE::TESObjectREFR* ref) { return InTheWilds(ref); }
         void ArcOfferLater(RE::StaticFunctionTag*, std::int32_t id) { ArcBridge::GetSingleton()->OfferLater(U(id)); }
         void ArcOfferDeferred(RE::StaticFunctionTag*, std::int32_t id) { ArcBridge::GetSingleton()->OfferDeferred(U(id)); }
+        void ArcOffer(RE::StaticFunctionTag*, std::int32_t id, RE::Actor* asker) {
+            if (asker) ArcBridge::GetSingleton()->Offer(U(id), asker);
+        }
         RE::Actor* ArcCompany(RE::StaticFunctionTag*, std::int32_t id) { return ArcBridge::GetSingleton()->Company(U(id)); }
         // What only scripts can read of someone's heart (other mods keep it in script storage): Hearts.h, HeartBridge.
         void ArcHeart(RE::StaticFunctionTag*, RE::Actor* who, std::int32_t sparked, std::int32_t stance, std::int32_t withChild,
@@ -3452,6 +3601,7 @@ namespace IntelEngine {
         a_vm->RegisterFunction("ArcDebugReach", script, ArcDebugReach); ++count;
         a_vm->RegisterFunction("ArcOfferLater", script, ArcOfferLater); ++count;
         a_vm->RegisterFunction("ArcOfferDeferred", script, ArcOfferDeferred); ++count;
+        a_vm->RegisterFunction("ArcOffer", script, ArcOffer); ++count;
         a_vm->RegisterFunction("ArcCompany", script, ArcCompany); ++count;
         a_vm->RegisterFunction("ArcEarshot", script, ArcEarshot); ++count;
         a_vm->RegisterFunction("ArcStoriesOn", script, ArcStoriesOn); ++count;

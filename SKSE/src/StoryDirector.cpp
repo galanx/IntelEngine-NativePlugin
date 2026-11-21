@@ -344,6 +344,13 @@ namespace IntelEngine::StoryDirector {
                             logger::info("[Director] {} acts: {} #{} planned by the engine; the offer goes out", chosen.name,
                                          isArc ? "story arc" : "quest", id);
                             task->AddTask([id, giverId, isArc]() {
+                                // A story of the town goes out by the door every offer goes out of: who comes to the
+                                // player and who waits is decided there (a stranger, somebody with a post to keep,
+                                // anybody once the player is beyond the town's houses).
+                                if (isArc) {
+                                    if (auto* giver = RE::TESForm::LookupByID<RE::Actor>(giverId)) ArcBridge::GetSingleton()->Offer(id, giver);
+                                    return;
+                                }
                                 auto* source = SKSE::GetModCallbackEventSource();
                                 if (!source) return;
                                 SKSE::ModCallbackEvent event{};

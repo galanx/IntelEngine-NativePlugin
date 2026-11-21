@@ -1094,12 +1094,21 @@ namespace IntelEngine {
                 if (level == L::kLover || level == L::kAlly || level == L::kConfidant) return true;
             }
         }
+        // The two factions are looked up once: asked for by a plugin's name the game walks its whole load order, and the
+        // pacer asks this of every person of a town in one frame.
+        static std::once_flag looked;
+        static RE::TESFaction* married = nullptr;
+        static RE::TESFaction* bond = nullptr;
         auto* data = RE::TESDataHandler::GetSingleton();
         if (!data) return false;
+        std::call_once(looked, [data]() {
+            married = data->LookupForm<RE::TESFaction>(0x0C6472, "Skyrim.esm");
+            bond = data->LookupForm<RE::TESFaction>(0xD63, "SNRom_Integration.esp");
+        });
         // Wed to the player (the game's own faction; SkyrimNet Relationships adds its spouses to it too).
-        if (auto* married = data->LookupForm<RE::TESFaction>(0x0C6472, "Skyrim.esm"); married && actor->IsInFaction(married)) return true;
+        if (married && actor->IsInFaction(married)) return true;
         // SkyrimNet Relationships, when installed: a Confidant or more (its bond faction's rank; its README invites the read).
-        if (auto* bond = data->LookupForm<RE::TESFaction>(0xD63, "SNRom_Integration.esp")) {
+        if (bond) {
             bool member = false;
             std::int8_t rank = -1;
             actor->VisitFactions([&](RE::TESFaction* faction, std::int8_t r) {

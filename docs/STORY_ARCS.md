@@ -201,11 +201,40 @@ the player (Faendal of Riverwood stood in the Bannered Mare a minute and a half 
 flagged `Deferred`, keeps three more days, and `ArcBridge::Lapse` sends the offer again when the asker is loaded, in the
 same space, within 3000 units, at least a minute later.
 
-**Strangers.** `ArcBridge::KnowsPlayer`: 2 met (SkyrimNet's memory of a meeting, a talk counted by the dialogue tracker,
-close to the player, a friend in the game's relationships), 1 the town heard of the player (an ended story with a
-rumour there), 0 stranger. The pacer asks those who know the player first; a stranger only when they are loaded within
-2500 units of the player in the same space ("a stranger with trouble takes a chance on a stranger who is right
-there"). The author is told `asker_knows` and writes the offer accordingly.
+**Strangers.** `ArcBridge::KnowsPlayer`: 2 has had to do with the player, 1 the town heard of the player (an ended
+story with a rumour there), 0 stranger. "Has had to do" is: SkyrimNet has seen the two have to do with each other at
+least six times (`Arcs::kAcquaintedEvents`, `MemoryDB::TimesWithPlayer`: a talk, not a greeting), or they once
+travelled with the player or are close in the game's own relationships (`LivingWorldBridge::CloseToPlayer`), or the
+game ties the two with a relationship record, or the player took on a story of theirs. The pacer asks those who know
+the player first. The author is told `asker_knows` and writes the offer accordingly.
+
+**Who goes to the player, and who waits (2026-11-21).** The user, of an innkeeper who walked out of Whiterun to a farm
+to ask a favour of a character who had stood in her inn for a minute: "he never met her before and she left her inn to
+track the player down as if she knows he is some kind of hero. Is this supposed to be immersive". Three holes let it
+happen. "Met" was true for anybody who had said one line to anyone since the game started (the counter kept for
+refreshing bios was asked) and for anybody SkyrimNet had seen with the player once. "In their town" was the name of
+the place the player stood in, and a town's name covers its farms and its meadery. And nothing kept somebody with a
+post at it. The rule now, one function (`Arcs::StaysPut`, cases in `ArcsCheck WhoGoes`), asked at the one door every
+offer goes out of (`ArcBridge::SendOffer`: the pacer's, a tale's, the director's picks of the town and the test hook
+`DebugArc` all pass it):
+- whoever the player is with (the same room, or out of doors within 3,000 units) may speak up there and then;
+- who was let come from elsewhere by the director's own distance rule (`Flag::CameFar`, `Flag::Sent`) comes;
+- somebody with a post to keep does not leave it to look for anyone (`KeepsPost`: who sells, who guards, the jarl,
+  the steward, innkeepers and merchants by their job factions);
+- nobody goes out of their own town after the player: `PlayerInTownProper` is inside a walled town's own world, or
+  within 4,500 units of an open town's map marker; indoors, wherever the player last stood under the sky;
+- a stranger does not go looking for the player, except as someone who has set out to ask round their town for anyone
+  (`SetsOut`, one in three of the stories that began as talk, after six hours, by day, and now only among the
+  town's houses and never from a post).
+Whoever stays waits (`OfferWaits`: `Flag::Deferred`, four more days), their trouble goes round as talk in town with
+where to find them, and the offer goes out when the two meet. Somebody who knows the player and held back only because
+the player was out of town comes across it once the player is back (`Pending::awaits`; not kept across a load: then
+they wait to meet). The director's "of the player's own settlement" (`NPCIndex::ReachOf` 0) holds only with the player
+among its houses; out at its farms they count as the rest of the hold, and need the reason and the acquaintance.
+Played on the test profile: the player at Chillfurrow Farm, Hulda given a story: "does not go looking for the player
+(they have a post to keep)", talk in town, nobody sent; the player back in the Bannered Mare: she came over inside her
+inn. Olava the same way ("the player is not in their town"), and she spoke up when the player walked into her part
+of town. Not played: somebody who knows the player coming across town once the player is back.
 
 **Never the game's own quests again.** The user: "Dungeon master written quests should never copy original game quests
 but should branch of them or even create new stories based on the knowledge, but never give the same letter via

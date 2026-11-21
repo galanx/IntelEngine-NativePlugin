@@ -722,11 +722,18 @@ namespace IntelEngine {
     namespace {
         std::mutex g_metMutex;
         std::unordered_set<RE::FormID> g_metPlayer;
+        std::unordered_map<RE::FormID, int> g_timesWithPlayer;
     }
 
     bool MemoryDB::HasMetPlayer(RE::FormID formId) const {
         std::scoped_lock lock(g_metMutex);
         return g_metPlayer.contains(formId);
+    }
+
+    int MemoryDB::TimesWithPlayer(RE::FormID formId) const {
+        std::scoped_lock lock(g_metMutex);
+        const auto it = g_timesWithPlayer.find(formId);
+        return it != g_timesWithPlayer.end() ? it->second : 0;
     }
 
     std::vector<PlayerRelationship> MemoryDB::GetPlayerRelationshipData() {
@@ -735,6 +742,7 @@ namespace IntelEngine {
             std::scoped_lock lock(g_metMutex);
             for (const auto& row : rows) {
                 if (row.formId && row.interactionCount > 0) g_metPlayer.insert(row.formId);
+                if (row.formId) g_timesWithPlayer[row.formId] = row.interactionCount;
             }
         }
         return rows;
