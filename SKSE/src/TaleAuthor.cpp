@@ -1120,6 +1120,7 @@ namespace IntelEngine {
         }
         a.place = request->town;
         if (request->otherHold) a.flags |= A::Flag::CameFar;
+        else if (request->afar) a.flags |= A::Flag::Sent;   // the director's rule let them come from elsewhere in the hold
         if (request->heart) a.flags |= A::Flag::Heart;
         a.seed = request->seed;
         g_request.reset();
@@ -1181,6 +1182,14 @@ namespace IntelEngine {
         if (auto* by = Company(id)) {
             const char* name = by->GetDisplayFullName();
             OfferDeferred(id, name && *name ? name : "someone");
+            return;
+        }
+        // Nor does somebody go looking for the player who has no business to: a stranger, somebody with a post to
+        // keep, anybody at all once the player is beyond their town's houses (Arcs.h, StaysPut). The story waits for
+        // the two to meet, and is talk in town meanwhile.
+        bool knowsPlayer = false;
+        if (const auto why = WhyStays(id, asker, knowsPlayer); why != A::Stays::No) {
+            OfferWaits(id, why, knowsPlayer);
             return;
         }
         if (auto* source = SKSE::GetModCallbackEventSource()) {

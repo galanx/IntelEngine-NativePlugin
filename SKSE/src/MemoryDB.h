@@ -204,6 +204,9 @@ namespace IntelEngine {
         /** Has this NPC ever had to do with the player, by the last relationship data read (the director reads it
          *  on every round, off the game's thread)? False before the first read. Any thread. */
         bool HasMetPlayer(RE::FormID formId) const;
+        /** How many times SkyrimNet has seen this person and the player have to do with each other (0: never), as of
+         *  the last reading of the player's relationships. Any thread. */
+        int TimesWithPlayer(RE::FormID formId) const;
         std::vector<PlayerRelationship> ReadPlayerRelationshipData();
 
         /**

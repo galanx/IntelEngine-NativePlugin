@@ -202,6 +202,7 @@ namespace IntelEngine::Arcs {
         constexpr std::uint32_t Deferred = 1u << 12;      // the asker could not reach the player (gone): at the next meeting
         constexpr std::uint32_t Heart = 1u << 13;         // a story of the heart between the asker and the player (never two running)
         constexpr std::uint32_t Rumored = 1u << 14;       // it began as talk in town: its asker did not come to the player at once
+        constexpr std::uint32_t Sent = 1u << 15;          // the director's own rule let the asker come from elsewhere in the hold
     }
 
     struct PatternDef {
@@ -453,6 +454,37 @@ namespace IntelEngine::Arcs {
     inline bool MaySetOutNow(const Arc& a, float now, float hour) {
         return SetsOut(a) && a.phase == Phase::Planned && now >= a.created && (now - a.created) * 24.0f >= kSetOutAfterHours &&
                hour >= kSetOutFromHour && hour < kSetOutUntilHour;
+    }
+
+    // Who goes to the player with their trouble, and who stays where they are until the player comes by. (The user,
+    // 2026-11-21, of an innkeeper who walked out of her town to a farm to ask a favour of someone who had stood in her
+    // inn for a minute: "he never met her before and she left her inn to track the player down as if she knows he is
+    // some kind of hero".) In this order:
+    //  - whoever the player is with may speak up there and then (a stranger with trouble takes a chance on a stranger);
+    //  - who was let come from elsewhere by the director's own rule had a reason worth the road;
+    //  - somebody with a post to keep (who sells, who guards, who holds office) does not leave it to look for anyone;
+    //  - nobody goes out of their own town after the player: with the player beyond its houses, they wait;
+    //  - a stranger does not go looking for the player, unless as someone asking round their town for anyone at all
+    //    (SetsOut above, the rarer way of a story that began as talk).
+    // Whoever stays waits (Flag::Deferred), their trouble is talk in town, and the offer goes out when the two meet.
+    constexpr int kAcquaintedEvents = 6;    // SkyrimNet has seen the two have to do with each other this often: talk, not a greeting
+    constexpr float kWithPlayer = 3000.0f;  // "with the player": the same room, or out of doors this near
+    constexpr float kTownReach = 4500.0f;   // an open town reaches this far round its marker on the map
+    enum class Stays : std::uint8_t { No = 0, Post, OutOfTown, Stranger };
+    struct Going {
+        bool with = false;          // the player is with them
+        bool sent = false;          // let come from elsewhere by the director's rule (Flag::CameFar, Flag::Sent)
+        bool post = false;          // they have a post to keep
+        bool inTown = false;        // the player is among the houses of their town
+        int knows = 0;              // 2 has had to do with the player, 1 their town has heard of the player, 0 a stranger
+        bool askingAround = false;  // they have set out to ask round their town for anyone
+    };
+    inline constexpr Stays StaysPut(const Going& g) {
+        if (g.with || g.sent) return Stays::No;
+        if (g.post) return Stays::Post;
+        if (!g.inTown) return Stays::OutOfTown;
+        if (g.knows <= 0 && !g.askingAround) return Stays::Stranger;
+        return Stays::No;
     }
 
     // The steps of an arc: a tale's own graph, else its pattern's table.

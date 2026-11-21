@@ -5,6 +5,7 @@
  */
 
 #include "NPCIndex.h"
+#include "ArcBridge.h"
 #include "NameMatch.h"
 #include "LivingWorldBridge.h"
 #include "StorylineBridge.h"
@@ -1739,8 +1740,11 @@ namespace IntelEngine {
                 return 0;
             }
         }
+        // Of the player's own settlement, with the player among its houses. With the player out at one of its farms or
+        // on the road, somebody of the town is no nearer than the rest of the hold: they need the reason, and the
+        // acquaintance, anybody there needs (an innkeeper walked out of Whiterun to a farm for a favour, 2026-11-21).
         const std::string theirTown = GetActorSettlementName(actor);
-        if (!theirTown.empty() && theirTown == GetActorSettlementName(player)) return 0;
+        if (!theirTown.empty() && theirTown == GetActorSettlementName(player)) return ArcBridge::GetSingleton()->PlayerInTownProper() ? 0 : 1;
         const std::string theirHold = GetNPCHoldName(actor);
         return !theirHold.empty() && theirHold == GetNPCHoldName(player) ? 1 : 2;
     }

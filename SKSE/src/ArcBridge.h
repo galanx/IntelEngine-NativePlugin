@@ -177,6 +177,13 @@ namespace IntelEngine {
         /** 2 has had to do with the player before, 1 their town has heard what the player did there, 0 a stranger.
          *  Main thread. */
         int KnowsPlayer(RE::Actor* actor, RE::FormID town) const;
+        /** The offer of a planned story goes out: its asker comes to the player, or stays where they are and waits
+         *  (SendOffer: not in front of the story's people, and Arcs::StaysPut). Main thread. */
+        void Offer(std::uint32_t id, RE::Actor* asker) { SendOffer(id, asker); }
+        /** Is the player among the houses of this town (0: of whichever town the place they stand in belongs to)?
+         *  Inside a walled town's own world, or within Arcs::kTownReach of an open town's marker; indoors, wherever
+         *  they last stood under the sky. The farms and mills a town's name covers are not it. Main thread. */
+        bool PlayerInTownProper(RE::FormID townId = 0);
         bool RequestTale(RE::Actor* asker, const std::string& written = {}, const TaleSeed* seed = nullptr);
         /** Plans a compiled tale (main thread). 0 = refused. */
         std::uint32_t PlanTale(Arcs::Arc a);
@@ -240,6 +247,7 @@ namespace IntelEngine {
             bool sought = false;         // the offer went out because the player came to the asker and spoke
             bool setOut = false;         // the asker of a story that began as talk set out to find someone (once)
             bool setOutForced = false;   // test hook: they set out at the next look, whatever the hour and their nature
+            bool awaits = false;         // held back only because the player was out of town: they come once the player is back in it
             bool lingering = false;      // the step's person stays with the player while they talk (the script's)
             float lingerHold = -1.0f;    // real seconds: not asked to linger again before this (refused or let go)
             std::array<std::int8_t, Arcs::kSites> bossState{};   // last seen: 0 unknown, 1 alive and loaded, 2 dead, 3 gone
@@ -276,6 +284,10 @@ namespace IntelEngine {
         void SendTale(std::shared_ptr<void> request, int attempt, std::string fix, std::string previous);   // any thread
         void TaleWritten(std::shared_ptr<void> request, int attempt, const std::string& text);              // main thread
         void SendOffer(std::uint32_t id, RE::Actor* asker);
+        /** Why this story's asker does not go to the player now (Arcs::StaysPut), and whether they know the player. */
+        Arcs::Stays WhyStays(std::uint32_t id, RE::Actor* asker, bool& knowsPlayer);
+        /** They stay where they are: the story waits for the two to meet, and their trouble is talk in town. */
+        void OfferWaits(std::uint32_t id, Arcs::Stays why, bool knowsPlayer);
         void SendJudge(std::uint32_t id, std::uint8_t node, RE::FormID who, std::string goal, std::array<std::string, 3> turns,
                        bool force);
         /** The game's own small quests (favours with a name) of each person, by base: for the tale author only. */
@@ -300,6 +312,8 @@ namespace IntelEngine {
         void Reconcile();   // withdraws rumors of arcs this save does not know (lock not held)
         void Pace();        // a town's story when the player has lingered there (main thread, lock not held)
 
+        std::atomic<RE::FormID> m_outdoorTown{0xFFFFFFFFu};   // the town whose houses the player last stood among under the sky (0 none, all bits: not seen yet)
+        std::unordered_map<RE::FormID, bool> m_walled;        // towns with a world of their own behind walls (main thread)
         RE::FormID m_paceTown = 0;       // the town the player is in, and since when (game days)
         float m_paceSince = 0.0f;
         float m_paceTried = -1.0f;       // the last time a story was looked for (game days)
