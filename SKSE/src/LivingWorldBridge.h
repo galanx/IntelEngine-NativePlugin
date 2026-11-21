@@ -56,6 +56,9 @@ namespace IntelEngine {
 
         /** A story moment was dispatched with this NPC: count it for pacing and rotation. */
         void OnStoryDispatched(RE::FormID actor, const std::string& storyType);
+        /** A faction's patrol was sent after the player (Patrols.h): a big moment with nobody's name on it. It
+         *  takes its share of the budget and earns the player the rest after a big moment. */
+        void OnPatrolSent();
         /** Game days since the last story moment (since the game began when there was none). */
         float QuietDays() const;
         /** Game days since this NPC was last part of a story moment (very many when never). */

@@ -843,7 +843,15 @@ namespace IntelEngine {
         // Heavy beats are not told back to back: an ambush at most once in four stories, a brawl once in three, and
         // after two stories that led out into the world the next stays among people. The engine holds to it (the
         // compiler refuses them), whatever the author would like.
-        std::uint32_t barred = 0;
+        // What the user has switched off in the settings is never in a story, told lately or not: no ambush with
+        // "ambush" off, no shadow with "stalker" off, nobody held with "rescue" off. (These switches governed the
+        // dungeon master's one-off moments only; a tale could have the very thing in it.) "Clear out enemies" off
+        // bars the master of a place to kill, and is kept apart from the bits below: a place may still be gone into.
+        const std::uint32_t switchedOff = ArcBridge::GetSingleton()->SwitchesOff();
+        const std::uint32_t slayOff = (switchedOff & ArcBridge::kSwitchClearOut) ? 1u << static_cast<unsigned>(A::Kind::Slay) : 0u;
+        std::uint32_t barred = ((switchedOff & ArcBridge::kSwitchAmbush) ? 1u << static_cast<unsigned>(A::Kind::Ambush) : 0u) |
+                               ((switchedOff & ArcBridge::kSwitchStalker) ? 1u << static_cast<unsigned>(A::Kind::Stalk) : 0u) |
+                               ((switchedOff & ArcBridge::kSwitchRescue) ? 1u << static_cast<unsigned>(A::Kind::Free) : 0u);
         if (written.empty()) {
             const auto bit = [](A::Kind k) { return 1u << static_cast<unsigned>(k); };
             const auto used = [&](std::uint32_t mask, std::size_t last) {
@@ -878,13 +886,14 @@ namespace IntelEngine {
             ctx["must_place"] = must;
             if (must) logger::info("Tales: this one leads out into the world (the last two stayed among people)");
         } else {
-            ctx["bar_ambush"] = false;
+            ctx["bar_ambush"] = (barred & (1u << static_cast<unsigned>(A::Kind::Ambush))) != 0;
             ctx["bar_brawl"] = false;
-            ctx["bar_stalk"] = false;
+            ctx["bar_stalk"] = (barred & (1u << static_cast<unsigned>(A::Kind::Stalk))) != 0;
             ctx["bar_places"] = false;
             ctx["must_place"] = false;
         }
-        request->pool.barred = barred;
+        ctx["bar_slay"] = slayOff != 0;
+        request->pool.barred = barred | slayOff;
         request->pool.depth = written.empty();
         // A hunt for what is killing people: on offer when a place near has ground outside it for what was left of a
         // victim. Asked for (a rumor of deaths, the test hook), it is that or nothing.

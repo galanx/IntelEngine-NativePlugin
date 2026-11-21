@@ -342,7 +342,15 @@ namespace IntelEngine {
             logger::info("Quests: no quest for {}: no place to send the player", giver->GetDisplayFullName());
             return 0;
         }
-        const auto tmpl = Q::PickTemplate(!m_keepsakes.empty(), true, m_book.lastTemplate, seed);
+        // The quest kinds of the settings hold for the engine's own quests: a bounty is the old "clear out enemies",
+        // a keepsake the old "find an item" (they governed nothing above Classic since 4.0 replaced those quests).
+        const std::uint32_t off = ArcBridge::GetSingleton()->SwitchesOff();
+        const auto tmpl = Q::PickTemplate(!m_keepsakes.empty() && !(off & ArcBridge::kSwitchFindItem), !(off & ArcBridge::kSwitchClearOut),
+                                          m_book.lastTemplate, seed);
+        if (tmpl == Q::Template::None) {
+            logger::info("Quests: no quest for {}: the kinds that fit are switched off in the settings", giver->GetDisplayFullName());
+            return 0;
+        }
         Q::Quest q;
         q.tmpl = tmpl;
         q.giver = giverId;

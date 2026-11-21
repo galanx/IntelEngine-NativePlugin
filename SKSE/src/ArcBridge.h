@@ -116,6 +116,15 @@ namespace IntelEngine {
         void DebugSetOut(std::uint32_t id);
         /** The "Stories" switch of the settings: off, no new story of the town begins (those open go on to their end). */
         void StoriesOn(bool on);
+        /** The story-type switches of the settings that are OFF (kSwitch* bits), as the script last told them. They
+         *  governed the dungeon master's one-off moments only; since 2026-11-22 they hold for the same thing inside
+         *  a story of the town and for the engine's own quests: no ambush step with "ambush" off, no shadow with
+         *  "stalker" off, nobody held with "rescue" off, no master of a place to kill and no bounty with "clear out
+         *  enemies" off, no keepsake with "find an item" off, and with "quest" off no story of the town begins. */
+        void StorySwitches(std::uint32_t off);
+        std::uint32_t SwitchesOff() const { return m_switchesOff.load(); }
+        static constexpr std::uint32_t kSwitchAmbush = 1u, kSwitchStalker = 2u, kSwitchRescue = 4u, kSwitchRequests = 8u,
+                                       kSwitchClearOut = 16u, kSwitchFindItem = 32u;
         /** The script let the step's person go (silence, the player left, the step moved on). */
         void LingerOver(std::uint32_t id);
         /** A tale's steps and branches, one log line each (when planned and after a load). */
@@ -294,6 +303,7 @@ namespace IntelEngine {
         std::unordered_map<RE::FormID, std::vector<RE::FormID>> m_favours;
         std::atomic<bool> m_taleBusy{false};
         std::atomic<bool> m_storiesOn{true};   // the "Stories" switch, as the script last told it
+        std::atomic<std::uint32_t> m_switchesOff{0};   // the story-type switches that are off (kSwitch* bits)
         std::atomic<float> m_questBusyUntil{-1.0f};   // real seconds: a quest moved on lately
         std::array<std::array<RE::FormID, 2>, Arcs::kSlots> m_holders{};
 
