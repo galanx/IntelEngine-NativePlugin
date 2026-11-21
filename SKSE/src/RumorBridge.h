@@ -41,6 +41,10 @@ namespace IntelEngine {
          *  those who hear everything (innkeepers, their servers, bards, merchants), the talk of the day for anyone
          *  else, nothing where nothing is going round. Any thread (SkyrimNet's). */
         std::string Lines(RE::Actor* actor);
+        /** For the author of a town's story: what goes round the hold the player is in now, the weightiest first,
+         *  `most` at the most. Somebody's trouble is left out (that is its own story's to offer): deeds, news of
+         *  the world, what became of people. Any thread. */
+        std::vector<std::string> TalkForTales(std::size_t most);
         /** The one who would pass the talk on in the place the player stands in (the innkeeper, else a server or the
          *  bard), awake and at peace, or null. The game's thread. */
         RE::Actor* Publican() const;

@@ -94,6 +94,15 @@ namespace IntelEngine::Hearts {
         return Lean::None;
     }
 
+    // Somebody drawn to the player who has never said so and would not come up to them: the story of a shy admirer,
+    // in which somebody close to them comes in their stead. Only while a courtship could begin at all (LeanOf: never
+    // a child, never kin, never somebody wed, a friend at least) and the player has not answered either way: answered
+    // yes there is no secret left, and a no stands. The bold ask for themselves (`confidence`: the game's own scale,
+    // 0 cowardly, 1 cautious, 2 average, 3 brave, 4 foolhardy).
+    inline bool ShyAdmirer(const Who& who, const Heart& h, const Rules& rules, int confidence) {
+        return LeanOf(who, h, rules) == Lean::Courtship && h.stance == 0 && confidence <= 2;
+    }
+
     inline const char* LeanWord(Lean lean) {
         switch (lean) {
             case Lean::Courtship: return "courtship";

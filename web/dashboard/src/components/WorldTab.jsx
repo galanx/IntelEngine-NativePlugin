@@ -80,6 +80,8 @@ function WorldTab({ world }) {
     ...quests.map((q) => ({ ...q, key: `q${q.id}` })),
   ];
   const people = (world.people || []).slice().sort((a, b) => Number(b.with_you) - Number(a.with_you) || a.name.localeCompare(b.name));
+  // How people stand toward the player where IntelEngine reads it from talk (the DLL sends them closest first).
+  const bonds = world.bonds || [];
 
   return (
     <div className="ie-page p-3 space-y-4">
@@ -217,6 +219,30 @@ function WorldTab({ world }) {
               </div>
             );
           })}
+        </div>
+      </section>
+
+      {/* How the people the player has talked with stand toward them, as read from what passed between the two */}
+      <section>
+        <h2 className="section-header mb-2">How People Stand With You</h2>
+        <div className="space-y-1">
+          {bonds.length === 0 && (
+            <div className="text-xs text-gray-500 leading-relaxed">
+              Nobody yet. Once someone has spoken with you a few times, how they stand toward you is read from what passed between you: an acquaintance, a friend, a close friend, or someone who has turned cold.
+            </div>
+          )}
+          {bonds.map((b, i) => (
+            <div key={i} className="slot-card rounded px-3 py-1.5">
+              <div className="flex items-baseline justify-between gap-2">
+                <span className="text-xs text-gray-200 font-medium truncate">{b.name}</span>
+                <span className={`text-[10px] shrink-0 ${b.sour ? 'text-red-400' : b.standing >= 2 ? 'text-emerald-400' : 'text-gray-400'}`}>{b.word}</span>
+              </div>
+              <div className="text-[10px] text-gray-500 mt-0.5">{b.source}</div>
+              {b.heart && (everything
+                ? <div className="text-[10px] text-gray-400">{b.heart.charAt(0).toUpperCase() + b.heart.slice(1)}</div>
+                : <div className="text-[10px] text-gray-600">What is in their heart is theirs to show.</div>)}
+            </div>
+          ))}
         </div>
       </section>
     </div>

@@ -391,6 +391,10 @@ namespace IntelEngine {
         /** How the faction's own speak of the player: "a Veteran of the Imperial Legion: fought in 4 of their
          *  battles (3 won)". Empty when there is nothing to say. */
         std::string PlayerKnownAs(const std::string& factionId);
+        /** For the author of a town's story: the times these people live in, a few lines: who is at war with whom,
+         *  and how the factions take the player (a rank earned, a faction that holds them for an enemy or thinks well
+         *  of them). Empty with politics off or nothing to say. Reads the political database: off the game's thread. */
+        std::string TimesForTales(const std::string& player);
         /** Everything about the ladder, for the dashboard: [{faction, name, rank, title, renown, next, ...}] */
         nlohmann::json RanksJson();
         void SaveRanks(SKSE::SerializationInterface* intfc) const;

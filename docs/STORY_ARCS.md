@@ -413,6 +413,47 @@ loaded, which the section after this one replaces with a rule for each person):
 - What it costs the player: one small decision call per reading (answered in about 0.3 s in the test), per person at
   most once every eight lines they say to the player.
 
+### A shy admirer, and stories that know the talk and the times (2026-11-22)
+
+The user: "if someone is too shy to confess and sends someone to request meeting the player, can the player have
+secret admirers, how do rumors tie to stories, how does politics tie back to stories". None of it existed: a
+courtship had one shape (the asker comes openly), the tale author knew nothing of the rumor ledger nor of the
+political state ("politics" was a genre word).
+
+- **A shy admirer** (`Hearts::ShyAdmirer`, `HeartsCheck`; `HeartBridge::ShyAdmirer`; `TaleAuthor.cpp`). While the
+  people of a town's story are gathered, anybody who is close to the asker (a relationship of the game, or the same
+  roof: `Person::close`) and has a line of the heart at all is looked at: a courtship that could begin
+  (`Hearts::LeanOf`), not answered by the player either way, the game's own confidence at "average" or below (the
+  bold ask for themselves), and never part of a story of the heart before. If there is one, the asker has no story
+  of the heart of their own and came with no reason of their own (`taleSeed`), the tale is that: `heart_lean`
+  "admirer", `admirer` (their key), `admirer_name`; the prompt's section "Someone who has not dared to say it". It is
+  a story of the heart for pacing and pay (`Flag::Heart`, no gold); its effects name the admirer ("closer pX",
+  "apart pX"), which the compiler always took by person. The offer follows the rules every offer follows: the
+  go-between is held back while the admirer stands with the player or within earshot.
+- **The talk and the times** (`RumorBridge::TalkForTales`, `FactionPolitics::TimesForTales`, added to the request on
+  the worker, after the bios): up to three things going round the hold the player is in (never somebody's trouble:
+  that is its own story's to offer) and a few lines of the wars and of how the factions take the player. Both
+  sections of the prompt are optional (`exists("talk")`, `exists("times")`) and say what a story may and may not do
+  with them. Not for stories of the heart.
+- Played (test profile, 2026-11-22): `DebugHeart Saadia 1 0` with the game's rank at friend, `DebugTale Hulda`:
+  "Hulda comes for Saadia, who is drawn to the player and has not said so"; the first writing broke a formal rule
+  (a choice with one option), the second held: talk with Hulda, talk with Olfina ("what she has noticed at the
+  Mare"), a stalk step by Saadia, a choice and a talk with Saadia; the offer waited while Saadia was in earshot,
+  went out, was taken on. Then, with a war declared and a test rumor, `DebugTale Ysolda`: "the author is told 1
+  thing(s) going round and something of the times"; the tale's hidden truth was a sale to the Legion's
+  quartermaster. Not played: the admirer story to its ends; an admirer found by a real reading or by SkyrimNet
+  Relationships' own spark (the test hook stood in); a tale that takes up the rumor.
+- Cost in the frame: the tale's request was 0.81 to 0.88 ms in the test game with these in (the talk and the times
+  are read on the worker; the admirer is one more look at the heart of people who are close to the asker and have a
+  line of the heart, next to nobody).
+
+Not built, and why: a letter as an object and anonymous gifts (the engine has no item-with-text path of its own;
+the "find" and "give" steps with listed items stand in); a battle enemy who yields and can be spared, befriended or
+recruited (battle soldiers are made for the battle and leave the world with it; one that stayed would need a
+keeper, a home and a follower mod's consent, and removing loaded actors is what crashed the full profile); faction
+missions as stories of their own with new companions (politics colours a town's story now; the old faction quests
+remain the dungeon master's).
+
 ### What 3.8 had and 4.0 had lost: found by an audit, 2026-11-21/22
 
 The user asked whether 4.0 covers everything 3.8 had. 3.8 (`main`) was held against the branch feature by feature.

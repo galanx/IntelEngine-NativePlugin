@@ -3,6 +3,7 @@
 // request and its answer, and the judge who reads a talk and names which prepared outcome it turned into.
 
 #include "ArcBridge.h"
+#include "FactionPolitics.h"
 #include "RumorBridge.h"
 #include "Safe.h"
 
@@ -452,6 +453,8 @@ namespace IntelEngine {
         std::vector<std::string> recentGenres;
         std::vector<std::uint32_t> recentBeats;   // the step kinds (bit per kind) of the stories the player took on, newest first
         bool recentHeart = false;                 // one of the last two stories, or one still open, was of the heart
+        std::vector<RE::FormID> heartCast;        // everybody who has been part of a story of the heart, ever
+        std::string admirerKey, admirerName;      // somebody close to the asker who is drawn to the player and has not said so
         std::vector<RE::FormID> restedPlaces;     // where the last stories led: those places rest a while
         int heartLooked = 0;
         {
@@ -477,6 +480,13 @@ namespace IntelEngine {
                     for (const auto site : it->site) {
                         if (site) restedPlaces.push_back(site);
                     }
+                }
+            }
+            // Whoever has had a story of the heart already, their own or one told for them, gets no admirer's story.
+            for (const auto& arc : m_book.all) {
+                if (!(arc.flags & A::Flag::Heart)) continue;
+                for (const auto id : arc.cast) {
+                    if (id) heartCast.push_back(id);
                 }
             }
             // What was told already (newest first): never again.
@@ -593,7 +603,22 @@ namespace IntelEngine {
             // What stands between them and the player, as the game and its mods keep it: fact for the author, so no
             // story gives the player's wife another love or reopens what the player turned down.
             if (auto* whoRef = RE::TESForm::LookupByID<RE::Actor>(f.ref)) {
-                if (const auto heart = HeartBridge::WordsFor(whoRef); !heart.empty()) j["heart"] = heart;
+                if (const auto heart = HeartBridge::WordsFor(whoRef); !heart.empty()) {
+                    j["heart"] = heart;
+                    // Somebody close to the one who asks, drawn to the player, never answered, and not one to come up
+                    // and say it: the asker may come in their stead (a shy admirer; decided below). Looked at only for
+                    // those who have a line of the heart at all and are close to the asker: next to nobody.
+                    if (!isAsker && admirerKey.empty() && person.close) {
+                        const bool had = std::find(heartCast.begin(), heartCast.end(), f.ref) != heartCast.end();
+                        if (!had && HeartBridge::ShyAdmirer(whoRef)) {
+                            admirerKey = person.key;
+                            admirerName = person.name;
+                        } else {
+                            logger::info("Tales: {} is close to the asker and has something with the player, but is no shy admirer ({})", person.name,
+                                         had ? "has had a story of the heart already" : "no unanswered courtship, or bold enough to ask themselves");
+                        }
+                    }
+                }
             }
             msHeart += lap(t);
             // Who holds office in the hold (the jarl, the steward) has a part in Skyrim's own story: a tale may bring a
@@ -818,6 +843,16 @@ namespace IntelEngine {
                 secondChance = wants == Hearts::Lean::Courtship && HeartBridge::SecondChanceFor(asker);
                 logger::info("Tales: {} and the player: a story of the heart ({}{})", asker->GetDisplayFullName(), lean,
                              secondChance ? ", after a no long ago" : "");
+            } else if (!admirerKey.empty() && !taleSeed) {
+                // A shy admirer (the user, 2026-11-21: "someone too shy to confess [who] sends someone"): the one who
+                // asks is close to somebody who is drawn to the player and has never said so. The asker comes in their
+                // stead; the story is the player finding out who, and what to do about it. Once for each admirer.
+                heartLean = "admirer";
+                lean = "a shy admirer";
+                request->heart = true;
+                request->pool.heart = true;
+                logger::info("Tales: {} comes for {}, who is drawn to the player and has not said so: a shy admirer's story",
+                             asker->GetDisplayFullName(), admirerName);
             }
         }
 
@@ -968,6 +1003,10 @@ namespace IntelEngine {
         ctx["thread"] = heartLean.empty() ? thread : std::string();
         ctx["rumored"] = request->pool.rumored;
         if (!heartLean.empty()) ctx["heart_lean"] = heartLean;
+        if (heartLean == "admirer") {
+            ctx["admirer"] = admirerKey;
+            ctx["admirer_name"] = admirerName;
+        }
         if (secondChance) ctx["second_chance"] = true;
         ctx["reward"] = request->pool.gold;
         {
@@ -1035,6 +1074,22 @@ namespace IntelEngine {
                         bio = bio.substr(0, n) + "...";
                     }
                     if (!bio.empty()) ctx["people"][i]["about"] = bio;
+                }
+                // What people of the hold talk about now, and the times they live in (the wars, how the factions take
+                // the player): read here, off the game's thread. A story may grow out of them, never against them
+                // (the prompt says how). A story of the heart is between two people: it is told neither.
+                if (!ctx.contains("heart_lean")) {
+                    nlohmann::json talk = nlohmann::json::array();
+                    for (auto& line : RumorBridge::GetSingleton()->TalkForTales(3)) talk.push_back(std::move(line));
+                    if (!talk.empty()) ctx["talk"] = std::move(talk);
+                    std::string times;
+                    try {
+                        times = FactionPolitics::GetSingleton()->TimesForTales(Safe::Text(ctx, "player_name", "the traveller"));
+                    } catch (...) {
+                    }
+                    if (!times.empty()) ctx["times"] = times;
+                    logger::info("Tales: the author is told {} thing(s) going round and {} of the times", ctx.contains("talk") ? ctx["talk"].size() : 0,
+                                 times.empty() ? "nothing" : "something");
                 }
                 request->context = ctx.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
             }

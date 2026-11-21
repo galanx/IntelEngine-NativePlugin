@@ -279,6 +279,12 @@ namespace IntelEngine::HeartBridge {
 
     bool SecondChanceFor(RE::Actor* actor) { return actor && Hearts::SecondChance(HeartOf(actor)); }
 
+    bool ShyAdmirer(RE::Actor* actor) {
+        auto* base = actor ? actor->GetActorBase() : nullptr;
+        if (!base) return false;
+        return Hearts::ShyAdmirer(WhoOf(actor), HeartOf(actor), RulesNow(), static_cast<int>(base->GetConfidenceLevel()));
+    }
+
     void Told(std::uint32_t actor, int sparked, int stance, int withChild, bool childIsPlayers, int children, bool playersChild, float refusedAt) {
         if (!actor) return;
         Script s;

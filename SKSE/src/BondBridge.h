@@ -56,6 +56,11 @@ namespace IntelEngine {
         /** One line for the log and for tests: "a friend, drawn to the player, unanswered (read at day 12.4, 23 times together)". */
         std::string Describe(std::uint32_t actor) const;
 
+        /** For the dashboard's World page: everybody whose standing was read here and counts (not those a
+         *  relationship mod speaks for alone), closest first, forty at the most: [{name, word, standing, sour, heart,
+         *  source}]. `heart` is what was read of the heart (shown only with "show everything"). Game thread. */
+        std::string DashboardJson() const;
+
         void Save(SKSE::SerializationInterface* intfc) const;
         void Load(SKSE::SerializationInterface* intfc, std::uint32_t version, std::uint32_t length);
         void Revert();

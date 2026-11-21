@@ -29,6 +29,8 @@ namespace IntelEngine::HeartBridge {
               float refusedAt = -1.0f);
     /** A courtship with them would be a second chance: turned down long ago, close again since (Hearts::SecondChance). */
     bool SecondChanceFor(RE::Actor* actor);
+    /** Drawn to the player, never answered, and not one to come up and say it (Hearts::ShyAdmirer). Game thread. */
+    bool ShyAdmirer(RE::Actor* actor);
     // A save was loaded or the game went back to the menu: what was told belongs to another timeline.
     void Forget();
 
