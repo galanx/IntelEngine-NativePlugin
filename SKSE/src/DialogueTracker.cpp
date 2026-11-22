@@ -111,6 +111,27 @@ namespace IntelEngine {
         return -1.0f;
     }
 
+    float DialogueTracker::SecondsSinceSpokeToPlayer(RE::FormID who) const {
+        const auto now = std::chrono::steady_clock::now();
+        std::lock_guard<std::mutex> lock(mutex_);
+        for (auto it = lines_.rbegin(); it != lines_.rend(); ++it) {
+            if (it->speaker != who || it->target != 0x14) continue;
+            return std::chrono::duration<float>(now - it->at).count();
+        }
+        return -1.0f;
+    }
+
+    std::vector<RE::FormID> DialogueTracker::SpeakersToPlayer(float seconds) const {
+        std::vector<RE::FormID> out;
+        const auto since = std::chrono::steady_clock::now() - std::chrono::milliseconds(static_cast<long long>(seconds * 1000.0f));
+        std::lock_guard<std::mutex> lock(mutex_);
+        for (const auto& line : lines_) {
+            if (line.at < since || line.speaker == 0x14 || line.target != 0x14) continue;
+            if (std::find(out.begin(), out.end(), line.speaker) == out.end()) out.push_back(line.speaker);
+        }
+        return out;
+    }
+
     void DialogueTracker::Record(const char* json, bool player) {
         if (!json) return;
         try {

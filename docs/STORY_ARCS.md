@@ -626,6 +626,56 @@ day fills with the first political news and the first story). The walker of the 
 person inside a far interior; the last stretch to Halted Stream Camp and the way back were made by console, so nothing
 of the road beyond eight minutes on foot was seen.
 
+### The story gaps closed, and the same build on the full profile (2026-11-22, afternoon)
+
+**A town's first story, sooner** (`ArcBridge::Pace`: `kFirstLingerHours` 0.5, `kFirstLingerPlayed` 90 s). For a town that
+has had no story yet in this game, once the player has said something and somebody who lives there has answered
+(`DialogueTracker::SpeakersToPlayer`, `SpeechTracker::SecondsSincePlayerSpoke`). The usual two game hours and four
+minutes of play stand otherwise, and the day between stories always. Who comes is `StaysPut`'s to say as before, so
+for a newcomer the story begins as talk in town. Seen on both profiles ("early: the town's first, and the player has
+talked with people who live here").
+
+**A spoken yes or no to an offer** (`IntelEngine_Arcs.SpokenAnswer`, `ArcBridge::ReadOffer` / `OfferSpoken`, the reader of
+decisions with a yes and a no as its answers; `kOfferNode` in `Judged`). The asker makes the request; a line of the
+player's younger than the request (said while they were asking or within six and a half seconds after; time with
+SkyrimNet's text box open does not count, the game stands still) starts the reading once the asker has replied. Yes:
+taken on. No: declined. Neither: the window. The window-only "was told that X will do it" narration is not sent when
+the answer was spoken. The quest engine's own offers (keepsake, bounty, venture) are still by window only.
+
+**Who asks** (`PaceChoose`): among those the player knows equally well, people with a part in an unfinished quest of the
+game (`m_journalAliases`) come last. The writer's prompt: nobody listed gets kin, a homeland or a past the game has not
+given them; someone with such a quest is "someone of the town at their daily work, nothing more".
+
+**Three people talking** (`PlayerTalksWithAnother`): somebody who said a line to the player within 45 s is part of the
+talk and waits only while the other's line is on its way or being said. Before, Camilla waited ninety seconds for a
+quiet her brother never left, and went away.
+
+**What it costs on 1,500 plugins** (measured, `IntelEngine_Arcs.DebugCosts`: each part timed six times, the first call
+and the least of the rest). Warm, every part of a request costs 0.000 to 0.003 ms. A session's first request was slow
+because of first calls: the user's lists read from SkyrimNet's settings inside a frame (0.60 ms; `FilterDue` let that
+happen whenever no director round had run yet), the first `KnowsPlayer` (0.60: a relationship mod's factions by plugin
+name), the first line of the heart (0.23), the player's quests (0.12), items (0.07), work and ties (0.07). Now:
+`NPCIndex::ReadStoryFilters` on the worker and `ArcBridge::WarmUp` on the game's thread when a save has loaded or a
+new game begins (2.7 to 2.9 ms there, once); `PaceChoose` is a `FrameJob` like `GatherTale`; the walled-town table is
+read at the main menu; more pauses in both jobs.
+
+| a session's first request, full profile | before | after |
+|---|---|---|
+| choosing who asks, worst frame | 1.41 ms | 0.44 ms (4 frames) |
+| gathering for the writer, worst frame | 0.97 ms | 0.35 ms (11 frames) |
+
+**The hold in open country**: the remembered hold is now written by the living world's regular look
+(`NPCIndex::NotePlayerHold`), and only a place the game marks as a hold counts as knowing where the player is (the
+land's own name, "Skyrim", was taken for a hold). Seen: "Hulda is elsewhere in the hold; their hold 'Whiterun', the
+player's 'Whiterun'" from "Some distance from The Lad of the Lake, Skyrim".
+
+**Played on the full profile**: the town's first story twice ("The Second Ledger of Hammerfell" with Saadia, which led
+to the rule above; then "The White Stag Oath"), its talk in town, the offer taken on by a spoken yes, two talk steps
+read right (Saadia: "a hunter proud of his kill doesn't shake"; Farengar: "'brought down', mind you, not slain").
+Not played there: the signs on the slope (the level-one test character was beaten in the cave by the list's own
+defeat mod before reaching them), any story to its end. One tale of three did not hold twice and was dropped ("p1
+cannot be held anywhere"): the town then waits for the next round.
+
 ### MCM rows that fit their column (2026-11-22)
 
 Found while the new switch was looked at in the MCM itself (which had not been opened for the 4.0 settings before).

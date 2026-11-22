@@ -35,6 +35,12 @@ namespace IntelEngine {
          *  thread. */
         float SecondsSinceOtherSpokeToPlayer(RE::FormID except, RE::FormID* who = nullptr) const;
 
+        /** Real seconds since this one last said a line to the player; below 0: not among the lines kept. Any thread. */
+        float SecondsSinceSpokeToPlayer(RE::FormID who) const;
+
+        /** Everybody who said a line to the player in the last `seconds` real seconds (each once). Any thread. */
+        std::vector<RE::FormID> SpeakersToPlayer(float seconds) const;
+
         /** Register the dialogue event callback with SkyrimNet. Call after API init. */
         void Initialize();
 

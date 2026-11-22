@@ -205,6 +205,7 @@ namespace IntelEngine {
             if (!location) location = cell->GetLocation();
             place.outdoors = !cell->IsInteriorCell();
             place.inAHold = InAHold(location);
+            NPCIndex::NotePlayerHold(location);   // the hold the player last walked in, for open country
             if (place.outdoors) {
                 const RE::FormID land = LandOf(player->GetWorldspace());
                 if (land) g_lastOutdoorLand.store(land);
