@@ -3,8 +3,10 @@
 
 #include "StorylineBridge.h"
 #include "BattleManager.h"
+#include "DialogueTracker.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <initializer_list>
 #include <string_view>
@@ -41,6 +43,20 @@ namespace IntelEngine {
         double RealNowSeconds() {
             return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
         }
+
+        // For private moments (Patrols.h): when a scene with the player was last seen or ended, and where the player
+        // was, look by look, with how they sat and whether they wore anything.
+        std::atomic<double> g_sceneLastAt{-1.0};
+        struct Where {
+            double at = 0.0;
+            RE::NiPoint3 pos;
+            RE::FormID space = 0;   // the land (out of doors) or the cell (indoors)
+        };
+        std::mutex g_whereMutex;
+        std::array<Where, 16> g_wheres{};
+        std::size_t g_whereNext = 0;
+        std::atomic<bool> g_resting{false};
+        std::atomic<bool> g_undressed{false};
 
         // In the middle of a scene: one of the game's that the player is part of, or another mod's. Nobody walks in
         // on that, at any level of the living world ("is this a bad time to say bandits are getting close to
@@ -126,8 +142,59 @@ namespace IntelEngine {
 
     bool LivingWorldBridge::IsBadMoment() { return BadMoment(); }
 
+    void LivingWorldBridge::NotePlayerWhere() {
+        auto* player = RE::PlayerCharacter::GetSingleton();
+        auto* cell = player ? player->GetParentCell() : nullptr;
+        if (!player || !cell) return;
+        const double now = RealNowSeconds();
+        if (player->GetCurrentScene()) g_sceneLastAt.store(now);   // a scene of the game: over at the last look that saw it
+        g_resting.store(player->AsActorState()->GetSitSleepState() != RE::SIT_SLEEP_STATE::kNormal);
+        g_undressed.store(player->GetWornArmor(RE::BGSBipedObjectForm::BipedObjectSlot::kBody) == nullptr);
+        Where w;
+        w.at = now;
+        w.pos = player->GetPosition();
+        auto* world = player->GetWorldspace();
+        w.space = cell->IsInteriorCell() ? cell->GetFormID() : (world ? world->GetFormID() : 0);
+        std::scoped_lock lock(g_whereMutex);
+        // (The look is asked for several times in a row while orders are carried out: one note in five seconds.)
+        const auto& last = g_wheres[(g_whereNext + g_wheres.size() - 1) % g_wheres.size()];
+        if (last.at > 0.0 && now - last.at < 5.0) return;
+        g_wheres[g_whereNext] = w;
+        g_whereNext = (g_whereNext + 1) % g_wheres.size();
+    }
+
+    Patrols::Private LivingWorldBridge::PrivateMoment() {
+        Patrols::Privacy p;
+        const double now = RealNowSeconds();
+        p.scene = InScene();
+        if (const double last = g_sceneLastAt.load(); last >= 0.0) p.sinceScene = static_cast<float>(now - last);
+        p.sinceTalk = DialogueTracker::SecondsSincePlayerTalk();
+        p.resting = g_resting.load();
+        p.undressed = g_undressed.load();
+        std::scoped_lock lock(g_whereMutex);
+        const Where* newest = nullptr;
+        const Where* then = nullptr;   // the look taken about a minute ago
+        for (const auto& w : g_wheres) {
+            if (w.at <= 0.0) continue;
+            if (!newest || w.at > newest->at) newest = &w;
+            const double age = now - w.at;
+            if (age >= 45.0 && age <= 80.0 && (!then || w.at < then->at)) then = &w;
+        }
+        // Followed only while the look is being taken (it is not at every level of the living world, nor with the
+        // game paused for long): somebody whose steps nobody follows is not held to have stood still.
+        if (newest && now - newest->at <= 40.0) {
+            p.tracked = true;
+            if (then) {
+                p.crossed = then->space != newest->space;
+                p.moved = p.crossed ? 0.0f : newest->pos.GetDistance(then->pos);
+            }
+        }
+        return Patrols::PrivateMoment(p);
+    }
+
     void LivingWorldBridge::SetSceneBusy(bool busy) {
         g_sceneBusyUntil.store(busy ? RealNowSeconds() + 1800.0 : 0.0);
+        g_sceneLastAt.store(RealNowSeconds());   // begun or over: either way the last moment it was known of
         logger::info("LivingWorld: another mod's scene with the player {}", busy ? "has begun: nobody comes until it is over" : "is over");
     }
 
@@ -422,6 +489,12 @@ namespace IntelEngine {
 
     void LivingWorldBridge::Revert() {
         g_sceneBusyUntil.store(0.0);
+        g_sceneLastAt.store(-1.0);
+        {
+            std::scoped_lock where(g_whereMutex);   // another game: where the player was is not where they are
+            g_wheres = {};
+            g_whereNext = 0;
+        }
         ++m_scanEpoch;   // who serves the player is asked afresh (Track)
         std::scoped_lock lock(m_mutex);
         m_lives.clear();

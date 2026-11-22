@@ -13,7 +13,6 @@ const SCHED_TASK_ICONS = {
 function TasksTab({ tasks, scheduled, calendar, sendAction, packages, removingIds, onMarkRemoving }) {
   const activeTasks = tasks.filter(s => s.state !== 0);
   const emptyTasks = tasks.filter(s => s.state === 0 && s.cooldownRemaining <= 0);
-  const cooldownTasks = tasks.filter(s => s.state === 0 && s.cooldownRemaining > 0);
 
   const activeScheduled = scheduled.filter(s => s.agent);
   const otherPackages = packages.filter(entry => !activeTasks.some(slot => (slot.agentFormId >>> 0) === entry.formId));
@@ -43,27 +42,6 @@ function TasksTab({ tasks, scheduled, calendar, sendAction, packages, removingId
         )}
       </section>
       <PackagesTab packages={otherPackages} sendAction={sendAction} removingIds={removingIds} onMarkRemoving={onMarkRemoving} />
-
-      {/* Cooldowns */}
-      {cooldownTasks.length > 0 && (
-        <section>
-          <h2 className="section-header mb-2">On Cooldown</h2>
-          <div className="space-y-1">
-            {cooldownTasks.map(slot => (
-              <div key={slot.index} className="slot-card rounded px-3 py-1.5 opacity-60">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs text-gray-400">
-                    Slot {slot.index + 1} &mdash; {slot.agentName || 'Unknown'}
-                  </span>
-                  <span className="text-xs text-gray-500">
-                    {Math.ceil(slot.cooldownRemaining)}s
-                  </span>
-                </div>
-              </div>
-            ))}
-          </div>
-        </section>
-      )}
 
       {/* Scheduled Tasks */}
       <section>

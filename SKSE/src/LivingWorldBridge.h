@@ -5,6 +5,7 @@
 // now, and lets the director rank the story engine's candidates. At the Classic level it changes nothing.
 
 #include "LivingWorld.h"
+#include "Patrols.h"
 
 #include <atomic>
 #include <chrono>
@@ -147,6 +148,13 @@ namespace IntelEngine {
         std::string DashboardJson() const;
         /** A fight, a conversation, a scene, a menu over the game: no ordinary moment lands now. */
         static bool IsBadMoment();
+        /** Is the player in a private moment (Patrols.h): with somebody, resting, undressed, or settled where they
+         *  are? Whoever the engine makes that comes at the player in arms asks this first. It reads what
+         *  NotePlayerWhere last saw and a few clocks: any thread. */
+        static Patrols::Private PrivateMoment();
+        /** The look that follows where the player goes, how they sit and what they wear (every ten seconds or so, with
+         *  the look of the living world). The game's thread. */
+        static void NotePlayerWhere();
         /** Another mod's scene with the player in it has begun or ended (OStim's thread events, told by the script). */
         static void SetSceneBusy(bool busy);
         /** A dungeon, cave, crypt, camp, lair or den: the place itself, not its parents. */

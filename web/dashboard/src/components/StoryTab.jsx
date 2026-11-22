@@ -66,7 +66,7 @@ function StoryTab({ story, quest, social, npcSocialLog, calendar, sendAction }) 
             <div className="text-xs text-gray-500">No active story dispatch</div>
             {story.nextCheckIn != null && story.nextCheckIn > 0 && (
               <div className="text-xs text-gray-500 mt-0.5">
-                Next check in {story.nextCheckIn.toFixed(1)} hours
+                Next look by the clock in {story.nextCheckIn.toFixed(1)} hours (arriving somewhere or waking up can bring one sooner)
               </div>
             )}
           </div>
@@ -76,7 +76,7 @@ function StoryTab({ story, quest, social, npcSocialLog, calendar, sendAction }) 
       {/* Story Type Toggles */}
       <section>
         <h2 className="section-header mb-2">Story types</h2>
-        <p className="text-[10px] text-gray-400 mb-1">Only affects automatic stories. Director dispatch can use any type. What NPCs do among themselves is under Settings, NPC Behavior.</p>
+        <p className="text-[10px] text-gray-400 mb-1">What the dungeon master may start by itself. A type switched off is not in a story of the town either: no ambush or shadow inside one, and with &quot;Someone has work for you&quot; off none begins. Director dispatch can use any type. What NPCs do among themselves is under Settings, NPC Behavior.</p>
         <div className="grid grid-cols-1 gap-1">
           {STORY_TYPES.filter(type => !type.key.startsWith('npc_')).map(type => {
             const enabled = story.types ? story.types[type.key] : true;
@@ -105,7 +105,8 @@ function StoryTab({ story, quest, social, npcSocialLog, calendar, sendAction }) 
       {/* Active Quest */}
       {quest && quest.active && (
         <section>
-          <h2 className="section-header mb-2">Active Quest</h2>
+          <h2 className="section-header mb-2">The Dungeon Master&apos;s Quest</h2>
+          <p className="text-[10px] text-gray-400 mb-1">A faction&apos;s quest written by the dungeon master. Stories of the town, bounties, keepsakes and ventures are on the World page.</p>
           <div className="slot-card rounded px-3 py-2 border-l-2 border-amber-400">
             <div className="flex items-center justify-between mb-1">
               <span className="text-sm text-gray-200 font-medium">

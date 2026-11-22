@@ -413,6 +413,41 @@ loaded, which the section after this one replaces with a rule for each person):
 - What it costs the player: one small decision call per reading (answered in about 0.3 s in the test), per person at
   most once every eight lines they say to the player.
 
+### Private moments: nobody in arms comes upon the player (2026-11-22)
+
+The user, about the faction patrols restored the same night: "I am also not sure about faction patrols either
+because users were complaining of soldiers spawning during their private moments". What stood in the way of each
+door before, read in code:
+
+- the patrol: the director's `MayDeliver` (a running scene: hard; combat, a busy battlefield, the game paused, the
+  game's dialogue, barter, sleep and OStim menus at the default "only when urgent") and its handler (out of doors,
+  not in or by a town or house, from a spot unseen);
+- a skirmish or brawl near the player, and the killer after a leader (`FactionPolitics::CheckEventManifestation`):
+  out of doors for the first two, a cooldown, no battle running. Nothing about scenes, menus or talk;
+- the hired men of a tale (`ArcBridge::AmbushLook`): the wilds, combat, `IsBadMoment`.
+
+None of them knew a SkyrimNet conversation (no menu of the game), the minutes after a scene, a rest, a bath, or a
+player who has simply stopped somewhere with somebody. Now all three ask `LivingWorldBridge::PrivateMoment()`
+(`Patrols::PrivateMoment`, pure, in `PatrolsCheck`), and the skirmish asks `IsBadMoment` as well:
+
+- a scene with the player is running, or was last known of within ten minutes (the script's OStim thread events,
+  and the game's own scenes as the look saw them);
+- a line to or by the player within two minutes (`DialogueTracker::SecondsSincePlayerTalk`);
+- sitting, lying, asleep (`GetSitSleepState`); nothing worn on the body slot;
+- settled: less than 1,000 units from where they were about a minute ago, unless they went through a door or to
+  another land in that minute. Where the player is, how they sit and what they wear is noted by the look of the
+  living world (every ten seconds or so, `NotePlayerWhere`); `PrivateMoment` itself reads only that and a few
+  clocks, so any thread may ask. Right after a load, before a minute of looks, nobody comes. Where the look is not
+  being taken, standing still is not held against the player and the other reasons hold.
+
+The test switch for patrols does not lift it. Test hook: `IntelEngine_Arcs.DebugPrivate` (logs the reason, or that
+the player may be come upon). Played on the test profile: "in talk" (a wandering thief had really spoken to the test
+character), "wears nothing", "has stayed where they are", then "on the road and may be come upon" after a minute's
+walk; with Stormcloak standing at -78 and every roll forced, "Patrols: nobody comes now: the player has stayed where
+they are for a while" twice, and walking, "StormcloakFaction sends 4 after the player". Not played: an intimacy
+mod's scene and the ten minutes after it (the test profile has none), sitting and sleeping, the skirmish's and the
+tale ambush's use of the same call.
+
 ### A shy admirer, and stories that know the talk and the times (2026-11-22)
 
 The user: "if someone is too shy to confess and sends someone to request meeting the player, can the player have
