@@ -41,9 +41,61 @@ asks again a frame later (`FindingField` keeps the poll off the battle meanwhile
 lines for one left over, and close it). On the full Isekai list, 2026-11-21: six looks, 0.77 ms in all, the longest
 0.22 ms. In one go the search had taken 0.8 to 1.1 ms on the small test list and 1.5 to 1.7 ms on the full one.
 
-Making a soldier is still over the half millisecond the mod holds itself to: 0.3 to 0.85 ms of its frame on the test
-list, 1.0 to 1.4 ms on the full one, of which the game's own making of an actor is 0.8 to 1.0. One frame at a time,
-never two in a row.
+### Making a soldier: three frames (2026-11-22)
+
+Until then a soldier was made in one call, one frame at a time: 0.3 to 0.85 ms of its frame on the test list, 1.0 to
+1.4 ms on the full one, of which the game's own making of an actor was 0.8 to 1.0 there. The user, told that this was
+the one cost still over: "But we dont want to cause stutters either."
+
+Timed apart on the test list, one soldier made whole (0.51 to 0.57 ms): the game's own making 0.40 to 0.48 by who is
+made, setting them down 0.07, their values, sides and place in the roll 0.04, choosing who 0.02, the rest (the two
+sides looked up by plugin name, the answer written as JSON) 0.03. The game's part cannot be cut up from outside, so it
+has a frame to itself and everything else is done in the frames around it:
+
+1. **Chosen** (`PrepareGroup`, native `BattlePrepareGroup(side, kind, player)`; kind 0 a wave, 1 the hidden force, 2 a
+   champion): where the group comes from out of the player's sight (`ComingPlace`: the looks at the ground) and who
+   they are (the roll). 1 chosen, 0 nowhere or nobody, -1 no battle. What it chose holds for five seconds
+   (`preparedKind`, `preparedAt`); `ReinforceLine` called without it does both itself, as before. The lines of the
+   muster have no such step: their place is the field's, and their roll costs 0.02 ms with the first soldier.
+2. **Made** (`MakeSoldiers`, from `MusterLine`, `ReinforceLine`, `RaiseLoner`): `PlaceSwitchedOff`, the game's own
+   PlaceAtMe (`RELOCATION_ID(55672, 56203)`, the function behind Papyrus' `PlaceAtMe`) asked for one, kept, switched
+   off from the start, beside the player. Before, `CreateReferenceAtLocation` made them whole on their spot and
+   `Disable()` followed in the next line. Each is noted in `unsettled_` by handle (not by id: an id given to somebody
+   else since would be taken for them) with their spot, side and orders. The script waits a frame before it even
+   reads what the call answered.
+3. **Settled** (`SettleSoldiers`, native `BattleSettle()`): everybody in `unsettled_` is set down on their spot
+   (`SetDown`, the engine's move, `RELOCATION_ID(56227, 56626)`; the height of the ground is looked up here), gets
+   their values, loses the factions they came with, gets their side and their place in the battle's roll
+   (`RegisterActor`, which is why `RememberBattleSoldiers` must come after it). It answers "" or, as JSON `{count,
+   formIds}`, those it could not settle: the battle ended between the halves, or their ground is no longer loaded.
+   They were never switched on, and the script deletes them (`DropOrphans`). Nobody is switched on before this step.
+
+In the script (`IntelEngine_Battle`): `SettleSoldiers()` (the call, the orphans, a frame's wait) after every making in
+`DrawUpLine`, `BringUp`, `SpringFlank`, `BringChampion`, and the same two steps for the killer of
+`ExecuteAssassination`. `ResolveBattleFactions` keeps what it found (it went through every plugin's name for every
+soldier). `Revert` empties `unsettled_`.
+
+**Measured** (test list, five battles; the last three on the final form, some 150 soldiers; the log line "at most ...
+in the last 16 runs" of each clock):
+
+| frame | what the log calls it | ms |
+|---|---|---|
+| chosen | "choosing where more soldiers come from, and who" | under 0.5 (no notice; a group's eight runs were not reached) |
+| made | "drawing up soldiers" / "bringing up soldiers" | 0.42 to 0.47 at most; three notices: 0.50, 0.54, 0.77 |
+| of which the game | "the game making one soldier" | 0.39 to 0.48 at most; one notice: 0.72 |
+| settled | "setting soldiers down and giving them their side" | 0.09 to 0.13 |
+
+So the half millisecond is kept except where the game's own call breaks it (0.48 of the 0.54, 0.72 of the 0.77): a
+soldier with their arms and armour costs the game that much to bring into being, and IntelEngine has 0.04 ms beside
+it. A muster of sixteen takes 2.7 s (it took 1.6), out of the player's sight. The battles ran to their end as before
+(lines, charge, hidden force, champion, waves, turncoats, the end, the march off, the removals).
+
+**Not done.** The full list has not been measured in this form (it needs the user's word for a run): the game's part
+there was 0.8 to 1.0 ms made whole. If it stays over, what is left is making soldiers ahead of the battle in frames
+nobody watches (a loading screen, an open menu) and keeping them switched off until the muster: not built, because it
+puts people into the save who belong to no battle yet. A save in the frame between a soldier's making and their
+settling leaves that soldier switched off and unknown to the script after the load; the muster had that gap before
+(soldiers are known to the script only after `RememberBattleSoldiers`).
 
 ## 3. Muster, the hail, the charge
 
