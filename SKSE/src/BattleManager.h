@@ -228,9 +228,16 @@ namespace IntelEngine {
          *  Returns JSON: {success, count, formIds, error} */
         std::string ReinforceLine(const std::string& side, int first, int count, RE::Actor* player, int kind = 0);
 
+        /** What a session's first battle looked up in the frame its first soldier was made in, looked up while the
+         *  save comes in: every faction's soldier template (by name it can be a search through every leveled list and
+         *  every NPC of the load order) with a first roll from it, and the two battle sides. On a list of 1,500
+         *  plugins that one frame took 1.45 ms, 0.58 of it these lookups (2026-11-22). */
+        void WarmUp();
+
         /** Before a group comes up (kind as for ReinforceLine: 0 a wave, 1 the hidden force, 2 a champion): where they
          *  come from, out of the player's sight, and who they are, chosen in a frame of its own. The first call of
          *  ReinforceLine did this and made a soldier in the same frame, and that frame took 0.50 ms (2026-11-22).
+         *  Kind 3 is a line of the muster, before MusterLine: who they are (their place is the field's).
          *  1: chosen, ReinforceLine may follow. 0: nowhere to come from unseen, or nobody to come (a side has one
          *  champion). -1: no battle with a field. */
         int PrepareGroup(const std::string& side, RE::Actor* player, int kind);
@@ -400,6 +407,18 @@ namespace IntelEngine {
 
         /** Count dead soldiers on a given side ("A" or "B"). */
         int CountDeadSoldiers(const std::string& side) const;
+
+        /** The fighting is called off for `count` of the battle's soldiers from number `first` on (of the running
+         *  battle, or of the one just closed): they start nothing any more, forget who struck them, and their fight
+         *  ends. amongThemselves: only somebody whose fight is with another soldier of the battle, or with nobody any
+         *  more (a soldier fighting a wolf is left to it). A few a call, so that no frame carries all of them. Returns
+         *  how many soldiers come after these.
+         *
+         *  A verdict used to be followed by each soldier being calmed in turn by the script while the two sides stayed
+         *  enemies: five to eight seconds for fifteen soldiers on a list of 1,500 plugins, in which those not reached
+         *  yet struck those who had been, who then defended themselves. The fight went on for minutes, and a beaten
+         *  side's fresh reserves cut the winners down (seen by the user, 2026-11-22). */
+        int CeaseFire(int first, int count, bool amongThemselves);
 
         /** Cleanup battle soldiers by proximity to player.
          *  Disables+deletes actors behind the player and far enough away.
@@ -572,6 +591,12 @@ namespace IntelEngine {
         double bountyWatchUntil_ = 0.0;          // real seconds; 0: while the battle is fought
         void SnapshotBounty();
         void StrikeBattleBounty();
+        /** A hold's guard who has got into a fight with a soldier of the battle (a blow gone wide, an arrow) stands
+         *  down, and the soldier lets him be: a battle is no crime, and the guards are not part of it. Looked for from
+         *  the soldiers' side (whom they are fighting), every round of the battle and of its aftermath. On the test
+         *  profile two Whiterun guards beside the road fought six soldiers of both armies after the verdict, and the
+         *  one with the player's pay never got to them (2026-11-22). */
+        void GuardsStandDown();
         std::atomic<double> quietUntil_{0.0};            // real seconds (steady clock): the aftermath of the last battle
         std::string lastPlace_;                          // where the last battle was fought (spoken of after it is over)
         mutable std::string lastPromotion_;              // the rank the last battle lifted the player to, until it has been said

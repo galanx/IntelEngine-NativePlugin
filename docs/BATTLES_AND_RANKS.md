@@ -90,12 +90,34 @@ soldier with their arms and armour costs the game that much to bring into being,
 it. A muster of sixteen takes 2.7 s (it took 1.6), out of the player's sight. The battles ran to their end as before
 (lines, charge, hidden force, champion, waves, turncoats, the end, the march off, the removals).
 
-**Not done.** The full list has not been measured in this form (it needs the user's word for a run): the game's part
-there was 0.8 to 1.0 ms made whole. If it stays over, what is left is making soldiers ahead of the battle in frames
-nobody watches (a loading screen, an open menu) and keeping them switched off until the muster: not built, because it
-puts people into the save who belong to no battle yet. A save in the frame between a soldier's making and their
-settling leaves that soldier switched off and unknown to the script after the load; the muster had that gap before
-(soldiers are known to the script only after `RememberBattleSoldiers`).
+**On the full Isekai list** (the user's word for the run, 2026-11-22 night: "Yes if you feel we are making progress
+without negative side effects that cost us features"; four battles, the profile put back and checked afterwards):
+
+| frame | ms on the full list |
+|---|---|
+| made, the whole call | 0.65 to 1.07 |
+| of which the game's own making | 0.59 to 1.00, every soldier over half a millisecond |
+| settled | 0.12 to 0.31 |
+| a fight called off (`CeaseFire`), two soldiers a frame | at most 0.39 (six a frame took 0.87) |
+
+So there the game's own call is over the half millisecond for every soldier, with 0.05 to 0.07 ms of IntelEngine's
+beside it: made whole it had been 1.0 to 1.4 ms. Two costs of IntelEngine's own showed only there and are gone:
+
+- The first soldier of a session's first battle: 1.45 ms, 0.58 of it lookups (every faction's soldier template by
+  name, which is a search through every leveled list and NPC of the load order when the game's own name table does
+  not know it, and the two battle sides). `BattleManager::WarmUp()` makes them while the save comes in (kPostLoadGame
+  and kNewGame, beside `ArcBridge::WarmUp()`; "9 soldier templates and the two sides looked up while the save came in
+  (0.49 ms)").
+- The roll of a line (who its soldiers are) in the same frame as its first soldier's making: 0.23 ms.
+  `PrepareGroup` kind 3, called by `DrawUpLine` a frame before the first `BattleMusterLine`; it also takes the player
+  out of the two battle sides. After both: the first soldier's call 1.07 ms with the game's 1.00.
+
+**Not done.** What is left over the half millisecond on a big list is the game's own making of a person. The one lever
+for it is making soldiers ahead of the battle in frames nobody watches (a loading screen, an open menu) and keeping
+them switched off until the muster: not built, because it puts people into the save who belong to no battle yet. A
+save in the frame between a soldier's making and their settling leaves that soldier switched off and unknown to the
+script after the load; the muster had that gap before (soldiers are known to the script only after
+`RememberBattleSoldiers`).
 
 ## 3. Muster, the hail, the charge
 
@@ -198,6 +220,46 @@ A hidden force and turncoats in one battle leave the champions out. What is in s
 - The battle is recorded once, as it was fought, and word of it starts in the hold it was fought in. The player's
   part is in the telling ("...was seen fighting for the Imperial Legion, and reportedly killed 7 of the other
   side, their champion among them").
+
+### The verdict holds (2026-11-22)
+
+The user, watching the battles of that night on the full list: "some stormcloak soldiers still spawned and kept
+fighting and actually killed lots of imperials after imperials won, is that in purpose or was something off?" It was
+off. `DisperseSoldiers` calmed each soldier in turn (`CalmSoldier`: aggression 0, `StopCombat`, weapon away) while the
+two battle sides stayed enemies until the battle was wound up three minutes later. On the full list the round takes
+five to eight seconds for fifteen soldiers; whoever had not been reached yet went on striking those who had, who then
+defended themselves, and `StandingAbout` leaves anybody in a fight alone. In the battle watched the winners' man was
+"fighting TRUE" for 37 s after the verdict and never reached the player; the beaten side had seven or eight standing,
+five of them a wave that had come up half a minute before.
+
+- `CeaseFire(amongThemselves)` (script): `Intel_BattleSideA.SetAlly(Intel_BattleSideB)`, then native
+  `BattleCeaseFire(first, 2, amongThemselves)` round the battle's soldiers, two a frame (`BattleManager::CeaseFire`:
+  aggression 0, `SetBeenAttacked(false)`, `StopCombat()`; of the running battle, or of the one just closed by its
+  cleanup list). `amongThemselves`: only somebody whose fight is with another soldier of the battle.
+- Where: `SetAlly` in the first line of `HandleBattleEnd`; `CeaseFire(false)` at the top of `DisperseSoldiers`
+  (every way a battle ends goes through it), `CeaseFire(true)` after its round of orders and before every look of
+  the aftermath. `StartBattle` makes the sides enemies again (`SetEnemy`, as before).
+- `SendToTheFight`: soldiers whose group was still being made when the battle closed stay switched off (the
+  aftermath's next look takes them out: `OutOfSight` answers 1 for somebody without a body). They used to fade in and
+  jog to the middle of the field after the verdict.
+
+Played twice on the full list: the fights called off 1.0 to 1.7 s after the verdict (most of that is the script
+reaching `DisperseSoldiers`: the count of the dead, the books, the journal), no line "they were still at each other",
+the winners' man "fighting False", his word after 4.5 and 10.7 s, the pay handed over, nobody killed afterwards.
+Three times on the test profile (0.3 to 0.6 s). Not played: a battle the player fights on in after the verdict (the
+sides are friends now: blows at the beaten are blows at friends).
+
+**The guards.** On the test profile the winners' man still showed "fighting TRUE" for twenty seconds after the
+verdict, and once never reached the player. A look of the aftermath that finds a soldier fighting somebody who is not
+of the battle now says whom ("... is still fighting Whiterun Guard (0001B5C2), who is not of the battle: left to
+it"), and that showed it: two Whiterun guards by the road, six soldiers of both armies. `GuardsStandDown()` (in
+`SuppressBountyTick`, which runs every round of a battle and of its aftermath): for every soldier of the battle whose
+fight is with a guard who is in neither battle side, both forget the blow and their fight ends (`SetBeenAttacked(false)`,
+`StopCombat()`). Looked for from the soldiers' side, so it costs a lookup a soldier. Seen by setting a guard and the
+Imperial captain on each other in the aftermath (console `startcombat` both ways): "Whiterun Guard (0001B5E3) and
+Imperial Legion Captain (FF000ECB) let each other be", both out of the fight within the round. Not seen: a guard
+drawn in by himself with the rule in place (none came into the one battle played after it). A fight with a wolf or a
+bandit is left alone, and a fight with nobody left in it is ended.
 
 ## 6. The ladder (`Ranks.h`, co-save record `IERK`)
 
