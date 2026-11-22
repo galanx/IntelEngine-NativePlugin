@@ -1200,7 +1200,7 @@ namespace IntelEngine {
             return false;
         }
 
-        // 4.0: the target of an objective the player has open never moves; at "NPCs of running quests may move:
+        // 4.0: the target of an objective the player has open never moves; at "Quest NPCs may move:
         // Never" nobody in a running quest is offered (at "only for something important" the dispatch checks the kind).
         if (!LivingWorldBridge::GetSingleton()->MayOfferForStory(actor)) {
             if (verbose) logger::debug("[StoryDM] Rejected '{}': held by a running quest", displayName);

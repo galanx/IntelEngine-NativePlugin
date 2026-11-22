@@ -2654,7 +2654,7 @@ namespace IntelEngine::Papyrus {
     }
 
     /** Whether a running quest lets this person go along with the player to whoever asked about them (the setting
-     *  "NPCs of running quests may move", as for a quest moment); the storyline's own objective does not count. */
+     *  "Quest NPCs may move", as for a quest moment); the storyline's own objective does not count. */
     bool StorylineMayComeAlong(RE::StaticFunctionTag*, RE::Actor* person) {
         return LivingWorldBridge::GetSingleton()->MayMoveForStory(person, "quest", true);
     }
@@ -3491,7 +3491,7 @@ namespace IntelEngine::Papyrus {
             return ok;
         };
         auto changes = SettingsBridge::ApplyFromFile(config, store);
-        if (added > 0) logger::info("SettingsBridge: {} setting(s) the file lacked were added to settings.yaml", added);
+        if (added > 0) logger::info("SettingsBridge: {} setting(s) the file lacked or held unreadably were written to settings.yaml from the game", added);
         if (changes.empty()) return 0;
         const auto count = static_cast<std::int32_t>(changes.size());
         logger::info("SettingsBridge: {} setting(s) taken from settings.yaml", count);

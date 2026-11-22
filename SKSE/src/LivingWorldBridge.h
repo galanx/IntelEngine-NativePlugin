@@ -134,7 +134,7 @@ namespace IntelEngine {
         // along with the player to the one who asked: that is the storyline itself, not a move away from it).
         static int QuestTie(RE::Actor* actor, bool skipStorylines = false);
         /** May the story director offer this NPC at all? Never the target of an open objective; nobody in a running
-         *  quest when "NPCs of running quests may move" is Never. Below the Lives and Rumors levels: as before 4.0. */
+         *  quest when "Quest NPCs may move" is Never. Below the Lives and Rumors levels: as before 4.0. */
         bool MayOfferForStory(RE::Actor* actor) const;
         /** May this kind of moment move this NPC? With "only for something important", someone in a running quest
          *  comes only to bring a quest (a message always goes by courier, the sender stays). */

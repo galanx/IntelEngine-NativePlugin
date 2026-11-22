@@ -458,8 +458,37 @@ Played: off, after a skipped day "budget 2.00, bad moment false, 44 s of play si
 switched on, "66 s of play since the last moment: a moment may land"; thrown on and off again in a fresh start of
 the game, the log line and `settings.yaml` (`skipped_time_counts`) followed each time. The dashboard's row was
 looked at in the preview (it sends `livingWorldSkippedTime` true and false, which the DLL hands to the scripts as
-1.0 and 0.0, the values played). Not opened in the game: the MCM toggle and the row on SkyrimNet's page; with the
-switch on, the town pacer was not watched beginning a story after a skip (only the director's verdict was).
+1.0 and 0.0, the values played). Then the row was opened in the game on both other pages: on SkyrimNet's page it
+was switched on and saved ("1 setting(s) taken from settings.yaml", "skipped time counts toward the pace"); in the
+MCM its info text shows in full and a click switched it off again ("does not count"). With the switch on, the town
+pacer was not watched beginning a story after a skip (only the director's verdict was).
+
+### MCM rows that fit their column (2026-11-22)
+
+Found while the new switch was looked at in the MCM itself (which had not been opened for the 4.0 settings before).
+SkyUI sets a text option's value in capitals from the right edge of its column, over whatever the label holds
+there. In the picture taken at a third of the screen's size a column is about 207 px wide, a label takes about
+4.5 px a letter and a value about 6.5: label and value together fit up to roughly 38 letters, a slider's or a
+switch's label up to roughly 40.
+
+- "Interruptions at bad moments" lay under "ONLY WHEN URGENT", "NPCs of running quests may move" under "FOR
+  IMPORTANT REASONS", and "A follower left behind moves on after (days)" touched its number. One name per setting
+  (`RunSettingNamesCheck`), so the table, the manifest, the dashboard and the MCM changed together: the choices are
+  now "If urgent" and "If important", the names "Quest NPCs may move" and "A follower left behind moves on (days)".
+  Keys and stored positions are unchanged.
+- `settings.yaml` stores a choice as its word. `SettingsBridge::ApplyFromFile` now writes the game's value over a
+  value it cannot read (a word of an older build, a typo), as it already did for a key the file lacks; before, the
+  old word stayed in the file until some setting was changed in the game. Both renamed choices are their setting's
+  default, and the game keeps its own value in any case. `RunSettingsBridgeCheck` has the case.
+- Active Tasks page: a busy slot's text was passed as the value of "Slot N:" and lay over it. `AddSlotRow` makes it
+  the row's own text; the bracketed end ("(near The Bannered Mare)") goes to the label of the Clear row below
+  (`SlotWhere`), where the first attempt had been cut at the column's edge.
+
+Seen in the game on the test profile: the Living world section with every row clear of its value, the Active Tasks
+page with two travellers, SkyrimNet's page with the same names, and a `settings.yaml` holding "Only when urgent" /
+"For important reasons" rewritten at the start ("2 setting(s) the file lacked or held unreadably were written").
+The MCM offers "R Default" on every row and no row answers it (no `OnOptionDefault` in the script): as before.
+The Scheduled Tasks page was not seen with an entry on it.
 
 ### The story clock: one pace setting above Classic (2026-11-22)
 
