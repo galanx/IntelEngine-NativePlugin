@@ -205,6 +205,8 @@ function SettingsTab({ config, storyTypes, onSettingChange, pluginConfig, onPlug
           hints={LW_PACING_HINTS}
           onChange={v => onSettingChange('livingWorldPacing', v)}
         />
+        <ToggleRow label="Skipped time counts toward the pace" value={config.livingWorldSkippedTime === true} onChange={v => onSettingChange('livingWorldSkippedTime', v)}
+          hint="Off: waiting, sleeping and fast travel do not bring the next moment sooner. It also takes time actually played: eight minutes between two moments, four minutes in a town before a story of its own begins there, twenty minutes between two such stories. On: the game&apos;s clock alone counts: skip a day and a day&apos;s worth of moments is due." />
         <SliderRow
           label="A follower told to wait waits"
           value={config.livingWorldWaitDays ?? 30}

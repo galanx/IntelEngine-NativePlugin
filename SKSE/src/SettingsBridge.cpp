@@ -118,6 +118,8 @@ namespace IntelEngine::SettingsBridge {
                 Choice("livingWorldPacing", "living_world", "pacing", kLwPacing, 1, LW, "How often something happens",
                        "About one notable moment every two game days, every game day, or twice a game day. Moments wait "
                        "for a good time: arriving in a town or an inn, coming home, leaving a dungeon, waking up."),
+                Bool("livingWorldSkippedTime", "living_world", "skipped_time_counts", false, LW, "Skipped time counts toward the pace",
+                     "Off: waiting, sleeping and fast travel do not bring the next moment sooner. It also takes time actually played: eight minutes between two moments, four minutes in a town before a story of its own begins there, twenty minutes between two such stories. On: the game's clock alone counts: skip a day and a day's worth of moments is due."),
                 Num(Kind::Float, "livingWorldWaitDays", "living_world", "wait_order_days", 1, 120, 30, LW,
                     "A follower told to wait waits (days)",
                     "How long after you told a follower to wait they start a life of their own, once their follower mod "

@@ -94,6 +94,10 @@ static void PacingRules() {
     skipped.playedSince = 30.0f;             // ...which was half a minute of play ago: the player waited a day
     Require(!MayDeliverNow(rested, s, skipped, false, false, 1), "a day waited through is no time played: no moment yet");
     Require(MayDeliverNow(rested, s, skipped, true, false, 1), "something urgent comes all the same");
+    Settings counting = s;
+    counting.skippedTimeCounts = true;
+    Require(MayDeliverNow(rested, counting, skipped, false, false, 1),
+            "with \"Skipped time counts toward the pace\" on, the game's clock alone counts: the day waited through is a day");
     skipped.playedSince = kMinGapPlayedSeconds;
     Require(MayDeliverNow(rested, s, skipped, false, false, 1), "after eight minutes of play it may");
     skipped.playedSince = -1.0f;
