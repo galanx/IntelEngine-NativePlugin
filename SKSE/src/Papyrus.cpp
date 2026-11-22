@@ -183,6 +183,7 @@ namespace IntelEngine::Papyrus {
     RE::BSFixedString FactionPatrolDue(RE::StaticFunctionTag*);
     void FactionPatrolSent(RE::StaticFunctionTag*);
     void FactionPatrolTest(RE::StaticFunctionTag*, bool);
+    RE::BSFixedString PrivateMomentNow(RE::StaticFunctionTag*);
     int AdjustPlayerFactionStanding(RE::StaticFunctionTag*, RE::BSFixedString, int);
     bool IsFactionAtWar(RE::StaticFunctionTag*, RE::BSFixedString, RE::BSFixedString);
     int GetWarMorale(RE::StaticFunctionTag*, RE::BSFixedString, RE::BSFixedString, RE::BSFixedString);
@@ -630,6 +631,7 @@ namespace IntelEngine::Papyrus {
         a_vm->RegisterFunction("FactionPatrolDue", SCRIPT_NAME, FactionPatrolDue); ++count;
         a_vm->RegisterFunction("FactionPatrolSent", SCRIPT_NAME, FactionPatrolSent); ++count;
         a_vm->RegisterFunction("FactionPatrolTest", SCRIPT_NAME, FactionPatrolTest); ++count;
+        a_vm->RegisterFunction("PrivateMomentNow", SCRIPT_NAME, PrivateMomentNow); ++count;
         a_vm->RegisterFunction("AdjustPlayerFactionStanding", SCRIPT_NAME, AdjustPlayerFactionStanding); ++count;
         a_vm->RegisterFunction("IsFactionAtWar", SCRIPT_NAME, IsFactionAtWar); ++count;
         a_vm->RegisterFunction("GetWarMorale", SCRIPT_NAME, GetWarMorale); ++count;
@@ -2669,6 +2671,7 @@ namespace IntelEngine::Papyrus {
     // ---------------------------------------------------------------- 4.0 lives of followers left behind
 
     void LivingWorldTrack(RE::StaticFunctionTag*) {
+        LivingWorldBridge::NotePlayerWhere();   // where the player goes, for private moments (Patrols.h)
         LivingWorldBridge::GetSingleton()->Track();
         BondBridge::GetSingleton()->Tick();   // how people stand with the player, where no relationship mod keeps it
     }
@@ -4654,6 +4657,11 @@ namespace IntelEngine::Papyrus {
         auto* politics = FactionPolitics::GetSingleton();
         auto* db = PoliticalDB::GetSingleton();
         if (!politics->IsEnabled() || !db->IsReady()) return "";
+        // Never upon somebody who is with somebody or has settled somewhere (the test switch does not lift this).
+        if (const auto priv = LivingWorldBridge::PrivateMoment(); priv != Patrols::Private::No) {
+            logger::info("Patrols: nobody comes now: {}", Patrols::Word(priv));
+            return "";
+        }
         std::string worst;
         int standing = 0;
         for (const auto& s : db->GetAllPlayerStandings()) {
@@ -4687,6 +4695,11 @@ namespace IntelEngine::Papyrus {
         auto* calendar = RE::Calendar::GetSingleton();
         g_lastPatrolDay.store(calendar ? calendar->GetCurrentGameTime() : 0.0f);
         LivingWorldBridge::GetSingleton()->OnPatrolSent();
+    }
+
+    RE::BSFixedString PrivateMomentNow(RE::StaticFunctionTag*) {
+        // Test hook: why nobody in arms would come upon the player now; "" when they may.
+        return Patrols::Word(LivingWorldBridge::PrivateMoment());
     }
 
     void FactionPatrolTest(RE::StaticFunctionTag*, bool always) {

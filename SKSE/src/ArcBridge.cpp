@@ -2388,6 +2388,9 @@ namespace IntelEngine {
                 wait = "after the last try";
             } else if (player->IsInCombat() || LivingWorldBridge::GetSingleton()->IsBadMoment()) {
                 wait = "a fight or a menu";
+            } else if (const auto priv = LivingWorldBridge::PrivateMoment(); priv != Patrols::Private::No) {
+                // Hired men fall on a traveller, never on somebody who is with somebody or has settled somewhere.
+                wait = Patrols::Word(priv);
             } else if (real < m_questBusyUntil.load()) {
                 wait = "a quest of the game moved on lately";
             }

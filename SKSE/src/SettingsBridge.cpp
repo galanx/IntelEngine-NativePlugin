@@ -31,7 +31,8 @@ namespace IntelEngine::SettingsBridge {
             "Ask you before an NPC starts this task: never, only for your followers, or for everyone.";
         constexpr const char* kAllowText =
             "On: your followers can be given this action like anyone else. Off: it is refused for your active followers, without a prompt.";
-        constexpr const char* kHoldShort = "How far this kind of story may reach for its NPC.";
+        constexpr const char* kHoldShort =
+            "How far this kind of story may reach for its NPC. Above Classic the director keeps people of other holds at home all the same, unless they are close to you and the matter presses.";
 
         Entry Bool(const char* key, const char* section, const char* name, bool def, const char* category,
                    const char* label, const char* description, const char* event = nullptr, const char* arg = nullptr) {
@@ -69,7 +70,7 @@ namespace IntelEngine::SettingsBridge {
                 Bool("storyEnabled", "stories", "enabled", true, S, "Stories",
                      "The dungeon master: NPCs who know you come to you, send word, lie in wait or bring work."),
                 Num(Kind::Float, "storyInterval", "stories", "check_interval_hours", 0.5, 168, 3, S, "Check interval (game hours)",
-                    "How often the dungeon master considers starting something."),
+                    "The fallback clock: how often the dungeon master looks when nothing else prompts it. Arriving in a town, an inn or your home, leaving a dungeon and waking up bring a look of their own; how much comes of it is set by 'How often something happens'."),
                 Num(Kind::Float, "longAbsenceDays", "stories", "long_absence_days", 1, 14, 3, S, "Long absence (days)",
                     "After this many days without meeting you, an NPC counts as not having seen you for a long time."),
                 Num(Kind::Float, "maxTravelDays", "stories", "max_travel_days", 0.25, 3, 1, S, "Longest journey (days)",
@@ -84,12 +85,16 @@ namespace IntelEngine::SettingsBridge {
                      kToggleStoryEvent, "road_encounter"),
                 Bool("typeMessage", "stories", "type_message", true, S, "Story type: a message is delivered", "",
                      kToggleStoryEvent, "message"),
-                Bool("typeQuest", "stories", "type_quest", true, S, "Story type: someone has work for you", "",
+                Bool("typeQuest", "stories", "type_quest", true, S, "Story type: someone has work for you",
+                     "People who need your help. Off: nobody brings you their trouble, and no story of the town begins.",
                      kToggleStoryEvent, "quest"),
-                Bool("typeAmbush", "stories", "type_ambush", true, S, "Story type: an ambush", "", kToggleStoryEvent, "ambush"),
+                Bool("typeAmbush", "stories", "type_ambush", true, S, "Story type: an ambush",
+                     "Someone with a grudge lies in wait on the road. Off: no ambush inside a town's story either.", kToggleStoryEvent, "ambush"),
                 Bool("typeFactionAmbush", "stories", "type_faction_ambush", true, S, "Story type: a faction's patrol hunts you",
-                     "", kToggleStoryEvent, "faction_ambush"),
-                Bool("typeStalker", "stories", "type_stalker", true, S, "Story type: someone follows you unseen", "",
+                     "A faction that holds you for an enemy (standing -40 or worse) sends men after you on the road, now and then. Never while you are with somebody, resting or settled somewhere.",
+                     kToggleStoryEvent, "faction_ambush"),
+                Bool("typeStalker", "stories", "type_stalker", true, S, "Story type: someone follows you unseen",
+                     "Someone shadows you from a distance, out of doors. Off: nobody does inside a town's story either.",
                      kToggleStoryEvent, "stalker"),
                 Choice("dangerZonePolicy", "stories", "danger_zone_policy", kNpcPolicy, 1, S, "NPCs sent into dangerous places",
                        "Who may be sent to you while you are in a dungeon or another dangerous place."),
@@ -133,14 +138,16 @@ namespace IntelEngine::SettingsBridge {
                 Choice("holdPolicyStalker", "stories", "reach_stalker", kHoldPolicy, 1, SH, "Someone follows you unseen", kHoldShort),
 
                 // ── Stories: quests ──
-                Bool("questCombat", "stories", "quest_combat", true, SQ, "Quest kind: clear out enemies", ""),
-                Bool("questRescue", "stories", "quest_rescue", true, SQ, "Quest kind: rescue someone", ""),
-                Bool("questFindItem", "stories", "quest_find_item", true, SQ, "Quest kind: find an item", ""),
+                Bool("questCombat", "stories", "quest_combat", true, SQ, "Quest kind: clear out enemies",
+                     "A bounty on what lives at a place. Off: no bounty, and no master of a place to kill inside a town's story."),
+                Bool("questRescue", "stories", "quest_rescue", true, SQ, "Quest kind: rescue someone",
+                     "Someone of the town held at a place out in the world. Off: nobody is held in a story."),
+                Bool("questFindItem", "stories", "quest_find_item", true, SQ, "Quest kind: find an item", "A keepsake lost at a place. Off: no keepsake hunt."),
                 Bool("questFactionCombat", "stories", "quest_faction_combat", true, SQ, "Quest kind: fight a faction's enemies", ""),
                 Bool("questFactionRescue", "stories", "quest_faction_rescue", true, SQ, "Quest kind: rescue for a faction", ""),
                 Bool("questFactionBattle", "stories", "quest_faction_battle", true, SQ, "Quest kind: join a faction's battle", ""),
                 Num(Kind::Float, "questTimeoutDays", "stories", "quest_timeout_days", 1, 30, 1, SQ, "Quest expires after (days)",
-                    "A quest you were offered and did not finish ends after this many days."),
+                    "A quest of the dungeon master's own that you were offered and did not finish ends after this many days. A story of the town says in its offer how long it waits."),
 
                 // ── NPCs among themselves ──
                 Bool("npcTickEnabled", "social", "enabled", true, N, "NPCs visit and talk to each other",

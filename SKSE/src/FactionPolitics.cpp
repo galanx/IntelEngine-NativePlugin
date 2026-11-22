@@ -7,6 +7,7 @@
  */
 
 #include "FactionPolitics.h"
+#include "LivingWorldBridge.h"
 #include "FactionPairValidation.h"
 #include "VanillaWar.h"
 #include "InformantRumorValidation.h"
@@ -1742,6 +1743,19 @@ war_allowed:
         float lastTime = lastManifestationTime_.load();
         if (lastTime > 0.0f && (currentTime - lastTime) < (MANIFESTATION_COOLDOWN_HOURS / 24.0f)) {
             logger::info("FactionPolitics: Skipping manifestation — cooldown active");
+            return "";
+        }
+
+        // Guard: a bad moment or a private one. A skirmish near the player, or a killer after a leader the player
+        // stands by, is men in arms appearing where the player is: never in the middle of a scene, a talk, a rest or
+        // a bath, nor where the player has settled (it used to ask only whether the player was out of doors). What
+        // cannot be shown is told as it was written, as always.
+        if (LivingWorldBridge::IsBadMoment()) {
+            logger::info("FactionPolitics: Skipping manifestation — a fight, a scene or a menu");
+            return "";
+        }
+        if (const auto priv = LivingWorldBridge::PrivateMoment(); priv != Patrols::Private::No) {
+            logger::info("FactionPolitics: Skipping manifestation — {}", Patrols::Word(priv));
             return "";
         }
 

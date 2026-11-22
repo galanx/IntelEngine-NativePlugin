@@ -47,7 +47,7 @@ const HOME_HINTS = [
 const HOLD_POLICIES = ['No restriction', 'Same hold (civilians)', 'Same hold (except followers)', 'Same hold (everyone)',
   'Same town (civilians)', 'Same town (except followers)', 'Same town (everyone)'];
 const HOLD_HINTS = [
-  'No restriction. NPCs from any hold can be dispatched.',
+  'No restriction from this setting. Above Classic the director still keeps people of other holds at home unless they are close to you and the matter presses.',
   'Civilians must be in the same hold as you. Warriors and followers can cross holds.',
   'Everyone except followers must be in the same hold.',
   'All NPCs must be in the same hold as you.',
@@ -141,7 +141,7 @@ function SettingsTab({ config, storyTypes, onSettingChange, pluginConfig, onPlug
           min={0.5} max={168} step={0.5}
           unit="game hours"
           onCommit={v => onSettingChange('storyInterval', v)}
-          hint="How often (game hours) the Story Engine checks for NPCs with reasons to find you. Max 168 = 1 week."
+          hint="The fallback clock: how often the dungeon master looks when nothing else prompts it. Arriving in a town, an inn or your home, leaving a dungeon and waking up bring a look of their own; how much comes of it is set by &quot;How often something happens&quot;. Max 168 = 1 week."
         />
         {/* No "NPC Cooldown" row: the game uses the longer of it and Long Absence (three days by default), so
             its 6 to 72 hours changed nothing. Long Absence is the setting. */}
@@ -395,11 +395,11 @@ function SettingsTab({ config, storyTypes, onSettingChange, pluginConfig, onPlug
       {/* Quest Types */}
       <Accordion title="Quest kinds" isOpen={openSections.quests} onToggle={() => toggle('quests')}>
         <ToggleRow label="Clear out enemies" value={config.questCombat} onChange={v => onSettingChange('questCombat', v)}
-          hint="NPC asks you to kill bandits, draugr, or dragons at a location." />
+          hint="A bounty on what lives at a place. Off: no bounty, and no master of a place to kill inside a town&apos;s story." />
         <ToggleRow label="Rescue someone" value={config.questRescue} onChange={v => onSettingChange('questRescue', v)}
-          hint="A real NPC is teleported to the location and held captive by enemies." />
+          hint="Someone of the town held at a place out in the world. Off: nobody is held in a story." />
         <ToggleRow label="Find an item" value={config.questFindItem} onChange={v => onSettingChange('questFindItem', v)}
-          hint="A valuable item spawns in a chest guarded by enemies." />
+          hint="A keepsake lost at a place. Off: no keepsake hunt." />
         <ToggleRow label="Fight a faction's enemies" value={config.questFactionCombat} onChange={v => onSettingChange('questFactionCombat', v)}
           hint="Clear out hostile faction soldiers at a location. Rewards faction standing." />
         <ToggleRow label="Rescue for a faction" value={config.questFactionRescue} onChange={v => onSettingChange('questFactionRescue', v)}

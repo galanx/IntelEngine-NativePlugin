@@ -26,6 +26,10 @@ namespace IntelEngine {
             return &instance;
         }
 
+        /** Real seconds since somebody last said a line to the player, or the player said one; below 0: nobody has
+         *  this session. A SkyrimNet conversation has no menu of the game to tell it by. Any thread. */
+        static float SecondsSincePlayerTalk();
+
         /** Register the dialogue event callback with SkyrimNet. Call after API init. */
         void Initialize();
 

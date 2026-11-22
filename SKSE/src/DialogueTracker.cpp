@@ -89,6 +89,17 @@ namespace IntelEngine {
         return {lineCounts_.begin(), lineCounts_.end()};
     }
 
+    namespace {
+        std::atomic<double> g_lastPlayerTalk{-1.0};   // steady-clock seconds of the last line to or by the player
+    }
+
+    float DialogueTracker::SecondsSincePlayerTalk() {
+        const double last = g_lastPlayerTalk.load();
+        if (last < 0.0) return -1.0f;
+        const double now = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+        return static_cast<float>(now - last);
+    }
+
     void DialogueTracker::Record(const char* json, bool player) {
         if (!json) return;
         try {
@@ -103,6 +114,9 @@ namespace IntelEngine {
             line.text = parsed.is_object() && parsed.contains("dialogue") && parsed["dialogue"].is_string() ? parsed["dialogue"].get<std::string>() : data;
             if (line.text.size() > 600) line.text.resize(600);
             if (!line.speaker || line.text.empty()) return;
+            if (player || line.target == 0x14) {
+                g_lastPlayerTalk.store(std::chrono::duration<double>(line.at.time_since_epoch()).count());
+            }
             // A line said to the player counts toward how well the two know each other (Bonds.h).
             if (!player && line.target == 0x14) BondBridge::GetSingleton()->Heard(line.speaker);
             std::lock_guard<std::mutex> lock(mutex_);
