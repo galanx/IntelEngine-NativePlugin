@@ -676,6 +676,57 @@ Not played there: the signs on the slope (the level-one test character was beate
 defeat mod before reaching them), any story to its end. One tale of three did not hold twice and was dropped ("p1
 cannot be held anywhere"): the town then waits for the next round.
 
+### The build of the day (2026-11-22, evening)
+
+The user, after the report that three stories had been the same: "Isnt the story composer ever being used to make the
+stories vary and not feel samey? That would add more depth I think." It was used for every story and varied what a
+story is about (the lean and the thread, sixteen flavours in turn). It did not vary how a story is built. Of the
+sixteen kinds of step, ten stories of that day used talk and choose in all, delve and slay in several, find once,
+examine once, visit once; give, wait, brawl, stalk, ambush, free and haunt never. The engine forbade repeats of heavy
+beats and asked for nothing, apart from a place after two stories among people.
+
+**Dealt by the engine** (`GatherTale`, "the build of the day"; not for a story asked for by kind or by someone with a
+reason of their own, a story of the heart, one that follows another, a test's own tale):
+
+| build | what the compiler asks for | when it can be dealt |
+|---|---|---|
+| a search | `Have` | items on offer |
+| a hand-over | `Have` and `Give` | items on offer |
+| a wait and a return | `Wait` and `Visit` | always |
+| a fistfight | `Brawl` | someone who would settle a matter with fists, not barred |
+| a place out in the world | `mustPlace` | a place near, not barred |
+| someone on the player's heels (heavy) | `Stalk` | not barred or switched off |
+| an ambush (heavy) | `Ambush` | not barred or switched off |
+| a hunt (heavy) | `mustExamine` | ground outside a place, no master killed last time, clear-out on |
+| a haunting (heavy) | `mustHaunt` | ground outside a place, none in the last two stories |
+| a rescue (heavy) | `mustCaptive` | a place that holds people, someone close to the asker who may be held |
+
+The one unused longest is dealt (`recentBeats`: the kinds of the stories the player took on, newest first; never told
+ranks first; among equals the story's seed decides). A heavy turn is every third: when neither of the last two
+stories the player took on had a heavy kind. The older count stands: after two stories among people a light turn is a
+place. `Pool::mustKinds` carries the step kinds; `Compile` refuses a tale in which one of them is missing or cannot be
+reached ("this story's build asks for a fistfight ..."), on the first asking only (`TaleWritten` clears it for the
+second: a story without its build is better than none). The writer is told in a section of its own, "This story's
+build", just above the answer's shape: as a bullet among the others it was overlooked on the first try. An item is
+never with the one who asks, so a hand-over is said as the engine can run it: found somewhere, then given.
+
+**A beginning** (`kBeginnings`, 26; `seed_idea` in the prompt): the next of the list for this character's game (a hash
+of the player's name plus the number of tales ever planned in the book). It replaces the eighteen premises the prompt
+listed as examples, of which the writer kept taking the same.
+
+**Who is cast**: in the pool's scoring, somebody with an unfinished quest of the game (`m_journalAliases`) loses forty
+points: used when the town has too few others.
+
+**Played** (test profile, three stories in one book, taken on by the engine's own call and left to run out so the next
+could be asked for): a search, first try ("The Quiet Chair", grief, from "a death long ago that everyone agreed not to
+look at closely": talk, talk, find, talk, choose with a Speech option); a place ("someone doing another's work for
+them, and hiding it"); on the heavy turn a rescue ("a song, a carving or a dish that someone claims as their own and
+is not": talk, delve, free, talk, talk, choose; its first draft lacked the captive and was sent back). The very first
+attempt of the day, a hand-over, failed twice (the build overlooked, then the item put with the asker) and led to the
+two changes above. Not played: a fistfight, a wait and a return, a shadow, an ambush, a hunt or a haunting dealt as a
+build (each exists and was played before as a story asked for by kind or written by hand); none of these stories
+beyond its plan.
+
 ### MCM rows that fit their column (2026-11-22)
 
 Found while the new switch was looked at in the MCM itself (which had not been opened for the 4.0 settings before).

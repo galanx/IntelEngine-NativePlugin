@@ -1099,6 +1099,21 @@ static void Depth() {
     const auto act = Tales::Compile(j, pool);
     if (!act.ok) std::cerr << act.errors;
     Require(act.ok, "a place as one act among people");
+    // The build the engine dealt: every kind asked for is in the story, on a way the player can take.
+    {
+        auto dealt = pool;
+        dealt.mustKinds = 1u << static_cast<unsigned>(Kind::Have);
+        Require(Tales::Compile(j, dealt).ok, "a search was asked for and is in it");
+        dealt.mustKinds = 1u << static_cast<unsigned>(Kind::Brawl);
+        const auto none = Tales::Compile(j, dealt).errors;
+        Require(none.find("this story's build asks for a fistfight") != std::string::npos, "a fistfight was asked for and is not in it");
+        dealt.mustKinds = (1u << static_cast<unsigned>(Kind::Wait)) | (1u << static_cast<unsigned>(Kind::Visit));
+        const auto both = Tales::Compile(j, dealt).errors;
+        Require(both.find("a wait (") != std::string::npos && both.find("someone coming to the player of their own accord") != std::string::npos,
+                "a wait and a return: both are asked for by name");
+        dealt.depth = false;
+        Require(Tales::Compile(j, dealt).ok, "a test's own tale is not held to a build");
+    }
     // The engine's count says this one goes out into the world.
     pool.mustPlace = true;
     Require(errorsOf(Sample()).find("leads out into the world") != std::string::npos, "a story in town when one out there is due");
