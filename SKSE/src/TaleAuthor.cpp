@@ -485,6 +485,7 @@ namespace IntelEngine {
         std::string admirerKey, admirerName;      // somebody close to the asker who is drawn to the player and has not said so
         std::vector<RE::FormID> restedPlaces;     // where the last stories led: those places rest a while
         std::vector<std::string> toldTitles;      // the titles of the last tales: a new one shares no word with them
+        std::size_t talesSoFar = 0;               // tales ever planned in this game: which beginning the next one gets
         RE::FormID lastPlace = 0;                 // where the last story that led out into the world went
         int heartLooked = 0;
         // An open end that has come due (4.0): the earlier tale, how it ended, what that left open, who it was about.
@@ -523,6 +524,9 @@ namespace IntelEngine {
                 for (const auto id : arc.cast) {
                     if (id) heartCast.push_back(id);
                 }
+            }
+            for (const auto& arc : m_book.all) {
+                if (arc.pattern == A::Pattern::Tale) ++talesSoFar;
             }
             // What was told already (newest first): never again.
             for (auto it = m_book.all.rbegin(); it != m_book.all.rend() && told.size() < 10; ++it) {
@@ -655,6 +659,19 @@ namespace IntelEngine {
             if (f.home) score += 2;
             // Those an open end is about come first among the people offered, so the writer can use them.
             if (std::find(dueCast.begin(), dueCast.end(), f.ref) != dueCast.end()) score += 50;
+            // Somebody the game still has a quest for comes last among the people offered: used when the town has too
+            // few others, and again freely once that quest is done (a story may then grow out of how it ended). The
+            // writer was told to keep clear of such a quest and still built a story on Mallus Maccius and the
+            // meadery's skeevers while "Dampened Spirits" had not begun (2026-11-22).
+            if (const auto bound = m_journalAliases.find(f.base); bound != m_journalAliases.end()) {
+                for (const auto questId : bound->second) {
+                    auto* quest = RE::TESForm::LookupByID<RE::TESQuest>(questId);
+                    if (quest && !quest->IsCompleted()) {
+                        score -= 40;
+                        break;
+                    }
+                }
+            }
             others.push_back({&f, score});
         }
         std::sort(others.begin(), others.end(), [](const Candidate& x, const Candidate& y) { return x.score > y.score; });
@@ -1087,13 +1104,164 @@ namespace IntelEngine {
         msRest += share.Ms() - restFrom;
         IE_TALE_PAUSE(0.08)
         restFrom = share.Ms();
+        // ---- the build of the day ---------------------------------------------------------------------------------
+        // The writer has sixteen kinds of step and, left alone, uses four: ask, ask, go to a place, decide. Ten stories
+        // of 2026-11-22 had one search and one body to look at between them: nothing handed over, no fistfight, nobody
+        // shadowed, nothing that had to come due, no rescue, no haunting. The engine forbade repeats and asked for
+        // nothing (the user: "Isnt the story composer ever being used to make the stories vary and not feel samey?").
+        // Now it deals each story its build: of those these people and places allow, the one unused longest, and every
+        // third story a heavy one (a hunt, a haunting, a rescue, someone on the player's heels, an ambush). The
+        // compiler holds the story to it (Pool::mustKinds, or the flags of a hunt, a haunting, a rescue). Not for a
+        // story asked for by kind or by someone with a reason of their own, a story of the heart, one that follows
+        // another, or a test's own tale.
+        bool buildHunt = false, buildHaunt = false, buildRescue = false;
+        std::string buildAsk;
+        if (written.empty() && heartLean.empty() && !(taleSeed && !taleSeed->kind.empty()) && !dueId && !afar) {
+            const auto bitOf = [](A::Kind k) { return 1u << static_cast<unsigned>(k); };
+            const auto age = [&](std::uint32_t mask) {   // stories told since one had it; 1000: never
+                for (std::size_t i = 0; i < recentBeats.size(); ++i) {
+                    if (recentBeats[i] & mask) return static_cast<int>(i);
+                }
+                return 1000;
+            };
+            const auto& pool = request->pool;
+            const bool ground = std::any_of(pool.sites.begin(), pool.sites.end(), [](const Tales::Site& s) { return s.outside; });
+            const bool holds = std::any_of(pool.sites.begin(), pool.sites.end(), [](const Tales::Site& s) { return Tales::SiteHolds(s.kind); });
+            const bool dear = std::any_of(pool.people.begin(), pool.people.end(), [](const Tales::Person& p) { return p.canHold && p.close; });
+            const bool fists = std::any_of(pool.people.begin(), pool.people.end(), [](const Tales::Person& p) { return p.canBrawl; });
+            const std::uint32_t places = bitOf(A::Kind::Delve) | bitOf(A::Kind::Slay);
+            const bool hauntedLately = (!recentBeats.empty() && (recentBeats[0] & bitOf(A::Kind::Haunt))) ||
+                                       (recentBeats.size() > 1 && (recentBeats[1] & bitOf(A::Kind::Haunt)));
+            struct Build {
+                const char* name;
+                std::uint32_t bits;
+                bool heavy;
+                bool can;
+                int special;   // 0 a step kind the compiler asks for, 1 a place, 2 a hunt, 3 a haunting, 4 a rescue
+                const char* ask;
+            };
+            const Build builds[] = {
+                {"a search", bitOf(A::Kind::Have), false, !pool.items.empty(), 0,
+                 "Something has to be found (a \"find\" step): an item of the list hidden in someone's home or carried in someone's pocket, "
+                 "and what is found is not what {player} was led to expect."},
+                // (An item is never with the one who asks: it lies hidden somewhere, is found, and only then handed on.)
+                {"a hand-over", bitOf(A::Kind::Have) | bitOf(A::Kind::Give), false, !pool.items.empty(), 0,
+                 "Something has to be found and then handed to someone (a \"find\" step, then a \"give\" step with the same item): an "
+                 "item of the list hidden in someone's home or pocket, never with the one who asks. The handing over is where the story "
+                 "turns: whoever receives it was not meant to, or it is not what they think."},
+                {"a wait and a return", bitOf(A::Kind::Wait) | bitOf(A::Kind::Visit), false, true, 0,
+                 "It does not end in a day: something has to come due (\"wait\", some hours to two days), and then someone comes to "
+                 "{player} of their own accord (\"visit\") with what the waiting brought."},
+                {"a fistfight", bitOf(A::Kind::Brawl), false, fists && !(barred & bitOf(A::Kind::Brawl)), 0,
+                 "At one point it comes to blows with bare fists (\"brawl\") with someone who would settle a matter that way, and winning "
+                 "and losing lead to different places."},
+                {"a place out in the world", bitOf(A::Kind::Delve), false, !pool.sites.empty() && !(barred & places), 1, ""},
+                {"someone on the player's heels", bitOf(A::Kind::Stalk), true, !(barred & bitOf(A::Kind::Stalk)), 0,
+                 "Someone shadows {player} out of doors (\"stalk\") until they are caught at it or come forward, and what they then say "
+                 "changes what the story is about."},
+                {"an ambush", bitOf(A::Kind::Ambush), true, !(barred & bitOf(A::Kind::Ambush)), 0,
+                 "Once {player} has learned too much, someone hires men to waylay them out in the wilds (\"ambush\"), and who paid those "
+                 "men is part of the truth."},
+                {"a hunt", bitOf(A::Kind::Examine), true, ground && !(barred & bitOf(A::Kind::Examine)) && !slayTwice && !slayOff, 2, ""},
+                {"a haunting", bitOf(A::Kind::Haunt), true, ground && !hauntedLately, 3, ""},
+                {"a rescue", bitOf(A::Kind::Free), true, holds && dear && !(barred & bitOf(A::Kind::Free)), 4, ""},
+            };
+            const std::uint32_t heavy = bitOf(A::Kind::Stalk) | bitOf(A::Kind::Ambush) | bitOf(A::Kind::Free) | bitOf(A::Kind::Examine) |
+                                        bitOf(A::Kind::Haunt);
+            const bool heavyTurn = recentBeats.size() >= 2 && !(recentBeats[0] & heavy) && !(recentBeats[1] & heavy);
+            const Build* chosen = nullptr;
+            const auto pick = [&](bool wantHeavy) {
+                long best = -1;
+                for (std::size_t i = 0; i < std::size(builds); ++i) {
+                    const auto& b = builds[i];
+                    if (b.heavy != wantHeavy || !b.can) continue;
+                    // Longest unused first; among equals the story's own seed decides.
+                    const long rank = static_cast<long>(age(b.bits)) * 1000 + static_cast<long>(A::detail::Mix(request->seed, static_cast<std::uint32_t>(i)) % 997u);
+                    if (rank > best) {
+                        best = rank;
+                        chosen = &b;
+                    }
+                }
+            };
+            if (heavyTurn) pick(true);
+            if (!chosen) pick(false);
+            // The engine's older count stands: after two stories among people this one has a place in it.
+            if (request->pool.mustPlace && !(chosen && chosen->heavy)) chosen = &builds[4];
+            if (chosen) {
+                const int since = age(chosen->bits);
+                switch (chosen->special) {
+                    case 1:
+                        request->pool.mustPlace = true;
+                        ctx["must_place"] = true;
+                        break;
+                    case 2: buildHunt = true; break;
+                    case 3: buildHaunt = true; break;
+                    case 4: buildRescue = true; break;
+                    default: {
+                        request->pool.mustKinds = chosen->bits;
+                        buildAsk = chosen->ask;
+                        const std::string name = PlayerName();
+                        for (auto at = buildAsk.find("{player}"); at != std::string::npos; at = buildAsk.find("{player}", at + name.size())) {
+                            buildAsk.replace(at, 8, name);
+                        }
+                        break;
+                    }
+                }
+                logger::info("Tales: this one's build: {} ({}; {})", chosen->name,
+                             since >= 1000 ? std::string("never told yet") : std::to_string(since + 1) + " stories since the last",
+                             heavyTurn && chosen->heavy ? "a heavy turn: the last two were light" : "a light turn");
+            }
+        }
+        ctx["build"] = buildAsk;
+        // ---- a different beginning each time ----------------------------------------------------------------------
+        // The writer was shown some eighteen premises at once as examples and took the same one again and again:
+        // money moving in secret (six of ten titles of 2026-11-22 had the word "Ledger"). Now each story is handed one
+        // beginning, the next of the list for this character's game, to make true of these people; the list is about
+        // people far more than about coin.
+        {
+            static constexpr const char* kBeginnings[] = {
+                "a promise made in anger that someone now has to keep",
+                "two people who each believe the same thing is rightfully theirs",
+                "a letter that was written and never sent",
+                "someone who has stopped going to a place they went to every day",
+                "a friendship that ended, and neither will say why",
+                "a thing lent years ago and never given back",
+                "someone who saw something and has told it two different ways",
+                "an old injury that the wrong person has been blamed for all this time",
+                "a gift that was meant as an insult",
+                "a wager that went further than either meant",
+                "a vow made to a god that has become inconvenient",
+                "a courtship one family must not hear of",
+                "a helper who knows the work better than the one they serve",
+                "someone making ready to leave town without telling anyone",
+                "two people of the same craft, one quietly undercutting the other",
+                "a rumour someone started in spite and can no longer stop",
+                "a kindness done in secret that looks like guilt from outside",
+                "someone taken for somebody else, and letting it stand",
+                "something buried, in the ground or in a record, that a newcomer has begun asking about",
+                "a favour owed to someone on the other side of the war",
+                "a debt called in at the worst moment",
+                "a tale told to frighten that those who tell it have stopped laughing at",
+                "an heirloom two branches of a family remember differently",
+                "a death long ago that everyone agreed not to look at closely",
+                "someone doing another's work for them, and hiding it",
+                "a song, a carving or a dish that someone claims as their own and is not",
+            };
+            std::string beginning;
+            if (written.empty() && heartLean.empty() && !dueId) {
+                const auto base = static_cast<std::size_t>(std::hash<std::string>{}(PlayerName()));
+                beginning = kBeginnings[(base + talesSoFar) % std::size(kBeginnings)];
+                logger::info("Tales: this one begins from: {}", beginning);
+            }
+            ctx["seed_idea"] = beginning;
+        }
         // A hunt for what is killing people: on offer when a place near has ground outside it for what was left of a
         // victim. Asked for (a rumor of deaths, the test hook), it is that or nothing.
         {
             const auto examine = 1u << static_cast<unsigned>(A::Kind::Examine);
             const bool ground = std::any_of(request->pool.sites.begin(), request->pool.sites.end(), [](const Tales::Site& s) { return s.outside; });
             const bool mayHunt = ground && !(barred & examine) && heartLean.empty() && !slayTwice;   // a hunt ends on what did it, killed
-            const bool hunt = taleSeed && taleSeed->kind == "mystery";
+            const bool hunt = (taleSeed && taleSeed->kind == "mystery") || buildHunt;
             if (hunt && !mayHunt) {
                 logger::info("Tales: no hunt for {}: {}", asker->GetDisplayFullName(),
                              !ground ? "no place near with ground outside it" : "the last story was one, or this one is of the heart");
@@ -1114,7 +1282,7 @@ namespace IntelEngine {
             const bool toldLately = std::any_of(recentBeats.begin(), recentBeats.begin() + static_cast<std::ptrdiff_t>(std::min<std::size_t>(2, recentBeats.size())),
                                                 [haunt](std::uint32_t beats) { return (beats & haunt) != 0; });
             const bool mayHaunt = ground && !toldLately && heartLean.empty();
-            const bool haunting = taleSeed && taleSeed->kind == "haunting";
+            const bool haunting = (taleSeed && taleSeed->kind == "haunting") || buildHaunt;
             if (haunting && !mayHaunt) {
                 logger::info("Tales: no haunting for {}: {}", asker->GetDisplayFullName(),
                              !ground ? "no place near with ground outside it" : "one of the last two stories was one, or this one is of the heart");
@@ -1137,7 +1305,7 @@ namespace IntelEngine {
             const bool someone = std::any_of(request->pool.people.begin(), request->pool.people.end(), [](const Tales::Person& p) { return p.canHold; });
             const bool dear = std::any_of(request->pool.people.begin(), request->pool.people.end(), [](const Tales::Person& p) { return p.canHold && p.close; });
             const bool mayHold = holds && someone && !(barred & (1u << static_cast<unsigned>(A::Kind::Free))) && heartLean.empty();
-            const bool rescue = taleSeed && taleSeed->kind == "rescue";
+            const bool rescue = (taleSeed && taleSeed->kind == "rescue") || buildRescue;
             if (rescue && (!mayHold || !dear)) {
                 logger::info("Tales: no rescue for {}: {}", asker->GetDisplayFullName(),
                              !holds ? "no place near that keeps prisoners" : !someone ? "nobody of the town may be held"
@@ -1341,6 +1509,12 @@ namespace IntelEngine {
         // The tale as written, for the record (one line; the model's own words).
         logger::info("Tales: the tale as written (attempt {}): {}", attempt + 1, json.is_object() ? json.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace) : text.substr(0, 4000));
         request->pool.titleMayRepeat = attempt >= 1;   // a title is no reason to lose a tale asked for twice
+        // Nor is its build: asked for twice and still without it, a story is better than none (a hunt, a haunting and a
+        // rescue are held to what they are both times: they are a kind of story, not a step in one).
+        if (attempt >= 1 && request->pool.mustKinds) {
+            logger::info("Tales: the second asking is not held to its build");
+            request->pool.mustKinds = 0;
+        }
         auto result = Tales::Compile(json, request->pool);
         if (!result.ok) {
             logger::info("Tales: the tale (attempt {}) does not hold: {}", attempt + 1, result.errors);

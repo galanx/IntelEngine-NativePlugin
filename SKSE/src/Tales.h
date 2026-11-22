@@ -129,6 +129,11 @@ namespace IntelEngine::Tales {
         std::vector<std::string> titles;
         // The second asking: a title is no longer a reason to lose the whole tale.
         bool titleMayRepeat = false;
+        // The build the engine dealt this story (TaleAuthor.cpp, "the build of the day"): step kinds, a bit each
+        // (Arcs::Kind), every one of which must be in the tale on a way the player can take. A hunt, a haunting and a
+        // rescue have their own flags above; this is for a search, a hand-over, a wait and a return, a fistfight,
+        // someone on the player's heels, an ambush.
+        std::uint32_t mustKinds = 0;
     };
 
     struct Result {
@@ -260,6 +265,21 @@ namespace IntelEngine::Tales {
     }
 
     namespace detail {
+        // What a build asks for, in the words the writer is told when it is missing.
+        inline const char* BuildAsked(A::Kind kind) {
+            switch (kind) {
+                case A::Kind::Have: return "a search (a \"find\" step: something hidden at someone's home or carried in someone's pocket)";
+                case A::Kind::Give: return "a hand-over (a \"give\" step: something carried to someone, where the story turns)";
+                case A::Kind::Wait: return "a wait (a \"wait\" step: something has to come due)";
+                case A::Kind::Visit: return "someone coming to the player of their own accord (a \"visit\" step, after the wait)";
+                case A::Kind::Brawl: return "a fistfight (a \"brawl\" step with someone who would settle a matter with fists)";
+                case A::Kind::Stalk: return "someone shadowing the player (a \"stalk\" step)";
+                case A::Kind::Ambush: return "an ambush out in the wilds (an \"ambush\" step)";
+                case A::Kind::Delve: return "a place out in the world (a \"delve\" step)";
+                default: return "a step it does not have";
+            }
+        }
+
         // A word of a new title that an earlier title has too: the word as written, and that earlier title. Words of
         // five letters or more, compared in lower case in any script; a word that begins like a name of the story's
         // own people or places is theirs ("Ulfberth's", "Ulfberths").
@@ -1269,6 +1289,19 @@ namespace IntelEngine::Tales {
             }
             if (pool.mustPlace && !anyPlace) {
                 fail("steps: this story leads out into the world: one of the places listed must be part of it (\"delve\", \"slay\", or someone \"held\" there and a step \"free\")");
+            }
+            // The build the engine dealt this story: every kind asked for is in it, on a way the player can take.
+            if (pool.mustKinds) {
+                std::uint32_t have = 0;
+                for (std::size_t i = 0; i < steps.size(); ++i) {
+                    if (reach[i]) have |= 1u << static_cast<unsigned>(kindOf(i));
+                }
+                for (unsigned k = 1; k <= 15; ++k) {
+                    if ((pool.mustKinds & (1u << k)) && !(have & (1u << k))) {
+                        fail(std::string("steps: this story's build asks for ") + BuildAsked(static_cast<A::Kind>(k)) +
+                             ": it is not in the story, or no way through the story reaches it");
+                    }
+                }
             }
             if (anyPlace) {
                 if (amongPeople < 2) {

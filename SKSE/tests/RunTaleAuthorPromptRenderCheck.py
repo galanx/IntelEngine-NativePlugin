@@ -33,7 +33,7 @@ BASE = {
     "quests": ["Dragon Rising: Kill the dragon"], "told": ["crime: The Quiet Ledger - a ledger that lied"], "lean": "debt", "reward": 150,
     "bar_ambush": False, "bar_brawl": True, "bar_stalk": False, "bar_places": False, "bar_slay": False, "asker_knows": "met",
     "must_place": False, "must_captive": False, "bar_captive": False, "bar_examine": False, "must_mystery": False, "bar_haunt": False, "must_haunt": False, "thread": "", "rumored": False,
-    "text_language": "", "sequel": {},
+    "text_language": "", "sequel": {}, "build": "", "seed_idea": "",
 }
 
 
@@ -53,6 +53,10 @@ CASES = {
     "an ordinary story": (case(), {"has": ["# The people you may use", "Lean toward debt", "Jon Battle-Born", "Halted Stream Camp, a bandit camp, close by; at its heart: a bandit chief. Someone may be held here.",
                                            '"free": someone of the story is held at a place', "one act of a story, never the whole of it", "Never an errand"],
                                    "not": [HEART, "With Ada:", TAKEN, "This story leads out into the world", "a Dwarven centurion. Cleared once already; something new has moved in. Someone may be held here."]}),
+    "a build and a beginning dealt by the engine": (case(build="Something has to be found.", seed_idea="a letter that was written and never sent"),
+                                                    {"has": ["Begin from this, and make it true of these people: a letter that was written and never sent.",
+                                                             "# This story's build (dealt by the engine: an answer without it is refused)", "Something has to be found."],
+                                                     "not": ["Draw the premise from who these people are"]}),
     "out into the world": (case(must_place=True), {"has": ["This story leads out into the world", "one act of a story"], "not": [HEART, TAKEN]}),
     "a rescue": (case(must_captive=True, lean="adventure"), {"has": [TAKEN, "who is held at one of the places below", '"do": "free"', "Close to Ysolda.", "close to Ysolda (nobody asks a stranger"], "not": [HEART]}),
     "no master of a place to kill (clear-out switched off)": (case(bar_slay=True), {"has": ['"delve":', "At most two places in a story"], "not": ['"slay": ']}),
