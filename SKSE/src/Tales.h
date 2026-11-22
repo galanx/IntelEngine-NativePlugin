@@ -122,6 +122,13 @@ namespace IntelEngine::Tales {
         bool mustExamine = false;   // this one is a hunt for what is killing people: remains to look at, then what did it
         bool mustHaunt = false;     // this one is a haunting: something walks by night outside one of the places
         bool rumored = false;       // it begins as talk in town (the asker does not come): the offer says what people say
+        // The titles of the stories told lately. A new title shares no word of five letters or more with them: three
+        // stories running came back as "The Quiet Order", "The Quiet Husband" and "The Quiet Ledger" (the play
+        // session of 2026-11-22). Names of this story's own people and places do not count (a story that follows
+        // another may be named after the same person), nor do scripts that write no spaces between words.
+        std::vector<std::string> titles;
+        // The second asking: a title is no longer a reason to lose the whole tale.
+        bool titleMayRepeat = false;
     };
 
     struct Result {
@@ -252,6 +259,71 @@ namespace IntelEngine::Tales {
         }
     }
 
+    namespace detail {
+        // A word of a new title that an earlier title has too: the word as written, and that earlier title. Words of
+        // five letters or more, compared in lower case in any script; a word that begins like a name of the story's
+        // own people or places is theirs ("Ulfberth's", "Ulfberths").
+        inline std::pair<std::string, std::string> SharedTitleWord(const std::string& title, const std::vector<std::string>& earlier,
+                                                                   const std::vector<std::string>& names, std::size_t least = 5) {
+            // Lower case, a letter at a time, for the alphabets that have two cases (Latin with its accents, Greek,
+            // Cyrillic). Done here and not with the game's own folding, which brings the Windows headers with it.
+            const auto lower = [](char32_t c) -> char32_t {
+                if (c >= U'A' && c <= U'Z') return c + 32;
+                if (c >= 0xC0 && c <= 0xDE && c != 0xD7) return c + 32;
+                if (c >= 0x100 && c <= 0x17F) {
+                    if (c == 0x130 || c == 0x131 || c == 0x138 || c == 0x149 || c == 0x178 || c == 0x17F) return c;
+                    const bool oddIsUpper = (c >= 0x139 && c <= 0x148) || (c >= 0x179 && c <= 0x17E);
+                    return ((c % 2 == 1) == oddIsUpper) ? c + 1 : c;
+                }
+                if (c >= 0x391 && c <= 0x3A9 && c != 0x3A2) return c + 32;
+                if (c >= 0x410 && c <= 0x42F) return c + 32;
+                if (c >= 0x400 && c <= 0x40F) return c + 80;
+                return c;
+            };
+            const auto words = [&lower](const std::string& text, std::size_t atLeast) {
+                std::vector<std::pair<std::u32string, std::string>> out;   // lower case, as written
+                std::size_t begun = std::string::npos;
+                std::u32string word;
+                bool apart = true;
+                const auto close = [&](std::size_t end) {
+                    if (begun != std::string::npos && word.size() >= atLeast && apart) out.push_back({word, text.substr(begun, end - begun)});
+                    begun = std::string::npos;
+                    word.clear();
+                    apart = true;
+                };
+                char32_t c = 0;
+                for (std::size_t i = 0; i < text.size();) {
+                    const std::size_t n = NameForms::Decode(text, i, c);
+                    if (NameForms::Separator(c)) {
+                        close(i);
+                    } else {
+                        if (begun == std::string::npos) begun = i;
+                        word.push_back(lower(c));
+                        if (NameForms::Unspaced(c)) apart = false;
+                    }
+                    i += n;
+                }
+                close(text.size());
+                return out;
+            };
+            std::vector<std::u32string> own;
+            for (const auto& name : names) {
+                for (const auto& w : words(name, 4)) own.push_back(w.first);
+            }
+            const auto mine = words(title, least);
+            for (const auto& other : earlier) {
+                const auto theirs = words(other, least);
+                for (const auto& w : mine) {
+                    if (std::any_of(own.begin(), own.end(), [&](const std::u32string& n) { return w.first.rfind(n, 0) == 0; })) continue;
+                    for (const auto& t : theirs) {
+                        if (t.first == w.first) return {w.second, other};
+                    }
+                }
+            }
+            return {};
+        }
+    }
+
     // Builds the arc of a tale, or says why not.
     inline Result Compile(const nlohmann::json& tale, const Pool& pool) {
         using namespace detail;
@@ -275,6 +347,15 @@ namespace IntelEngine::Tales {
         a.genre = Words(a.genre, 32);   // by letters, never through the middle of one
         a.premise = Words(Str(tale, "premise"), 600);
         if (a.title.size() < 3) fail("title: missing");
+        if (!pool.titleMayRepeat && !pool.titles.empty()) {
+            std::vector<std::string> names;
+            for (const auto& p : pool.people) names.push_back(p.name);
+            for (const auto& s : pool.sites) names.push_back(s.name);
+            if (const auto shared = SharedTitleWord(a.title, pool.titles, names); !shared.first.empty()) {
+                fail("title: \"" + shared.first + "\" stood in the title of an earlier story already (\"" + shared.second +
+                     "\"): name this story after what it alone turns on");
+            }
+        }
         if (a.premise.empty()) fail("premise: missing");
 
         // ---- the people: p0 is the asker (role 1), the others take roles 2..7 in the order written

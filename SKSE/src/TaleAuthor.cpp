@@ -10,6 +10,7 @@
 
 #include "AsyncDispatch.h"
 #include "DialogueTracker.h"
+#include "FrameSpread.h"
 #include "HeartBridge.h"
 #include "ItemIndex.h"
 #include "ItemNames.h"
@@ -18,6 +19,7 @@
 #include "MemoryDB.h"
 #include "QuestBridge.h"
 #include "SkyrimNetAPI.h"
+#include "SlotTracker.h"
 #include "SpeechTracker.h"
 #include "Tales.h"
 
@@ -379,12 +381,35 @@ namespace IntelEngine {
     // ------------------------------------------------------------------ the request
 
     bool ArcBridge::RequestTale(RE::Actor* asker, const std::string& written, const TaleSeed* taleSeed) {
+        // Whether a tale is on its way is known before the gathering gives its first frame back: the answer is
+        // written while this call still stands (GatherTale lets go of it at its first pause).
+        bool onItsWay = false;
+        GatherTale(asker, written, taleSeed ? std::optional<TaleSeed>(*taleSeed) : std::nullopt, &onItsWay);
+        return onItsWay;
+    }
+
+// A pause of the gathering: when this frame's share has passed the limit, the rest waits for the next frame. A save
+// loaded in between ends the job (the people and places in hand were another game's).
+#define IE_TALE_PAUSE(limit)                                                                                          \
+    if (spread && share.Ms() > (limit)) {                                                                             \
+        share.End();                                                                                                  \
+        co_await NextFrame{};                                                                                         \
+        if (SlotTracker::GetSingleton()->loadGeneration.load(std::memory_order_relaxed) != generation) {              \
+            logger::info("Tales: a save was loaded while a tale's request was gathered: dropped");                    \
+            m_taleBusy.store(false);                                                                                  \
+            co_return;                                                                                                \
+        }                                                                                                             \
+        share.Begin();                                                                                                \
+    }
+
+    FrameJob ArcBridge::GatherTale(RE::Actor* asker, std::string written, std::optional<TaleSeed> seedOwned, bool* answer) {
+        const TaleSeed* taleSeed = seedOwned ? &*seedOwned : nullptr;
         const bool afar = taleSeed && taleSeed->fromAfar;
         // `written`: a tale given as JSON (test hook ArcDebugTaleFile) instead of one asked of the model.
-        if (!asker || (written.empty() && !SkyrimNetAPI::SendCustomPromptToLLM)) return false;
+        if (!asker || (written.empty() && !SkyrimNetAPI::SendCustomPromptToLLM)) co_return;
         if (written.empty() && NPCIndex::BlockedForStories(asker)) {
             logger::info("Tales: no tale for {}: kept out of stories by the user's lists", asker->GetDisplayFullName());
-            return false;
+            co_return;
         }
         const float real = RealNow();
         const auto started = std::chrono::steady_clock::now();
@@ -394,13 +419,13 @@ namespace IntelEngine {
                 m_taleBusy.store(false);
             } else {
                 logger::info("Tales: no tale for {}: another tale is being written", asker->GetDisplayFullName());
-                return false;
+                co_return;
             }
         }
         std::string why;
         if (!Usable(asker, 0, why)) {
             logger::info("Tales: no tale for {}: {}", asker->GetDisplayFullName(), why);
-            return false;
+            co_return;
         }
         const Folk* me = FolkOf(asker->GetFormID());
         Folk away;   // someone the director chose who has no home in a town (a former follower, a wanderer)
@@ -417,7 +442,7 @@ namespace IntelEngine {
         }
         if (!me) {
             logger::info("Tales: no tale for {}: not one of the townsfolk with a town", asker->GetDisplayFullName());
-            return false;
+            co_return;
         }
         // A town's story comes to a player who is in that town, from someone who has not asked for anything lately. One
         // the director chose for a reason of their own comes to the player wherever the player is.
@@ -431,12 +456,12 @@ namespace IntelEngine {
                 const std::string playerHold = pc ? NPCIndex::GetNPCHoldName(pc) : std::string();
                 if (index && !NPCIndex::PassesHoldRestriction(asker, playerHold, index->GetHoldRestrictionPolicy("seek_player"))) {
                     logger::info("Tales: no tale for {}: the settings do not let them cross holds to seek the player out", asker->GetDisplayFullName());
-                    return false;
+                    co_return;
                 }
             }
             if (written.empty() && AskedWithin(asker->GetFormID(), 7.0f)) {
                 logger::info("Tales: no tale for {}: they asked the player for something lately", asker->GetDisplayFullName());
-                return false;
+                co_return;
             }
         } else {
             auto* player = RE::PlayerCharacter::GetSingleton();
@@ -444,11 +469,11 @@ namespace IntelEngine {
             auto* here = player ? TownOfLoc(cell && cell->GetLocation() ? cell->GetLocation() : player->GetCurrentLocation()) : nullptr;
             if (!here || here->GetFormID() != me->town) {
                 logger::info("Tales: no tale for {}: the player is not in their town", asker->GetDisplayFullName());
-                return false;
+                co_return;
             }
             if (written.empty() && AskedWithin(asker->GetFormID(), 7.0f)) {
                 logger::info("Tales: no tale for {}: they asked the player for something lately", asker->GetDisplayFullName());
-                return false;
+                co_return;
             }
         }
         std::vector<std::string> told;
@@ -458,6 +483,8 @@ namespace IntelEngine {
         std::vector<RE::FormID> heartCast;        // everybody who has been part of a story of the heart, ever
         std::string admirerKey, admirerName;      // somebody close to the asker who is drawn to the player and has not said so
         std::vector<RE::FormID> restedPlaces;     // where the last stories led: those places rest a while
+        std::vector<std::string> toldTitles;      // the titles of the last tales: a new one shares no word with them
+        RE::FormID lastPlace = 0;                 // where the last story that led out into the world went
         int heartLooked = 0;
         // An open end that has come due (4.0): the earlier tale, how it ended, what that left open, who it was about.
         std::uint32_t dueId = 0;
@@ -467,12 +494,12 @@ namespace IntelEngine {
             std::scoped_lock lock(m_mutex);
             if (m_book.Count(A::Phase::Planned) > 0 || m_book.Count(A::Phase::Open) >= A::kMaxOpen) {
                 logger::info("Tales: no tale for {}: another story is on its way or two are open", asker->GetDisplayFullName());
-                return false;
+                co_return;
             }
             if (const float last = m_book.LastBeat(), now = NowDays(); !A::QuietFor(last, now, A::kQuietHours)) {
                 logger::info("Tales: no tale for {}: a story came to the player or ended {:.1f} hours ago (quiet for {:.0f})",
                              asker->GetDisplayFullName(), (now - last) * 24.0f, A::kQuietHours);
-                return false;
+                co_return;
             }
             // Where the last four stories led out into the world: not there again so soon (the user, 2026-11-20:
             // "what would happen if you clear the broken fang cave but another quest makes you go to the same place
@@ -485,6 +512,7 @@ namespace IntelEngine {
                     ++looked;
                     for (const auto site : it->site) {
                         if (site) restedPlaces.push_back(site);
+                        if (site && !lastPlace) lastPlace = site;
                     }
                 }
             }
@@ -504,6 +532,7 @@ namespace IntelEngine {
                     for (const auto& n : A::NodesOf(*it)) beats |= 1u << static_cast<unsigned>(n.kind);
                     recentBeats.push_back(beats);
                 }
+                if (it->pattern == A::Pattern::Tale && toldTitles.size() < 6 && !it->title.empty()) toldTitles.push_back(it->title);
                 if (it->pattern == A::Pattern::Tale) {
                     // With how it ended and what that left open (4.0). The writer used to see the title and the
                     // premise only: whether the thief was handed over or let go, whether the innocent was named,
@@ -566,7 +595,30 @@ namespace IntelEngine {
             }
         }
 
+        // ---- the first pause. Everything above is quick and says whether a tale can be asked for at all. What
+        // follows (the people, the places, the words for the writer) reads the game and took 0.74 to 0.85 ms of one
+        // frame in a small town, 2.4 ms on a large mod list: it is done a part a frame (FrameSpread.h), never in the
+        // frame of the look that asked for it. From here a tale is on its way as far as the caller is concerned; a
+        // failure further down is logged and frees the writer's desk, as a tale that comes back unusable does. A
+        // test's own tale is checked and planned at once, in the one frame, as before.
+        const bool spread = written.empty();
+        const auto generation = SlotTracker::GetSingleton()->loadGeneration.load(std::memory_order_relaxed);
+        FrameShare share(started);
+        bool held = false;
+        const auto drop = [&]() {
+            if (held) m_taleBusy.store(false);
+        };
+        const double msBefore = share.Ms();
+        if (spread) {
+            m_taleBusy.store(true);
+            g_requestAt = real;
+            held = true;
+            *answer = true;
+            answer = nullptr;   // the caller has its answer and is gone after this pause
+        }
+        IE_TALE_PAUSE(-1.0)
         auto request = std::make_shared<Request>();
+        request->pool.titles = toldTitles;
         request->asker = asker->GetFormID();
         request->town = me->town;
         request->sequelOf = dueId;
@@ -575,7 +627,7 @@ namespace IntelEngine {
         request->pool.rumored = request->rumored && written.empty();
         request->afar = afar;
         request->otherHold = taleSeed && taleSeed->otherHold;
-        const auto atPeople = std::chrono::steady_clock::now();
+        const auto atPeople = std::chrono::steady_clock::now();   // choosing among the town is timed from here
         // ---- the people: the asker, then those of the town the game ties to them, then the town's known faces
         struct Candidate {
             const Folk* folk;
@@ -713,9 +765,9 @@ namespace IntelEngine {
                 int n = 0;
                 for (const auto questId : errands->second) {
                     auto* quest = RE::TESForm::LookupByID<RE::TESQuest>(questId);
-                    const char* qname = quest ? quest->GetFullName() : nullptr;
-                    if (!quest || !qname || !*qname || favours.find(qname) != std::string::npos) continue;
-                    favours += (favours.empty() ? "" : ", ") + std::string(qname) + (quest->IsCompleted() ? " (finished)" : Begun(quest) ? " (begun)" : " (not begun)");
+                    const std::string qname = QuestLabel(quest);
+                    if (!quest || qname.empty() || favours.find(qname) != std::string::npos) continue;
+                    favours += (favours.empty() ? "" : ", ") + qname + (quest->IsCompleted() ? " (finished)" : Begun(quest) ? " (begun)" : " (not begun)");
                     if (++n >= 4) break;
                 }
                 if (!favours.empty()) j["favours"] = favours;
@@ -731,18 +783,21 @@ namespace IntelEngine {
             people.push_back(j);
             return true;
         };
-        if (!add(*me, true)) return false;
+        if (!add(*me, true)) { drop(); co_return; }
         // A test's own tale may cast anyone free in town; the model is shown the few that fit best.
         const std::size_t poolSize = written.empty() ? kPoolSize : 64;
         for (const auto& c : others) {
             if (request->pool.people.size() >= poolSize) break;
+            IE_TALE_PAUSE(0.25)
             add(*c.folk, false);
         }
         if (request->pool.people.size() < 3) {
             logger::info("Tales: no tale for {}: too few free people in {}", asker->GetDisplayFullName(), NameOf(me->town));
-            return false;
+            { drop(); co_return; }
         }
-        const auto atCompanions = std::chrono::steady_clock::now();
+        IE_TALE_PAUSE(0.2)
+        double msCompanions = 0.0;
+        const double companionsFrom = share.Ms();
         // ---- old companions: former followers living a life of their own, wherever it has taken them. A story may
         // lead the player to them (a talk with someone out at a ruin is a journey there) or have them seek the player
         // out; they are never jailed, sent away or fought, and nothing is hidden with them (the user, 2026-11-19:
@@ -784,7 +839,10 @@ namespace IntelEngine {
         }
         request->pool.items = ItemChoices();
 
-        const auto atPlaces = std::chrono::steady_clock::now();
+        msCompanions = share.Ms() - companionsFrom;
+        IE_TALE_PAUSE(0.2)
+        double msPlaces = 0.0;
+        const double placesFrom = share.Ms();
         // ---- places out in the world in the town's hold, the nearest first, at most two of a kind
         nlohmann::json places = nlohmann::json::array();
         {
@@ -825,6 +883,12 @@ namespace IntelEngine {
             const auto rests = [&](const Near& n) { return std::find(restedPlaces.begin(), restedPlaces.end(), n.p.location) != restedPlaces.end(); };
             const auto fresh = std::count_if(nearby.begin(), nearby.end(), [&](const Near& n) { return !rests(n); });
             int rested = 0;
+            // And another kind of place than last time, as long as two places of other kinds are near: a bandit camp
+            // after a bandit camp is the same story's second act again, whoever its chief is called (the play session
+            // of 2026-11-22: Halted Stream Camp, then Silent Moons Camp, a chief with a hold over a townsman in both).
+            const std::uint8_t lastKind = lastPlace ? SiteKindOf(RE::TESForm::LookupByID<RE::BGSLocation>(lastPlace)) : Tales::SiteNone;
+            const auto otherKinds = std::count_if(nearby.begin(), nearby.end(), [&](const Near& n) { return !rests(n) && n.kind != lastKind; });
+            int sameKind = 0;
             for (const auto& n : nearby) {
                 if (request->pool.sites.size() >= 8) break;
                 auto* location = RE::TESForm::LookupByID<RE::BGSLocation>(n.p.location);
@@ -832,6 +896,10 @@ namespace IntelEngine {
                 if (!name || !*name) continue;
                 if (fresh >= 2 && rests(n)) {
                     ++rested;
+                    continue;
+                }
+                if (lastKind != Tales::SiteNone && n.kind == lastKind && otherKinds >= 2) {
+                    ++sameKind;
                     continue;
                 }
                 if (std::find(offered.begin(), offered.end(), name) != offered.end()) continue;
@@ -863,11 +931,20 @@ namespace IntelEngine {
             }
             if (refused) logger::info("Tales: {} place(s) of the hold left out: a quest of the game or of the player's needs them", refused);
             if (rested) logger::info("Tales: {} place(s) rest: a story led there lately", rested);
+            if (sameKind) logger::info("Tales: {} place(s) left out: the last story led to one of their kind ({})", sameKind, SiteWhat(lastKind));
         }
         auto* player = RE::PlayerCharacter::GetSingleton();
-        request->pool.gold = A::RewardGold(A::Pattern::Thief, player ? player->GetLevel() : 10);
+        // The reward: by the player's level, and between four fifths and six fifths of it by the story's own seed, in
+        // fives (every tale of a new game paid 155).
+        {
+            const std::uint32_t base = A::RewardGold(A::Pattern::Thief, player ? player->GetLevel() : 10);
+            const std::uint32_t fifths = 16u + A::detail::Mix(request->seed, 0x60D5u) % 9u;   // 16..24 twentieths
+            request->pool.gold = std::max<std::uint32_t>(25u, (base * fifths / 20u + 2u) / 5u * 5u);
+        }
 
-        const auto atGenre = std::chrono::steady_clock::now();
+        msPlaces = share.Ms() - placesFrom;
+        IE_TALE_PAUSE(0.2)
+        const double restFrom = share.Ms();
         // The genre to lean toward: one not told lately, in an order of the day.
         std::vector<std::string> fresh;
         for (const auto* g : kGenres) {
@@ -945,6 +1022,7 @@ namespace IntelEngine {
         // bars the master of a place to kill, and is kept apart from the bits below: a place may still be gone into.
         const std::uint32_t switchedOff = ArcBridge::GetSingleton()->SwitchesOff();
         const std::uint32_t slayOff = (switchedOff & ArcBridge::kSwitchClearOut) ? 1u << static_cast<unsigned>(A::Kind::Slay) : 0u;
+        bool slayTwice = false;   // the last story ended a place's master: this one does not
         std::uint32_t barred = ((switchedOff & ArcBridge::kSwitchAmbush) ? 1u << static_cast<unsigned>(A::Kind::Ambush) : 0u) |
                                ((switchedOff & ArcBridge::kSwitchStalker) ? 1u << static_cast<unsigned>(A::Kind::Stalk) : 0u) |
                                ((switchedOff & ArcBridge::kSwitchRescue) ? 1u << static_cast<unsigned>(A::Kind::Free) : 0u);
@@ -961,6 +1039,11 @@ namespace IntelEngine {
             if (used(bit(A::Kind::Free), 3)) barred |= bit(A::Kind::Free);   // someone held: once in four stories
             if (used(bit(A::Kind::Examine), 1)) barred |= bit(A::Kind::Examine);   // a hunt for what kills: never two running
             if (recentBeats.size() >= 2 && (recentBeats[0] & place) && (recentBeats[1] & place)) barred |= place;
+            // A master killed at a place: never in two stories running (a story asked for by kind, a hunt, a haunting,
+            // a rescue, is that kind whatever came before). The place itself may be gone into again: for what lies
+            // there, for someone who waits there, for a look at what happened.
+            const bool byKind = taleSeed && (taleSeed->kind == "mystery" || taleSeed->kind == "haunting" || taleSeed->kind == "rescue");
+            if (!byKind && !recentBeats.empty() && (recentBeats[0] & bit(A::Kind::Slay))) slayTwice = true;
             if (barred & place) {
                 request->pool.sites.clear();
                 places = nlohmann::json::array();
@@ -988,20 +1071,21 @@ namespace IntelEngine {
             ctx["bar_places"] = false;
             ctx["must_place"] = false;
         }
-        ctx["bar_slay"] = slayOff != 0;
-        request->pool.barred = barred | slayOff;
+        ctx["bar_slay"] = slayOff != 0 || slayTwice;
+        request->pool.barred = barred | slayOff | (slayTwice ? 1u << static_cast<unsigned>(A::Kind::Slay) : 0u);
+        if (slayTwice) logger::info("Tales: no master of a place is killed in this one: the last story ended on one");
         request->pool.depth = written.empty();
         // A hunt for what is killing people: on offer when a place near has ground outside it for what was left of a
         // victim. Asked for (a rumor of deaths, the test hook), it is that or nothing.
         {
             const auto examine = 1u << static_cast<unsigned>(A::Kind::Examine);
             const bool ground = std::any_of(request->pool.sites.begin(), request->pool.sites.end(), [](const Tales::Site& s) { return s.outside; });
-            const bool mayHunt = ground && !(barred & examine) && heartLean.empty();
+            const bool mayHunt = ground && !(barred & examine) && heartLean.empty() && !slayTwice;   // a hunt ends on what did it, killed
             const bool hunt = taleSeed && taleSeed->kind == "mystery";
             if (hunt && !mayHunt) {
                 logger::info("Tales: no hunt for {}: {}", asker->GetDisplayFullName(),
                              !ground ? "no place near with ground outside it" : "the last story was one, or this one is of the heart");
-                return false;
+                { drop(); co_return; }
             }
             ctx["bar_examine"] = !mayHunt;
             if (!mayHunt) request->pool.barred |= examine;
@@ -1022,7 +1106,7 @@ namespace IntelEngine {
             if (haunting && !mayHaunt) {
                 logger::info("Tales: no haunting for {}: {}", asker->GetDisplayFullName(),
                              !ground ? "no place near with ground outside it" : "one of the last two stories was one, or this one is of the heart");
-                return false;
+                { drop(); co_return; }
             }
             ctx["bar_haunt"] = !mayHaunt;
             if (!mayHaunt) request->pool.barred |= haunt;
@@ -1046,7 +1130,7 @@ namespace IntelEngine {
                 logger::info("Tales: no rescue for {}: {}", asker->GetDisplayFullName(),
                              !holds ? "no place near that keeps prisoners" : !someone ? "nobody of the town may be held"
                              : !dear ? "nobody close to them may be held (a rescue is for someone who is theirs)" : "someone was held in a story told lately");
-                return false;
+                { drop(); co_return; }
             }
             ctx["bar_captive"] = !mayHold;
             if (!mayHold) request->pool.barred |= 1u << static_cast<unsigned>(A::Kind::Free);
@@ -1113,16 +1197,16 @@ namespace IntelEngine {
         m_taleBusy.store(true);
         g_requestAt = real;
         g_request = request;
-        const auto ended = std::chrono::steady_clock::now();
-        const auto part = [](auto from, auto to) { return std::chrono::duration<double, std::milli>(to - from).count(); };
-        logger::info("Tales: asking for a tale of {} in {} ({} people, {} places, {} items, leaning {}, {} told before; {:.2f} ms "
-                     "of the game's frame: {:.2f} before the people, {:.2f} the people ({:.2f} choosing among the town, {:.2f} who may "
-                     "do what, {:.2f} work and ties, {:.2f} the heart, {:.2f} the game's quests and the rest), {:.2f} old companions, "
-                     "{:.2f} the places, {:.2f} the rest)",
+        const double msRest = share.Ms() - restFrom;
+        share.End();
+        logger::info("Tales: asking for a tale of {} in {} ({} people, {} places, {} items, leaning {}, {} told before; at most "
+                     "{:.2f} ms of the game's frame, over {} frame(s); {:.2f} ms in all: {:.2f} before the people, {:.2f} the people "
+                     "({:.2f} choosing among the town, {:.2f} who may do what, {:.2f} work and ties, {:.2f} the heart, {:.2f} the "
+                     "game's quests and the rest), {:.2f} old companions, {:.2f} the places, {:.2f} the rest)",
                      request->pool.people[0].name, NameOf(me->town), request->pool.people.size(), request->pool.sites.size(),
-                     request->pool.items.size(), lean, told.size(), part(started, ended), part(started, atPeople),
-                     part(atPeople, atCompanions), msScore, msUsable, msWords, msHeart, msQuests, part(atCompanions, atPlaces),
-                     part(atPlaces, atGenre), part(atGenre, ended));
+                     request->pool.items.size(), lean, told.size(), share.worst, share.frames, share.total, msBefore,
+                     msScore + msUsable + msWords + msHeart + msQuests, msScore, msUsable, msWords, msHeart, msQuests, msCompanions,
+                     msPlaces, msRest);
         if (!written.empty()) {
             std::string who;
             for (const auto& p : request->pool.people) {
@@ -1131,7 +1215,8 @@ namespace IntelEngine {
             for (const auto& s : request->pool.sites) who += " place " + s.key + " " + s.name + " (" + SiteWhat(s.kind) + ");";
             logger::info("Tales: test pool:{}", who);
             TaleWritten(request, 9, written);   // a test's own tale: checked and planned at once, no second asking, no fallback
-            return true;
+            if (answer) *answer = true;
+            co_return;
         }
         // Bio summaries are files: read on the worker, then sent from there.
         AsyncDispatch::Submit([this, request]() {
@@ -1170,8 +1255,10 @@ namespace IntelEngine {
             }
             SendTale(request, 0, {}, {});
         });
-        return true;
+        if (answer) *answer = true;
+        co_return;
     }
+#undef IE_TALE_PAUSE
 
     void ArcBridge::SendTale(std::shared_ptr<void> handle, int attempt, std::string fix, std::string previous) {
         auto request = std::static_pointer_cast<Request>(handle);
@@ -1225,6 +1312,7 @@ namespace IntelEngine {
         if (open != std::string::npos && close != std::string::npos && close > open) json = nlohmann::json::parse(text.substr(open, close - open + 1), nullptr, false);
         // The tale as written, for the record (one line; the model's own words).
         logger::info("Tales: the tale as written (attempt {}): {}", attempt + 1, json.is_object() ? json.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace) : text.substr(0, 4000));
+        request->pool.titleMayRepeat = attempt >= 1;   // a title is no reason to lose a tale asked for twice
         auto result = Tales::Compile(json, request->pool);
         if (!result.ok) {
             logger::info("Tales: the tale (attempt {}) does not hold: {}", attempt + 1, result.errors);
@@ -1275,6 +1363,7 @@ namespace IntelEngine {
         m_taleBusy.store(false);
         const bool onTheRoad = (a.flags & A::Flag::CameFar) != 0;
         std::string hook = result.hook;
+        const std::string askWords = a.offerAsk;   // the asker's request, for the town's talk when the writer wrote none
         const auto id = PlanTale(std::move(a));
         auto* asker = RE::TESForm::LookupByID<RE::Actor>(request->asker);
         if (id && asker && request->rumored && !onTheRoad) {
@@ -1291,7 +1380,14 @@ namespace IntelEngine {
                 pending.offerSent = false;
                 pending.deferredAt = RealNow();
             }
-            if (hook.empty()) hook = NameOf(request->asker) + " has trouble, and has been asking around for someone who will look into it.";
+            if (hook.empty()) {
+                std::string ask = askWords;
+                {
+                    std::scoped_lock lock(m_mutex);
+                    if (const auto* arc = m_book.Find(id)) ask = Fill(askWords, *arc);
+                }
+                hook = TroubleTalk(NameOf(request->asker), ask);
+            }
             // Where to look for them is a fact of the game, not the writer's to leave out: talk that names no place
             // sends nobody anywhere.
             {
@@ -1429,6 +1525,52 @@ namespace IntelEngine {
         SendJudge(id, a.node, who, n.goal, n.turns, pending.nones >= 3);
     }
 
+    // ------------------------------------------------------------------ a decision already spoken
+    //
+    // A decision step asks the player to decide something in front of someone, by a window with the answers. A player
+    // who talks has often just said it: "Ulfberth, your wife is faithful. There is no man. She has been hiding a
+    // debt..." was answered by Ulfberth in full, and then the window asked what to tell Ulfberth (the play session of
+    // 2026-11-22). So the talk is read first, by the same reader that reads a talk step, with the answers as its
+    // outcomes: an answer the player has plainly given is taken as given; anything less brings the window as before.
+    // Never for an answer that needs the player's Speech (the window carries that), and only what was said since the
+    // step became the story's step.
+
+    bool ArcBridge::ChoiceUnread(const A::Arc& a, const Pending& pending) const {
+        if (a.pattern != A::Pattern::Tale || a.node >= a.graph.size()) return false;
+        const auto& n = a.graph[a.node];
+        if (n.kind != A::Kind::Choose || pending.spoken || pending.answer >= 0) return false;
+        for (const auto& e : n.edges) {
+            if (e.when == A::If::Persuaded) return false;
+        }
+        if (!SkyrimNetAPI::SendCustomDecisionToLLM && !SkyrimNetAPI::SendCustomPromptToLLM) return false;   // nobody to read it
+        // A reading that never came back does not keep the window shut.
+        if (pending.judging && RealNow() - pending.judgedAt > 25.0f) return false;
+        return true;
+    }
+
+    void ArcBridge::ChoiceTalk(std::uint32_t id, const A::Arc& a, Pending& pending, const A::Facts& f) {
+        if (!ChoiceUnread(a, pending) || pending.judging) return;
+        const auto& n = a.graph[a.node];
+        if (!n.who || !f.with[n.who] || !f.spoke[n.who]) return;
+        auto* speech = SpeechTracker::GetSingleton();
+        const RE::FormID who = a.cast[n.who];
+        // Read once both have gone quiet: the window no longer cuts into what the person is still saying.
+        if (speech->IsSpeechPending(who)) return;
+        const float theirs = speech->SecondsSinceSpeechEnded(who);
+        const float players = speech->SecondsSincePlayerSpoke();
+        if ((theirs >= 0.0f && theirs < kQuietSeconds) || (players >= 0.0f && players < kQuietSeconds)) return;
+        const float now = RealNow();
+        // The player said nothing since this became the step: there is nothing to read, the window asks.
+        const float since = pending.nodeAt >= 0.0f ? now - pending.nodeAt : kTalkWindow;
+        if (players < 0.0f || players > since) {
+            pending.spoken = 1;
+            return;
+        }
+        pending.judging = true;
+        pending.judgedAt = now;
+        SendJudge(id, a.node, who, n.question.empty() ? n.goal : n.question, n.options, false, true, since + 5.0f);
+    }
+
     bool ArcBridge::Parley(std::uint32_t id, const A::Arc& a, Pending& pending, const A::Node& n, float nearest, std::string& why) {
         auto* speech = SpeechTracker::GetSingleton();
         const RE::FormID who = a.thug[0];
@@ -1491,8 +1633,9 @@ namespace IntelEngine {
         return false;
     }
 
-    void ArcBridge::SendJudge(std::uint32_t id, std::uint8_t node, RE::FormID who, std::string goal, std::array<std::string, 3> turns, bool force) {
-        const auto lines = DialogueTracker::GetSingleton()->ConversationWith(who, kTalkWindow, kTalkLines);
+    void ArcBridge::SendJudge(std::uint32_t id, std::uint8_t node, RE::FormID who, std::string goal, std::array<std::string, 3> turns, bool force,
+                              bool decision, float window) {
+        const auto lines = DialogueTracker::GetSingleton()->ConversationWith(who, window > 0.0f ? std::min(window, kTalkWindow) : kTalkWindow, kTalkLines);
         const std::string name = NameOf(who);
         const std::string player = PlayerName();
         std::string transcript;
@@ -1503,14 +1646,17 @@ namespace IntelEngine {
         ctx["goal"] = goal;
         ctx["transcript"] = transcript.empty() ? std::string("(nothing was heard)") : transcript;
         ctx["allow_none"] = !force;
+        ctx["decision"] = decision;
         nlohmann::json outcomes = nlohmann::json::array();
+        const auto* arc = decision ? m_book.Find(id) : nullptr;   // the answers carry {placeholders} (lock held by the caller)
         for (std::size_t k = 0; k < turns.size(); ++k) {
             if (turns[k].empty()) continue;
-            outcomes.push_back({{"key", "o" + std::to_string(k)}, {"text", turns[k]}});
+            outcomes.push_back({{"key", "o" + std::to_string(k)}, {"text", arc ? Fill(turns[k], *arc) : turns[k]}});
         }
         ctx["outcomes"] = outcomes;
         const std::string context = ctx.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
-        logger::info("Tales: #{} reading the talk with {} ({} lines{})", id, name, lines.size(), force ? ", an outcome must be named" : "");
+        logger::info("Tales: #{} reading the talk with {} ({} lines{}{})", id, name, lines.size(), force ? ", an outcome must be named" : "",
+                     decision ? ", for a decision already spoken" : "");
         // The reading is taken in on the game's own thread, in a task of its own, never inside the call that asked for
         // it: the watch asks with this bridge's lock held (Advance), and a call that fails at once (no API, nothing
         // queued, no route for decisions) used to answer on the spot and take that lock a second time: a hang. The
@@ -1566,6 +1712,23 @@ namespace IntelEngine {
         if (!a || !A::IsOpen(*a) || it == m_pending.end() || it->second.node != node || a->node != node) return;
         auto& pending = it->second;
         pending.judging = false;
+        if (node < a->graph.size() && a->graph[node].kind == A::Kind::Choose) {
+            // A decision step: the answer the player has already given in talk, or the window after all.
+            const auto& n = a->graph[node];
+            if (pending.spoken || RealNow() - pending.judgedAt > 25.0f) {
+                pending.spoken = 1;   // the window is up already: its answer is the one that counts
+                return;
+            }
+            if (turn >= 0 && turn < 3 && !n.options[static_cast<std::size_t>(turn)].empty()) {
+                pending.answer = turn;
+                pending.chooseHold = RealNow() + 30.0f;
+                logger::info("Tales: #{} the decision was made in talk: {}", id, Fill(n.options[static_cast<std::size_t>(turn)], *a));
+            } else {
+                pending.spoken = 1;
+                logger::info("Tales: #{} no decision was spoken in the talk: the window asks", id);
+            }
+            return;
+        }
         if (turn >= 0 && turn < 3 && node < a->graph.size() && !a->graph[node].turns[static_cast<std::size_t>(turn)].empty()) {
             pending.turn = turn;
             logger::info("Tales: #{} the talk turned out: {}", id, Fill(a->graph[node].turns[static_cast<std::size_t>(turn)], *a));

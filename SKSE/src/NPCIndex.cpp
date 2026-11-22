@@ -1393,8 +1393,36 @@ namespace IntelEngine {
         return loc;
     }
 
+    namespace {
+        // The hold the player was last known to be in, for the stretches of open country the game gives no place at
+        // all (the tundra between Whiterun and its camps): there the player's hold read as none, everybody of the
+        // hold as "in another hold", and the user's own limits on who may cross holds as passed, since no hold could
+        // be told (the play session of 2026-11-22). Forgotten when a save is loaded.
+        std::mutex g_playerHoldMutex;
+        std::string g_playerHoldLast;
+        std::uint32_t g_playerHoldGeneration = 0;
+    }
+
     std::string NPCIndex::GetNPCHoldName(RE::Actor* actor) {
-        auto* loc = ResolveActorLocation(actor);
+        if (actor && actor->IsPlayerRef()) {
+            std::string hold = HoldNameAt(ResolveActorLocation(actor));
+            const auto generation = SlotTracker::GetSingleton()->loadGeneration.load(std::memory_order_relaxed);
+            std::scoped_lock lock(g_playerHoldMutex);
+            if (g_playerHoldGeneration != generation) {
+                g_playerHoldGeneration = generation;
+                g_playerHoldLast.clear();
+            }
+            if (!hold.empty()) {
+                g_playerHoldLast = hold;
+            } else if (auto* cell = actor->GetParentCell(); cell && !cell->IsInteriorCell()) {
+                hold = g_playerHoldLast;
+            }
+            return hold;
+        }
+        return HoldNameAt(ResolveActorLocation(actor));
+    }
+
+    std::string NPCIndex::HoldNameAt(RE::BGSLocation* loc) {
         if (!loc) return "";
 
         // The hold is the location the game itself marks as one (LocTypeHold). Where a load order has none above
