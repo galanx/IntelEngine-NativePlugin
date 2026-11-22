@@ -711,6 +711,7 @@ namespace IntelEngine {
             if (!guard || guard->IsDead() || !guard->IsGuard()) continue;
             // (A guard who has been taken into a battle side fights in it like anybody.)
             if ((sideA && guard->IsInFaction(sideA)) || (sideB && guard->IsInFaction(sideB))) continue;
+            if (InAKillingBlow(soldier) || InAKillingBlow(guard)) continue;       // not in the middle of one: see CeaseFire
             guard->SetBeenAttacked(false);
             guard->StopCombat();
             soldier->SetBeenAttacked(false);
@@ -3278,6 +3279,61 @@ namespace IntelEngine {
         return out.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
     }
 
+    bool BattleManager::InAKillingBlow(RE::Actor* actor) {
+        if (!actor) return false;
+        if (actor->IsInKillMove()) return true;
+        // Down and alive: bleeding out (on their knees, or on their back where a mod lays the wounded down), or
+        // knocked off their feet and not up again.
+        auto* state = actor->AsActorState();
+        return state && (state->IsBleedingOut() || state->GetKnockState() != RE::KNOCK_STATE_ENUM::kNormal);
+    }
+
+    void BattleManager::DebugBodies() {
+        std::vector<RE::FormID> ids;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (activeBattle_) {
+                for (const auto& a : activeBattle_->actors) ids.push_back(a.formId);
+            }
+        }
+        if (ids.empty()) {
+            std::lock_guard<std::mutex> lock(cleanupMutex_);
+            ids = cleanupFormIds_;
+        }
+        auto* tes = RE::TES::GetSingleton();
+        int dead = 0, high = 0, held = 0;
+        for (const auto id : ids) {
+            auto* actor = RE::TESForm::LookupByID<RE::Actor>(id);
+            if (!actor || actor->IsDisabled() || !actor->Is3DLoaded()) continue;
+            RE::NiPoint3 at = actor->GetPosition();
+            float land = 0.f;
+            const bool onLand = tes && tes->GetLandHeight(at, land);
+            // Where the body is drawn, not only where the game keeps the person: somebody left in an animation hangs
+            // above the place they are said to be at.
+            float middle = at.z;
+            if (auto* body = actor->Get3D()) middle = body->worldBound.center.z;
+            const float above = onLand ? middle - land : 0.f;
+            const bool isDead = actor->IsDead();
+            const bool killing = actor->IsInKillMove();
+            auto* state = actor->AsActorState();
+            const bool bleeding = state && state->IsBleedingOut();
+            const int knock = state ? static_cast<int>(state->GetKnockState()) : 0;
+            if (isDead) ++dead;
+            if (killing) ++held;
+            // A body lying on the ground has its middle a hand or two above it; one standing, some 60 units.
+            const bool odd = isDead ? above > 45.f : (killing || bleeding || knock != 0);
+            if (isDead && above > 45.f) ++high;
+            if (odd) {
+                logger::info("Battle: [bodies] {} ({:08X}) {} at ({:.0f}, {:.0f}): the middle of the body {:.0f} units above the land{}{}{}{}",
+                             actor->GetDisplayFullName(), id, isDead ? "dead" : "alive", at.x, at.y, above,
+                             bleeding ? ", bleeding out" : "", knock != 0 ? ", knocked down" : "", killing ? ", in a killing blow" : "",
+                             actor->IsInCombat() ? ", fighting" : "");
+            }
+        }
+        logger::info("Battle: [bodies] {} of the battle looked at: {} dead, {} of them with the middle of the body more than 45 units above the land; {} in a killing blow",
+                     ids.size(), dead, high, held);
+    }
+
     int BattleManager::CeaseFire(int first, int count, bool amongThemselves) {
         static FrameStats stats;
         FrameClock clock("Battle: calling the fighting off", stats, FrameClock::Now(), 40);
@@ -3299,6 +3355,15 @@ namespace IntelEngine {
         for (int i = first; i < last; ++i) {
             auto* actor = RE::TESForm::LookupByID<RE::Actor>(ids[static_cast<std::size_t>(i)]);
             if (!actor || actor->IsDead() || actor->IsDisabled()) continue;
+            // Somebody in the middle of a killing blow, the one who deals it as much as the one who takes it, is left
+            // alone until it is over (the next look finds them): the two are held in one animation, and ending the
+            // fight of either leaves the other hanging in the air where the blow had lifted them, dead or as good as.
+            // The same for anybody who is down and not on their feet.
+            if (InAKillingBlow(actor)) {
+                logger::info("Battle: {} ({:08X}) is in the middle of a killing blow or down: their fight is not called off now",
+                             actor->GetDisplayFullName(), actor->GetFormID());
+                continue;
+            }
             const bool fighting = actor->IsInCombat();
             if (amongThemselves) {
                 if (!fighting) continue;
