@@ -114,7 +114,8 @@ beside it: made whole it had been 1.0 to 1.4 ms. Two costs of IntelEngine's own 
 
 **Not done.** What is left over the half millisecond on a big list is the game's own making of a person. The one lever
 for it is making soldiers ahead of the battle in frames nobody watches (a loading screen, an open menu) and keeping
-them switched off until the muster: not built, because it puts people into the save who belong to no battle yet. A
+them switched off until the muster: not built, because it puts people into the save who belong to no battle yet (the
+user's decision, 2026-11-22: "Leave it as is"). A
 save in the frame between a soldier's making and their settling leaves that soldier switched off and unknown to the
 script after the load; the muster had that gap before (soldiers are known to the script only after
 `RememberBattleSoldiers`).
