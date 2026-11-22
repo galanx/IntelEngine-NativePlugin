@@ -195,6 +195,31 @@ class VM:
 
     def external(self, method, args, script):
         if method == "IsDashboardOpen": return False
+        # The language natives (LanguageBridge), as they answer in an English game with no pack in force.
+        if method == "L": return args[0]                      # what the player reads: no pack, so as it came
+        if method in ("PlaceInEnglish", "CommaList"): return args[0]
+        if method == "TextLanguage": return ""
+        if method == "LoadStamp": return 1                   # one load of one session
+        if method == "IsNoneWord": return args[0].strip().lower() in ("", "none")
+        if method in ("TextMentionsName", "ReplaceWholeWord"):
+            # whole words, whatever the case, as NameForms does it for a name written as it is
+            text, what = args[0], args[1]
+            low, needle = text.lower(), what.lower()
+            hits, at = [], low.find(needle) if needle else -1
+            while at >= 0:
+                end = at + len(needle)
+                left = at == 0 or not low[at - 1].isalnum()     # an apostrophe ends a word here: "Sinmir's" names Sinmir
+                right = end >= len(low) or not low[end].isalnum()
+                if left and right and (not hits or at >= hits[-1][1]):
+                    hits.append((at, end))
+                at = low.find(needle, at + 1)
+            if method == "TextMentionsName":
+                return bool(hits)
+            out, copied = "", 0
+            for at, end in hits:
+                out += text[copied:at] + args[2]
+                copied = end
+            return out + text[copied:]
         if method == "GetLength": return len(args[0])
         if method == "Find": return args[0].find(args[1], args[2] if len(args) > 2 else 0)
         if method == "GetNthChar": return args[0][args[1]]

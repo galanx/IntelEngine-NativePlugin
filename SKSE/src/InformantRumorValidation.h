@@ -1,5 +1,8 @@
 #pragma once
 
+#include "NameForms.h"
+#include "Utf8Fold.h"
+
 #include <algorithm>
 #include <cctype>
 #include <string>
@@ -18,13 +21,10 @@ inline std::string InformantRumorRejection(const std::string& subject, const std
     const std::string first = text.substr(0, text.find_first_of(" ,.;:"));
     if (text.empty()) return "rumor is empty";
     if (name.empty()) return "subject is empty";
-    // whole word, same boundary as Papyrus ReplaceText: "Ria" must not match inside "Victoria" or "Riften"
-    auto names = [&](const std::string& t, const std::string& w) {
-        const std::string lt = lower(t), lw = lower(w);
-        for (size_t at = lt.find(lw); at != std::string::npos; at = lt.find(lw, at + 1))
-            if ((at == 0 || !std::isalpha((unsigned char)lt[at - 1])) && (at + lw.size() >= lt.size() || !std::isalpha((unsigned char)lt[at + lw.size()]))) return true;
-        return false;
-    };
+    // As whole words ("Ria" must not match inside "Victoria" or "Riften"), in whatever form the language of the
+    // sentence puts the name (NameForms.h): a rumor that says "Lidiyu" names Lidiya, one that says "Svens" names
+    // Sven. Looked for letter by letter in the form it has in the list, every such rumor was thrown away.
+    auto names = [&](const std::string& t, const std::string& w) { return NameForms::Mentions(FoldUtf8(t), FoldUtf8(w)); };
     if (!rumor.empty() && !names(rumor, name)) return "rumor does not name the subject";
     // a name that merely ends in "ing" is allowed, and so are ordinary openings that happen to end in it: the rule
     // keeps "Hearing that ..." out, but it also refused "During the feast, Nazeem ..." and "King Torygg ..."

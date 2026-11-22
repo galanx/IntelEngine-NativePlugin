@@ -39,6 +39,7 @@ def main():
 
     maintenance = MaintenanceVM(files, history)
     maintenance.properties["LastMaintenanceRealTime"] = 0.0
+    maintenance.properties["LastMaintenanceLoad"] = 0   # no load seen yet: the first call takes this load's stamp
     maintenance.halt_before = "ClearAllPrefix"
     maintenance.invoke("IntelEngine_Core", "Maintenance", (True,))
     require(maintenance.halt_reached, "initial Maintenance did not reach first-load cleanup")

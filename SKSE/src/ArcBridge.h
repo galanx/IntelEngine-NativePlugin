@@ -80,6 +80,9 @@ namespace IntelEngine {
         /** The script moved the one held at a place on (Arcs::CaptiveState: away, bound at the heart, gone home). */
         void Captive(std::uint32_t id, int state);
         /** The script laid what is to be looked at outside a place (null: it could not). */
+        /** Where a sign of a trail is laid (main thread): a point on the ground out from the place, as x, y, z; empty
+         *  for what lies by the place itself, or when no ground is found (then it lies by the place too). */
+        std::vector<float> TrailSpot(std::uint32_t id, int clue);
         void CluePlaced(std::uint32_t id, int clue, RE::TESObjectREFR* lies);
         /** The script put what walks by night outside its place (it is night, and the ground there is in the game). */
         void SpiritOut(std::uint32_t id, RE::Actor* shade);

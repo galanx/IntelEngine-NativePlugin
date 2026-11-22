@@ -14,6 +14,9 @@
 #include "JsonKeys.h"
 #include "NPCIndex.h"
 #include "LivingWorldBridge.h"
+#include "LanguageBridge.h"
+#include "NameForms.h"
+#include "Utf8Fold.h"
 #include "BondBridge.h"
 #include "HeartBridge.h"
 #include "ItemNames.h"
@@ -68,6 +71,7 @@
 namespace IntelEngine::Papyrus {
 
     bool StoryLoadRecovered(RE::StaticFunctionTag*, bool complete) { return IntelEngineStoryLoadRecovered(complete); }
+    std::int32_t LoadStamp(RE::StaticFunctionTag*) { return intelEngineLoadStamp.load(); }
     // Forward declarations for functions defined after Register()
     void MarkSystemPending(RE::StaticFunctionTag*, RE::BSFixedString, float);
     void ClearSystemPending(RE::StaticFunctionTag*, RE::BSFixedString);
@@ -175,6 +179,13 @@ namespace IntelEngine::Papyrus {
     std::int32_t GetSkyrimNetPackageApiVersion(RE::StaticFunctionTag*);
     std::int32_t SyncPluginSettings(RE::StaticFunctionTag*, RE::BSFixedString);
     std::int32_t ApplyPluginSettings(RE::StaticFunctionTag*, RE::BSFixedString);
+    RE::BSFixedString PlaceInEnglish(RE::StaticFunctionTag*, RE::BSFixedString);
+    bool IsNoneWord(RE::StaticFunctionTag*, RE::BSFixedString);
+    RE::BSFixedString LabelText(RE::StaticFunctionTag*, RE::BSFixedString);
+    bool TextMentionsName(RE::StaticFunctionTag*, RE::BSFixedString, RE::BSFixedString);
+    RE::BSFixedString TextLanguage(RE::StaticFunctionTag*);
+    RE::BSFixedString ReplaceWholeWord(RE::StaticFunctionTag*, RE::BSFixedString, RE::BSFixedString, RE::BSFixedString);
+    RE::BSFixedString CommaList(RE::StaticFunctionTag*, RE::BSFixedString);
 
     // Political system forward declarations
     int GetFactionRelation(RE::StaticFunctionTag*, RE::BSFixedString, RE::BSFixedString);
@@ -626,6 +637,14 @@ namespace IntelEngine::Papyrus {
         a_vm->RegisterFunction("GetSkyrimNetPackageApiVersion", SCRIPT_NAME, GetSkyrimNetPackageApiVersion); ++count;
         a_vm->RegisterFunction("SyncPluginSettings", SCRIPT_NAME, SyncPluginSettings); ++count;
         a_vm->RegisterFunction("ApplyPluginSettings", SCRIPT_NAME, ApplyPluginSettings); ++count;
+        a_vm->RegisterFunction("LoadStamp", SCRIPT_NAME, LoadStamp); ++count;
+        a_vm->RegisterFunction("PlaceInEnglish", SCRIPT_NAME, PlaceInEnglish); ++count;
+        a_vm->RegisterFunction("IsNoneWord", SCRIPT_NAME, IsNoneWord); ++count;
+        a_vm->RegisterFunction("L", SCRIPT_NAME, LabelText); ++count;
+        a_vm->RegisterFunction("TextMentionsName", SCRIPT_NAME, TextMentionsName); ++count;
+        a_vm->RegisterFunction("TextLanguage", SCRIPT_NAME, TextLanguage); ++count;
+        a_vm->RegisterFunction("ReplaceWholeWord", SCRIPT_NAME, ReplaceWholeWord); ++count;
+        a_vm->RegisterFunction("CommaList", SCRIPT_NAME, CommaList); ++count;
 
         // Faction Politics Functions
         a_vm->RegisterFunction("GetFactionRelation", SCRIPT_NAME, GetFactionRelation); ++count;
@@ -1414,15 +1433,108 @@ namespace IntelEngine::Papyrus {
             currentHour = (currentGameTime - std::floor(currentGameTime)) * 24.0f;
         }
 
-        const float result = NaturalTime::Parse(
-            condition.c_str() ? condition.c_str() : "", currentHour);
+        // The model writes a time in the language it speaks ("zavtra utrom", "morgen frueh", "neser ne mengjes" in
+        // their own letters); the reader knows English. The language packs in force put it into English first
+        // (LanguageBridge.h); English comes through as it was.
+        const std::string said = condition.c_str() ? condition.c_str() : "";
+        const std::string english = LanguageBridge::GetSingleton()->TimeToEnglish(said);
+        const float result = NaturalTime::Parse(english, currentHour);
         if (result < 0.0f) {
-            logger::debug("ParseTimeCondition: could not parse '{}'", condition.c_str());
+            logger::info("ParseTimeCondition: could not read '{}'{}", said, english == said ? std::string{} : " (as '" + english + "')");
+        } else if (english != said) {
+            logger::info("ParseTimeCondition: '{}' (as '{}') -> {}", said, english, result);
         } else {
-            logger::debug("ParseTimeCondition: '{}' -> {}", condition.c_str(), result);
+            logger::debug("ParseTimeCondition: '{}' -> {}", said, result);
         }
         return result;
     }
+
+    // ==========================================================================
+    // Languages (LanguageBridge.h, LanguagePack.h)
+    // ==========================================================================
+
+    // A word of place said in another language, in English ("domoi": "home"), when the whole of what was said is
+    // one; anything else (a name, English) comes back as it was.
+    RE::BSFixedString PlaceInEnglish(RE::StaticFunctionTag*, RE::BSFixedString said) {
+        const std::string english = LanguageBridge::GetSingleton()->PlaceToEnglish(said.c_str() ? said.c_str() : "");
+        return english.empty() ? said : RE::BSFixedString(english);
+    }
+
+    // Nothing, "none", or the word for it in a language in force ("net", "keine", "asnje").
+    bool IsNoneWord(RE::StaticFunctionTag*, RE::BSFixedString said) {
+        return LanguageBridge::GetSingleton()->IsNone(said.c_str() ? said.c_str() : "");
+    }
+
+    // What the player reads, in the language of the game where its pack has the sentence; else as it came.
+    RE::BSFixedString LabelText(RE::StaticFunctionTag*, RE::BSFixedString english) {
+        const std::string text = english.c_str() ? english.c_str() : "";
+        const std::string there = LanguageBridge::GetSingleton()->Label(text);
+        return there == text ? english : RE::BSFixedString(there);
+    }
+
+    // Does a sentence speak of this name, in whatever form its language puts it (NameForms.h)?
+    bool TextMentionsName(RE::StaticFunctionTag*, RE::BSFixedString text, RE::BSFixedString name) {
+        return NameForms::Mentions(FoldUtf8(text.c_str() ? text.c_str() : ""), FoldUtf8(name.c_str() ? name.c_str() : ""),
+                                   LanguageBridge::GetSingleton()->Free());
+    }
+
+    // Every whole-word occurrence of `what` in `text` replaced by `with`, whatever the case, with word boundaries
+    // of any script (NameForms.h). The scripts' own version asked StringUtil.IsLetter, which knows ASCII only:
+    // every byte of a Cyrillic letter was a boundary, so a name was replaced in the middle of its declined form.
+    RE::BSFixedString ReplaceWholeWord(RE::StaticFunctionTag*, RE::BSFixedString text, RE::BSFixedString what, RE::BSFixedString with) {
+        const std::string original = text.c_str() ? text.c_str() : "";
+        const std::string word = what.c_str() ? what.c_str() : "";
+        const std::string to = with.c_str() ? with.c_str() : "";
+        if (original.empty() || word.empty()) return text;
+        const std::string hay = FoldUtf8(original), needle = FoldUtf8(word);   // folding keeps the byte length
+        if (hay.size() != original.size() || needle.empty()) return text;
+        // (The apostrophe is a boundary here, as it was in the scripts' own loop: "Sinmir's" gives way to "my",
+        // and what is left of "Sinmir" to "me".)
+        const auto separatorAt = [&](std::size_t at) {
+            char32_t c = 0;
+            NameForms::Decode(hay, at, c);
+            return NameForms::Separator(c) || NameForms::Apostrophe(c);
+        };
+        std::string out;
+        std::size_t copied = 0;
+        for (auto at = hay.find(needle); at != std::string::npos; at = hay.find(needle, at + 1)) {
+            if (at < copied) continue;
+            const std::size_t end = at + needle.size();
+            bool left = at == 0;
+            if (!left) {
+                std::size_t b = at - 1;
+                while (b > 0 && (static_cast<unsigned char>(hay[b]) & 0xC0) == 0x80) --b;
+                left = separatorAt(b);
+            }
+            const bool right = end >= hay.size() || separatorAt(end);
+            if (!left || !right) continue;
+            out.append(original, copied, at - copied);
+            out += to;
+            copied = end;
+        }
+        if (copied == 0) return text;
+        out.append(original, copied, std::string::npos);
+        return RE::BSFixedString(out);
+    }
+
+    // A list of names with commas between them, whatever the model put there: the ideographic and the full-width
+    // comma and the semicolons of any width become commas ("A、B" was one long name, and nobody came along).
+    RE::BSFixedString CommaList(RE::StaticFunctionTag*, RE::BSFixedString said) {
+        const std::string in = said.c_str() ? said.c_str() : "";
+        std::string out;
+        out.reserve(in.size());
+        char32_t c = 0;
+        for (std::size_t i = 0; i < in.size();) {
+            const auto n = NameForms::Decode(in, i, c);
+            if (c == 0x3001 || c == 0xFF0C || c == 0xFF1B || c == ';' || c == 0x060C) out += ',';
+            else out.append(in, i, n);
+            i += n;
+        }
+        return out == in ? said : RE::BSFixedString(out);
+    }
+
+    // The English name of the language the player reads in ("Russian"); empty for English.
+    RE::BSFixedString TextLanguage(RE::StaticFunctionTag*) { return RE::BSFixedString(LanguageBridge::GetSingleton()->TextLanguage()); }
 
     float CalculateTargetGameTime(RE::StaticFunctionTag*, float targetHour, float currentHour) {
         auto* calendar = RE::Calendar::GetSingleton();
@@ -3476,6 +3588,7 @@ namespace IntelEngine::Papyrus {
     // same events the dashboard sends, delivered on the game thread. Politics and the dashboard keys read the
     // file themselves. Returns how many settings change.
     std::int32_t ApplyPluginSettings(RE::StaticFunctionTag*, RE::BSFixedString configJson) {
+        LanguageBridge::GetSingleton()->Decide();   // the two language settings live in the same file
         FactionPolitics::GetSingleton()->LoadSettings();
         DashboardConfig::GetSingleton()->Reload();
         const auto config = SettingsBridge::ParseConfig(configJson.c_str());
@@ -5734,7 +5847,10 @@ namespace IntelEngine::Papyrus {
 
     RE::BSFixedString BattleSay(RE::StaticFunctionTag*, RE::BSFixedString what, RE::BSFixedString a, RE::BSFixedString b,
                                 RE::BSFixedString name, int number, int other) {
-        return RE::BSFixedString(BattleManager::GetSingleton()->Say(what.c_str(), a.c_str(), b.c_str(), name.c_str(), number, other).c_str());
+        // What a battle says to the player (notices, the names on a champion or a turncoat, the words on buttons)
+        // in the game's language where its pack has the sentence (LanguageBridge.h).
+        return RE::BSFixedString(LanguageBridge::GetSingleton()->Label(
+            BattleManager::GetSingleton()->Say(what.c_str(), a.c_str(), b.c_str(), name.c_str(), number, other)));
     }
 
     RE::BSFixedString GetBattleSoldierFormIds(RE::StaticFunctionTag*, RE::BSFixedString side) {

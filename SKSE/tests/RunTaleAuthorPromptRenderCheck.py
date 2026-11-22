@@ -33,6 +33,7 @@ BASE = {
     "quests": ["Dragon Rising: Kill the dragon"], "told": ["crime: The Quiet Ledger - a ledger that lied"], "lean": "debt", "reward": 150,
     "bar_ambush": False, "bar_brawl": True, "bar_stalk": False, "bar_places": False, "bar_slay": False, "asker_knows": "met",
     "must_place": False, "must_captive": False, "bar_captive": False, "bar_examine": False, "must_mystery": False, "bar_haunt": False, "must_haunt": False, "thread": "", "rumored": False,
+    "text_language": "", "sequel": {},
 }
 
 
@@ -58,6 +59,12 @@ CASES = {
     "no ambush and no shadow (switched off)": (case(bar_ambush=True, bar_stalk=True), {"has": ['"delve":', '"slay": '], "not": ['"ambush": someone of the story', '"stalk": someone']}),
     "the talk of the town and the times": (case(talk=["They say Ada stood with the Legion at Honningbrew.", "A shade walks the Whiterun road by night."], times="- Imperial Legion and Stormcloaks are at war (2 battles fought so far).\n- Ada is known as a Veteran of the Imperial Legion: fought in 2 of their battles (2 won).\n"),
         {"has": ["# What people here are talking about now", "- They say Ada stood with the Legion at Honningbrew.", "- A shade walks the Whiterun road by night.", "# The times", "are at war (2 battles fought so far)", "never move an army", "# The people you may use (by key)"], "not": [HEART]}),
+    "an open end that has come due": (case(sequel={"title": "The Quiet Ledger", "when": "a few days ago", "ended": "I let Sigurd go.", "open": "Sigurd went free and still owes Belethor.", "people": "Sigurd, Belethor"}),
+        {"has": ["# This story grows out of an earlier one", '"The Quiet Ledger" ended a few days ago', "I let Sigurd go.", "Sigurd went free and still owes Belethor.", "It was about: Sigurd, Belethor.", "HOW IT ENDED is what Ada did"], "not": [HEART]}),
+    "no open end": (case(), {"has": ['"after" of an ending', '"after": "..."'], "not": ["# This story grows out of an earlier one"]}),
+    "the player reads another language": (case(text_language="Russian"), {"has": ["# Language", "Ada reads Russian. Write in Russian everything that is read or told", '("a hunter", "a cow", "a horse", "a goat", "a deer")'], "not": []}),
+    "the player reads English": (case(), {"has": ["# Words"], "not": ["# Language"]}),
+    "a hunt has a trail": (case(must_mystery=True, lean="mystery"), {"has": ["then a trail out by the place: two or three things to look at closely", "Up to three in a story, by the same place: they are a trail"], "not": ["At most two in a story"]}),
     "no talk and no politics": (case(), {"has": ["# The people you may use (by key)"], "not": ["# What people here are talking about now", "# The times"]}),
     "nobody held this time": (case(bar_captive=True), {"has": ['"delve":'], "not": ['"free": someone of the story', TAKEN]}),
     "a hunt": (case(must_mystery=True, lean="mystery"), {"has": ["# Something is killing near", '"examine": what was left of a victim', '"name": after an "examine"', "leaves these signs on those it kills"], "not": [TAKEN]}),

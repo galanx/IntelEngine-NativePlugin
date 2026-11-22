@@ -28,6 +28,12 @@ namespace IntelEngine {
         /** The hold a name means: a hold's own name ("The Reach", "Whiterun Hold") or its capital's ("Markarth").
          *  Rumors::NoHold for anything else. */
         static std::uint8_t HoldByName(const std::string& where);
+        /** The hold the player is in, by the game's own records (never by a name): Rumors::NoHold outside the holds.
+         *  Main thread. */
+        static std::uint8_t HoldOfPlayer();
+        /** A hold's name as the game shows it, for a hold or a capital named in English in a data file ("Solitude"
+         *  gives "Haafingar" in the game's language); empty when the name means no hold. */
+        static std::string HoldShown(const std::string& where);
         /** Everything of one owner goes (a story given up, taken on or ended; a quest closed). Any thread. */
         void Withdraw(Rumors::Owner owner, std::uint32_t ownerId, Rumors::Kind only = Rumors::Kind{});
         /** The owners (ids) that have a rumor of this kind out: so their keeper can take it back when its time is over. */

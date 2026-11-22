@@ -463,6 +463,99 @@ was switched on and saved ("1 setting(s) taken from settings.yaml", "skipped tim
 MCM its info text shows in full and a click switched it off again ("does not count"). With the switch on, the town
 pacer was not watched beginning a story after a skip (only the director's verdict was).
 
+### Any language (2026-11-22)
+
+The user: "Create the necessary dictionaries and language detection logic that properly handles place names in the
+appropriate language, even handling special characters like cyrillic or japanese/korean or even chinese, would be
+great if we can later on add more dictionary files that translate the labels that are used and the logic only uses
+those files based on the games language, and also handle Albanian where the game language is still originally
+english (which is a special case)". An audit the same day had found what depended on English (memory
+`intelengine-language-audit`).
+
+- `NameForms.h` (pure, `NameFormsCheck`): a name as people say it. Words by the separators of any script; `SameWord`
+  (one begins with the other, a short ending differs; never across an apostrophe); little words let go (`Small`,
+  and a pack's `free` words); `Stands` gives Same / Forms / PartForms; `Find` the best of many, tied = nobody's;
+  `Mentions` for a sentence (a possessive speaks of its owner); `Slips` in letters. Used by `NPCIndex::FindByName`,
+  `FindByNameNear`, the form-id and location lookups, `LocationResolver::ResolveCell/ResolveLocation`,
+  `StoryCandidateResolution` (which also folds case for every script now), `InformantRumorValidation`.
+- `LanguagePack.h` (pure, `LanguagePackCheck` runs the shipped packs through the real `NaturalTimeParser`):
+  a pack file's sections (meta, time, place, none, free, label); `TimeToEnglish` (words, then the half of the day
+  beside an hour becomes its am / pm); `PlaceToEnglish` (only when the whole of what was said is a word of place);
+  `IsNone`; `Translate` (a label found under names); `ScriptCount`, `TextPack`, `SpokenPacks`,
+  `SpokenCodesOfTranslator`.
+- `LanguageBridge` (the game): reads the packs once, is told the script of the game's own place names by the place
+  index, reads Skyrim.ini's sLanguage and SkyrimNet's `UniversalTranslator.yaml`, decides, answers from a snapshot.
+  Natives: `PlaceInEnglish`, `IsNoneWord`, `L`, `TextMentionsName`, `TextLanguage`, `ReplaceWholeWord`,
+  `CommaList`; `ParseTimeCondition` reads through the packs and logs what it took a time for.
+- What the player reads: `Core.NotifyPlayer`, every `Debug.Notification`, `ShowChoice` (what is shown is
+  translated, what is returned stays the English the callers compare), `BattleSay`, the journal's title and
+  objectives. `SKSE/tools/gen_label_template.py` writes `_labels_template.tsv` from the sources (`--check` in the
+  suite). The tale author's context has `text_language`.
+- `Tales::Words` counts letters and cuts at the sentence ends of any script; the save record's text limits are
+  bytes of their own (`kMaxTextBytes`, `kMaxLongBytes`).
+- Politics: `RumorBridge::HoldOfPlayer` (by form id), `HoldByName` as whole words, `HoldShown`;
+  `FactionPolitics::ShownAsInGame` adds `leaders_shown` and `hold_shown`, read by the awareness prompt.
+- The actions tell the model to write a time in English ("tomorrow 08:00", "in 2 hours"), a name in its plain
+  form, and "none" in English: the first line of defence; the packs are the second.
+
+Played (English game, "Languages people speak" set on SkyrimNet's page to six languages; `lang_ingame.py`): the
+log reads "the game says ENGLISH, its place names are written in latin; the player reads English; people speak
+Albanian, Russian, German, Japanese, Korean, Chinese"; "завтра утром", "nesër në mëngjes", "morgen früh", "明日の朝",
+"내일 아침" all 32 (tomorrow at eight), "në orën 6 të mbrëmjes", "um 18 Uhr", "下午6点" all 18, "pas dy orësh" two
+hours on; "домой", "n'shpi", "nach Hause", "家", "回家" home, "jashtë", "밖으로" outside, "Whiterunit" left a name,
+"asnjë" none; "Huldës", "Huldas" Hulda, "Lydian" Lydia, "Jonit" Jon Battle-Born, "zu Ysolda" Ysolda, "Belethorit"
+Belethor. Not played: a translated game; a label actually translated on screen (no pack ships sentences yet);
+the dashboard's Language section in the game. Not built: asking the model "which of these did you mean" when a
+name still fits nobody; converting names that are not UTF-8 (German and other Western game files may be
+Windows-1252: unverified without such an install); block and white lists and pending schedules still go by name.
+
+### A trail to follow (2026-11-22)
+
+The user's bar is a contract with a scene, tracks and a lair; a hunt had one body by the door. `kClues` is 3;
+`Arc::clueFar` says how far out each lies (the last looked at by a place lies by it, those before farther out, set
+in `Tales::Compile`); a hunt asked for must have at least two. `ArcBridge::TrailSpot` finds the ground: the
+farthest sign 4,400 units out (2,200 for a trail of two), the others evenly on the way in, on the line from the
+place to the player, every one 3,000 units from the player (less room, shorter trail; only a player at the door
+gets it short and on the far side); candidates from the navmesh of the loaded cells, the best under the open sky
+(three rays of the game's collision per spot, at most six spots). The script places a marker at the spot and the
+dead one at the marker: placed at the cave and moved, the bodies stayed invisible. `MarkerOf` shows the way to the
+first sign only for a game hour; `cluetext` adds one of eight fixed sentences for the way on.
+
+Played on the test profile (`tales/test_r.json`, `trail_setup.sh`), on foot: offer taken at Anoriath's stall, one
+honest answer from Elrindir, then toward Broken Fang Cave from two cells east: "a sign of the trail, 4400 units
+out ... open ground found (9100 navmesh triangles looked at, 716 spots fit, 1 tried for open sky, 0.37 ms)", the
+other 0.22 ms. Goat (marked), window "...nothing has fed on the meat at all. The trail leads on to the west.";
+journal "Follow the trail on toward the cave", no marker; horse, "The trail leads on to the west."; Torvald by
+the cave, no way on; then Anoriath's question, the cave, Elrindir's choice, the end. What the first walk found and
+mended: both far signs invisible (moved before loaded), one on the far side of the cave out of reach (each sign had
+chosen its side by itself). Not played: a trail laid by the model's own story; the marker appearing after the
+hour; a player arriving at the door (the far-side branch).
+
+### What a story leaves to the next (2026-11-22)
+
+`TaleEnd::after` (the writer's sentence on what an ending leaves unsettled), `Arc::sequelOf`, `Arc::followed`,
+record version 10. `RequestTale` hands the writer each earlier tale with "HOW IT ENDED" (the closing journal line of
+the ending reached) and "LEFT OPEN"; and looks for an open end that has come due: the newest tale of this town
+that ended two game days ago or more with something left open, not of the heart, not taken up yet, and not when
+the last tale told was itself a follow-up. Its people come first among those offered, the prompt gets a section of
+its own, and on acceptance the new tale carries `sequelOf` and the old one `followed`.
+
+Played with the model: the hunt above ended with Elrindir's part kept from Anoriath; a tale for Amren in between
+was written with an "after" on every ending and declined; three game days on: "an open end has come due: \"The
+Trail to Broken Fang\" (a few days ago) left open: Elrindir owes his silence to Prisoner, and Anoriath does not
+know yet that his own brother sent Torvald to that cave", and "\"The Hunter's Widow\" grows out of what \"The
+Trail to Broken Fang\" left open" (notes with a goat's head; Torvald's widow in Rorikstead; three endings, each
+leaving its own open end). Not played: the follow-up itself to its end; a chain of three.
+
+### Maintenance skipped on a load (2026-11-22)
+
+`Core.Maintenance` guarded against a second call by `Utility.GetCurrentRealTime()` against a time kept in the
+save; that clock restarts with the game. A kept time later than now was mended long ago; a kept time a few seconds
+earlier than now is the common case (start, load at once: the same second every session) and skipped the whole
+Maintenance: "IntelEngine Maintenance skipped (duplicate call within 5s)" as the first line after a load, and no
+story visitor's arrival was looked at again. `IntelEngine.LoadStamp()` (the second the session began and a count of
+its loads) says which load a kept time belongs to. Seen before and after in the test profile's log.
+
 ### MCM rows that fit their column (2026-11-22)
 
 Found while the new switch was looked at in the MCM itself (which had not been opened for the 4.0 settings before).

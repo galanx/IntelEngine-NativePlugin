@@ -19,6 +19,7 @@
 // "befriend pX pY", "estrange pX pY", "pay", "player pays pX N", "give iN" (the step's person hands the item over).
 
 #include "Arcs.h"
+#include "NameForms.h"
 
 #include <algorithm>
 #include <cctype>
@@ -179,30 +180,58 @@ namespace IntelEngine::Tales {
             for (const char* word : {"the player", "The player"}) {
                 for (auto at = s.find(word); at != std::string::npos; at = s.find(word, at + 8)) s.replace(at, std::strlen(word), "{player}");
             }
-            if (s.size() > limit) {
+            // The limit is in letters, as the writer was told it, not in bytes: a Cyrillic letter is two bytes and a
+            // Japanese one three, so a Russian text lost half of what it was allowed and a Japanese one two thirds.
+            std::vector<std::size_t> at;   // where each letter begins
+            std::vector<char32_t> letter;
+            at.reserve(s.size() + 1);
+            letter.reserve(s.size());
+            for (std::size_t i = 0; i < s.size();) {
+                char32_t c = 0;
+                at.push_back(i);
+                i += NameForms::Decode(s, i, c);
+                letter.push_back(c);
+            }
+            if (letter.size() > limit) {
+                at.push_back(s.size());
                 // Too long for where it is shown. Keep what reads whole: up to the last full sentence, or else up
                 // to the last clause (a plea in the offer box read "...because I cannot go near him... Reward: 155
-                // gold", 2026-11-19); by punctuation only, so it holds in any language.
-                const auto before = [&](std::size_t i) { return i + 1 < s.size() && s[i + 1] == ' '; };
-                for (std::size_t i = std::min(limit, s.size()); i-- > limit / 2;) {
-                    if ((s[i] == '.' || s[i] == '!' || s[i] == '?') && before(i)) {
-                        s.resize(i + 1);
+                // gold", 2026-11-19); by punctuation only, so it holds in any language: the stops of the scripts
+                // that write no space after them (the ideographic full stop and comma, the full-width marks) end a
+                // sentence or a clause as they stand.
+                const auto spaceAfter = [&](std::size_t i) { return i + 1 < letter.size() && letter[i + 1] == U' '; };
+                const auto sentenceEnd = [&](std::size_t i) {
+                    const char32_t c = letter[i];
+                    return ((c == U'.' || c == U'!' || c == U'?') && spaceAfter(i)) || c == 0x3002 || c == 0xFF01 || c == 0xFF1F;
+                };
+                const auto clauseEnd = [&](std::size_t i) {
+                    const char32_t c = letter[i];
+                    return ((c == U',' || c == U';' || c == U':') && spaceAfter(i)) || c == 0x3001 || c == 0xFF0C || c == 0xFF1B || c == 0xFF1A;
+                };
+                for (std::size_t i = limit; i-- > limit / 2;) {
+                    if (sentenceEnd(i)) {
+                        s.resize(at[i + 1]);
                         return s;
                     }
                 }
-                for (std::size_t i = std::min(limit, s.size()); i-- > limit * 3 / 5;) {
-                    if ((s[i] == ',' || s[i] == ';' || s[i] == ':') && before(i)) {
-                        s.resize(i);
-                        s += ".";
+                for (std::size_t i = limit; i-- > limit * 3 / 5;) {
+                    if (clauseEnd(i)) {
+                        const bool wide = letter[i] >= 0x3000;
+                        s.resize(at[i]);
+                        s += wide ? "\xE3\x80\x82" : ".";   // the ideographic full stop where the clause ended in one of its marks
                         return s;
                     }
                 }
                 // No such place: cut at the end of a word, and say that it was cut (an answer in a popup read
-                // "...swindled by Quickhand, and th", 2026-11-19).
+                // "...swindled by Quickhand, and th", 2026-11-19). A script without spaces is cut between letters.
                 std::size_t n = limit > 3 ? limit - 3 : limit;
-                while (n > 0 && (static_cast<unsigned char>(s[n]) & 0xC0) == 0x80) --n;
-                if (const auto space = s.rfind(' ', n); space != std::string::npos && space + 30 >= n && space > 0) n = space;
-                s.resize(n);
+                for (std::size_t back = 0; back <= 30 && back < n; ++back) {
+                    if (letter[n - back] == U' ') {
+                        n -= back;
+                        break;
+                    }
+                }
+                s.resize(at[n]);
                 while (!s.empty() && (s.back() == ',' || s.back() == ';' || s.back() == ':' || s.back() == ' ')) s.pop_back();
                 s += "...";
             }
@@ -243,7 +272,7 @@ namespace IntelEngine::Tales {
         a.genre = Lower(Words(Str(tale, "genre"), 60));
         // One word or two for the ledger ("mystery of the heart, with a family secret" -> "mystery of the heart").
         if (const auto cut = a.genre.find_first_of(",;(/"); cut != std::string::npos) a.genre = Trim(a.genre.substr(0, cut));
-        if (a.genre.size() > 32) a.genre.resize(32);
+        a.genre = Words(a.genre, 32);   // by letters, never through the middle of one
         a.premise = Words(Str(tale, "premise"), 600);
         if (a.title.size() < 3) fail("title: missing");
         if (a.premise.empty()) fail("premise: missing");
@@ -440,6 +469,7 @@ namespace IntelEngine::Tales {
             const auto& e = endings[kEndNames[k]];
             auto& end = a.ends[k];
             end.journal = Words(Str(e, "journal"), kMaxLine);
+            end.after = Words(Str(e, "after"), 240);   // what it leaves open; a later story may grow out of it
             end.rumor = Words(Str(e, "rumor"), kMaxLine);
             end.pay = !pool.heart && (k == 0 ? !e.contains("pay") || Bool(e, "pay") : Bool(e, "pay"));
             if (e.contains("memories") && e["memories"].is_object()) {
@@ -1066,6 +1096,20 @@ namespace IntelEngine::Tales {
         }
         if (pool.mustExamine && !examines) {
             fail("steps: this story is a hunt for what is killing people: a step \"examine\" (what was left of a victim, outside one of the places), then the \"slay\" there");
+        }
+        // A hunt has a trail (4.0; the user's bar is a contract with a scene, tracks and a lair): one body by the
+        // door was all there was to look at. Signs on the way first, the victim last.
+        if (pool.mustExamine && examines == 1) {
+            fail("steps: a hunt has a trail: two or three \"examine\" steps by the same place, each showing something more: the signs on the way first (\"what\": a beast, \"a cow\", \"a horse\", \"a goat\", \"a deer\"), the victim (\"a hunter\") last");
+        }
+        // How far out each lies: the last to be looked at by a place lies by the place itself, those before it
+        // farther out along the way there, in the order they are looked at.
+        for (std::uint8_t site = 1; site <= A::kSites; ++site) {
+            std::vector<std::size_t> here;
+            for (std::size_t k = 0; k < A::kClues; ++k) {
+                if (a.clueWhat[k] && a.clueSite[k] == site) here.push_back(k);
+            }
+            for (std::size_t j = 0; j < here.size(); ++j) a.clueFar[here[j]] = static_cast<std::uint8_t>(here.size() - 1 - j);
         }
         // ---- what walks by night: only if the story comes to it, and what lets it rest can be had before
         bool haunted = false;

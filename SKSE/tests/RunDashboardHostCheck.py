@@ -670,6 +670,7 @@ class DashboardConfig { public: static ConfigStub* GetSingleton(){static ConfigS
 class FactionPolitics { public: static PoliticsStub* GetSingleton(){static PoliticsStub p;return &p;} };
 class PoliticalEngineBridge { public: static PoliticalEngineBridge* GetSingleton(){static PoliticalEngineBridge b;return &b;} bool IsDetected()const{return false;} };
 class SlotTracker { public: static SlotStub* GetSingleton(){static SlotStub s;return &s;} };
+class LanguageBridge { public: static LanguageBridge* GetSingleton(){static LanguageBridge b;return &b;} std::string Describe()const{return "English";} };
 
 class NPCIndex { public:
     static NPCIndex* GetSingleton(){static NPCIndex index;return &index;}

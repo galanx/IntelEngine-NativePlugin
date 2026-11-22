@@ -11,6 +11,8 @@
 
 #include <string>
 #include <vector>
+#include "NameForms.h"
+
 #include <algorithm>
 
 namespace IntelEngine::StringUtils {
@@ -196,7 +198,7 @@ namespace IntelEngine::StringUtils {
                                   const std::vector<std::string>& candidates,
                                   int maxDistance) {
         FuzzyResult result;
-        auto searchLen = searchTerm.length();
+        const auto searchLen = NameForms::Letters(searchTerm);   // letters, as the distance below counts them
         for (const auto& name : candidates) {
             int dist = LevenshteinDistance(searchTerm, name);
             if (dist == 0) {
@@ -207,7 +209,7 @@ namespace IntelEngine::StringUtils {
             }
             // Reject matches where every character is effectively wrong —
             // prevents "inn" -> "aho" (distance 3, both length 3)
-            auto minLen = (std::min)(searchLen, name.length());
+            auto minLen = (std::min)(searchLen, NameForms::Letters(name));
             if (dist >= static_cast<int>(minLen)) continue;
 
             if (dist < result.distance) {

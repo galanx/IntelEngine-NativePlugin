@@ -376,7 +376,7 @@ static void Adventure() {
     Require(back.Find(id)->bossName[0] == "Grelka the Silent" && back.Find(id)->graph[1].site == 1 && back.Find(id)->propSite[0] == 1, "whole");
     // A save made before ambushes (record version 4: no ambush block) still loads.
     auto v4 = bytes;
-    v4.resize(v4.size() - (3 * 4 + 2 + 1) - 3 - 14 - 12);   // the ambush block, the three bytes of someone held (version 7), the fourteen of remains (8), the twelve of what walks by night (9)
+    v4.resize(v4.size() - (3 * 4 + 2 + 1) - 3 - 14 - 12 - 21);   // (and the 21 of version 10: a trail, what an ending leaves open, sequels) the ambush block, the three bytes of someone held (version 7), the fourteen of remains (8), the twelve of what walks by night (9)
     Book older;
     Require(Deserialize(v4, older, 4) && older.Find(id)->bossName[0] == "Grelka the Silent", "a record of version 4 loads");
 
@@ -451,7 +451,7 @@ static void Ambush() {
     // A save of record version 5 (ambushes, before stalkers) loads as it was.
     Book five;
     auto v5 = bytes;
-    v5.resize(v5.size() - 3 - 14 - 12);   // before someone could be held (version 7), remains examined (8) or anything walked by night (9)
+    v5.resize(v5.size() - 3 - 14 - 12 - 21);   // before someone could be held (version 7), remains examined (8) or anything walked by night (9)
     Require(Deserialize(v5, five, 5) && five.Find(id)->graph[0].kind == Kind::Ambush, "a record of version 5 loads");
 
     const auto errorsOf = [](json x) { return Tales::Compile(x, Town()).errors; };
@@ -629,10 +629,10 @@ static void Mystery() {
     Require(b.clueWhat[0] == RemainsHunter && b.clueSite[0] == 1 && b.clueRef[0] == 0xFF001234 && b.clueState[0] == CluePlaced && b.graph[1].kind == Kind::Examine, "whole");
     Book seven;
     auto v7 = bytes;
-    v7.resize(v7.size() - 14 - 12);
+    v7.resize(v7.size() - 14 - 12 - 21);
     Require(!Deserialize(v7, seven, 7), "a step that examines read as version 7 is refused, not misread");
     auto wrong = bytes;
-    wrong[wrong.size() - 1 - 12] = 7;   // no such state
+    wrong[wrong.size() - 1 - 12 - 21] = 7;   // no such state
     Require(!Deserialize(wrong, seven), "a state that does not exist is refused");
 
     const auto errorsOf = [](json x, Tales::Pool pool) { return Tales::Compile(x, pool).errors; };
@@ -658,7 +658,81 @@ static void Mystery() {
     Require(errorsOf(Hunted(), barred).find("no \"examine\" in this story") != std::string::npos, "not in every story");
     auto hunt = TownThatHolds();
     hunt.mustExamine = true;
-    Require(Tales::Compile(Hunted(), hunt).ok, "a hunt asked for, and it is one");
+    // A hunt has a trail (4.0): signs on the way, then the victim. One body by the door is not a hunt any more.
+    Require(errorsOf(Hunted(), hunt).find("a hunt has a trail") != std::string::npos, "one thing to look at is no trail");
+    const auto trailed = [](int signs) {
+        json x = Hunted();
+        static const char* kBeasts[] = {"a goat", "a horse", "a cow"};
+        std::string next = "s2";
+        for (int k = signs - 1; k >= 0; --k) {
+            const std::string id = "t" + std::to_string(k);
+            json sign = {{"id", id}, {"do", "examine"}, {"place", "d2"}, {"what", kBeasts[k % 3]}, {"goal", "Look at what was left of the beast"},
+                         {"clue", "Its throat is cut clean, and nothing has fed on it."}, {"then", next}, {"journal", "A beast, killed and left."}};
+            x["steps"].insert(x["steps"].begin() + 1, sign);
+            next = id;
+        }
+        for (auto& o : x["steps"][0]["outcomes"]) o["then"] = next;
+        return x;
+    };
+    {
+        const auto two = Tales::Compile(trailed(1), hunt);
+        Require(two.ok, "a hunt asked for, and it is one: a sign on the way, then the victim");
+        Require(two.arc.clueWhat[0] == RemainsGoat && two.arc.clueWhat[1] == RemainsHunter && two.arc.clueFar[0] == 1 && two.arc.clueFar[1] == 0,
+                "the first to be looked at lies farther out, the last by the place itself");
+        const auto three = Tales::Compile(trailed(2), hunt);
+        Require(three.ok && three.arc.clueFar[0] == 2 && three.arc.clueFar[1] == 1 && three.arc.clueFar[2] == 0 && three.arc.clueWhat[2] == RemainsHunter,
+                "three along the way: farthest, nearer, by the place");
+        Require(errorsOf(trailed(3), hunt).find("at most 3 things to examine") != std::string::npos, "three is the most");
+        // The journal shows the way to the first sign only; the next is found by walking the trail.
+        Book trail;
+        const auto tid = trail.Plan(three.arc, 1.0f);
+        Arc& w = *trail.Find(tid);
+        w.clueState[1] = CluePlaced;
+        w.clueRef[1] = 0xFF001235;
+        w.sequelOf = 7;
+        w.followed = 1;
+        w.ends[0].after = "Grelka's brother is still up at the mine.";
+        Book again;
+        Require(Deserialize(Serialize(trail), again), "a trail survives the co-save");
+        const Arc& kept = *again.Find(tid);
+        Require(kept.clueFar[0] == 2 && kept.clueFar[1] == 1 && kept.clueFar[2] == 0 && kept.clueWhat[2] == RemainsHunter && kept.clueSite[2] == kept.clueSite[0] &&
+                    kept.clueState[1] == CluePlaced && kept.clueRef[1] == 0xFF001235,
+                "every sign with how far out it lies");
+        Require(kept.sequelOf == 7 && kept.followed == 1 && kept.ends[0].after == "Grelka's brother is still up at the mine." && kept.ends[1].after.empty(),
+                "and what an ending leaves open, and which tale took it up");
+        auto broken = Serialize(trail);
+        broken[broken.size() - 1] = 2;   // "followed" is yes or no
+        Require(!Deserialize(broken, again), "a record that says neither is refused");
+    }
+    // What an ending leaves open, in the writer's words; nothing when it says nothing.
+    {
+        json x = Hunted();
+        x["endings"]["other"]["after"] = "Hulda's part in it is known to {player} alone.";
+        const auto res = Tales::Compile(x, TownThatHolds());
+        Require(res.ok && res.arc.ends[2].after == "Hulda's part in it is known to {player} alone." && res.arc.ends[0].after.empty(), "what an ending leaves open");
+    }
+    // Lengths are counted in letters, and a text is cut at a sentence end of its own script.
+    {
+        json x = Hunted();
+        std::string goal;
+        for (int i = 0; i < 20; ++i) goal += "\xD0\x9F\xD0\xBE\xD0\xB3\xD0\xBE\xD0\xB2\xD0\xBE\xD1\x80\xD0\xB8 ";   // "Pogovori " in Cyrillic: 9 letters, 17 bytes, 20 times
+        x["steps"][0]["goal"] = goal;
+        auto res = Tales::Compile(x, TownThatHolds());
+        Require(res.ok, "a long Cyrillic goal");
+        std::size_t letters = 0;
+        for (const unsigned char c : res.arc.graph[0].goal) letters += (c & 0xC0) != 0x80;
+        Require(letters > 100 && letters <= 140, "140 letters are kept, not 140 bytes (which would be 74 letters)");
+        std::string ja;
+        for (int i = 0; i < 30; ++i) ja += "\xE7\x8B\xA9\xE4\xBA\xBA\xE3\x81\xAF\xE6\xAD\xBB\xE3\x82\x93\xE3\x81\xA0\xE3\x80\x82";   // six letters and the ideographic full stop
+        x["steps"][0]["goal"] = ja;
+        res = Tales::Compile(x, TownThatHolds());
+        Require(res.ok, "a long Japanese goal");
+        const std::string& cut = res.arc.graph[0].goal;
+        Require(cut.size() >= 3 && cut.compare(cut.size() - 3, 3, "\xE3\x80\x82") == 0, "cut after an ideographic full stop, with nothing added");
+        std::size_t jaLetters = 0;
+        for (const unsigned char c : cut) jaLetters += (c & 0xC0) != 0x80;
+        Require(jaLetters == 140, "at a sentence end within the limit: 20 sentences of seven letters");
+    }
     Require(errorsOf(Taken(), hunt).find("a hunt for what is killing people") != std::string::npos, "and nothing else");
     // Naming what did it: a choice whose true answer the engine knows, worth a remedy from the one who hears it.
     {
@@ -954,10 +1028,10 @@ static void Captive() {
             back.Find(id)->graph[2].kind == Kind::Free, "whole");
     Book six;
     auto v6 = bytes;
-    v6.resize(v6.size() - 3 - 14 - 12);   // without the three bytes of someone held, the fourteen of the remains and the twelve of what walks by night after them
+    v6.resize(v6.size() - 3 - 14 - 12 - 21);   // without the three bytes of someone held, the fourteen of the remains and the twelve of what walks by night after them
     Require(!Deserialize(v6, six, 6), "a step that frees someone read as version 6 is refused, not misread");
     auto wrong = bytes;
-    wrong[wrong.size() - 1 - 14 - 12] = 9;   // no such state
+    wrong[wrong.size() - 1 - 14 - 12 - 21] = 9;   // no such state
     Require(!Deserialize(wrong, six), "a state that does not exist is refused");
 
     const auto errorsOf = [](json x, Tales::Pool pool) { return Tales::Compile(x, pool).errors; };

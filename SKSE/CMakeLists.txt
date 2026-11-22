@@ -157,6 +157,7 @@ set(SOURCES
     src/BattleManager.cpp
     src/DialogueTracker.cpp
     src/SpeechTracker.cpp
+    src/LanguageBridge.cpp
     src/LivingWorldBridge.cpp
     src/LivingWorldLives.cpp
     src/PlaceTargets.cpp

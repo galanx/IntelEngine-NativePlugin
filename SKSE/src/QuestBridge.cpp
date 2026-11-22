@@ -1,4 +1,5 @@
 #include "QuestBridge.h"
+#include "LanguageBridge.h"
 #include "FrameCost.h"
 #include "RumorBridge.h"
 #include "Safe.h"
@@ -1116,7 +1117,7 @@ namespace IntelEngine {
         std::scoped_lock lock(m_mutex);
         for (const auto& q : m_book.all) {
             if (q.slot == 0xFF || q.title.empty()) continue;
-            if (auto* quest = JournalQuest(q.slot)) quest->fullName = q.title.c_str();
+            if (auto* quest = JournalQuest(q.slot)) quest->fullName = LanguageBridge::GetSingleton()->Label(q.title).c_str();
         }
     }
 
