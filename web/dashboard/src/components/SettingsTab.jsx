@@ -532,6 +532,22 @@ function SettingsTab({ config, storyTypes, onSettingChange, pluginConfig, onPlug
             />
           </Accordion>
 
+          <Accordion title="Language" isOpen={openSections.language} onToggle={() => toggle('language')}>
+            <p className="text-[10px] text-gray-600 mb-2">Now: {pluginConfig['language.now'] || 'not known yet'}</p>
+            <TextInputRow
+              label="Language of journal and messages"
+              hint="auto, or a language pack by name (russian, german, japanese, korean, chinese, french, spanish, italian, polish), or english"
+              value={pluginConfig['language.text'] || 'auto'}
+              onCommit={v => onPluginConfigChange('language.text', v)}
+            />
+            <TextInputRow
+              label="Languages people speak"
+              hint="auto (from SkyrimNet's translator settings), or names with commas between them (albanian, russian)"
+              value={pluginConfig['language.spoken'] || 'auto'}
+              onCommit={v => onPluginConfigChange('language.spoken', v)}
+            />
+          </Accordion>
+
           <Accordion title="LLM Overrides" isOpen={openSections.llm} onToggle={() => toggle('llm')}>
             <p className="text-[10px] text-gray-600 mb-2">Leave empty to use base SkyrimNet config</p>
             <TextInputRow

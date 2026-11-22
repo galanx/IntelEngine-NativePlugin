@@ -6,6 +6,8 @@
 // stands for another as whole words only, and a slip of the pen is measured by how long the name is. By structure
 // alone (letters, word boundaries, lengths), so it holds in every language. Pure logic, checked by NameMatchCheck.
 
+#include "NameForms.h"
+
 #include <algorithm>
 #include <cctype>
 #include <string>
@@ -37,5 +39,7 @@ namespace IntelEngine::NameMatch {
         const int byLength = length <= 4 ? 0 : length <= 7 ? 1 : length <= 11 ? 2 : 3;
         return std::min(most, byLength);
     }
-    inline int Slips(const std::string& a, const std::string& b, int most) { return Slips(std::min(a.size(), b.size()), most); }
+    // By letters, not bytes (NameForms.h): a Cyrillic name of four letters is eight bytes and got the allowance of
+    // eight, a Korean one of three the allowance of nine.
+    inline int Slips(const std::string& a, const std::string& b, int most) { return NameForms::Slips(a, b, most); }
 }

@@ -1,4 +1,5 @@
 #include <chrono>
+#include "LanguageBridge.h"
 /**
  * Dashboard UI Manager Implementation
  *
@@ -469,6 +470,9 @@ namespace IntelEngine {
                     pc["story.faction_whitelist"] = rv("story.faction_whitelist", "");
                     pc["story.location_whitelist"] = rv("story.location_whitelist", "");
                     pc["story.npc_whitelist"] = rv("story.npc_whitelist", "");
+                    pc["language.text"] = rv("language.text", "auto");
+                    pc["language.spoken"] = rv("language.spoken", "auto");
+                    pc["language.now"] = LanguageBridge::GetSingleton()->Describe();   // what is in force, for the page
                     pc["llm.endpoint"] = rv("llm.endpoint", "");
                     pc["llm.api_key"] = rv("llm.api_key", "");
                     pc["llm.model_name"] = rv("llm.model_name", "");

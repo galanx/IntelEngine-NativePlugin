@@ -126,6 +126,8 @@ template<class... T> void error(T&&...) {}
         "#include \"VanillaWar.h\"\n"   # WarPossible asks the game's own civil war
         "namespace IntelEngine {\n" + "\n".join(method(source, s) for s in signatures) +
         "\nvoid FactionPolitics::WritePoliticalStateFile() {}\n"
+        # Nothing is shown "as in the game" here: there is no game, and the fixture's names are the data file's.
+        "void FactionPolitics::ShownAsInGame(nlohmann::json&, const FactionConfig&) {}\n"
         # No quests of the game in this fixture: nobody is bound by a story of their own; and no talk of the day.
         "std::string FactionPolitics::BoundBy(const std::string&) const { return {}; }\n"
         "void FactionPolitics::News(const std::string&, const std::string&, const std::string&, int, const std::string&) {}\n"

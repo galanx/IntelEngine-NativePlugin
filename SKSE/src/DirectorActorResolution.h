@@ -1,8 +1,11 @@
 #pragma once
 
+#include "Utf8Fold.h"
+
 #include <algorithm>
 #include <cctype>
 #include <cstdint>
+#include <string>
 #include <string_view>
 
 namespace IntelEngine {
@@ -35,9 +38,9 @@ template <typename Entries, typename Eligibility>
 DirectorActorMatch ResolveDirectorActorFormID(std::string_view name, const Entries& entries, Eligibility eligibility) {
     DirectorActorMatch result;
     if (name.empty()) return result;
+    const std::string wanted = FoldUtf8(std::string(name));   // lower case in every script, not byte by byte
     for (const auto& [id, candidate] : entries) {
-        if (!id || !std::equal(name.begin(), name.end(), candidate.begin(), candidate.end(),
-            [](unsigned char a, unsigned char b) { return std::tolower(a) == std::tolower(b); })) continue;
+        if (!id || FoldUtf8(std::string(candidate)) != wanted) continue;
         const auto reason = eligibility(id);
         if (reason != DirectorActorRejection::None) {
             if (!result.formId && (reason > result.rejection ||

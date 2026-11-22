@@ -1,4 +1,5 @@
 #include "RumorBridge.h"
+#include "NameMatch.h"
 #include "FrameCost.h"
 #include "LivingWorldBridge.h"
 #include "Safe.h"
@@ -137,10 +138,23 @@ namespace IntelEngine {
             {"eastmarch", R::Eastmarch}, {"riften", R::Rift},           {"rift", R::Rift}};
         std::string lower = where;
         for (auto& c : lower) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        // As whole words: "reach" was found inside "Dragonsreach", and the jarl's hall counted as the Reach.
         for (const auto& [name, index] : kNames) {
-            if (lower.find(name) != std::string::npos) return index;
+            if (NameMatch::WholeWords(lower, name)) return index;
         }
         return R::NoHold;
+    }
+
+    std::uint8_t RumorBridge::HoldOfPlayer() {
+        auto* player = RE::PlayerCharacter::GetSingleton();
+        auto* cell = player ? player->GetParentCell() : nullptr;
+        auto* location = cell && cell->GetLocation() ? cell->GetLocation() : (player ? player->GetCurrentLocation() : nullptr);
+        return HoldOf(location);
+    }
+
+    std::string RumorBridge::HoldShown(const std::string& where) {
+        const auto hold = HoldByName(where);
+        return hold == R::NoHold ? std::string() : HoldName(hold);
     }
 
     std::uint32_t RumorBridge::NoteNews(const std::string& text, const std::string& where, float weight, std::uint32_t ownerId) {

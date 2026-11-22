@@ -3,6 +3,7 @@
 // request and its answer, and the judge who reads a talk and names which prepared outcome it turned into.
 
 #include "ArcBridge.h"
+#include "LanguageBridge.h"
 #include "FactionPolitics.h"
 #include "RumorBridge.h"
 #include "Safe.h"
@@ -364,6 +365,7 @@ namespace IntelEngine {
             bool afar = false;             // the director's: the asker comes to the player wherever the player is
             bool otherHold = false;        // ... from another hold
             bool heart = false;            // a story of the heart between the asker and the player (Hearts.h)
+            std::uint32_t sequelOf = 0;    // the earlier tale whose open end this one takes up, 0 = none
             std::vector<RE::FormID> bios;  // whose bio summaries the worker adds (file reads stay off the game thread)
         };
         std::shared_ptr<Request> g_request;   // the tale being written (one at a time)
@@ -457,6 +459,10 @@ namespace IntelEngine {
         std::string admirerKey, admirerName;      // somebody close to the asker who is drawn to the player and has not said so
         std::vector<RE::FormID> restedPlaces;     // where the last stories led: those places rest a while
         int heartLooked = 0;
+        // An open end that has come due (4.0): the earlier tale, how it ended, what that left open, who it was about.
+        std::uint32_t dueId = 0;
+        std::string dueTitle, dueEnded, dueOpen, dueWhen, duePeople;
+        std::vector<RE::FormID> dueCast;
         {
             std::scoped_lock lock(m_mutex);
             if (m_book.Count(A::Phase::Planned) > 0 || m_book.Count(A::Phase::Open) >= A::kMaxOpen) {
@@ -499,7 +505,25 @@ namespace IntelEngine {
                     recentBeats.push_back(beats);
                 }
                 if (it->pattern == A::Pattern::Tale) {
-                    told.push_back(it->genre + ": " + it->title + " - " + it->premise);
+                    // With how it ended and what that left open (4.0). The writer used to see the title and the
+                    // premise only: whether the thief was handed over or let go, whether the innocent was named,
+                    // was nowhere, so a later story could not build on it and now and then contradicted it.
+                    std::string line = it->genre + ": " + it->title + " - " + it->premise;
+                    if (it->phase == A::Phase::Ended) {
+                        const int k = A::TaleEndIndex(it->ending);
+                        if (k >= 0) {
+                            const auto& end = it->ends[static_cast<std::size_t>(k)];
+                            if (!end.journal.empty()) line += " HOW IT ENDED (" + PlayerName() + "'s journal): " + Fill(end.journal, *it);
+                            if (!end.after.empty()) line += " LEFT OPEN: " + Fill(end.after, *it);
+                        } else if (it->ending == A::Ending::Declined) {
+                            line += " HOW IT ENDED: " + PlayerName() + " would not take it on.";
+                        } else if (it->ending == A::Ending::Ignored) {
+                            line += " HOW IT ENDED: " + PlayerName() + " took it on and never saw it through.";
+                        }
+                    } else if (A::IsOpen(*it)) {
+                        line += " (still going on)";
+                    }
+                    told.push_back(std::move(line));
                     recentGenres.push_back(it->genre);
                 } else {
                     told.push_back(A::DefaultTitle(it->pattern) + " (" + (it->pattern == A::Pattern::Thief ? "a theft in town" : it->pattern == A::Pattern::Feud ? "a quarrel settled" : "a murder solved") + ")");
@@ -508,9 +532,44 @@ namespace IntelEngine {
             }
         }
 
+        // ---- an open end that has come due (4.0). The newest tale of this town that ended, two game days ago or
+        // more, in a way its writer said leaves something open, and that no later tale has taken up. Not when the
+        // newest tale that was told at all was itself such a follow-up: never two running, so a town's stories do
+        // not become one endless thread. A story asked for by kind (a hunt, a haunting, a rescue, one of the heart,
+        // one whose asker comes from afar with a reason of their own) is that kind and nothing else.
+        if (!afar && written.empty() && !(taleSeed && !taleSeed->kind.empty())) {
+            std::scoped_lock lock(m_mutex);
+            const float now = NowDays();
+            bool lastWasSequel = false;
+            for (auto it = m_book.all.rbegin(); it != m_book.all.rend(); ++it) {
+                if (it->ending == A::Ending::Lapsed || it->pattern != A::Pattern::Tale) continue;
+                lastWasSequel = it->sequelOf != 0;
+                break;
+            }
+            for (auto it = m_book.all.rbegin(); it != m_book.all.rend() && !dueId && !lastWasSequel; ++it) {
+                if (it->pattern != A::Pattern::Tale || it->phase != A::Phase::Ended || it->followed || it->place != me->town) continue;
+                if (it->flags & A::Flag::Heart) continue;   // what stands between two people is theirs, and the heart has its own stories
+                const int k = A::TaleEndIndex(it->ending);
+                if (k < 0) continue;
+                const auto& end = it->ends[static_cast<std::size_t>(k)];
+                if (end.after.empty() || now - it->since < 2.0f) continue;
+                dueId = it->id;
+                dueTitle = it->title;
+                dueEnded = Fill(end.journal, *it);
+                dueOpen = Fill(end.after, *it);
+                dueWhen = now - it->since < 4.0f ? "a few days ago" : now - it->since < 10.0f ? "about a week ago" : "some time ago";
+                for (std::size_t r = 1; r < A::kRoles; ++r) {
+                    if (!it->cast[r]) continue;
+                    dueCast.push_back(it->cast[r]);
+                    duePeople += (duePeople.empty() ? "" : ", ") + NameOf(it->cast[r]);
+                }
+            }
+        }
+
         auto request = std::make_shared<Request>();
         request->asker = asker->GetFormID();
         request->town = me->town;
+        request->sequelOf = dueId;
         request->seed = A::detail::Mix(request->asker, static_cast<std::uint32_t>(NowDays() * 1440.0f));
         request->rumored = taleSeed && taleSeed->rumored && !afar;
         request->pool.rumored = request->rumored && written.empty();
@@ -541,6 +600,8 @@ namespace IntelEngine {
             if (npc->relationships && !npc->relationships->empty()) score += 4;
             if (askerBase && RE::BGSRelationship::GetRelationship(askerBase, npc)) score += 6;
             if (f.home) score += 2;
+            // Those an open end is about come first among the people offered, so the writer can use them.
+            if (std::find(dueCast.begin(), dueCast.end(), f.ref) != dueCast.end()) score += 50;
             others.push_back({&f, score});
         }
         std::sort(others.begin(), others.end(), [](const Candidate& x, const Candidate& y) { return x.score > y.score; });
@@ -999,7 +1060,21 @@ namespace IntelEngine {
         ctx["places"] = places;
         ctx["quests"] = PlayerQuests();
         ctx["told"] = told;
+        // The language the player reads in ("Russian"), empty for English: the writer is told to write in it what
+        // the player reads (LanguageBridge.h). In an English game whose people speak another language it stays
+        // English: the journal is the game's, the speech is SkyrimNet's.
+        ctx["text_language"] = LanguageBridge::GetSingleton()->TextLanguage();
         ctx["lean"] = lean;
+        // The open end that has come due, for the writer (an empty object when there is none; a story of the heart
+        // is its own kind).
+        nlohmann::json sequel = nlohmann::json::object();
+        if (dueId && heartLean.empty()) {
+            sequel = {{"title", dueTitle}, {"when", dueWhen}, {"ended", dueEnded}, {"open", dueOpen}, {"people", duePeople}};
+            logger::info("Tales: an open end has come due: \"{}\" ({}) left open: {}", dueTitle, dueWhen, dueOpen);
+        } else {
+            request->sequelOf = 0;
+        }
+        ctx["sequel"] = sequel;
         ctx["thread"] = heartLean.empty() ? thread : std::string();
         ctx["rumored"] = request->pool.rumored;
         if (!heartLean.empty()) ctx["heart_lean"] = heartLean;
@@ -1187,6 +1262,15 @@ namespace IntelEngine {
         else if (request->afar) a.flags |= A::Flag::Sent;   // the director's rule let them come from elsewhere in the hold
         if (request->heart) a.flags |= A::Flag::Heart;
         a.seed = request->seed;
+        a.sequelOf = request->sequelOf;
+        if (request->sequelOf) {
+            // What the earlier tale left open is taken up now: once.
+            std::scoped_lock lock(m_mutex);
+            if (auto* earlier = m_book.Find(request->sequelOf)) {
+                earlier->followed = 1;
+                logger::info("Tales: \"{}\" grows out of what \"{}\" left open", a.title, earlier->title);
+            }
+        }
         g_request.reset();
         m_taleBusy.store(false);
         const bool onTheRoad = (a.flags & A::Flag::CameFar) != 0;

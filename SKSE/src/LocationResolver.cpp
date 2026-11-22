@@ -6,6 +6,8 @@
  */
 
 #include "LocationResolver.h"
+#include "LanguageBridge.h"
+#include "NameForms.h"
 #include "PlaceNameFile.h"
 #include "CellAnalyzer.h"
 #include "NPCIndex.h"
@@ -106,6 +108,10 @@ namespace IntelEngine {
             }
         }
 
+        // What script are the game's own place names written in? Asked before any names from files are added:
+        // it tells a translation the game's language setting does not know of (LanguageBridge.h).
+        LanguageBridge::GetSingleton()->NoteNames(m_allLocationNames);
+
         // Add place names from Data/SKSE/Plugins/IntelEngine/placenames/*.tsv (english.tsv ships), so names
         // in another language resolve: English input on a German install, for one. The game's own names were
         // indexed above and stay first-wins.
@@ -195,6 +201,15 @@ namespace IntelEngine {
             }
         }
 
+        // 1b. The name as people say it in their language (NameForms.h): an ending, an article, a particle.
+        if (const auto forms = NameForms::Find(lowerName, m_allCellNames, NameForms::Forms, LanguageBridge::GetSingleton()->Free())) {
+            auto cellIt = m_cellIndex.find(m_allCellNames[static_cast<std::size_t>(forms.index)]);
+            if (auto* form = cellIt != m_cellIndex.end() ? RE::TESForm::LookupByID(cellIt->second) : nullptr) {
+                logger::info("ResolveCell('{}') -> '{}' (the name in another form)", locationName, m_allCellNames[static_cast<std::size_t>(forms.index)]);
+                return form->As<RE::TESObjectCELL>();
+            }
+        }
+
         // 2. Token + fuzzy match (article-stripped exact → word overlap → Levenshtein)
         auto fuzzy = StringUtils::TokenFuzzyFind(lowerName, m_allCellNames,
                                                   Settings::GetSingleton()->fuzzyMatchThreshold);
@@ -228,6 +243,15 @@ namespace IntelEngine {
             if (form) {
                 logger::info("ResolveLocation('{}') -> Exact match (FormID {:08X})",
                             locationName, it->second);
+                return form->As<RE::BGSLocation>();
+            }
+        }
+
+        // 1b. The name as people say it in their language (NameForms.h): an ending, an article, a particle.
+        if (const auto forms = NameForms::Find(lowerName, m_allLocationNames, NameForms::Forms, LanguageBridge::GetSingleton()->Free())) {
+            auto locIt = m_locationIndex.find(m_allLocationNames[static_cast<std::size_t>(forms.index)]);
+            if (auto* form = locIt != m_locationIndex.end() ? RE::TESForm::LookupByID(locIt->second) : nullptr) {
+                logger::info("ResolveLocation('{}') -> '{}' (the name in another form)", locationName, m_allLocationNames[static_cast<std::size_t>(forms.index)]);
                 return form->As<RE::BGSLocation>();
             }
         }
@@ -1798,7 +1822,11 @@ namespace IntelEngine {
         return false;
     }
 
-    SemanticIntent LocationResolver::DetectSemanticIntent(const std::string& destination) {
+    SemanticIntent LocationResolver::DetectSemanticIntent(const std::string& said) {
+        // A word of place said in another language ("domoi", "nach Hause", "n'shpi": home) is read as its English,
+        // when it is the whole of what was said (LanguagePack.h); a name stays a name.
+        const std::string english = LanguageBridge::GetSingleton()->PlaceToEnglish(said);
+        const std::string& destination = english.empty() ? said : english;
         std::string lower = StringUtils::ToLowerStd(destination);
 
         // Helper: check if string mentions bed/bedroom
@@ -2233,7 +2261,9 @@ namespace IntelEngine {
     // Legacy Functions
     // =========================================================================
 
-    bool LocationResolver::IsSemanticTerm(const std::string& term) {
+    bool LocationResolver::IsSemanticTerm(const std::string& said) {
+        const std::string english = LanguageBridge::GetSingleton()->PlaceToEnglish(said);   // "naverkh" is "upstairs"
+        const std::string& term = english.empty() ? said : english;
         std::string lowerTerm = StringUtils::ToLowerStd(term);
         return m_semanticTerms.find(lowerTerm) != m_semanticTerms.end();
     }

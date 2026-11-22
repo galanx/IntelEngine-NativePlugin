@@ -47,7 +47,7 @@ namespace IntelEngine::Arcs {
     constexpr std::size_t kRoles = 8;
     constexpr std::size_t kProps = 3;
     constexpr std::size_t kSites = 2;   // a tale's places out in the world (dungeons, ruins, camps)
-    constexpr std::size_t kClues = 2;   // what a tale leaves out there to be looked at closely (a victim's remains)
+    constexpr std::size_t kClues = 3;   // what a tale leaves out there to be looked at closely (a victim's remains, and the signs on the way: a trail)
     constexpr std::size_t kThugs = 3;   // the men of a tale's ambush
 
     enum class Kind : std::uint8_t {
@@ -326,6 +326,11 @@ namespace IntelEngine::Arcs {
     };
 
     constexpr std::size_t kMaxText = 200;
+    // The same in the save record, in bytes. What the writer is allowed is counted in letters (Tales.h), and a letter
+    // is up to four bytes: at 200 bytes a Russian goal of 140 letters lost its end at the first save, a Japanese one
+    // two thirds of itself. Records written before hold shorter texts and load as they did.
+    constexpr std::size_t kMaxTextBytes = 800;
+    constexpr std::size_t kMaxLongBytes = 6000;
     constexpr std::size_t kMaxLong = 2400;   // a tale's longer texts: a person's truth, the story so far
 
     // How a tale ends, in its author's words: the journal's closing line, what the town hears (may be empty: a private
@@ -335,6 +340,10 @@ namespace IntelEngine::Arcs {
         std::string rumor;
         std::array<std::string, kRoles> memory{};
         bool pay = false;
+        // What this ending leaves unsettled among these people, in a sentence (someone let go who may come back, a
+        // debt still owed, a truth one of them does not know yet); empty when it settles everything. A later story
+        // of the town grows out of it (TaleAuthor: an open end that has come due).
+        std::string after;
     };
 
     // Where someone held at a place stands: to be taken (out of anyone's sight, before the asker has come), away
@@ -421,6 +430,10 @@ namespace IntelEngine::Arcs {
         std::array<std::uint8_t, kClues> clueSite{};    // the place (index + 1) it lies outside of
         std::array<std::uint32_t, kClues> clueRef{};    // what the script put there, 0 = nothing yet
         std::array<std::uint8_t, kClues> clueState{};   // ClueState
+        // ---- a trail, and what a story leaves to the next (record version 10)
+        std::array<std::uint8_t, kClues> clueFar{};     // how far out along the way to the place it lies: 0 by the place itself, 1, 2 farther
+        std::uint32_t sequelOf = 0;                     // the earlier tale this one grows out of, 0 = none
+        std::uint8_t followed = 0;                      // a later tale has taken up what this one left open
         // ---- something that walks by night outside a place (record version 9)
         std::uint8_t spiritSite = 0;                    // the place (index + 1) it walks outside of, 0 = nothing walks
         std::uint8_t spiritWoman = 0;                   // 1 a woman's shade, 0 a man's
@@ -1178,7 +1191,7 @@ namespace IntelEngine::Arcs {
     // ------------------------------------------------------------------ save data (co-save record 'IEAR')
 
     constexpr std::uint32_t kRecordType = 'IEAR';
-    constexpr std::uint32_t kRecordVersion = 9;   // 2: tales; 3: a visit's why; 4: places out in the world; 5: ambushes; 6: stalkers; 7: someone held at a place; 8: remains to examine; 9: what walks by night. Older ones load
+    constexpr std::uint32_t kRecordVersion = 10;   // 10: a trail of three things to examine, what an ending leaves open, sequels; 2: tales; 3: a visit's why; 4: places out in the world; 5: ambushes; 6: stalkers; 7: someone held at a place; 8: remains to examine; 9: what walks by night. Older ones load
 
     namespace detail {
         template <class T>
@@ -1200,20 +1213,20 @@ namespace IntelEngine::Arcs {
             while (n > 0 && (static_cast<unsigned char>(text[n]) & 0xC0) == 0x80) --n;
             return n;
         }
-        inline void PutText(std::vector<std::uint8_t>& out, const std::string& text, std::size_t limit = kMaxText) {
+        inline void PutText(std::vector<std::uint8_t>& out, const std::string& text, std::size_t limit = kMaxTextBytes) {
             const auto size = static_cast<std::uint16_t>(Fit(text, limit));
             Put(out, size);
             out.insert(out.end(), text.begin(), text.begin() + size);
         }
-        inline bool GetText(std::span<const std::uint8_t> in, std::size_t& at, std::string& text, std::size_t limit = kMaxText) {
+        inline bool GetText(std::span<const std::uint8_t> in, std::size_t& at, std::string& text, std::size_t limit = kMaxTextBytes) {
             std::uint16_t size = 0;
             if (!Get(in, at, size) || size > limit || in.size() - at < size) return false;
             text.assign(reinterpret_cast<const char*>(in.data() + at), size);
             at += size;
             return true;
         }
-        inline void PutLong(std::vector<std::uint8_t>& out, const std::string& text) { PutText(out, text, kMaxLong); }
-        inline bool GetLong(std::span<const std::uint8_t> in, std::size_t& at, std::string& text) { return GetText(in, at, text, kMaxLong); }
+        inline void PutLong(std::vector<std::uint8_t>& out, const std::string& text) { PutText(out, text, kMaxLongBytes); }
+        inline bool GetLong(std::span<const std::uint8_t> in, std::size_t& at, std::string& text) { return GetText(in, at, text, kMaxLongBytes); }
 
         inline void PutNode(std::vector<std::uint8_t>& out, const Node& n) {
             Put(out, static_cast<std::uint8_t>(n.kind));
@@ -1388,8 +1401,8 @@ namespace IntelEngine::Arcs {
             detail::Put(out, a.captive);
             detail::Put(out, a.captiveSite);
             detail::Put(out, a.captiveState);
-            // ---- version 8: remains to examine
-            for (std::size_t k = 0; k < kClues; ++k) {
+            // ---- version 8: remains to examine (the two a record of that version holds; the third is below)
+            for (std::size_t k = 0; k < 2; ++k) {
                 detail::Put(out, a.clueWhat[k]);
                 detail::Put(out, a.clueSite[k]);
                 detail::Put(out, a.clueRef[k]);
@@ -1403,6 +1416,15 @@ namespace IntelEngine::Arcs {
             detail::Put(out, a.spiritRef);
             detail::PutText(out, a.spiritName);
             detail::PutLong(out, a.spiritTruth);
+            // ---- version 10: the third thing to examine, how far out each lies, what each ending leaves open, sequels
+            detail::Put(out, a.clueWhat[2]);
+            detail::Put(out, a.clueSite[2]);
+            detail::Put(out, a.clueRef[2]);
+            detail::Put(out, a.clueState[2]);
+            for (const auto band : a.clueFar) detail::Put(out, band);
+            for (const auto& e : a.ends) detail::PutLong(out, e.after);
+            detail::Put(out, a.sequelOf);
+            detail::Put(out, a.followed);
         }
         return out;
     }
@@ -1493,7 +1515,7 @@ namespace IntelEngine::Arcs {
                 }
             }
             if (version >= 8) {
-                for (std::size_t k = 0; k < kClues; ++k) {
+                for (std::size_t k = 0; k < 2; ++k) {
                     if (!detail::Get(in, at, a.clueWhat[k]) || !detail::Get(in, at, a.clueSite[k]) || !detail::Get(in, at, a.clueRef[k]) ||
                         !detail::Get(in, at, a.clueState[k]) || a.clueWhat[k] > kRemains || a.clueSite[k] > kSites || a.clueState[k] > ClueSeen ||
                         (a.clueWhat[k] != 0) != (a.clueSite[k] != 0)) {
@@ -1508,6 +1530,20 @@ namespace IntelEngine::Arcs {
                     a.spiritState > SpiritRested) {
                     return false;
                 }
+            }
+            if (version >= 10) {
+                if (!detail::Get(in, at, a.clueWhat[2]) || !detail::Get(in, at, a.clueSite[2]) || !detail::Get(in, at, a.clueRef[2]) ||
+                    !detail::Get(in, at, a.clueState[2]) || a.clueWhat[2] > kRemains || a.clueSite[2] > kSites || a.clueState[2] > ClueSeen ||
+                    (a.clueWhat[2] != 0) != (a.clueSite[2] != 0)) {
+                    return false;
+                }
+                for (auto& band : a.clueFar) {
+                    if (!detail::Get(in, at, band) || band > 2) return false;
+                }
+                for (auto& e : a.ends) {
+                    if (!detail::GetLong(in, at, e.after)) return false;
+                }
+                if (!detail::Get(in, at, a.sequelOf) || !detail::Get(in, at, a.followed) || a.followed > 1) return false;
             }
             const bool tale = pattern == static_cast<std::uint8_t>(Pattern::Tale);
             const bool known = pattern >= 1 && pattern <= kPatterns;

@@ -5,6 +5,8 @@
  */
 
 #include "NPCIndex.h"
+#include "LanguageBridge.h"
+#include "NameForms.h"
 #include "ArcBridge.h"
 #include "NameMatch.h"
 #include "LivingWorldBridge.h"
@@ -594,6 +596,17 @@ namespace IntelEngine {
 
         std::string lowerSearch = StringUtils::ToLowerStd(searchTerm);
         std::string matchedName;
+        const auto saidWords = NameForms::Read(lowerSearch);
+        const auto freeWords = LanguageBridge::GetSingleton()->Free();
+        // By a name the index holds: the loaded actor, else the one its form id gives.
+        const auto byIndexedName = [&](const std::string& name) -> RE::Actor* {
+            auto loadedIt = m_npcIndex.find(name);
+            if (loadedIt != m_npcIndex.end()) {
+                if (auto* valid = ValidateCachedActor(loadedIt->second)) return valid;
+            }
+            auto formIdIt = m_npcFormIds.find(name);
+            return formIdIt != m_npcFormIds.end() ? GetActorFromFormId(formIdIt->second) : nullptr;
+        };
 
         // 1. Exact match in loaded NPCs
         auto exactIt = m_npcIndex.find(lowerSearch);
@@ -603,6 +616,17 @@ namespace IntelEngine {
                 return valid;
             }
             // Stale pointer — fall through to other strategies
+        }
+
+        // 1b. The name as people say it in their language (NameForms.h): with a case ending ("k Lidii"), an article
+        // ("zur ..."), an ending hung behind ("Lydian", "Whiterunit") or a particle without a space (Korean,
+        // Japanese). The whole name first; part of a name with another ending only after the ways below.
+        const auto forms = NameForms::Find(lowerSearch, m_allNames, NameForms::PartForms, freeWords);
+        if (forms && forms.stand >= NameForms::Forms) {
+            if (auto* actor = byIndexedName(m_allNames[static_cast<std::size_t>(forms.index)])) {
+                logger::info("FindNPCByName('{}') -> '{}' (the name in another form)", searchTerm, m_allNames[static_cast<std::size_t>(forms.index)]);
+                return actor;
+            }
         }
 
         // 2. Fuzzy match with Levenshtein distance
@@ -661,6 +685,14 @@ namespace IntelEngine {
             }
         }
 
+        // 4b. Part of the name with another ending ("k Ionu" for Jon Battle-Born), when one name alone fits.
+        if (forms && forms.stand == NameForms::PartForms) {
+            if (auto* actor = byIndexedName(m_allNames[static_cast<std::size_t>(forms.index)])) {
+                logger::info("FindNPCByName('{}') -> '{}' (part of the name, in another form)", searchTerm, m_allNames[static_cast<std::size_t>(forms.index)]);
+                return actor;
+            }
+        }
+
         // 5. Live scan - search ALL currently loaded actors as last resort
         // This catches NPCs missed by the index (non-unique, newly spawned, etc.)
         RE::Actor* bestLiveMatch = nullptr;
@@ -696,6 +728,11 @@ namespace IntelEngine {
                 bestLiveDist = 1;
                 bestLiveMatch = actor;
             }
+            // ... or their name in another form (an ending, a particle): the same
+            if (1 < bestLiveDist && NameForms::Stands(NameForms::Read(lowerName), saidWords, freeWords).stand >= NameForms::Forms) {
+                bestLiveDist = 1;
+                bestLiveMatch = actor;
+            }
 
             return false;
         });
@@ -722,6 +759,8 @@ namespace IntelEngine {
         std::string lowerSearch = StringUtils::ToLowerStd(searchTerm);
         int maxDist = Settings::GetSingleton()->fuzzyMatchThreshold;
         auto nearPos = nearActor->GetPosition();
+        const auto saidWords = NameForms::Read(lowerSearch);
+        const auto freeWords = LanguageBridge::GetSingleton()->Free();
 
         struct Candidate {
             RE::Actor* actor;
@@ -748,6 +787,10 @@ namespace IntelEngine {
                 nameScore = 0;  // exact
             } else if (person && NameMatch::PartOf(lowerName, lowerSearch)) {
                 nameScore = 1;  // one name inside the other, as whole words (NameMatch.h)
+            } else if (const auto stands = person ? NameForms::Stands(NameForms::Read(lowerName), saidWords, freeWords).stand : NameForms::No;
+                       stands >= NameForms::PartForms) {
+                // their name in another form (NameForms.h): the whole name like a whole-word match, part of it after
+                nameScore = stands >= NameForms::Forms ? 1 : 2;
             } else if (person) {
                 int leven = StringUtils::LevenshteinDistance(lowerSearch, lowerName);
                 if (leven <= NameMatch::Slips(lowerSearch, lowerName, maxDist)) {
@@ -829,6 +872,12 @@ namespace IntelEngine {
             return exactIt->second;
         }
 
+        // 1b. The name in another form (NameForms.h)
+        if (const auto forms = NameForms::Find(lowerSearch, m_allNames, NameForms::Forms, LanguageBridge::GetSingleton()->Free())) {
+            auto it = m_npcFormIds.find(m_allNames[static_cast<std::size_t>(forms.index)]);
+            if (it != m_npcFormIds.end()) return it->second;
+        }
+
         // 2. Fuzzy match
         auto fuzzy = StringUtils::FuzzyFind(lowerSearch, m_allNames,
                                              Settings::GetSingleton()->fuzzyMatchThreshold);
@@ -853,6 +902,12 @@ namespace IntelEngine {
         auto exactIt = m_npcCurrentLocations.find(lowerSearch);
         if (exactIt != m_npcCurrentLocations.end()) {
             return RE::BSFixedString(exactIt->second);
+        }
+
+        // The name in another form (NameForms.h)
+        if (const auto forms = NameForms::Find(lowerSearch, m_allNames, NameForms::Forms, LanguageBridge::GetSingleton()->Free())) {
+            auto locIt = m_npcCurrentLocations.find(m_allNames[static_cast<std::size_t>(forms.index)]);
+            if (locIt != m_npcCurrentLocations.end()) return RE::BSFixedString(locIt->second);
         }
 
         // Fuzzy match — use FuzzyFind (consistent with rest of codebase)

@@ -8,6 +8,7 @@
 #include "Plugin.h"
 #include "Papyrus.h"
 #include "NPCIndex.h"
+#include "LanguageBridge.h"
 #include "BattleManager.h"
 #include "ItemIndex.h"
 #include "LocationResolver.h"
@@ -160,7 +161,7 @@ namespace IntelEngine {
     }
 
     void RevertCallback(SKSE::SerializationInterface*) {
-        intelEngineStoryLoadRecovered.store(false);
+        intelEngineStoryLoadRecovered.store(false); IntelEngineNewLoad();
         PoliticalEngineBridge::GetSingleton()->MarkDirty(true);
         PoliticalDB::GetSingleton()->BeginLoad();
         g_currentSaveID.clear();
@@ -391,7 +392,7 @@ namespace IntelEngine {
     void MessageHandler(SKSE::MessagingInterface::Message* a_msg) {
         switch (a_msg->type) {
             case SKSE::MessagingInterface::kPreLoadGame:
-                intelEngineStoryLoadRecovered.store(false);
+                intelEngineStoryLoadRecovered.store(false); IntelEngineNewLoad();
                 SpeechTracker::GetSingleton()->Reset();
                 PoliticalDB::GetSingleton()->BeginLoad();
                 break;
@@ -511,6 +512,7 @@ namespace IntelEngine {
 
                 DashboardConfig::GetSingleton()->Load();
                 DashboardUIManager::GetSingleton()->Initialize();
+                LanguageBridge::GetSingleton()->Load();     // before the indexes: the place index tells it the names' script
                 NPCIndex::GetSingleton()->BuildIndex();
                 LocationResolver::GetSingleton()->BuildLocationIndex();
                 ItemIndex::GetSingleton()->BuildIndex();
@@ -546,6 +548,7 @@ namespace IntelEngine {
                 // Game loaded — SlotTracker already populated from co-save (LoadCallback).
                 // ClearAll moved to RevertCallback to avoid wiping co-save data.
                 logger::info("Game loaded - refreshing indexes, clearing MemoryDB caches");
+                LanguageBridge::GetSingleton()->Decide();   // the settings may differ from when the data was loaded
                 LivingWorldBridge::GetSingleton()->OnGameLoaded(false);
                 // Journal titles are not in the save: the quests' records give them back.
                 if (auto* titles = SKSE::GetTaskInterface()) {

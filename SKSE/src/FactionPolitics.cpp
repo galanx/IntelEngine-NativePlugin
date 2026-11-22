@@ -822,7 +822,7 @@ war_allowed:
         // Engine-touch variant: resolves liveness via NPCIndex + Actor methods.
         // Essential NPCs can't permanently die (bleedout ≠ death), so never exclude them.
         auto* npcIndex = NPCIndex::GetSingleton();
-        return BuildFactionJsonCore(f, [self = GetSingleton(), &f, npcIndex](const std::string& name) -> std::pair<bool, bool> {
+        auto fj = BuildFactionJsonCore(f, [self = GetSingleton(), &f, npcIndex](const std::string& name) -> std::pair<bool, bool> {
             if (self->IsFallen(f.id, name)) return {true, true};
             auto* actor = npcIndex
                 ? npcIndex->GetActorFromFormId(npcIndex->FindFactionLeaderFormId(name))
@@ -832,6 +832,28 @@ war_allowed:
             if (dead) self->MarkFallen(f.id, name, name);
             return {true, dead};
         });
+        ShownAsInGame(fj, f);
+        return fj;
+    }
+
+    // The leaders and the hold as the game shows them, beside the data file's English: a leader knows themself by
+    // the name the game gives them, and in a translated game that is not the one in factions.yaml (found by its form
+    // id). "leaders" stays as configured: the fallen are kept by those names. (A method of its own: the offline feed
+    // check lifts FactionToJson out as it stands and has no game to ask.)
+    void FactionPolitics::ShownAsInGame(nlohmann::json& fj, const FactionConfig& f) {
+        if (!fj.is_object()) return;
+        auto* npcIndex = NPCIndex::GetSingleton();
+        if (npcIndex && fj.contains("leaders") && fj["leaders"].is_array()) {
+            nlohmann::json shown = nlohmann::json::array();
+            for (const auto& leader : fj["leaders"]) {
+                if (!leader.is_string()) continue;
+                auto* actor = npcIndex->GetActorFromFormId(npcIndex->FindFactionLeaderFormId(leader.get<std::string>()));
+                const char* name = actor ? actor->GetDisplayFullName() : nullptr;
+                if (name && *name && leader.get<std::string>() != name) shown.push_back(name);
+            }
+            if (!shown.empty()) fj["leaders_shown"] = std::move(shown);
+        }
+        if (const auto hold = RumorBridge::HoldShown(f.hold); !hold.empty() && hold != f.hold) fj["hold_shown"] = hold;
     }
 
     std::string FactionPolitics::GetFactionsJson() {
@@ -1786,11 +1808,15 @@ war_allowed:
         // A faction's `hold` is its capital's name ("Markarth"); the player's is the hold's ("The Reach"). Compared
         // as written they were never the same, and nothing was ever shown because the player was in a faction's
         // hold: only because one of its leaders happened to stand within 5,000 units.
-        const auto inHoldOf = [&playerHold](const std::optional<FactionConfig>& cfg) {
+        // And the player's hold came as the game shows it, which in a translated game is no English name at all:
+        // the hold the player is in is asked of the game's own records, and only the data file's name is read.
+        const auto playerHoldIndex = RumorBridge::HoldOfPlayer();
+        const auto inHoldOf = [&playerHold, playerHoldIndex](const std::optional<FactionConfig>& cfg) {
             if (!cfg || cfg->hold.empty()) return false;
             if (cfg->hold == playerHold) return true;
             const auto theirs = RumorBridge::HoldByName(cfg->hold);
-            return theirs != Rumors::NoHold && theirs == RumorBridge::HoldByName(playerHold);
+            if (theirs == Rumors::NoHold) return false;
+            return theirs == playerHoldIndex || theirs == RumorBridge::HoldByName(playerHold);
         };
 
         // For assassination: factionA attacks factionB

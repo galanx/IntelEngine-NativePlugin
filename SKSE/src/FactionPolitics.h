@@ -564,6 +564,8 @@ namespace IntelEngine {
 
         /** Serialize a FactionConfig to JSON (shared by context/dashboard/state file builders). */
         static nlohmann::json FactionToJson(const FactionConfig& f);
+        // The leaders and the hold as the game shows them (a translated game), added beside the configured names.
+        static void ShownAsInGame(nlohmann::json& fj, const FactionConfig& f);
 
         /** Build faction id→name lookup map (acquires configMutex_ internally). */
         std::unordered_map<std::string, std::string> BuildIdToNameMap() const;

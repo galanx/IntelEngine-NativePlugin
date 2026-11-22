@@ -6,6 +6,7 @@
  */
 
 #include "BattleManager.h"
+#include "LanguageBridge.h"
 #include "SoldierTemplates.h"
 #include "Papyrus.h"
 #include "LocationResolver.h"
@@ -2691,7 +2692,7 @@ namespace IntelEngine {
         auto* fp = FactionPolitics::GetSingleton();
         const std::string text = "Stand with " + The(fp->GetFactionDisplayName(factionId)) + " near " + place + " before the battle is decided";
         for (auto* objective : quest->objectives) {
-            if (objective && objective->index == 0) objective->displayText = text.c_str();
+            if (objective && objective->index == 0) objective->displayText = LanguageBridge::GetSingleton()->Label(text).c_str();
         }
     }
 

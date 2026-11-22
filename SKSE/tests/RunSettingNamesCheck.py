@@ -181,7 +181,7 @@ for key, name in page.items():
 for path in ('politics.enabled', 'politics.tick_interval_hours', 'politics.max_relation_change_per_tick',
              'politics.max_active_wars', 'politics.pe_integration', 'story.faction_blocklist',
              'story.location_blocklist', 'story.npc_blocklist', 'story.faction_whitelist', 'story.location_whitelist',
-             'story.npc_whitelist', 'llm.endpoint', 'llm.api_key', 'llm.model_name', 'llm.temperature',
+             'story.npc_whitelist', 'language.text', 'language.spoken', 'llm.endpoint', 'llm.api_key', 'llm.model_name', 'llm.temperature',
              'llm.max_tokens', 'llm.timeout', 'ui.scale'):
     found = rows.get(path)
     expected = bare(written[path])

@@ -1,4 +1,5 @@
 #include "ArcBridge.h"
+#include "LanguageBridge.h"
 #include "FrameCost.h"
 #include "RumorBridge.h"
 #include "Safe.h"
@@ -742,7 +743,15 @@ namespace IntelEngine {
         const auto refOf = [](RE::FormID id) { return id ? RE::TESForm::LookupByID<RE::TESObjectREFR>(id) : nullptr; };
         if (tale) {
             // What is to be looked at closely: on it once it lies there; until then the place on the map it lies by.
+            // Along a trail only the first sign is shown the way to: the next is found by walking where the last
+            // one pointed (its window says which way), and is marked after a game hour all the same, so that
+            // nobody stands in the dark with a journal that will not help.
             if (n.kind == A::Kind::Examine && n.prop < A::kClues) {
+                bool first = true;
+                for (std::size_t k = 0; k < A::kClues; ++k) {
+                    if (k != n.prop && a.clueWhat[k] && a.clueSite[k] == a.clueSite[n.prop] && a.clueFar[k] > a.clueFar[n.prop]) first = false;
+                }
+                if (!first && NowDays() - a.since < 1.0f / 24.0f) return nullptr;
                 if (auto* lies = refOf(a.clueRef[n.prop]); a.clueState[n.prop] != A::ClueToPlace && Points(lies)) return lies;
                 return OutsideOf(a, n.site);
             }
@@ -2325,6 +2334,137 @@ namespace IntelEngine {
         }
     }
 
+    std::vector<float> ArcBridge::TrailSpot(std::uint32_t id, int clue) {
+        // A sign of a trail lies out from the place on the way to it, where someone coming would pass: on the
+        // player's side of the place when the player is still far enough off for nothing to appear in sight, on the
+        // far side when they stand close already (they came another way, or rode the cart to the door). The ground
+        // is the navmesh of the cells in the game around the place: one look over its triangles, the nearest to
+        // the wanted distance and line wins; no ground there, and it lies by the place like the last of them.
+        std::vector<float> out;
+        RE::TESObjectREFR* anchor = nullptr;
+        std::uint8_t band = 0, most = 0;   // how far out this one lies, and the farthest of its trail ("far" is a word of the Windows headers)
+        {
+            std::scoped_lock lock(m_mutex);
+            const auto* a = m_book.Find(id);
+            const auto k = static_cast<std::size_t>(clue);
+            if (!a || clue < 0 || k >= A::kClues || !a->clueWhat[k] || !a->clueFar[k]) return out;
+            band = a->clueFar[k];
+            for (std::size_t j = 0; j < A::kClues; ++j) {
+                if (a->clueWhat[j] && a->clueSite[j] == a->clueSite[k]) most = std::max(most, a->clueFar[j]);
+            }
+            anchor = OutsideOf(*a, a->clueSite[k]);
+        }
+        auto* player = RE::PlayerCharacter::GetSingleton();
+        auto* tes = RE::TES::GetSingleton();
+        if (!anchor || !player || !tes) return out;
+        const auto started = std::chrono::steady_clock::now();
+        const auto origin = anchor->GetPosition();
+        const auto from = player->GetPosition();
+        float dx = from.x - origin.x, dy = from.y - origin.y;
+        const float away = std::sqrt(dx * dx + dy * dy);
+        if (away < 1.0f) return out;
+        dx /= away;
+        dy /= away;
+        // The trail lies between the player and the place, where someone coming passes it: its farthest sign some
+        // sixty metres out (thirty for a trail of two), the others evenly on the way in. In sight is no place to lay
+        // the dead: every sign keeps 3000 units from the player, so with less room the whole trail is shorter. Only
+        // a player who stands at the door already (they came another way, or rode to it) gets it on the far side,
+        // and short. (Laid for each sign by itself it lay on both sides of the place at once: seen 2026-11-22, the
+        // farther sign beyond the cave and out of reach.)
+        const float room = away - 3000.0f;
+        float farthest = most >= 2 ? 4400.0f : 2200.0f;
+        bool beyond = false;
+        if (room >= 1200.0f) {
+            farthest = std::min(farthest, room);
+        } else {
+            beyond = true;
+            farthest = most >= 2 ? 1600.0f : 900.0f;
+        }
+        const float want = farthest * static_cast<float>(band) / static_cast<float>(std::max<std::uint8_t>(most, 1));
+        const float slack = std::max(300.0f, want * 0.4f);
+        if (beyond) {
+            dx = -dx;
+            dy = -dy;
+        }
+        struct Spot {
+            RE::NiPoint3 at;
+            float score;
+        };
+        std::vector<Spot> spots;
+        std::size_t triangles = 0;
+        tes->ForEachCell([&](RE::TESObjectCELL* cell) {
+            if (!cell || cell->IsInteriorCell()) return;
+            auto* navs = cell->GetRuntimeData().navMeshes;
+            if (!navs) return;
+            for (auto& mesh : navs->navMeshes) {
+                if (!mesh) continue;
+                const auto& vertices = mesh->vertices;
+                for (const auto& tri : mesh->triangles) {
+                    ++triangles;
+                    if (tri.triangleFlags.any(RE::BSNavmeshTriangle::TriangleFlag::kDeleted)) continue;
+                    if (tri.vertices[0] >= vertices.size() || tri.vertices[1] >= vertices.size() || tri.vertices[2] >= vertices.size()) continue;
+                    const auto& a = vertices[tri.vertices[0]].location;
+                    const auto& b = vertices[tri.vertices[1]].location;
+                    const auto& c = vertices[tri.vertices[2]].location;
+                    const RE::NiPoint3 p{(a.x + b.x + c.x) / 3.0f, (a.y + b.y + c.y) / 3.0f, (a.z + b.z + c.z) / 3.0f};
+                    const float ox = p.x - origin.x, oy = p.y - origin.y;
+                    const float d2 = ox * ox + oy * oy;
+                    if (d2 < (want - slack) * (want - slack) || d2 > (want + slack) * (want + slack)) continue;
+                    if (std::abs(p.z - origin.z) > 700.0f) continue;
+                    const float along = ox * dx + oy * dy;
+                    if (along <= 0.0f) continue;
+                    const float d = std::sqrt(d2);
+                    // off the line costs most (1 - cos, about 20 a degree), then the distance, then the height
+                    const float score = (1.0f - along / d) * 3600.0f + std::abs(d - want) * 0.5f + std::abs(p.z - origin.z) * 0.5f;
+                    spots.push_back({p, score});
+                }
+            }
+        });
+        // The best of them that lies under the open sky. The navmesh runs under overhangs and through the feet of
+        // rocks, and a body laid there cannot be seen (the horse of the first trail walked lay inside a rock face):
+        // a ray of the game's own collision, from high above down to just over the spot and over two spots a step to
+        // either side, must meet nothing. At most six spots are tried.
+        std::sort(spots.begin(), spots.end(), [](const Spot& x, const Spot& y) { return x.score < y.score; });
+        auto* cell = player->GetParentCell();
+        auto* world = cell ? cell->GetbhkWorld() : nullptr;
+        const auto open = [&](const RE::NiPoint3& p) {
+            if (!world) return true;
+            const float scale = RE::bhkWorld::GetWorldScale();
+            static constexpr float kSide[3][2] = {{0.0f, 0.0f}, {90.0f, 0.0f}, {-45.0f, 78.0f}};
+            for (const auto& side : kSide) {
+                RE::bhkPickData pick;
+                const RE::NiPoint3 from{p.x + side[0], p.y + side[1], p.z + 2000.0f}, to{p.x + side[0], p.y + side[1], p.z + 90.0f};
+                pick.rayInput.from = RE::hkVector4(from.x * scale, from.y * scale, from.z * scale, 0.0f);
+                pick.rayInput.to = RE::hkVector4(to.x * scale, to.y * scale, to.z * scale, 0.0f);
+                pick.rayInput.enableShapeCollectionFilter = false;
+                pick.rayInput.filterInfo.filter = (RE::bhkCollisionFilter::GetSingleton()->GetNewSystemGroup() << 16) | static_cast<std::uint32_t>(RE::COL_LAYER::kLOS);
+                {
+                    RE::BSReadLockGuard guard(world->worldLock);
+                    world->PickObject(pick);
+                }
+                if (pick.rayOutput.HasHit()) return false;
+            }
+            return true;
+        };
+        std::size_t tried = 0;
+        std::vector<RE::NiPoint3> refused;
+        for (const auto& spot : spots) {
+            // not a step from one that was just refused: the same rock
+            if (std::any_of(refused.begin(), refused.end(), [&](const RE::NiPoint3& r) { return r.GetDistance(spot.at) < 250.0f; })) continue;
+            if (tried++ >= 6) break;
+            if (open(spot.at)) {
+                out = {spot.at.x, spot.at.y, spot.at.z};
+                break;
+            }
+            refused.push_back(spot.at);
+        }
+        const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
+        logger::info("Arcs: #{} a sign of the trail, {:.0f} units out from the place{}: {} ({} navmesh triangles looked at, {} spots fit, {} tried for open sky, {:.2f} ms of the game's frame)",
+                     id, want, beyond ? " on its far side (the player stands at the door)" : " toward the player",
+                     out.empty() ? "no open ground found, it lies by the place" : "open ground found", triangles, spots.size(), tried, ms);
+        return out;
+    }
+
     void ArcBridge::CluePlaced(std::uint32_t id, int clue, RE::TESObjectREFR* lies) {
         std::scoped_lock lock(m_mutex);
         auto* a = m_book.Find(id);
@@ -3026,12 +3166,35 @@ namespace IntelEngine {
             return {};
         }
         if (name.starts_with("cluetext")) {
-            // What the player sees on what was left there (the writer's words, from the place's own signs).
+            // What the player sees on what was left there (the writer's words, from the place's own signs), and,
+            // along a trail, which way it leads on: toward the next thing to be looked at where that lies already,
+            // else toward the place. Eight fixed sentences, so a language pack can have them.
             const auto k = static_cast<std::size_t>(std::atoi(name.c_str() + 8));
+            if (k >= A::kClues) return {};
+            std::string text;
             for (const auto& step : A::NodesOf(*a)) {
-                if (step.kind == A::Kind::Examine && step.prop == k) return Fill(step.question, *a);
+                if (step.kind == A::Kind::Examine && step.prop == k) text = Fill(step.question, *a);
             }
-            return {};
+            if (text.empty() || !a->clueFar[k]) return text;
+            auto* here = a->clueRef[k] ? RE::TESForm::LookupByID<RE::TESObjectREFR>(a->clueRef[k]) : nullptr;
+            RE::TESObjectREFR* next = nullptr;
+            for (std::size_t j = 0; j < A::kClues; ++j) {
+                if (a->clueWhat[j] && a->clueSite[j] == a->clueSite[k] && a->clueFar[j] + 1 == a->clueFar[k] && a->clueRef[j]) {
+                    next = RE::TESForm::LookupByID<RE::TESObjectREFR>(a->clueRef[j]);
+                }
+            }
+            if (!next) next = OutsideOf(*a, a->clueSite[k]);
+            if (!here || !next) return text;
+            const float dx = next->GetPositionX() - here->GetPositionX(), dy = next->GetPositionY() - here->GetPositionY();
+            if (dx * dx + dy * dy < 200.0f * 200.0f) return text;
+            static constexpr const char* kWays[8] = {"The trail leads on to the north.",      "The trail leads on to the north-east.",
+                                                     "The trail leads on to the east.",       "The trail leads on to the south-east.",
+                                                     "The trail leads on to the south.",      "The trail leads on to the south-west.",
+                                                     "The trail leads on to the west.",       "The trail leads on to the north-west."};
+            // the game's north is +y, its east +x; eight ways of 45 degrees, north in the middle of the first
+            const float turn = std::atan2(dx, dy) * 180.0f / 3.14159265f;   // 0 north, 90 east
+            const int way = static_cast<int>(std::floor((turn < 0.0f ? turn + 360.0f : turn) / 45.0f + 0.5f)) % 8;
+            return text + " " + LanguageBridge::GetSingleton()->Label(kWays[way]);
         }
         if (name == "thugwhy") {
             // What the men know of their errand (a fact in their bios): who paid them, and for what.
@@ -3246,13 +3409,13 @@ namespace IntelEngine {
             if (a.slot == 0xFF || a.title.empty()) continue;
             auto* quest = JournalQuest(a.slot);
             if (!quest) continue;
-            quest->fullName = Fill(a.title, a).c_str();
+            quest->fullName = LanguageBridge::GetSingleton()->Label(Fill(a.title, a)).c_str();
             if (a.pattern != A::Pattern::Tale) continue;
             // A tale's step goals are its objectives' texts (objectives kTaleObjective.. of the slot's quest).
             for (auto* objective : quest->objectives) {
                 if (!objective || objective->index < A::kTaleObjective) continue;
                 const auto n = static_cast<std::size_t>(objective->index - A::kTaleObjective);
-                if (n < a.graph.size()) objective->displayText = Fill(a.graph[n].goal, a).c_str();
+                if (n < a.graph.size()) objective->displayText = LanguageBridge::GetSingleton()->Label(Fill(a.graph[n].goal, a)).c_str();
             }
             // The log: the story so far, and how it ended, as the names of the slot's two holders' own base items.
             const auto name = [](RE::FormID ref, const std::string& text) {
@@ -3512,6 +3675,9 @@ namespace IntelEngine {
         }
         void ArcGangPlaced(RE::StaticFunctionTag*, std::int32_t id) { ArcBridge::GetSingleton()->GangPlaced(U(id)); }
         void ArcCaptive(RE::StaticFunctionTag*, std::int32_t id, std::int32_t state) { ArcBridge::GetSingleton()->Captive(U(id), state); }
+        std::vector<float> ArcTrailSpot(RE::StaticFunctionTag*, std::int32_t id, std::int32_t clue) {
+            return ArcBridge::GetSingleton()->TrailSpot(U(id), clue);
+        }
         void ArcCluePlaced(RE::StaticFunctionTag*, std::int32_t id, std::int32_t clue, RE::TESObjectREFR* lies) {
             ArcBridge::GetSingleton()->CluePlaced(U(id), clue, lies);
         }
@@ -3645,6 +3811,7 @@ namespace IntelEngine {
         a_vm->RegisterFunction("ArcGangPlaced", script, ArcGangPlaced); ++count;
         a_vm->RegisterFunction("ArcCaptive", script, ArcCaptive); ++count;
         a_vm->RegisterFunction("ArcCluePlaced", script, ArcCluePlaced); ++count;
+        a_vm->RegisterFunction("ArcTrailSpot", script, ArcTrailSpot); ++count;
         a_vm->RegisterFunction("ArcRequestHunt", script, ArcRequestHunt); ++count;
         a_vm->RegisterFunction("ArcRequestHaunt", script, ArcRequestHaunt); ++count;
         a_vm->RegisterFunction("ArcSpiritOut", script, ArcSpiritOut); ++count;
