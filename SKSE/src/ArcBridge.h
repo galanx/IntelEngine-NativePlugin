@@ -97,6 +97,17 @@ namespace IntelEngine {
          *  one whose asker comes in person, who then did not come): the asker's own request as people would have
          *  heard them make it. "Ysolda has trouble, and has been asking around" told nobody anything (2026-11-22). */
         static std::string TroubleTalk(const std::string& asker, const std::string& ask);
+        /** The asker has made their request and the player has answered in talk: the talk is read for a yes or a no
+         *  (the reader of decisions, with the two answers as its outcomes). OfferSpoken says what came of it: -1 while
+         *  it is read, 0 nothing decided (the window asks), 1 the player took it on, 2 the player said no. */
+        void ReadOffer(std::uint32_t id);
+        int OfferSpoken(std::uint32_t id);
+        /** While a save comes in: the tables and first lookups a session's first story request used to fill in the
+         *  middle of play (each the better part of a millisecond on a large mod list). Game thread. */
+        void WarmUp();
+        /** Test hook: what the parts of a tale's request cost for this person, each timed several times on the game's
+         *  thread (the first call, then the least of the rest), written to the log. */
+        void DebugCosts(RE::Actor* who);
         /** No other story came to the player or ended within the hour (the manners every offer keeps). */
         bool QuietNow(std::uint32_t id);
         /** A quest moved a stage on: noted, with the hour. Whether it holds anything back is QuestBusy's to say. */
@@ -288,6 +299,10 @@ namespace IntelEngine {
             float judgedAt = -1.0f;      // real seconds of the last reading
             float askedAt = -1.0f;       // real seconds: the player's first line since that reading (< 0: none yet)
             float nodeAt = -1.0f;        // real seconds: when this step became the story's step
+            // What the player said to the offer, read from the talk: -2 not asked, -1 being read, 0 nothing decided,
+            // 1 yes, 2 no.
+            int offerSpoken = -2;
+            float offerReadAt = -1.0f;   // real seconds: when that reading was asked for
             std::uint8_t spoken = 0;     // a tale's decision: 1 = the talk was read and the decision was not in it (the window asks)
             float visitAt = -1.0f;       // game days: the step's person was last sent to the player
             float stalkHold = -1.0f;     // real seconds: a stalker is not sent after the player again before this
@@ -341,6 +356,8 @@ namespace IntelEngine {
         /** RequestTale's work, a part a frame (FrameSpread.h): `answer` is written before its first pause and never
          *  after; the asker's seed is its own copy. */
         FrameJob GatherTale(RE::Actor* asker, std::string written, std::optional<TaleSeed> seed, bool* answer);   // main thread
+        /** The pacer's choosing of who comes with a story, a part a frame (the look that leads to it stays one frame). */
+        FrameJob PaceChoose(RE::FormID townId, float now, double played);   // main thread
         void SendTale(std::shared_ptr<void> request, int attempt, std::string fix, std::string previous);   // any thread
         void TaleWritten(std::shared_ptr<void> request, int attempt, const std::string& text);              // main thread
         void SendOffer(std::uint32_t id, RE::Actor* asker);
@@ -384,12 +401,14 @@ namespace IntelEngine {
 
         std::atomic<RE::FormID> m_outdoorTown{0xFFFFFFFFu};   // the town whose houses the player last stood among under the sky (0 none, all bits: not seen yet)
         std::unordered_map<RE::FormID, bool> m_walled;        // towns with a world of their own behind walls (main thread)
+        bool m_walledRead = false;                            // ... read for every town at the main menu
         RE::FormID m_paceTown = 0;       // the town the player is in, and since when (game days)
         float m_paceSince = 0.0f;
         float m_paceTried = -1.0f;       // the last time a story was looked for (game days)
         double m_pacePlayedAt = 0.0;     // time played (LivingWorldBridge::PlayedSeconds) when the player came to this town
         double m_paceBegunPlayed = -1.0; // and when the last story began by itself; below 0: none this session
         int m_paceHeld = 0;              // why the pacer last held back (so the log says it once)
+        bool m_paceEarly = false;        // this town's first story may begin early: the player has talked with its people
 
         mutable std::mutex m_mutex;
         Arcs::Book m_book;

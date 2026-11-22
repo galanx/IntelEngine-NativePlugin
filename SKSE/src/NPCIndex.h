@@ -194,6 +194,10 @@ namespace IntelEngine {
          *  the same lists the director's candidates go through, as last read (a director round reads them anew on a
          *  worker thread). For everything that casts people: a town's tales, their askers, the patterns. */
         static bool BlockedForStories(RE::Actor* actor);
+        /** The story filters (the user's block lists and white lists) read from SkyrimNet's settings now. Call it on a
+         *  worker thread: after it nothing reads them inside a frame of play. Done when a save is loaded and before
+         *  every director round. */
+        static void ReadStoryFilters();
 
         /** 4.0: a place where someone may cry out for help in front of everyone (a town, a city, a settlement, an
          *  inn; not a dungeon, a dangerous place or the player's home). */
@@ -653,6 +657,9 @@ namespace IntelEngine {
         static std::string GetNPCHoldName(RE::Actor* actor);
         /** The hold a place lies in, by name (the location the game marks as a hold above it); empty when none. */
         static std::string HoldNameAt(RE::BGSLocation* loc);
+        /** The player stands in a place of this hold (told by the living world's regular look): remembered for the
+         *  stretches of open country that belong to no named place. */
+        static void NotePlayerHold(const RE::BGSLocation* location);
 
         /**
          * Get the settlement name (city/town) for an actor.

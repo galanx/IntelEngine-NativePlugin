@@ -17,6 +17,7 @@
 #include "QuestBridge.h"
 #include "Papyrus.h"
 #include "SkyrimNetAPI.h"
+#include "SlotTracker.h"
 #include "SpeechTracker.h"
 #include "Tales.h"
 
@@ -43,6 +44,13 @@ namespace IntelEngine {
         // Pacing (docs/research/PACING.md): a town's story when the player has lingered in that town a while, never
         // sooner than a day after the last one began, one coming at a time; tried at most every couple of hours.
         constexpr float kTownLingerHours = 2.0f;
+        // A town's first story, for a player who has talked with people who live there: half a game hour and a minute
+        // and a half of play instead of two hours and four minutes. On a new game the inn had nothing of the town's to
+        // tell for the first stretch of play however much the player asked around (the play session of 2026-11-22).
+        // Who comes with it is decided as always: someone the player has had to do with comes over, a stranger's
+        // trouble becomes talk in town, which is what the one asking around then hears.
+        constexpr float kFirstLingerHours = 0.5f;
+        constexpr float kFirstLingerPlayed = 90.0f;
         constexpr float kArcGapDays = 1.0f;
         constexpr float kPaceRetryDays = 2.0f / 24.0f;
         constexpr std::string_view kRumorLabel = "IntelEngine arc: ";
@@ -280,6 +288,16 @@ namespace IntelEngine {
         if (m_catalogued) return;
         m_catalogued = true;
         const auto started = std::chrono::steady_clock::now();
+        // Which towns stand behind walls (a worldspace of their own): asked whenever somebody may come to the player.
+        // Read here, at the main menu: the first asking for a town used to walk every worldspace of the load order in
+        // the middle of play (0.4 ms of one frame in the test game, 2026-11-22).
+        if (auto* data = RE::TESDataHandler::GetSingleton()) {
+            for (auto* w : data->GetFormArray<RE::TESWorldSpace>()) {
+                if (!w || !w->parentWorld || !w->location) continue;
+                if (auto* walledTown = TownOf(w->location)) m_walled[walledTown->GetFormID()] = true;
+            }
+            m_walledRead = true;
+        }
         // Every unique, grown-up person the director knows (the persistent references), with their home: the interior
         // of the bed they own when the home index has it, else the interior they were placed in by the game's data
         // (a house, a shop, the inn they keep: where their things are). The bed index alone knew 20 people of
@@ -1040,6 +1058,16 @@ namespace IntelEngine {
         RE::FormID who = 0;
         const float since = DialogueTracker::GetSingleton()->SecondsSinceOtherSpokeToPlayer(except, &who);
         if (since < 0.0f) return false;
+        // Nobody speaks over a line that is on its way or being said, whoever they are.
+        if (who && since < 240.0f && SpeechTracker::GetSingleton()->IsSpeechPending(who)) return true;
+        // Somebody who is part of the talk themselves (a line of theirs to the player within the last three quarters of
+        // a minute) does not wait for it to be over: three people talking is one talk, and their turn comes when the
+        // other has finished the sentence. Camilla, with her brother answering every line of the player's, waited
+        // ninety seconds for a quiet that never came and went away (2026-11-22).
+        if (except) {
+            const float own = DialogueTracker::GetSingleton()->SecondsSinceSpokeToPlayer(except);
+            if (own >= 0.0f && own < 45.0f) return false;
+        }
         if (since < within) return true;
         if (since > 240.0f || !who) return false;
         // A line is written long before it has been said, and when it has been said the word is the player's: the
@@ -1249,6 +1277,8 @@ namespace IntelEngine {
             bool walled = false;
             if (const auto it = m_walled.find(town); it != m_walled.end()) {
                 walled = it->second;
+            } else if (m_walledRead) {
+                walled = false;   // read at the main menu: a town not in the table has no world of its own
             } else {
                 if (auto* data = RE::TESDataHandler::GetSingleton()) {
                     for (auto* w : data->GetFormArray<RE::TESWorldSpace>()) {
@@ -1345,19 +1375,46 @@ namespace IntelEngine {
             m_paceHeld = 0;
             return;
         }
-        if (!townId || (now - m_paceSince) * 24.0f < kTownLingerHours) return;
+        if (!townId) return;
+        const float hereHours = (now - m_paceSince) * 24.0f;
+        const float herePlayed = static_cast<float>(played - m_pacePlayedAt);
+        bool early = false;
+        if (hereHours < kTownLingerHours || !A::PlayedEnough(herePlayed, A::kTownLingerPlayed)) {
+            // Sooner for the town's first story, once the player has spoken and somebody who lives here has answered.
+            if (hereHours >= kFirstLingerHours && A::PlayedEnough(herePlayed, kFirstLingerPlayed)) {
+                const float window = std::min(herePlayed + 120.0f, 1800.0f);
+                const float said = SpeechTracker::GetSingleton()->SecondsSincePlayerSpoke();
+                bool first = false;
+                {
+                    std::scoped_lock lock(m_mutex);
+                    first = std::none_of(m_book.all.begin(), m_book.all.end(), [&](const A::Arc& a) { return a.place == townId; });
+                }
+                if (first && said >= 0.0f && said < window) {
+                    for (const auto speaker : DialogueTracker::GetSingleton()->SpeakersToPlayer(window)) {
+                        const Folk* f = FolkOf(speaker);
+                        if (f && f->town == townId) {
+                            early = true;
+                            break;
+                        }
+                    }
+                }
+            }
+            if (!early && hereHours < kTownLingerHours) return;
+        }
+        m_paceEarly = early;
+        const float lingerPlayed = early ? kFirstLingerPlayed : A::kTownLingerPlayed;
         // Time actually played, too: two hours waited through at the inn are no time spent in the town, and a day
         // waited through is not the day between two stories (the user, 2026-11-22: "What about player constantly
         // skipping time. Will that ruin the pacing?").
         if (!LivingWorldBridge::GetSingleton()->GetSettings().skippedTimeCounts) {
             const float here = static_cast<float>(played - m_pacePlayedAt);
             const float since = m_paceBegunPlayed < 0.0 ? -1.0f : static_cast<float>(played - m_paceBegunPlayed);
-            const int held = !A::PlayedEnough(here, A::kTownLingerPlayed) ? 1 : !A::PlayedEnough(since, A::kStoryGapPlayed) ? 2 : 0;
+            const int held = !A::PlayedEnough(here, lingerPlayed) ? 1 : !A::PlayedEnough(since, A::kStoryGapPlayed) ? 2 : 0;
             if (held != m_paceHeld) {
                 m_paceHeld = held;
                 if (held == 1) {
                     logger::info("Arcs: no story of {} yet: {:.0f} s played here ({:.0f} needed, whatever the clock says)", PlaceName(townId), here,
-                                 A::kTownLingerPlayed);
+                                 lingerPlayed);
                 } else if (held == 2) {
                     logger::info("Arcs: no story of {} yet: the last one began {:.0f} s of play ago ({:.0f} needed, whatever the clock says)",
                                  PlaceName(townId), since, A::kStoryGapPlayed);
@@ -1380,6 +1437,34 @@ namespace IntelEngine {
             if (last >= 0.0f && now >= last && now - last < kArcGapDays) return;
         }
         m_paceTried = now;
+        PaceChoose(townId, now, played);
+    }
+
+// A pause of the choosing: when this frame's share has passed the limit, the rest waits for the next frame; a save
+// loaded in between ends it.
+#define IE_PACE_PAUSE(limit)                                                                                          \
+    if (share.Ms() > (limit)) {                                                                                       \
+        share.End();                                                                                                  \
+        co_await NextFrame{};                                                                                         \
+        if (SlotTracker::GetSingleton()->loadGeneration.load(std::memory_order_relaxed) != generation) co_return;     \
+        share.Begin();                                                                                                \
+    }
+
+    FrameJob ArcBridge::PaceChoose(RE::FormID townId, float now, double played) {
+        // Who of the town comes with a story costs more than the look that led here: whether each of its people has
+        // had to do with the player is asked of SkyrimNet's counts, the bonds, the game's relationships and the book
+        // (0.64 ms in one frame for Riverwood, more the more people a load order puts in a town). It runs in frames
+        // of its own, a part a frame (FrameSpread.h), never in the frame of the look.
+        const auto generation = SlotTracker::GetSingleton()->loadGeneration.load(std::memory_order_relaxed);
+        FrameShare share;
+        IE_PACE_PAUSE(-1.0)
+        // Where the time goes, for the log line (the parts are timed, never guessed at).
+        const auto clock = [] { return std::chrono::steady_clock::now(); };
+        const auto msSince = [](std::chrono::steady_clock::time_point t) {
+            return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t).count();
+        };
+        double msGather = 0.0, msKnows = 0.0, msKnowsWorst = 0.0, msChecks = 0.0, msAsk = 0.0;
+        auto t = clock();
         // Who in this town might come: anyone with a home here, in an order of the hour.
         std::vector<const Folk*> folk;
         for (const auto& f : m_folk) {
@@ -1389,19 +1474,51 @@ namespace IntelEngine {
         std::sort(folk.begin(), folk.end(), [seed](const Folk* x, const Folk* y) {
             return A::detail::Mix(seed, x->ref) < A::detail::Mix(seed, y->ref);
         });
-        const auto started = std::chrono::steady_clock::now();
-        const auto spent = [&] { return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count(); };
+        msGather = msSince(t);
         // Those who have had to do with the player come first (the order of the hour among them is kept).
         std::unordered_map<RE::FormID, int> knows;
         for (const auto* f : folk) {
+            IE_PACE_PAUSE(0.25)
+            t = clock();
             auto* who = RE::TESForm::LookupByID<RE::Actor>(f->ref);
             knows[f->ref] = who ? KnowsPlayer(who, townId) : 0;
+            const double one = msSince(t);
+            msKnows += one;
+            msKnowsWorst = std::max(msKnowsWorst, one);
         }
-        std::stable_sort(folk.begin(), folk.end(), [&](const Folk* x, const Folk* y) { return knows[x->ref] > knows[y->ref]; });
+        // Among those the player knows equally well, somebody with a part in a quest of the game that is not finished
+        // comes last. The one who asks is whom a story is about, and theirs is still the game's to tell: Saadia, the
+        // first to ask on a new game of a large mod list, was given a brother and an uncle in Hammerfell while "In My
+        // Time of Need" had not begun (2026-11-22). The writer is told to keep clear of such a quest; with the person
+        // at the heart of the story that was not enough.
+        std::unordered_map<RE::FormID, bool> pending;
+        for (const auto* f : folk) {
+            bool has = false;
+            if (const auto it = m_journalAliases.find(f->base); it != m_journalAliases.end()) {
+                for (const auto questId : it->second) {
+                    auto* quest = RE::TESForm::LookupByID<RE::TESQuest>(questId);
+                    if (quest && !quest->IsCompleted()) {
+                        has = true;
+                        break;
+                    }
+                }
+            }
+            pending[f->ref] = has;
+        }
+        std::stable_sort(folk.begin(), folk.end(), [&](const Folk* x, const Folk* y) {
+            if (knows[x->ref] != knows[y->ref]) return knows[x->ref] > knows[y->ref];
+            return !pending[x->ref] && pending[y->ref];
+        });
+        const auto worst = [&] { return std::max(share.worst, share.Ms()); };
         int tries = 0;
-        const bool inTown = PlayerInTownProper(townId);
         for (const auto* f : folk) {
             if (++tries > 6) break;
+            IE_PACE_PAUSE(0.05)
+            // The world may have moved on while the choosing was spread: a tale asked for elsewhere, a fight begun.
+            t = clock();
+            auto* player = RE::PlayerCharacter::GetSingleton();
+            if (!player || m_taleBusy.load() || player->IsInCombat() || LivingWorldBridge::GetSingleton()->IsBadMoment()) co_return;
+            const bool inTown = PlayerInTownProper(townId);
             auto* asker = RE::TESForm::LookupByID<RE::Actor>(f->ref);
             if (!asker || asker->IsDead() || asker->IsDisabled()) continue;
             if (AskedWithin(asker->GetFormID(), kAskerRestDays)) continue;
@@ -1422,26 +1539,36 @@ namespace IntelEngine {
                 going.knows = knows[f->ref];
                 if (A::StaysPut(going) != A::Stays::No) talk.rumored = true;
             }
+            msChecks += msSince(t);
+            IE_PACE_PAUSE(0.05)   // the asking has a frame of its own
+            t = clock();
             // A tale the dungeon master writes for them, when a model can be asked; its answer brings the offer.
-            if (RequestTale(asker, {}, talk.rumored ? &talk : nullptr)) {
-                logger::info("Arcs: a tale is being written in {} after {:.1f} hours there, with {} ({:.2f} ms)", PlaceName(townId),
-                             (now - m_paceSince) * 24.0f, NameOf(f->ref), spent());
+            const bool asked = RequestTale(asker, {}, talk.rumored ? &talk : nullptr);
+            msAsk += msSince(t);
+            if (asked) {
+                logger::info("Arcs: a tale is being written in {} after {:.1f} hours there, with {} (at most {:.2f} ms of the game's frame, over {} "
+                             "frame(s): {} people of the town gathered in {:.2f}, who knows the player {:.2f} in all and {:.2f} the slowest, "
+                             "the manners of {} tried {:.2f}, the asking {:.2f}){}",
+                             PlaceName(townId), (now - m_paceSince) * 24.0f, NameOf(f->ref), worst(), share.frames, folk.size(), msGather, msKnows,
+                             msKnowsWorst, tries, msChecks, msAsk,
+                             m_paceEarly ? "; early: the town's first, and the player has talked with people who live here" : "");
                 m_paceSince = now;
                 m_paceBegunPlayed = played;
-                return;
+                co_return;
             }
             if (talk.rumored) continue;   // no model to write it: a stranger elsewhere in town still does not come looking
             const auto id = PlanFor(asker, 0, true);
             if (!id) continue;
-            logger::info("Arcs: #{} begins in {} after {:.1f} hours there: {} comes to the player ({:.2f} ms)", id, PlaceName(townId),
-                         (now - m_paceSince) * 24.0f, NameOf(f->ref), spent());
+            logger::info("Arcs: #{} begins in {} after {:.1f} hours there: {} comes to the player (at most {:.2f} ms of the game's frame, over {} frame(s))", id, PlaceName(townId),
+                         (now - m_paceSince) * 24.0f, NameOf(f->ref), worst(), share.frames);
             m_paceSince = now;
             m_paceBegunPlayed = played;
             SendOffer(id, asker);   // by the one door every offer goes out of: its manners hold here too
-            return;
+            co_return;
         }
-        logger::info("Arcs: nobody in {} has a story for the player now ({:.2f} ms)", PlaceName(townId), spent());
+        logger::info("Arcs: nobody in {} has a story for the player now (at most {:.2f} ms of the game's frame, over {} frame(s))", PlaceName(townId), worst(), share.frames);
     }
+#undef IE_PACE_PAUSE
 
     std::vector<std::uint32_t> ArcBridge::OpenIds() const {
         std::scoped_lock lock(m_mutex);
@@ -3826,8 +3953,14 @@ namespace IntelEngine {
         // Test hook: is the player in the middle of a quest of the journal right now (what holds a town's stories
         // back)? Asking also writes the line about each quest that moved on lately, shown in the journal or not.
         bool ArcQuestBusyNow(RE::StaticFunctionTag*) { return ArcBridge::GetSingleton()->QuestBusy(RealSeconds()); }
+        // Test hook: what the parts of a tale's request cost for this person (to the log).
+        void ArcDebugCosts(RE::StaticFunctionTag*, RE::Actor* who) { ArcBridge::GetSingleton()->DebugCosts(who); }
         // No other story came to the player or ended within the hour.
         bool ArcQuietNow(RE::StaticFunctionTag*, std::int32_t id) { return ArcBridge::GetSingleton()->QuietNow(U(id)); }
+        // The player's answer to an offer, taken from the talk: ArcReadOffer has it read, ArcOfferSpoken says what came
+        // of it (-1 being read, 0 nothing decided, 1 yes, 2 no).
+        void ArcReadOffer(RE::StaticFunctionTag*, std::int32_t id) { ArcBridge::GetSingleton()->ReadOffer(U(id)); }
+        std::int32_t ArcOfferSpoken(RE::StaticFunctionTag*, std::int32_t id) { return ArcBridge::GetSingleton()->OfferSpoken(U(id)); }
         // What only scripts can read of someone's heart (other mods keep it in script storage): Hearts.h, HeartBridge.
         void ArcHeart(RE::StaticFunctionTag*, RE::Actor* who, std::int32_t sparked, std::int32_t stance, std::int32_t withChild,
                       bool childIsPlayers, std::int32_t children, bool playersChild, float refusedAt) {
@@ -3867,6 +4000,8 @@ namespace IntelEngine {
                          reach == 0 ? "here" : reach == 1 ? "elsewhere in the hold" : "in another hold",
                          bonded ? ", close to the player" : ", not close to the player", StoryDirector::kFarRestDays,
                          ArcBridge::GetSingleton()->FarComerLately(StoryDirector::kFarRestDays) ? "yes" : "no");
+            logger::info("[Director] test: their hold '{}', the player's '{}'", NPCIndex::GetNPCHoldName(actor),
+                         NPCIndex::GetNPCHoldName(RE::PlayerCharacter::GetSingleton()));
             return reach + (bonded ? 10 : 0);
         }
         // Test hook: a tale as the director asks for one (a reason of the asker's own, coming from afar).
@@ -3932,7 +4067,10 @@ namespace IntelEngine {
         a_vm->RegisterFunction("ArcCompany", script, ArcCompany); ++count;
         a_vm->RegisterFunction("ArcTalkWithAnother", script, ArcTalkWithAnother); ++count;
         a_vm->RegisterFunction("ArcQuestBusyNow", script, ArcQuestBusyNow); ++count;
+        a_vm->RegisterFunction("ArcDebugCosts", script, ArcDebugCosts); ++count;
         a_vm->RegisterFunction("ArcQuietNow", script, ArcQuietNow); ++count;
+        a_vm->RegisterFunction("ArcReadOffer", script, ArcReadOffer); ++count;
+        a_vm->RegisterFunction("ArcOfferSpoken", script, ArcOfferSpoken); ++count;
         a_vm->RegisterFunction("ArcEarshot", script, ArcEarshot); ++count;
         a_vm->RegisterFunction("ArcStoriesOn", script, ArcStoriesOn); ++count;
         a_vm->RegisterFunction("ArcStorySwitches", script, ArcStorySwitches); ++count;

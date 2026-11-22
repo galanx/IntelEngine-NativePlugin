@@ -380,6 +380,8 @@ namespace IntelEngine {
         s_filtersReadOffFrame.store(true, std::memory_order_relaxed);
     }
 
+    void NPCIndex::ReadStoryFilters() { RefreshStoryFilters(); }
+
     static bool PassesFactionWhitelist(RE::Actor* actor) {
         RefreshFactionWhitelist();
         std::lock_guard<std::mutex> lock(s_factionWhitelistMutex);
@@ -1403,9 +1405,34 @@ namespace IntelEngine {
         std::uint32_t g_playerHoldGeneration = 0;
     }
 
+    void NPCIndex::NotePlayerHold(const RE::BGSLocation* location) {
+        int depth = 0;
+        for (auto* at = location; at && depth < 12; at = at->parentLoc, ++depth) {
+            if (!at->HasKeywordString("LocTypeHold")) continue;
+            const char* name = at->GetFullName();
+            if (!name || !name[0]) return;
+            const auto generation = SlotTracker::GetSingleton()->loadGeneration.load(std::memory_order_relaxed);
+            std::scoped_lock lock(g_playerHoldMutex);
+            g_playerHoldGeneration = generation;
+            g_playerHoldLast = name;
+            return;
+        }
+    }
+
     std::string NPCIndex::GetNPCHoldName(RE::Actor* actor) {
         if (actor && actor->IsPlayerRef()) {
-            std::string hold = HoldNameAt(ResolveActorLocation(actor));
+            // Only a place the game itself marks as a hold counts as knowing where the player is: in open country the
+            // nearest name is the land's ("Skyrim"), which the rule for load orders without marked holds would take for
+            // a hold of its own, and everybody of Whiterun stood "in another hold" from a player a mile outside its
+            // walls (seen on the full list, 2026-11-22).
+            auto* place = ResolveActorLocation(actor);
+            std::string hold;
+            int depth = 0;
+            for (auto* at = place; at && depth < 12; at = at->parentLoc, ++depth) {
+                if (!at->HasKeywordString("LocTypeHold")) continue;
+                if (auto holdName = at->GetFullName(); holdName && holdName[0]) hold = holdName;
+                break;
+            }
             const auto generation = SlotTracker::GetSingleton()->loadGeneration.load(std::memory_order_relaxed);
             std::scoped_lock lock(g_playerHoldMutex);
             if (g_playerHoldGeneration != generation) {
@@ -1414,10 +1441,10 @@ namespace IntelEngine {
             }
             if (!hold.empty()) {
                 g_playerHoldLast = hold;
-            } else if (auto* cell = actor->GetParentCell(); cell && !cell->IsInteriorCell()) {
-                hold = g_playerHoldLast;
+                return hold;
             }
-            return hold;
+            if (auto* cell = actor->GetParentCell(); cell && !cell->IsInteriorCell() && !g_playerHoldLast.empty()) return g_playerHoldLast;
+            return HoldNameAt(place);   // no hold walked in yet this session, or a load order without marked holds
         }
         return HoldNameAt(ResolveActorLocation(actor));
     }

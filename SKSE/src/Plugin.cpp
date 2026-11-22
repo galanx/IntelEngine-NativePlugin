@@ -540,6 +540,9 @@ namespace IntelEngine {
                     auto* task = SKSE::GetTaskInterface();
                     if (task) {
                         task->AddTask([]() { DispatchMaintenanceCall(true); });
+                        // A new game has its first story request too: the same first lookups, made now.
+                        task->AddTask([]() { ArcBridge::GetSingleton()->WarmUp(); });
+                        AsyncDispatch::Submit([] { NPCIndex::ReadStoryFilters(); });
                     }
                 }
                 break;
@@ -548,6 +551,13 @@ namespace IntelEngine {
                 // Game loaded — SlotTracker already populated from co-save (LoadCallback).
                 // ClearAll moved to RevertCallback to avoid wiping co-save data.
                 logger::info("Game loaded - refreshing indexes, clearing MemoryDB caches");
+                // What a session's first story request used to read in the middle of play: the user's lists on the worker
+                // (after that nothing reads them inside a frame), the first lookups on the game's thread while the save
+                // comes in.
+                AsyncDispatch::Submit([] { NPCIndex::ReadStoryFilters(); });
+                if (auto* warm = SKSE::GetTaskInterface()) {
+                    warm->AddTask([] { ArcBridge::GetSingleton()->WarmUp(); });
+                }
                 LanguageBridge::GetSingleton()->Decide();   // the settings may differ from when the data was loaded
                 LivingWorldBridge::GetSingleton()->OnGameLoaded(false);
                 // Journal titles are not in the save: the quests' records give them back.

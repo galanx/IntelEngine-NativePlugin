@@ -9,6 +9,7 @@
 #include "Safe.h"
 
 #include "AsyncDispatch.h"
+#include "BondBridge.h"
 #include "DialogueTracker.h"
 #include "FrameSpread.h"
 #include "HeartBridge.h"
@@ -658,6 +659,7 @@ namespace IntelEngine {
         }
         std::sort(others.begin(), others.end(), [](const Candidate& x, const Candidate& y) { return x.score > y.score; });
         msScore = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - atPeople).count();
+        IE_TALE_PAUSE(0.08)   // choosing among a town of a large mod list is a frame's share by itself (0.37 ms)
 
         nlohmann::json people = nlohmann::json::array();
         const auto add = [&](const Folk& f, bool isAsker) {
@@ -795,7 +797,7 @@ namespace IntelEngine {
             logger::info("Tales: no tale for {}: too few free people in {}", asker->GetDisplayFullName(), NameOf(me->town));
             { drop(); co_return; }
         }
-        IE_TALE_PAUSE(0.2)
+        IE_TALE_PAUSE(0.08)
         double msCompanions = 0.0;
         const double companionsFrom = share.Ms();
         // ---- old companions: former followers living a life of their own, wherever it has taken them. A story may
@@ -840,9 +842,9 @@ namespace IntelEngine {
         request->pool.items = ItemChoices();
 
         msCompanions = share.Ms() - companionsFrom;
-        IE_TALE_PAUSE(0.2)
+        IE_TALE_PAUSE(0.08)
         double msPlaces = 0.0;
-        const double placesFrom = share.Ms();
+        double placesFrom = share.Ms();
         // ---- places out in the world in the town's hold, the nearest first, at most two of a kind
         nlohmann::json places = nlohmann::json::array();
         {
@@ -860,6 +862,9 @@ namespace IntelEngine {
             int refused = 0;
             for (const auto& p : QuestBridge::GetSingleton()->Places()) {
                 if (!townHold || p.hold != townHold->GetFormID()) continue;
+                msPlaces += share.Ms() - placesFrom;
+                IE_TALE_PAUSE(0.25)   // a hold of a large mod list has dozens of places to weigh
+                placesFrom = share.Ms();
                 auto* location = RE::TESForm::LookupByID<RE::BGSLocation>(p.location);
                 const auto kind = SiteKindOf(location);
                 if (kind == Tales::SiteNone) continue;
@@ -942,9 +947,10 @@ namespace IntelEngine {
             request->pool.gold = std::max<std::uint32_t>(25u, (base * fifths / 20u + 2u) / 5u * 5u);
         }
 
-        msPlaces = share.Ms() - placesFrom;
-        IE_TALE_PAUSE(0.2)
-        const double restFrom = share.Ms();
+        msPlaces += share.Ms() - placesFrom;
+        IE_TALE_PAUSE(0.08)
+        double restFrom = share.Ms();
+        double msRest = 0.0, msQuests2 = 0.0, msDump = 0.0;
         // The genre to lean toward: one not told lately, in an order of the day.
         std::vector<std::string> fresh;
         for (const auto* g : kGenres) {
@@ -994,6 +1000,9 @@ namespace IntelEngine {
             }
         }
 
+        msRest += share.Ms() - restFrom;
+        IE_TALE_PAUSE(0.08)
+        restFrom = share.Ms();
         nlohmann::json ctx;
         ctx["player_name"] = PlayerName();
         if (player) {
@@ -1075,6 +1084,9 @@ namespace IntelEngine {
         request->pool.barred = barred | slayOff | (slayTwice ? 1u << static_cast<unsigned>(A::Kind::Slay) : 0u);
         if (slayTwice) logger::info("Tales: no master of a place is killed in this one: the last story ended on one");
         request->pool.depth = written.empty();
+        msRest += share.Ms() - restFrom;
+        IE_TALE_PAUSE(0.08)
+        restFrom = share.Ms();
         // A hunt for what is killing people: on offer when a place near has ground outside it for what was left of a
         // victim. Asked for (a rumor of deaths, the test hook), it is that or nothing.
         {
@@ -1141,8 +1153,17 @@ namespace IntelEngine {
                 ctx["must_place"] = false;
             }
         }
+        // (The words for the writer are put together a part a frame as well: on a large mod list this last part was
+        // 0.7 ms in one.)
+        msRest += share.Ms() - restFrom;
+        IE_TALE_PAUSE(0.08)
+        restFrom = share.Ms();
         ctx["places"] = places;
-        ctx["quests"] = PlayerQuests();
+        {
+            const double from = share.Ms();
+            ctx["quests"] = PlayerQuests();
+            msQuests2 = share.Ms() - from;
+        }
         ctx["told"] = told;
         // The language the player reads in ("Russian"), empty for English: the writer is told to write in it what
         // the player reads (LanguageBridge.h). In an English game whose people speak another language it stays
@@ -1192,21 +1213,28 @@ namespace IntelEngine {
             if (loc && loc->HasKeywordString("LocTypePlayerHouse")) where += " (" + PlayerName() + "'s own home)";
             ctx["player_where"] = where;
         }
-        request->context = ctx.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
+        msRest += share.Ms() - restFrom;
+        IE_TALE_PAUSE(0.08)
+        restFrom = share.Ms();
+        {
+            const double from = share.Ms();
+            request->context = ctx.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
+            msDump = share.Ms() - from;
+        }
 
         m_taleBusy.store(true);
         g_requestAt = real;
         g_request = request;
-        const double msRest = share.Ms() - restFrom;
+        msRest += share.Ms() - restFrom;
         share.End();
         logger::info("Tales: asking for a tale of {} in {} ({} people, {} places, {} items, leaning {}, {} told before; at most "
                      "{:.2f} ms of the game's frame, over {} frame(s); {:.2f} ms in all: {:.2f} before the people, {:.2f} the people "
                      "({:.2f} choosing among the town, {:.2f} who may do what, {:.2f} work and ties, {:.2f} the heart, {:.2f} the "
-                     "game's quests and the rest), {:.2f} old companions, {:.2f} the places, {:.2f} the rest)",
+                     "game's quests and the rest), {:.2f} old companions, {:.2f} the places, {:.2f} the rest, of it {:.2f} the player's quests and {:.2f} writing it down)",
                      request->pool.people[0].name, NameOf(me->town), request->pool.people.size(), request->pool.sites.size(),
                      request->pool.items.size(), lean, told.size(), share.worst, share.frames, share.total, msBefore,
                      msScore + msUsable + msWords + msHeart + msQuests, msScore, msUsable, msWords, msHeart, msQuests, msCompanions,
-                     msPlaces, msRest);
+                     msPlaces, msRest, msQuests2, msDump);
         if (!written.empty()) {
             std::string who;
             for (const auto& p : request->pool.people) {
@@ -1525,6 +1553,146 @@ namespace IntelEngine {
         SendJudge(id, a.node, who, n.goal, n.turns, pending.nones >= 3);
     }
 
+    // ------------------------------------------------------------------ warmed while a save comes in
+    //
+    // Measured on a list of 1,500 plugins with the hook below: once warm, every part of a tale's request costs a few
+    // thousandths of a millisecond. What made a session's first request 2.9 ms (and its pacer 1.4 ms in one frame) were
+    // first calls: the user's lists read from SkyrimNet's settings (0.6 ms), the first "has this person had to do with
+    // the player" (0.6: a relationship mod's factions looked up by plugin name), the first line of the heart (0.23),
+    // the first look at the player's quests, a person's work and the items (0.07 to 0.12 each). They are made here,
+    // once, right after a save has loaded, where a millisecond is not felt.
+    void ArcBridge::WarmUp() {
+        const auto started = std::chrono::steady_clock::now();
+        RE::Actor* who = nullptr;
+        RE::FormID town = 0;
+        for (const auto& f : m_folk) {
+            who = RE::TESForm::LookupByID<RE::Actor>(f.ref);
+            if (who) {
+                town = f.town;
+                break;
+            }
+        }
+        if (!who) return;
+        std::string why;
+        (void)Usable(who, 0, why);
+        (void)KnowsPlayer(who, town);
+        (void)BondBridge::GetSingleton()->Seen(who);
+        (void)HeartBridge::WordsFor(who);
+        (void)HeartBridge::LeanFor(who);
+        (void)HeartBridge::ShyAdmirer(who);
+        (void)PlayerQuests();
+        (void)WorkOf(who);
+        (void)TiesOf(who->GetActorBase());
+        (void)ItemChoices();
+        (void)ObjectiveLocations();
+        (void)PlayerInTownProper(town);
+        (void)QuestBusy(RealNow());
+        logger::info("Arcs: first lookups made while the save came in ({:.2f} ms, with {} standing in for the town)",
+                     std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count(),
+                     who->GetDisplayFullName() ? who->GetDisplayFullName() : "someone");
+    }
+
+    // ------------------------------------------------------------------ what things cost (test hook)
+    //
+    // The parts of a tale's request, each run several times on the game's thread: the first call (which may fill a
+    // table) and the least of the repeats (what it costs once warm, free of the scheduler's interruptions). One
+    // reading of a spread job says little on a busy game thread: 0.5 ms "before the people" on a large mod list turned
+    // out to be one thing, and guessing at it had been wrong before.
+    void ArcBridge::DebugCosts(RE::Actor* who) {
+        if (!who) return;
+        const auto time = [](const std::function<void()>& fn, int runs) {
+            double first = 0.0, least = 1.0e9;
+            for (int i = 0; i < runs; ++i) {
+                const auto t = std::chrono::steady_clock::now();
+                fn();
+                const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t).count();
+                if (i == 0) first = ms;
+                else least = std::min(least, ms);
+            }
+            return std::pair<double, double>(first, least);
+        };
+        const Folk* me = FolkOf(who->GetFormID());
+        const RE::FormID town = me ? me->town : 0;
+        const auto lists = time([&] { (void)NPCIndex::BlockedForStories(who); }, 6);
+        const auto usable = time([&] {
+            std::string why;
+            (void)Usable(who, 0, why);
+        }, 6);
+        const auto knows = time([&] { (void)KnowsPlayer(who, town); }, 6);
+        const auto seen = time([&] { (void)BondBridge::GetSingleton()->Seen(who); }, 6);
+        const auto heart = time([&] { (void)HeartBridge::WordsFor(who); }, 6);
+        const auto lean = time([&] { (void)HeartBridge::LeanFor(who); }, 6);
+        const auto shy = time([&] { (void)HeartBridge::ShyAdmirer(who); }, 6);
+        const auto quests = time([&] { (void)PlayerQuests(); }, 4);
+        const auto inTown = time([&] { (void)PlayerInTownProper(town); }, 6);
+        const auto bad = time([&] { (void)LivingWorldBridge::GetSingleton()->IsBadMoment(); }, 6);
+        const auto work = time([&] {
+            (void)WorkOf(who);
+            (void)TiesOf(who->GetActorBase());
+        }, 6);
+        const auto items = time([&] { (void)ItemChoices(); }, 4);
+        const auto places = time([&] { (void)ObjectiveLocations(); }, 4);
+        const auto asked = time([&] { (void)AskedWithin(who->GetFormID(), 7.0f); }, 6);
+        const auto talk = time([&] { (void)PlayerTalksWithAnother(who->GetFormID(), 45.0f); }, 6);
+        const auto busy = time([&] { (void)QuestBusy(RealNow()); }, 6);
+        const auto told = time([&] {
+            std::scoped_lock lock(m_mutex);
+            float last = -1.0f;
+            for (const auto& a : m_book.all) last = std::max(last, a.created);
+            (void)last;
+        }, 6);
+        const auto name = who->GetDisplayFullName();
+        logger::info("Arcs: what things cost for {} (ms, the first call / the least of the repeats): the user's lists {:.3f}/{:.3f}, usable "
+                     "{:.3f}/{:.3f}, knows the player {:.3f}/{:.3f}, bond {:.3f}/{:.3f}, heart's words {:.3f}/{:.3f}, heart's lean {:.3f}/{:.3f}, "
+                     "shy admirer {:.3f}/{:.3f}, the player's quests {:.3f}/{:.3f}, in town proper {:.3f}/{:.3f}, bad moment {:.3f}/{:.3f}, "
+                     "work and ties {:.3f}/{:.3f}, items {:.3f}/{:.3f}, places quests need {:.3f}/{:.3f}, asked lately {:.3f}/{:.3f}, in talk "
+                     "{:.3f}/{:.3f}, quest gate {:.3f}/{:.3f}, the book {:.3f}/{:.3f}",
+                     name ? name : "?", lists.first, lists.second, usable.first, usable.second, knows.first, knows.second, seen.first, seen.second,
+                     heart.first, heart.second, lean.first, lean.second, shy.first, shy.second, quests.first, quests.second, inTown.first,
+                     inTown.second, bad.first, bad.second, work.first, work.second, items.first, items.second, places.first, places.second,
+                     asked.first, asked.second, talk.first, talk.second, busy.first, busy.second, told.first, told.second);
+    }
+
+    // ------------------------------------------------------------------ a yes or a no already spoken
+    //
+    // An offer was answered by a window and by nothing else: a player who said "Yes, I will look into it" to the one who
+    // asked got the window all the same, and what the dialogue model does with such a line cannot be relied on (some
+    // models agree in words and run no action). The talk is read by the reader of decisions instead, with a yes and a
+    // no as its two answers; anything less brings the window, as before.
+
+    namespace {
+        constexpr std::uint8_t kOfferNode = 0xFE;   // SendJudge's "step" for the reading of an offer
+    }
+
+    void ArcBridge::ReadOffer(std::uint32_t id) {
+        std::scoped_lock lock(m_mutex);
+        const auto* a = m_book.Find(id);
+        if (!a || a->phase != A::Phase::Planned) return;
+        auto& pending = m_pending[id];
+        if (pending.offerSpoken == -1 && RealNow() - pending.offerReadAt < 25.0f) return;   // being read
+        if (!SkyrimNetAPI::SendCustomDecisionToLLM && !SkyrimNetAPI::SendCustomPromptToLLM) {
+            pending.offerSpoken = 0;
+            return;
+        }
+        pending.offerSpoken = -1;
+        pending.offerReadAt = RealNow();
+        const std::string player = PlayerName();
+        const std::string ask = Fill(a->offerAsk.empty() ? A::OfferPrompt(*a) : a->offerAsk, *a);
+        SendJudge(id, kOfferNode, a->cast[A::RAsker], "whether to take on what " + NameOf(a->cast[A::RAsker]) + " has just asked: \"" + ask + "\"",
+                  {player + " says yes: they will do it, look into it, or help.", player + " says no: they will not do it, or not now.", std::string()},
+                  false, true, 150.0f);
+    }
+
+    int ArcBridge::OfferSpoken(std::uint32_t id) {
+        std::scoped_lock lock(m_mutex);
+        const auto it = m_pending.find(id);
+        if (it == m_pending.end()) return 0;
+        auto& pending = it->second;
+        // A reading that never came back is nothing decided.
+        if (pending.offerSpoken == -1 && RealNow() - pending.offerReadAt > 25.0f) pending.offerSpoken = 0;
+        return pending.offerSpoken == -2 ? 0 : pending.offerSpoken;
+    }
+
     // ------------------------------------------------------------------ a decision already spoken
     //
     // A decision step asks the player to decide something in front of someone, by a window with the answers. A player
@@ -1709,6 +1877,14 @@ namespace IntelEngine {
         std::scoped_lock lock(m_mutex);
         const auto* a = m_book.Find(id);
         auto it = m_pending.find(id);
+        if (node == kOfferNode) {
+            // The player's answer to an offer, as read from the talk.
+            if (!a || a->phase != A::Phase::Planned || it == m_pending.end() || it->second.offerSpoken != -1) return;
+            it->second.offerSpoken = turn == 0 ? 1 : turn == 1 ? 2 : 0;
+            logger::info("Tales: #{} the offer in talk: {}", id,
+                         turn == 0 ? "the player said yes" : turn == 1 ? "the player said no" : "nothing was decided: the window asks");
+            return;
+        }
         if (!a || !A::IsOpen(*a) || it == m_pending.end() || it->second.node != node || a->node != node) return;
         auto& pending = it->second;
         pending.judging = false;
