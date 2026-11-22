@@ -85,6 +85,19 @@ static void PacingRules() {
     d.lastBigDay = 30.5f;
     Require(!MayDeliverNow(d, s, soon, false, true, 1), "a rest after a big moment");
     Require(MayDeliverNow(d, s, soon, false, false, 1), "a small one is fine");
+    // Skipping time does not bring the next moment: it takes time actually played as well.
+    Situation skipped{Seam::Woke, 40.0f, false};
+    DirectorState rested;
+    rested.budget = 2.0f;
+    rested.budgetDay = 40.0f;
+    rested.lastMomentDay = 39.0f;            // a moment a game day ago...
+    skipped.playedSince = 30.0f;             // ...which was half a minute of play ago: the player waited a day
+    Require(!MayDeliverNow(rested, s, skipped, false, false, 1), "a day waited through is no time played: no moment yet");
+    Require(MayDeliverNow(rested, s, skipped, true, false, 1), "something urgent comes all the same");
+    skipped.playedSince = kMinGapPlayedSeconds;
+    Require(MayDeliverNow(rested, s, skipped, false, false, 1), "after eight minutes of play it may");
+    skipped.playedSince = -1.0f;
+    Require(MayDeliverNow(rested, s, skipped, false, false, 1), "no moment yet this session: nothing to wait out");
     Situation dungeon{Seam::InDungeon, 31.0f, false};
     Require(!MayDeliverNow(d, s, dungeon, false, false, 1), "deep in a dungeon only urgent things come");
     Require(MayDeliverNow(d, s, dungeon, true, false, 1), "help can still arrive");

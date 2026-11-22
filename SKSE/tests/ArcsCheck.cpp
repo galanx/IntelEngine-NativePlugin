@@ -374,6 +374,11 @@ static void WhoGoes() {
     Require(StaysPut(stranger) == Stays::OutOfTown, "and never beyond its houses");
     stranger.with = true;
     Require(StaysPut(stranger) == Stays::No, "a stranger with trouble may take a chance on the stranger beside them");
+    // Time skipped is not time played.
+    Require(!PlayedEnough(30.0f, kTownLingerPlayed) && PlayedEnough(kTownLingerPlayed, kTownLingerPlayed),
+            "a town's story begins after four minutes of play there, not after two hours waited through");
+    Require(!PlayedEnough(600.0f, kStoryGapPlayed) && PlayedEnough(1200.0f, kStoryGapPlayed), "and not within twenty minutes of play of the last");
+    Require(PlayedEnough(-1.0f, kStoryGapPlayed), "none begun this session: nothing to wait out");
     // Where nobody is sent (another plane, a dungeon): not even somebody the director lets come from afar.
     Going afar;
     afar.sent = true;

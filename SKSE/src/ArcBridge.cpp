@@ -1289,12 +1289,34 @@ namespace IntelEngine {
         auto* cell = player->GetParentCell();
         auto* town = TownOf(cell && cell->GetLocation() ? cell->GetLocation() : player->GetCurrentLocation());
         const RE::FormID townId = town ? town->GetFormID() : 0;
+        const double played = LivingWorldBridge::PlayedSeconds();
         if (townId != m_paceTown || now < m_paceSince) {
             m_paceTown = townId;
             m_paceSince = now;
+            m_pacePlayedAt = played;
+            m_paceHeld = 0;
             return;
         }
         if (!townId || (now - m_paceSince) * 24.0f < kTownLingerHours) return;
+        // Time actually played, too: two hours waited through at the inn are no time spent in the town, and a day
+        // waited through is not the day between two stories (the user, 2026-11-22: "What about player constantly
+        // skipping time. Will that ruin the pacing?").
+        {
+            const float here = static_cast<float>(played - m_pacePlayedAt);
+            const float since = m_paceBegunPlayed < 0.0 ? -1.0f : static_cast<float>(played - m_paceBegunPlayed);
+            const int held = !A::PlayedEnough(here, A::kTownLingerPlayed) ? 1 : !A::PlayedEnough(since, A::kStoryGapPlayed) ? 2 : 0;
+            if (held != m_paceHeld) {
+                m_paceHeld = held;
+                if (held == 1) {
+                    logger::info("Arcs: no story of {} yet: {:.0f} s played here ({:.0f} needed, whatever the clock says)", PlaceName(townId), here,
+                                 A::kTownLingerPlayed);
+                } else if (held == 2) {
+                    logger::info("Arcs: no story of {} yet: the last one began {:.0f} s of play ago ({:.0f} needed, whatever the clock says)",
+                                 PlaceName(townId), since, A::kStoryGapPlayed);
+                }
+            }
+            if (held) return;
+        }
         if (m_paceTried >= 0.0f && now >= m_paceTried && now - m_paceTried < kPaceRetryDays) return;
         if (LivingWorldBridge::GetSingleton()->IsBadMoment() || player->IsInCombat()) return;
         // The player is busy with a quest of the journal (a stage of it moved on lately): no story cuts in.
@@ -1357,6 +1379,7 @@ namespace IntelEngine {
                 logger::info("Arcs: a tale is being written in {} after {:.1f} hours there, with {} ({:.2f} ms)", PlaceName(townId),
                              (now - m_paceSince) * 24.0f, NameOf(f->ref), spent());
                 m_paceSince = now;
+                m_paceBegunPlayed = played;
                 return;
             }
             if (talk.rumored) continue;   // no model to write it: a stranger elsewhere in town still does not come looking
@@ -1365,6 +1388,7 @@ namespace IntelEngine {
             logger::info("Arcs: #{} begins in {} after {:.1f} hours there: {} comes to the player ({:.2f} ms)", id, PlaceName(townId),
                          (now - m_paceSince) * 24.0f, NameOf(f->ref), spent());
             m_paceSince = now;
+            m_paceBegunPlayed = played;
             SendOffer(id, asker);   // by the one door every offer goes out of: its manners hold here too
             return;
         }
@@ -3428,6 +3452,9 @@ namespace IntelEngine {
         }
         m_book = A::Book{};
         m_pending.clear();
+        m_paceTown = 0;                // another game: the town, and what began there, are not this game's
+        m_paceBegunPlayed = -1.0;
+        m_paceHeld = 0;
         // A save without arcs (made before them, or before this mod) still gets its look: every arc rumor is of another
         // timeline then.
         m_reconciled = false;

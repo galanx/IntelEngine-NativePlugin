@@ -155,6 +155,10 @@ namespace IntelEngine {
         /** The look that follows where the player goes, how they sit and what they wear (every ten seconds or so, with
          *  the look of the living world). The game's thread. */
         static void NotePlayerWhere();
+        /** Seconds the game has actually been played this session: counted by the look above, which is not taken while
+         *  the game is paused (menus, waiting, sleeping, loading), and never more than twenty seconds a look. Skipping
+         *  time adds nothing to it. Any thread. */
+        static double PlayedSeconds();
         /** Is the player where nobody is sent (Patrols::PlaceBars): beyond reach, or in a dungeon above Classic? As
          *  the last look saw it (NotePlayerWhere, every ten seconds or so): any thread. */
         static Patrols::Barred PlaceBars();

@@ -468,6 +468,11 @@ namespace IntelEngine::Arcs {
     //    (SetsOut above, the rarer way of a story that began as talk).
     // Whoever stays waits (Flag::Deferred), their trouble is talk in town, and the offer goes out when the two meet.
     constexpr int kAcquaintedEvents = 6;    // SkyrimNet has seen the two have to do with each other this often: talk, not a greeting
+    // Time actually played (LivingWorld.h says why): a town's own story begins after this much play in the town, and
+    // not within this much play of the last story that began by itself, whatever the game's clock was turned to.
+    constexpr float kTownLingerPlayed = 240.0f;   // four minutes (two game hours are six at the game's own pace)
+    constexpr float kStoryGapPlayed = 1200.0f;    // twenty minutes (a game day is seventy-two)
+    inline constexpr bool PlayedEnough(float playedSince, float needed) { return playedSince < 0.0f || playedSince >= needed; }
     constexpr float kWithPlayer = 3000.0f;  // "with the player": the same room, or out of doors this near
     constexpr float kTownReach = 4500.0f;   // an open town reaches this far round its marker on the map
     enum class Stays : std::uint8_t { No = 0, Post, OutOfTown, Stranger, Barred };
