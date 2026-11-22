@@ -85,7 +85,7 @@ namespace IntelEngine::Papyrus {
     void NotifyStoryTypePicked(RE::StaticFunctionTag*, RE::BSFixedString);
     void RecordStoryDispatch(RE::StaticFunctionTag*, RE::BSFixedString, RE::BSFixedString, RE::BSFixedString);
     bool LivingWorldMayDeliver(RE::StaticFunctionTag*, std::int32_t, bool);
-    void SetLivingWorldSettings(RE::StaticFunctionTag*, std::int32_t, std::int32_t, std::int32_t, std::int32_t, float, float);
+    void SetLivingWorldSettings(RE::StaticFunctionTag*, std::int32_t, std::int32_t, std::int32_t, std::int32_t, float, float, bool);
     void LivingWorldMomentDispatched(RE::StaticFunctionTag*, RE::Actor*, RE::BSFixedString);
     std::int32_t StorylineOpen(RE::StaticFunctionTag*, std::int32_t, std::int32_t, RE::Actor*, RE::Actor*, RE::BGSLocation*,
                                RE::TESObjectREFR*, RE::TESForm*, float, std::int32_t, bool);
@@ -2395,7 +2395,7 @@ namespace IntelEngine::Papyrus {
 
     /** 4.0 living world: the six settings, from the scripts on load and on every change. Out-of-range values clamp. */
     void SetLivingWorldSettings(RE::StaticFunctionTag*, std::int32_t level, std::int32_t interruptions, std::int32_t questNpcs,
-                                std::int32_t pacing, float waitDays, float lifeDays) {
+                                std::int32_t pacing, float waitDays, float lifeDays, bool skippedTimeCounts) {
         LivingWorld::Settings s;
         s.level = static_cast<LivingWorld::WorldLevel>(std::clamp(level, 0, 2));
         s.interruptions = static_cast<LivingWorld::Interruptions>(std::clamp(interruptions, 0, 2));
@@ -2403,6 +2403,7 @@ namespace IntelEngine::Papyrus {
         s.pacing = static_cast<LivingWorld::Pacing>(std::clamp(pacing, 0, 2));
         s.waitOrderDays = std::clamp(waitDays, 1.0f, 120.0f);
         s.lifeStartDays = std::clamp(lifeDays, 1.0f, 60.0f);
+        s.skippedTimeCounts = skippedTimeCounts;
         LivingWorldBridge::GetSingleton()->SetSettings(s);
     }
 

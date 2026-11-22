@@ -111,6 +111,7 @@ class VM:
         self.properties.update({f"TargetAlias{i:02d}": ReferenceAlias() for i in range(5)})
         self.properties.update({"NPCTickIntervalHours": 1.5, "MONITOR_INTERVAL": 5.0, "IDLE_POLL_INTERVAL": 30.0})
         self.properties.update({"LivingWorldLevel": 2})   # the default level of the living world ("Lives")
+        self.properties.update({"LivingWorldSkippedTime": False})   # "Skipped time counts toward the pace": off by default
         # Core's own bookkeeping variables (3.8): pending tick, last sweep, open popup request.
         self.properties.update({"_tickDueRealTime": 0.0, "_lastSweepGameTime": 0.0, "_mlRequest": ""})
         # 3.8.2: when the quest's one game-time timer is due (RequestGameTimeTick).

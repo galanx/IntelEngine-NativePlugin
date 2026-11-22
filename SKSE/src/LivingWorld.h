@@ -40,6 +40,9 @@ namespace IntelEngine::LivingWorld {
         Pacing pacing = Pacing::Normal;
         float waitOrderDays = 30.0f;  // a follower told to wait keeps waiting this long
         float lifeStartDays = 7.0f;   // a follower left behind starts a life of their own after this long
+        // "Skipped time counts toward the pace" (the user, 2026-11-22: "Make it a setting that the user can choose
+        // if time skipping should count toward the story time"). Off: moments also take time actually played.
+        bool skippedTimeCounts = false;
     };
 
     inline float MomentsPerDay(Pacing pacing) {
@@ -438,7 +441,7 @@ namespace IntelEngine::LivingWorld {
         if (urgent) return true;
         if (state.budget < 1.0f) return false;
         if (at.now - state.lastMomentDay < kMinGapDays) return false;
-        if (at.playedSince >= 0.0f && at.playedSince < kMinGapPlayedSeconds) return false;
+        if (!settings.skippedTimeCounts && at.playedSince >= 0.0f && at.playedSince < kMinGapPlayedSeconds) return false;
         if (big && at.now - state.lastBigDay < kRestAfterBigDays) return false;
         return true;
     }

@@ -162,14 +162,15 @@ namespace IntelEngine {
                           m_settings.interruptions == settings.interruptions &&
                           m_settings.questNpcMoves == settings.questNpcMoves && m_settings.pacing == settings.pacing &&
                           m_settings.waitOrderDays == settings.waitOrderDays &&
-                          m_settings.lifeStartDays == settings.lifeStartDays;
+                          m_settings.lifeStartDays == settings.lifeStartDays && m_settings.skippedTimeCounts == settings.skippedTimeCounts;
         m_settings = settings;
         m_settingsKnown = true;
         if (same) return;
-        logger::info("LivingWorld: level {}, interruptions {}, quest NPCs {}, pacing {}, wait {:.0f} days, own life after {:.0f} days",
+        logger::info("LivingWorld: level {}, interruptions {}, quest NPCs {}, pacing {}, wait {:.0f} days, own life after {:.0f} days, "
+                     "skipped time {}",
                      static_cast<int>(settings.level), static_cast<int>(settings.interruptions),
                      static_cast<int>(settings.questNpcMoves), static_cast<int>(settings.pacing), settings.waitOrderDays,
-                     settings.lifeStartDays);
+                     settings.lifeStartDays, settings.skippedTimeCounts ? "counts toward the pace" : "does not count: moments take time played");
     }
 
     bool LivingWorldBridge::IsDungeon(const RE::BGSLocation* location) {

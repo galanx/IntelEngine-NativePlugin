@@ -446,6 +446,21 @@ later "budget 2.00, bad moment false, 76 s of play since the last moment: held b
 "531 s of play since the last moment: a moment may land". Not played: the game's own wait and sleep menus and a
 fast travel (the fast clock stood in for them); twenty minutes of play to see the second town story begin.
 
+**The switch.** The user, right after: "Make it a setting that the user can choose if time skipping should count
+toward the story time". `livingWorldSkippedTime` (`living_world.skipped_time_counts`), named "Skipped time counts
+toward the pace" on all three pages, off by default. `LivingWorld::Settings::skippedTimeCounts` reaches the DLL as
+the seventh argument of `SetLivingWorldSettings`. On, `MayDeliverNow` leaves out the gap in time played and
+`ArcBridge::Pace` leaves out both of its conditions in time played, so the game's clock alone counts, as it did
+before the rules above. The line the DLL logs when its settings change says which way it stands ("skipped time
+counts toward the pace" / "does not count: moments take time played").
+
+Played: off, after a skipped day "budget 2.00, bad moment false, 44 s of play since the last moment: held back";
+switched on, "66 s of play since the last moment: a moment may land"; thrown on and off again in a fresh start of
+the game, the log line and `settings.yaml` (`skipped_time_counts`) followed each time. The dashboard's row was
+looked at in the preview (it sends `livingWorldSkippedTime` true and false, which the DLL hands to the scripts as
+1.0 and 0.0, the values played). Not opened in the game: the MCM toggle and the row on SkyrimNet's page; with the
+switch on, the town pacer was not watched beginning a story after a skip (only the director's verdict was).
+
 ### The story clock: one pace setting above Classic (2026-11-22)
 
 The user: "What about the story checks time which is every 3h by default, do we still need that?" Above Classic two

@@ -1301,7 +1301,7 @@ namespace IntelEngine {
         // Time actually played, too: two hours waited through at the inn are no time spent in the town, and a day
         // waited through is not the day between two stories (the user, 2026-11-22: "What about player constantly
         // skipping time. Will that ruin the pacing?").
-        {
+        if (!LivingWorldBridge::GetSingleton()->GetSettings().skippedTimeCounts) {
             const float here = static_cast<float>(played - m_pacePlayedAt);
             const float since = m_paceBegunPlayed < 0.0 ? -1.0f : static_cast<float>(played - m_paceBegunPlayed);
             const int held = !A::PlayedEnough(here, A::kTownLingerPlayed) ? 1 : !A::PlayedEnough(since, A::kStoryGapPlayed) ? 2 : 0;
