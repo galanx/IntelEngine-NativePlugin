@@ -272,6 +272,8 @@ namespace IntelEngine::Papyrus {
     RE::BSFixedString BattlePickField(RE::StaticFunctionTag*, RE::Actor*, RE::TESObjectREFR*);
     RE::BSFixedString BattleMusterLine(RE::StaticFunctionTag*, RE::BSFixedString, int, int, RE::Actor*);
     RE::BSFixedString BattleReinforceLine(RE::StaticFunctionTag*, RE::BSFixedString, int, int, RE::Actor*);
+    RE::BSFixedString BattleSettle(RE::StaticFunctionTag*);
+    int BattlePrepareGroup(RE::StaticFunctionTag*, RE::BSFixedString, int, RE::Actor*);
     void BattleBeginFight(RE::StaticFunctionTag*);
     RE::BSFixedString BattleVerdict(RE::StaticFunctionTag*);
     RE::BSFixedString BattleIdleHands(RE::StaticFunctionTag*, int);
@@ -751,6 +753,8 @@ namespace IntelEngine::Papyrus {
         a_vm->RegisterFunction("BattlePickField", SCRIPT_NAME, BattlePickField); ++count;
         a_vm->RegisterFunction("BattleMusterLine", SCRIPT_NAME, BattleMusterLine); ++count;
         a_vm->RegisterFunction("BattleReinforceLine", SCRIPT_NAME, BattleReinforceLine); ++count;
+        a_vm->RegisterFunction("BattleSettle", SCRIPT_NAME, BattleSettle); ++count;
+        a_vm->RegisterFunction("BattlePrepareGroup", SCRIPT_NAME, BattlePrepareGroup); ++count;
         a_vm->RegisterFunction("BattleBeginFight", SCRIPT_NAME, BattleBeginFight); ++count;
         a_vm->RegisterFunction("BattleVerdict", SCRIPT_NAME, BattleVerdict); ++count;
         a_vm->RegisterFunction("BattleIdleHands", SCRIPT_NAME, BattleIdleHands); ++count;
@@ -5804,6 +5808,14 @@ namespace IntelEngine::Papyrus {
 
     RE::BSFixedString BattleReinforceLine(RE::StaticFunctionTag*, RE::BSFixedString side, int first, int count, RE::Actor* player) {
         return RE::BSFixedString(BattleManager::GetSingleton()->ReinforceLine(side.c_str(), first, count, player).c_str());
+    }
+
+    RE::BSFixedString BattleSettle(RE::StaticFunctionTag*) {
+        return RE::BSFixedString(BattleManager::GetSingleton()->SettleSoldiers().c_str());
+    }
+
+    int BattlePrepareGroup(RE::StaticFunctionTag*, RE::BSFixedString side, int kind, RE::Actor* player) {
+        return BattleManager::GetSingleton()->PrepareGroup(side.c_str(), player, kind);
     }
 
     void BattleBeginFight(RE::StaticFunctionTag*) { BattleManager::GetSingleton()->BeginFight(); }

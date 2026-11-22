@@ -15,6 +15,8 @@
 #include "Battlefield.h"
 
 #include <nlohmann/json.hpp>
+#include <atomic>
+#include <chrono>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -225,6 +227,13 @@ namespace IntelEngine {
          *  first: their number in the group that comes up together (0 picks where the group comes from).
          *  Returns JSON: {success, count, formIds, error} */
         std::string ReinforceLine(const std::string& side, int first, int count, RE::Actor* player, int kind = 0);
+
+        /** Before a group comes up (kind as for ReinforceLine: 0 a wave, 1 the hidden force, 2 a champion): where they
+         *  come from, out of the player's sight, and who they are, chosen in a frame of its own. The first call of
+         *  ReinforceLine did this and made a soldier in the same frame, and that frame took 0.50 ms (2026-11-22).
+         *  1: chosen, ReinforceLine may follow. 0: nowhere to come from unseen, or nobody to come (a side has one
+         *  champion). -1: no battle with a field. */
+        int PrepareGroup(const std::string& side, RE::Actor* player, int kind);
         // kind: 0 those who come up behind their own line; 1 a hidden force, out to one side of the other's line; 2 the
         // side's champion, alone, from behind their own line.
 
@@ -278,10 +287,23 @@ namespace IntelEngine {
 
         /** Part of one army of the active battle drawn up on its field ("A" or "B"): soldiers `first` to
          *  `first + count - 1` of its first wave, in ranks, the commander (number 0) in front, facing the other line,
-         *  standing down (they start nothing). Created where they stand, switched off: the script lets them fade in.
-         *  A few at a time: making one soldier takes about a quarter of a millisecond of the game's frame.
+         *  standing down (they start nothing). Made switched off and not yet where they stand: SettleSoldiers, a
+         *  frame later, sets them down and gives them their side; then the script lets them fade in. One at a time.
          *  Returns JSON: {success, count, formIds, commander: [id] (with number 0), error} */
         std::string MusterLine(const std::string& side, int first, int count, RE::Actor* player);
+
+        /** The second half of making soldiers, to be called a frame after the first (MusterLine, ReinforceLine,
+         *  RaiseLoner): everybody made and not yet settled is set down where they are to stand, loses the factions
+         *  they came with, gets their side, their orders and their place in the battle's roll.
+         *
+         *  One soldier made whole in one call took 0.51 to 0.57 ms of the game's frame (test profile, 2026-11-22):
+         *  the game's own making 0.40 to 0.48 by who is made, the setting down 0.07, the rest 0.06 to 0.10. The
+         *  game's part cannot be cut into pieces; the rest can be done in another frame, and is (0.09 ms).
+         *
+         *  Returns "" when everybody was settled; else JSON {count, formIds} of those who could not be (the battle
+         *  ended between the two halves, or the ground they were to stand on is no longer loaded): they are switched
+         *  off and were never seen, and the script removes them. */
+        std::string SettleSoldiers();
 
         /** The active battle is a skirmish: `size` a side (2 to 6), nobody held back, told and recorded as a clash of a
          *  few and not as a battle. To be said before the lines are drawn up. (A brawl or a border skirmish used to
@@ -289,8 +311,9 @@ namespace IntelEngine {
          *  in the same battle side, so that nothing but the first order to fight made them enemies.) */
         void SetSkirmish(int size);
 
-        /** One person of a faction's soldiers made at a spot of the world around the player, switched off, in no
-         *  faction at all and starting nothing: somebody who comes for one man (an assassin). */
+        /** One person of a faction's soldiers made for a spot of the world around the player, switched off, in no
+         *  faction at all and starting nothing: somebody who comes for one man (an assassin). Like every soldier
+         *  they stand on that spot only after SettleSoldiers. */
         RE::Actor* RaiseLoner(const std::string& factionId, Battlefield::Vec at, float facingDeg, RE::Actor* player);
 
         /** A spot to come from for somebody who is to walk up to `target` unseen: on ground that can be walked, out of
@@ -473,6 +496,9 @@ namespace IntelEngine {
             bool flankDone = false, turnDone = false, championCalledA = false, championCalledB = false;
             RE::FormID championA = 0, championB = 0;
             float flankX = 0.f, flankY = 0.f;           // where the hidden force breaks cover
+            // What PrepareGroup has chosen for a side (A, B) and when: the kind of group, -1 nothing.
+            int preparedKind[2] = {-1, -1};
+            std::chrono::steady_clock::time_point preparedAt[2];
             std::string championFell, sprung, turning;  // said by the poll, once each
             // Captains and champions of each side cut down by the player's own hand.
             int playerSlewCaptainsA = 0, playerSlewCaptainsB = 0, playerSlewChampionsA = 0, playerSlewChampionsB = 0;
@@ -489,13 +515,36 @@ namespace IntelEngine {
         mutable std::unordered_map<std::string, RE::TESBoundObject*> templates_;
         mutable std::mutex templatesMutex_;
 
-        /** Soldiers of one side created where they are to stand (never at the player), facing `facingDeg`, switched
-         *  off, without the factions they came with, in their battle side. standDown: they start no fight (the lines
-         *  at the muster). commander: the first of them leads the side. */
-        std::vector<RE::Actor*> RaiseSoldiers(const std::string& factionId, RE::TESFaction* battleFaction,
-                                              const std::vector<Battlefield::Vec>& spots, float facingDeg, float fallbackZ,
-                                              RE::Actor* player, bool standDown, bool commander, bool ofABattle = true,
-                                              const std::vector<RE::TESBoundObject*>* who = nullptr, bool champion = false);
+        /** The first half of making soldiers of one side: the game makes them, switched off, and each is noted with
+         *  the spot they are to stand on (facing `facingDeg`), the side they are to be in and their orders. Nothing
+         *  else is done to them here: SettleSoldiers does the rest in a later frame. standDown: they start no fight
+         *  (the lines at the muster). commander: the first of them leads the side. */
+        std::vector<RE::Actor*> MakeSoldiers(const std::string& factionId, RE::TESFaction* battleFaction,
+                                             const std::vector<Battlefield::Vec>& spots, float facingDeg, float fallbackZ,
+                                             RE::Actor* player, bool standDown, bool commander, bool ofABattle = true,
+                                             const std::vector<RE::TESBoundObject*>* who = nullptr, bool champion = false);
+        /** Somebody made and not yet settled. (By handle, not by id: an id that has been given to somebody else since
+         *  would be taken for them; a handle then resolves to nobody. Plain values: this header is also compiled by
+         *  checks that know none of the game's types.) */
+        struct Unsettled {
+            std::uint32_t handle = 0;
+            RE::FormID world = 0;               // the land they are to stand in
+            float x = 0.f, y = 0.f, z = 0.f;    // where (the height is looked up when they are set down)
+            float facing = 0.f;                 // in radians
+            std::string factionId;
+            RE::TESFaction* battleFaction = nullptr;
+            bool standDown = false;
+            bool ofABattle = false;
+            int tier = 0;               // 0 a soldier, 2 the one who leads, 3 a champion
+        };
+        std::vector<Unsettled> unsettled_;
+        std::mutex unsettledMutex_;
+        /** Where a group of one side can come from unseen (behind their own line; a hidden force out to one side of
+         *  the other's). False: nowhere, nobody comes this time. */
+        bool ComingPlace(RE::Actor* player, bool sideA, bool flank, Battlefield::Vec centre, float axis, float z,
+                         const std::string& factionId, Battlefield::Vec& point) const;
+        /** These are somebody else's to remove (the script's, by the ids it was given): they are not settled later. */
+        void ForgetUnsettled(const std::vector<RE::Actor*>& soldiers);
         /** The next `count` of the group rolled for a side of the active battle (rolled now, `whole` of them, when
          *  `first` is 0 or nothing is left). */
         std::vector<RE::TESBoundObject*> NextOf(bool sideA, const std::string& factionId, int first, int count, int whole, RE::Actor* player);
@@ -503,6 +552,7 @@ namespace IntelEngine {
         /** Resolve Intel_BattleSideA and Intel_BattleSideB factions from IntelEngine.esp.
          *  Returns {nullptr, nullptr} if ESP not found. */
         std::pair<RE::TESFaction*, RE::TESFaction*> ResolveBattleFactions() const;
+        std::pair<RE::TESFaction*, RE::TESFaction*> FindBattleFactions() const;
 
         /** Thread-safe random float in [min, max]. */
         static float RandomFloat(float min, float max);

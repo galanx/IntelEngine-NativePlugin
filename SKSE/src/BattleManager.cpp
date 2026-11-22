@@ -1111,6 +1111,10 @@ namespace IntelEngine {
 
     void BattleManager::Revert() {
         ClearPendingBattles();
+        {
+            std::lock_guard<std::mutex> lock(unsettledMutex_);
+            unsettled_.clear();          // of the game that is left: whoever they were went with it
+        }
         quietUntil_.store(0.0);
         std::lock_guard<std::mutex> lock(templatesMutex_);
         templates_.clear();
@@ -1992,7 +1996,7 @@ namespace IntelEngine {
 
     std::string BattleManager::MusterLine(const std::string& side, int first, int count, RE::Actor* player) {
         static FrameStats stats;
-        FrameClock clock("Battle: drawing up soldiers", stats, FrameClock::Now(), 60);
+        FrameClock clock("Battle: drawing up soldiers", stats, FrameClock::Now(), 16);
         nlohmann::json out;
         out["success"] = false;
         out["count"] = 0;
@@ -2034,7 +2038,7 @@ namespace IntelEngine {
         const auto& line = isA ? field.a : field.b;
         const std::vector<Battlefield::Vec> spots(line.spots.begin() + first, line.spots.begin() + first + count);
         const auto who = NextOf(isA, factionId, first, count, total, player);
-        const auto soldiers = RaiseSoldiers(factionId, isA ? battleFactionA : battleFactionB, spots, line.facing, z, player, true, first == 0, true, &who);
+        const auto soldiers = MakeSoldiers(factionId, isA ? battleFactionA : battleFactionB, spots, line.facing, z, player, true, first == 0, true, &who);
         nlohmann::json ids = nlohmann::json::array();
         for (auto* s : soldiers) ids.push_back(s->GetFormID());
         out["success"] = true;
@@ -2051,7 +2055,7 @@ namespace IntelEngine {
     std::string BattleManager::ReinforceLine(const std::string& side, int first, int count, RE::Actor* player, int kind) {
         const bool flank = kind == 1;
         static FrameStats stats;
-        FrameClock clock("Battle: bringing up soldiers", stats, FrameClock::Now(), 60);
+        FrameClock clock("Battle: bringing up soldiers", stats, FrameClock::Now(), 8);
         nlohmann::json out;
         out["success"] = false;
         out["count"] = 0;
@@ -2105,48 +2109,44 @@ namespace IntelEngine {
 
         const auto field = Battlefield::Draw(centre, axis, 1, 1);
         const auto& line = isA ? field.a : field.b;
-        const Battlefield::Vec me{player->GetPositionX(), player->GetPositionY()};
+        bool prepared = false;
         if (first <= 0) {
-            // Where this group comes from: behind their own line, where the player is least likely to see it.
-            // The first of the places worth trying that can be walked from. None (the player stands where they would
-            // come from, or it is all rock and water there): nobody comes this time, rather than out of thin air next
-            // to the player (it happened: 685 units off, in plain view, 2026-11-20).
-            bool found = false;
-            const float looking = Battlefield::Norm(player->GetAngleZ() * kDegPerRad);
-            // Those who come up come from behind their own line; a hidden force from out to one side of the other's.
-            const auto places = flank ? Battlefield::FlankPoints(isA ? field.b : field.a, me, looking) : Battlefield::ReservePoints(line, me, looking);
-            for (const auto& at : places) {
-                const Ground ground = GroundAt(tes, at, z);
-                if (!ground.walkable || ground.wet) continue;
-                point = at;
-                found = true;
-                break;
+            {
+                // Chosen a frame ago by PrepareGroup (the place, and who comes)? Then nothing is looked for in the
+                // frame the first of them is made in. (`point` above is that place.)
+                std::lock_guard<std::mutex> lock(mutex_);
+                if (activeBattle_) {
+                    auto& ready = activeBattle_->preparedKind[isA ? 0 : 1];
+                    prepared = ready == kind && std::chrono::steady_clock::now() - activeBattle_->preparedAt[isA ? 0 : 1] < std::chrono::seconds(5);
+                    ready = -1;
+                }
             }
-            if (!found) {
-                logger::info("Battle: nowhere for more of {} to come from unseen: nobody comes up this time", factionId);
-                out["success"] = true;
-                return out.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
-            }
-            logger::info("Battle: more of {} come {}, {:.0f} units from the player", factionId,
-                         flank ? "out of hiding on the flank" : "up behind their line", Battlefield::Dist(me, point));
-            std::lock_guard<std::mutex> lock(mutex_);
-            if (activeBattle_ && flank) {
-                activeBattle_->flankX = point.x;
-                activeBattle_->flankY = point.y;
-            } else if (activeBattle_) {
-                (isA ? activeBattle_->reserveAX : activeBattle_->reserveBX) = point.x;
-                (isA ? activeBattle_->reserveAY : activeBattle_->reserveBY) = point.y;
+            if (!prepared) {
+                if (!ComingPlace(player, isA, flank, centre, axis, z, factionId, point)) {
+                    out["success"] = true;
+                    return out.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
+                }
+                std::lock_guard<std::mutex> lock(mutex_);
+                if (activeBattle_ && flank) {
+                    activeBattle_->flankX = point.x;
+                    activeBattle_->flankY = point.y;
+                } else if (activeBattle_) {
+                    (isA ? activeBattle_->reserveAX : activeBattle_->reserveBX) = point.x;
+                    (isA ? activeBattle_->reserveAY : activeBattle_->reserveBY) = point.y;
+                }
             }
         }
         std::vector<Battlefield::Vec> spots;
         for (int i = 0; i < count; ++i) spots.push_back(Battlefield::ReserveSpot(point, line.facing, (std::max)(first, 0) + i));
 
-        // (A champion is rolled by themself, so that a wave's group being made at the same time is left as it is.)
+        // (A champion is rolled by themself, so that a wave's group being made at the same time is left as it is.
+        // A group PrepareGroup has rolled is not rolled again by its first.)
         const auto who = kind == 2 ? RollFor(factionId, 1, player)
-                                   : NextOf(isA, factionId, first, count, (std::max)(count, flank ? Battlefield::kFlankSize : Battlefield::WaveSize(GetWave(side) + 1)), player);
+                                   : NextOf(isA, factionId, prepared ? (std::max)(first, 1) : first, count,
+                                            (std::max)(count, flank ? Battlefield::kFlankSize : Battlefield::WaveSize(GetWave(side) + 1)), player);
         // A hidden force looks at the line it falls on.
         const float looks = flank ? Battlefield::Bearing(point, (isA ? field.b : field.a).centre) : line.facing;
-        const auto soldiers = RaiseSoldiers(factionId, isA ? battleFactionA : battleFactionB, spots, looks, z, player, false, false, true, &who, bringsChampion);
+        const auto soldiers = MakeSoldiers(factionId, isA ? battleFactionA : battleFactionB, spots, looks, z, player, false, false, true, &who, bringsChampion);
         nlohmann::json ids = nlohmann::json::array();
         for (auto* s : soldiers) ids.push_back(s->GetFormID());
         out["count"] = static_cast<int>(soldiers.size());
@@ -2157,17 +2157,81 @@ namespace IntelEngine {
             logger::info("Battle: a champion of {} comes up", factionId);
         }
         out["formIds"] = ids;
+        bool over = false;
         {
+            std::lock_guard<std::mutex> lock(mutex_);
+            over = !activeBattle_;
+        }
+        if (over) {
             // The battle may have ended while they were made: they are switched off, and the script removes them
             // by the ids it gets back.
-            std::lock_guard<std::mutex> lock(mutex_);
-            if (!activeBattle_) {
-                out["error"] = "battle ended during spawn";
-                return out.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
-            }
+            ForgetUnsettled(soldiers);
+            out["error"] = "battle ended during spawn";
+            return out.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
         }
         out["success"] = true;
         return out.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
+    }
+
+    bool BattleManager::ComingPlace(RE::Actor* player, bool sideA, bool flank, Battlefield::Vec centre, float axis, float z,
+                                    const std::string& factionId, Battlefield::Vec& point) const {
+        auto* tes = RE::TES::GetSingleton();
+        if (!tes || !player) return false;
+        // Where a group comes from: behind their own line, where the player is least likely to see it; a hidden force
+        // from out to one side of the other's. The first of the places worth trying that can be walked from. None
+        // (the player stands where they would come from, or it is all rock and water there): nobody comes this time,
+        // rather than out of thin air next to the player (it happened: 685 units off, in plain view, 2026-11-20).
+        const auto field = Battlefield::Draw(centre, axis, 1, 1);
+        const auto& line = sideA ? field.a : field.b;
+        const Battlefield::Vec me{player->GetPositionX(), player->GetPositionY()};
+        const float looking = Battlefield::Norm(player->GetAngleZ() * kDegPerRad);
+        const auto places = flank ? Battlefield::FlankPoints(sideA ? field.b : field.a, me, looking) : Battlefield::ReservePoints(line, me, looking);
+        for (const auto& at : places) {
+            const Ground ground = GroundAt(tes, at, z);
+            if (!ground.walkable || ground.wet) continue;
+            point = at;
+            logger::info("Battle: more of {} come {}, {:.0f} units from the player", factionId,
+                         flank ? "out of hiding on the flank" : "up behind their line", Battlefield::Dist(me, point));
+            return true;
+        }
+        logger::info("Battle: nowhere for more of {} to come from unseen: nobody comes up this time", factionId);
+        return false;
+    }
+
+    int BattleManager::PrepareGroup(const std::string& side, RE::Actor* player, int kind) {
+        static FrameStats stats;
+        FrameClock clock("Battle: choosing where more soldiers come from, and who", stats, FrameClock::Now(), 8);
+        const bool flank = kind == 1;
+        const bool isA = IsA(side);
+        std::string factionId;
+        Battlefield::Vec centre;
+        float axis = 0.f, z = 0.f;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (!activeBattle_ || !activeBattle_->fieldSet || !player) return -1;
+            activeBattle_->preparedKind[isA ? 0 : 1] = -1;
+            if (kind == 2 && (isA ? activeBattle_->championA : activeBattle_->championB) != 0) return 0;     // a side has one
+            factionId = isA ? activeBattle_->factionA : activeBattle_->factionB;
+            centre = {activeBattle_->fieldX, activeBattle_->fieldY};
+            axis = activeBattle_->fieldAxis;
+            z = activeBattle_->fieldZ;
+        }
+        Battlefield::Vec point;
+        if (!ComingPlace(player, isA, flank, centre, axis, z, factionId, point)) return 0;
+        // Who comes: a wave or a hidden force is rolled here, whole. (A champion is rolled by themself when made.)
+        if (kind != 2) NextOf(isA, factionId, 0, 0, flank ? Battlefield::kFlankSize : Battlefield::WaveSize(GetWave(side) + 1), player);
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (!activeBattle_) return -1;
+        if (flank) {
+            activeBattle_->flankX = point.x;
+            activeBattle_->flankY = point.y;
+        } else {
+            (isA ? activeBattle_->reserveAX : activeBattle_->reserveBX) = point.x;
+            (isA ? activeBattle_->reserveAY : activeBattle_->reserveBY) = point.y;
+        }
+        activeBattle_->preparedKind[isA ? 0 : 1] = kind;
+        activeBattle_->preparedAt[isA ? 0 : 1] = std::chrono::steady_clock::now();
+        return 1;
     }
 
     void BattleManager::SetSkirmish(int size) {
@@ -2189,7 +2253,7 @@ namespace IntelEngine {
     RE::Actor* BattleManager::RaiseLoner(const std::string& factionId, Battlefield::Vec at, float facingDeg, RE::Actor* player) {
         static FrameStats stats;
         FrameClock clock("Battle: making one who comes alone", stats, FrameClock::Now(), 20);
-        const auto made = RaiseSoldiers(factionId, nullptr, {at}, facingDeg, player ? player->GetPositionZ() : 0.f, player, true, false, false);
+        const auto made = MakeSoldiers(factionId, nullptr, {at}, facingDeg, player ? player->GetPositionZ() : 0.f, player, true, false, false);
         return made.empty() ? nullptr : made.front();
     }
 
@@ -2766,6 +2830,19 @@ namespace IntelEngine {
     // Battle faction membership + SetBeenAttacked(false) handles friendly fire.
 
     std::pair<RE::TESFaction*, RE::TESFaction*> BattleManager::ResolveBattleFactions() const {
+        // Found once: they are records of IntelEngine.esp and stay where they are for as long as the game runs. (The
+        // lookup goes through the names of every plugin, and it was done for every soldier.)
+        static std::atomic<RE::TESFaction*> sideA{nullptr}, sideB{nullptr};
+        if (auto* a = sideA.load(), *b = sideB.load(); a && b) return {a, b};
+        const auto found = FindBattleFactions();
+        if (found.first && found.second) {
+            sideA.store(found.first);
+            sideB.store(found.second);
+        }
+        return found;
+    }
+
+    std::pair<RE::TESFaction*, RE::TESFaction*> BattleManager::FindBattleFactions() const {
         auto* dataHandler = RE::TESDataHandler::GetSingleton();
         if (!dataHandler) return {nullptr, nullptr};
         auto* modFile = dataHandler->LookupModByName("IntelEngine.esp");
@@ -2942,47 +3019,128 @@ namespace IntelEngine {
         return resolved;
     }
 
-    std::vector<RE::Actor*> BattleManager::RaiseSoldiers(const std::string& factionId, RE::TESFaction* battleFaction,
-                                                          const std::vector<Battlefield::Vec>& spots, float facingDeg, float fallbackZ,
-                                                          RE::Actor* player, bool standDown, bool commander, bool ofABattle,
-                                                          const std::vector<RE::TESBoundObject*>* who, bool champion) {
+    namespace {
+        // The game's own PlaceAtMe (the function behind Papyrus' ObjectReference.PlaceAtMe), asked for somebody switched
+        // off from the start: their record is made, their body is not asked for until they are switched on.
+        //
+        // Before, a soldier was made whole on the spot (CreateReferenceAtLocation) and switched off in the next line,
+        // to be faded in by the script later, and everything else was done to them in the same call: 0.5 to 0.85 ms
+        // of one frame in the test game, 1.0 to 1.4 ms on a list of 1,500 plugins, once a soldier. Made switched off,
+        // the game's part is 0.40 to 0.48 ms in the test game by who is made (measured 2026-11-22 over five battles;
+        // the full list not yet), and next to nothing else is done in that frame.
+        RE::TESObjectREFR* PlaceSwitchedOff(RE::TESObjectREFR* at, RE::TESForm* base) {
+            using func_t = RE::TESObjectREFR*(RE::BSScript::IVirtualMachine*, std::uint32_t, RE::TESObjectREFR*, RE::TESForm*, std::int32_t, bool, bool);
+            static REL::Relocation<func_t> func{RELOCATION_ID(55672, 56203)};
+            return func(nullptr, 0, at, base, 1, true, true);   // one, kept (persistent), switched off
+        }
+
+        // The game's own move of a reference to a point (what Papyrus' MoveTo ends in): for somebody switched off it
+        // only says where they are, in which cell.
+        void SetDown(RE::TESObjectREFR* ref, RE::TESObjectCELL* cell, RE::TESWorldSpace* world, const RE::NiPoint3& at, const RE::NiPoint3& rotation) {
+            using func_t = void(RE::TESObjectREFR*, const RE::ObjectRefHandle&, RE::TESObjectCELL*, RE::TESWorldSpace*, const RE::NiPoint3&, const RE::NiPoint3&);
+            static REL::Relocation<func_t> func{RELOCATION_ID(56227, 56626)};
+            func(ref, RE::ObjectRefHandle(), cell, world, at, rotation);
+        }
+    }
+
+    std::vector<RE::Actor*> BattleManager::MakeSoldiers(const std::string& factionId, RE::TESFaction* battleFaction,
+                                                         const std::vector<Battlefield::Vec>& spots, float facingDeg, float fallbackZ,
+                                                         RE::Actor* player, bool standDown, bool commander, bool ofABattle,
+                                                         const std::vector<RE::TESBoundObject*>* who, bool champion) {
         std::vector<RE::Actor*> soldiers;
         auto* tes = RE::TES::GetSingleton();
-        auto* data = RE::TESDataHandler::GetSingleton();
         auto* world = player ? player->GetWorldspace() : nullptr;
-        if (!tes || !data || !world || spots.empty()) return soldiers;
+        if (!tes || !world || spots.empty()) return soldiers;
 
         const auto bases = who ? *who : RollFor(factionId, static_cast<int>(spots.size()), player);
-        // Each is made where they are to stand, looking the way their line looks. (3.8 made them all on one spot,
-        // the player's when the place of the battle was not at hand, and moved them afterwards.)
+        // Each is to stand on a spot of their own, looking the way their line looks. (3.8 made them all on one spot,
+        // the player's when the place of the battle was not at hand, and moved them afterwards, in plain view.)
         const RE::NiPoint3 rotation{0.f, 0.f, Battlefield::Norm(facingDeg) / kDegPerRad};
         for (std::size_t i = 0; i < bases.size() && i < spots.size(); ++i) {
             RE::NiPoint3 at{spots[i].x, spots[i].y, fallbackZ};
             auto* cell = tes->GetCell(at);
             if (!cell || cell->IsInteriorCell()) continue;          // off the loaded ground: nobody is made there
-            float height = 0.f;
-            if (tes->GetLandHeight(at, height)) at.z = height + 6.f;
-            // The game's own making of a person (their record, what they carry, their mind) is timed by itself: it is
-            // most of what a soldier costs, and nothing here can make it less.
-            RE::ObjectRefHandle handle;
+            // The game's own making of a person (their record, what they carry), timed by itself: it is all that is
+            // done to them in this frame. They are made switched off, beside the player, where nobody sees them.
+            RE::TESObjectREFR* ref = nullptr;
             {
                 static FrameStats made;
-                FrameClock clock("Battle: the game making one soldier", made, FrameClock::Now(), 60);
-                handle = data->CreateReferenceAtLocation(bases[i], at, rotation, cell, world, nullptr, nullptr, RE::ObjectRefHandle(), true, true);
+                FrameClock clock("Battle: the game making one soldier", made, FrameClock::Now(), 16);
+                ref = PlaceSwitchedOff(player, bases[i]);
             }
-            const auto ref = handle.get();
             auto* actor = ref ? ref->As<RE::Actor>() : nullptr;
             if (!actor) continue;
-            // Switched off until the script lets them fade in, the way the game lets people in the distance appear.
-            actor->Disable();
+
+            Unsettled later;
+            later.handle = actor->CreateRefHandle().native_handle();
+            later.world = world->GetFormID();
+            later.x = at.x;
+            later.y = at.y;
+            later.z = at.z;
+            later.facing = rotation.z;
+            later.factionId = factionId;
+            later.battleFaction = battleFaction;
+            later.standDown = standDown;
+            later.ofABattle = ofABattle;
+            later.tier = (champion && i == 0) ? 3 : (commander && i == 0) ? 2 : 0;
+            {
+                std::lock_guard<std::mutex> lock(unsettledMutex_);
+                unsettled_.push_back(std::move(later));
+            }
+            soldiers.push_back(actor);
+        }
+        return soldiers;
+    }
+
+    void BattleManager::ForgetUnsettled(const std::vector<RE::Actor*>& soldiers) {
+        std::lock_guard<std::mutex> lock(unsettledMutex_);
+        std::erase_if(unsettled_, [&soldiers](const Unsettled& u) {
+            const auto ref = RE::TESObjectREFR::LookupByHandle(u.handle);
+            return !ref || std::find(soldiers.begin(), soldiers.end(), ref.get()) != soldiers.end();
+        });
+    }
+
+    std::string BattleManager::SettleSoldiers() {
+        std::vector<Unsettled> due;
+        {
+            std::lock_guard<std::mutex> lock(unsettledMutex_);
+            due.swap(unsettled_);
+        }
+        if (due.empty()) return {};
+        static FrameStats stats;
+        FrameClock clock("Battle: setting soldiers down and giving them their side", stats, FrameClock::Now(), 16);
+        auto* tes = RE::TES::GetSingleton();
+        bool battle = false;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            battle = activeBattle_.has_value();
+        }
+        nlohmann::json left = nlohmann::json::array();
+        for (const auto& u : due) {
+            const auto ref = RE::TESObjectREFR::LookupByHandle(u.handle);
+            auto* actor = ref ? ref->As<RE::Actor>() : nullptr;
+            if (!actor || actor->IsDeleted()) continue;         // removed since by whoever was given their id
+            // Set down where they are to stand before anybody can see them: the script lets them fade in afterwards,
+            // the way the game lets people in the distance appear. Not of a battle that ended in between, and not
+            // onto ground that is no longer loaded: such a one is the script's to remove, unseen.
+            RE::NiPoint3 at{u.x, u.y, u.z};
+            auto* world = RE::TESForm::LookupByID<RE::TESWorldSpace>(u.world);
+            auto* cell = tes ? tes->GetCell(at) : nullptr;
+            if (!cell || cell->IsInteriorCell() || !world || (u.ofABattle && !battle)) {
+                left.push_back(actor->GetFormID());
+                continue;
+            }
+            float height = 0.f;
+            if (tes->GetLandHeight(at, height)) at.z = height + 6.f;
+            SetDown(actor, cell, world, at, RE::NiPoint3{0.f, 0.f, u.facing});
 
             // At the muster they start nothing; those who come later come to fight. Nobody runs before the army breaks.
-            actor->AsActorValueOwner()->SetActorValue(RE::ActorValue::kAggression, standDown ? 0.f : 1.f);
+            actor->AsActorValueOwner()->SetActorValue(RE::ActorValue::kAggression, u.standDown ? 0.f : 1.f);
             actor->AsActorValueOwner()->SetActorValue(RE::ActorValue::kConfidence, 4.f);
             // A soldier of a battle strikes with part of their force and stands more than they would. A champion (the
             // first of a group that brings one) strikes with all of it and stands three times a soldier's measure.
-            const bool isChampion = champion && i == 0;
-            if (ofABattle) {
+            const bool isChampion = u.tier == 3;
+            if (u.ofABattle) {
                 actor->AsActorValueOwner()->SetActorValue(RE::ActorValue::kAttackDamageMult, isChampion ? Battlefield::kChampionForce : Battlefield::kBlowForce);
                 if (const float health = actor->AsActorValueOwner()->GetPermanentActorValue(RE::ActorValue::kHealth); health > 0.f) {
                     actor->AsActorValueOwner()->ModActorValue(RE::ACTOR_VALUE_MODIFIER::kPermanent, RE::ActorValue::kHealth,
@@ -2990,12 +3148,17 @@ namespace IntelEngine {
                 }
             }
             StripOwnFactions(actor);
-            if (battleFaction) actor->AddToFaction(battleFaction, 0);
+            if (u.battleFaction) actor->AddToFaction(u.battleFaction, 0);
 
-            if (ofABattle) RegisterActor(actor, factionId, isChampion ? 3 : (commander && i == 0) ? 2 : 0);
-            soldiers.push_back(actor);
+            if (u.ofABattle) RegisterActor(actor, u.factionId, u.tier);
         }
-        return soldiers;
+        if (left.empty()) return {};
+        logger::info("Battle: {} made and not set down (the battle is over, or their ground is no longer loaded): the script removes them",
+                     left.size());
+        nlohmann::json out;
+        out["count"] = static_cast<int>(left.size());
+        out["formIds"] = left;
+        return out.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
     }
 
     // =========================================================================
