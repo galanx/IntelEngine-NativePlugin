@@ -110,6 +110,7 @@ class VM:
         self.properties.update({f"AgentAlias{i:02d}": aliases[i] for i in range(5)})
         self.properties.update({f"TargetAlias{i:02d}": ReferenceAlias() for i in range(5)})
         self.properties.update({"NPCTickIntervalHours": 1.5, "MONITOR_INTERVAL": 5.0, "IDLE_POLL_INTERVAL": 30.0})
+        self.properties.update({"LivingWorldLevel": 2})   # the default level of the living world ("Lives")
         # Core's own bookkeeping variables (3.8): pending tick, last sweep, open popup request.
         self.properties.update({"_tickDueRealTime": 0.0, "_lastSweepGameTime": 0.0, "_mlRequest": ""})
         # 3.8.2: when the quest's one game-time timer is due (RequestGameTimeTick).
@@ -354,6 +355,11 @@ class VM:
             self.effects.append((method, tuple(args)))
             return None
         if method == "LivingWorldMayDeliver": return True
+        # 4.0: above Classic the story clock is the director's own (Core.GetStoryClockHours); the modeled game is at
+        # "Lives" (LivingWorldLevel 2 below), no faction is after the player, and the player is where people may come.
+        if method == "LivingWorldClockHours": return 3.0
+        if method == "FactionPatrolDue": return ""
+        if method == "PlaceBarsArrival": return 0
         # 4.0: nobody in the modeled game takes part in a running quest.
         if method == "LivingWorldMayMove": return True
         if method == "QuestInvolves": return False

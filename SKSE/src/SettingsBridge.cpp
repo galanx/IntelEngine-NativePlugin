@@ -70,7 +70,7 @@ namespace IntelEngine::SettingsBridge {
                 Bool("storyEnabled", "stories", "enabled", true, S, "Stories",
                      "The dungeon master: NPCs who know you come to you, send word, lie in wait or bring work."),
                 Num(Kind::Float, "storyInterval", "stories", "check_interval_hours", 0.5, 168, 3, S, "Check interval (game hours)",
-                    "The fallback clock: how often the dungeon master looks when nothing else prompts it. Arriving in a town, an inn or your home, leaving a dungeon and waking up bring a look of their own; how much comes of it is set by 'How often something happens'."),
+                    "At Classic: how often the dungeon master looks for somebody with a reason to come to you. Above Classic it is not used: the pace is 'How often something happens', and the dungeon master looks when you arrive somewhere, when you wake, and every three game hours besides."),
                 Num(Kind::Float, "longAbsenceDays", "stories", "long_absence_days", 1, 14, 3, S, "Long absence (days)",
                     "After this many days without meeting you, an NPC counts as not having seen you for a long time."),
                 Num(Kind::Float, "maxTravelDays", "stories", "max_travel_days", 0.25, 3, 1, S, "Longest journey (days)",
