@@ -413,6 +413,39 @@ loaded, which the section after this one replaces with a rule for each person):
 - What it costs the player: one small decision call per reading (answered in about 0.3 s in the test), per person at
   most once every eight lines they say to the player.
 
+### Time skipped is not time played (2026-11-22)
+
+The user: "What about player constantly skipping time. Will that ruin the pacing?" It would have. Every pacing rule
+counted the game's clock: the director's budget (so many moments a game day, three game hours apart), the town
+pacer (two game hours in town, a game day between two stories), the quiet after a story (six game hours). The
+budget is capped at two moments, so nothing piled up over a long sleep; but whoever waits a day, and then another,
+was owed a moment after each wait and a new town story after each (each a call to the tale author, most of them
+lapsing unseen).
+
+`LivingWorldBridge::PlayedSeconds()`: seconds the game actually ran this session, counted by the look of the living
+world (`NotePlayerWhere`, every ten seconds or so), which is not taken while the game is paused, and never more
+than twenty seconds a look: a menu, a wait, a sleep or a fast travel adds one look's worth. Kept for the session
+only. Rules (pure, in `LivingWorldCheck` and `ArcsCheck`):
+
+- the director: `kMinGapPlayedSeconds` (480) of play between two ordinary moments (`Situation::playedSince`,
+  `MayDeliverNow`); what is urgent still comes; the stamp is set where a moment is counted (`OnStoryDispatched`,
+  `OnPatrolSent`);
+- the town pacer (`ArcBridge::Pace`): `kTownLingerPlayed` (240) of play in the town, and `kStoryGapPlayed` (1200)
+  since the last story that began by itself. The log says once why it holds back.
+
+At a timescale of 20 these are what three game hours (nine minutes), two game hours (six) and a game day
+(seventy-two) already are, so they bind only when time is skipped or runs fast. Not changed, on purpose: what the
+world does by itself while time passes (rumors travel and fade, an offer lapses after its days, followers left
+behind get on with their lives, a gathering nobody came to is decided unseen, a patrol's two game days of rest).
+Test hooks set by hand (`DebugTale`, `DebugArc`) do not go through the pacer and are not held.
+
+Played on the test profile, skipping time with `set timescale to 2500`: in town "22 s played here (240 needed,
+whatever the clock says)" after four and a half game hours; "a tale is being written in Whiterun" at 240 s; after
+a further game day "the last one began 11 s of play ago (1200 needed)". On the road, after a patrol: a game day
+later "budget 2.00, bad moment false, 76 s of play since the last moment: held back", then 362 s held back, then
+"531 s of play since the last moment: a moment may land". Not played: the game's own wait and sleep menus and a
+fast travel (the fast clock stood in for them); twenty minutes of play to see the second town story begin.
+
 ### The story clock: one pace setting above Classic (2026-11-22)
 
 The user: "What about the story checks time which is every 3h by default, do we still need that?" Above Classic two

@@ -327,6 +327,9 @@ namespace IntelEngine {
         RE::FormID m_paceTown = 0;       // the town the player is in, and since when (game days)
         float m_paceSince = 0.0f;
         float m_paceTried = -1.0f;       // the last time a story was looked for (game days)
+        double m_pacePlayedAt = 0.0;     // time played (LivingWorldBridge::PlayedSeconds) when the player came to this town
+        double m_paceBegunPlayed = -1.0; // and when the last story began by itself; below 0: none this session
+        int m_paceHeld = 0;              // why the pacer last held back (so the log says it once)
 
         mutable std::mutex m_mutex;
         Arcs::Book m_book;

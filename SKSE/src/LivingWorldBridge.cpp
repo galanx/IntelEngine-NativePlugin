@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <format>
 #include <initializer_list>
 #include <string_view>
 
@@ -61,6 +62,10 @@ namespace IntelEngine {
         // Places nobody is sent to (Patrols::PlaceBars), as the last look saw it, and the last land seen out of doors.
         std::atomic<std::uint8_t> g_placeBars{0};
         std::atomic<RE::FormID> g_lastOutdoorLand{0};
+        // Time actually played this session (PlayedSeconds), and when the last moment landed on that clock.
+        std::atomic<double> g_played{0.0};
+        std::atomic<double> g_lastLookReal{0.0};
+        std::atomic<double> g_lastMomentPlayed{-1.0};
 
         // The land a worldspace belongs to: its parent's while it is a piece of the parent's own ground (Whiterun's
         // streets are Skyrim's: they take everything from it). A parent named only for its map, sky, water or climate
@@ -184,6 +189,11 @@ namespace IntelEngine {
         auto* cell = player ? player->GetParentCell() : nullptr;
         if (!player || !cell) return;
         const double now = RealNowSeconds();
+        // Time played: what passed since the last look, twenty seconds at the most (the look stops while the game is
+        // paused, so a long menu, a wait or a sleep adds one look's worth and no more).
+        if (const double last = g_lastLookReal.exchange(now); last > 0.0 && now > last) {
+            g_played.store(g_played.load() + (std::min)(now - last, 20.0));
+        }
         if (player->GetCurrentScene()) g_sceneLastAt.store(now);   // a scene of the game: over at the last look that saw it
         g_resting.store(player->AsActorState()->GetSitSleepState() != RE::SIT_SLEEP_STATE::kNormal);
         g_undressed.store(player->GetWornArmor(RE::BGSBipedObjectForm::BipedObjectSlot::kBody) == nullptr);
@@ -225,6 +235,8 @@ namespace IntelEngine {
         g_wheres[g_whereNext] = w;
         g_whereNext = (g_whereNext + 1) % g_wheres.size();
     }
+
+    double LivingWorldBridge::PlayedSeconds() { return g_played.load(); }
 
     Patrols::Barred LivingWorldBridge::PlaceBars() { return static_cast<Patrols::Barred>(g_placeBars.load()); }
 
@@ -350,12 +362,14 @@ namespace IntelEngine {
         at.seam = static_cast<LivingWorld::Seam>(seam);
         at.now = NowDays();
         at.badMoment = BadMoment();
+        if (const double last = g_lastMomentPlayed.load(); last >= 0.0) at.playedSince = static_cast<float>(g_played.load() - last);
         std::scoped_lock lock(m_mutex);
         LivingWorld::Refill(m_state, settings, at.now);
         const auto seed = static_cast<std::uint32_t>(at.now * 1440.0f);
         const bool may = LivingWorld::MayDeliverNow(m_state, settings, at, urgent, false, seed);
-        logger::info("LivingWorld: seam {} at day {:.2f}, budget {:.2f}, bad moment {}: {}", seam, at.now, m_state.budget,
-                     at.badMoment, may ? "a moment may land" : "held back");
+        logger::info("LivingWorld: seam {} at day {:.2f}, budget {:.2f}, bad moment {}{}: {}", seam, at.now, m_state.budget, at.badMoment,
+                     at.playedSince >= 0.0f ? std::format(", {:.0f} s of play since the last moment", at.playedSince) : std::string(),
+                     may ? "a moment may land" : "held back");
         return may;
     }
 
@@ -435,6 +449,7 @@ namespace IntelEngine {
         // A story took them up: the package of their own life comes off, or the story and it would pull apart.
         if (LivingWorld::OwnLife(life)) life.flags |= LivingWorld::kNeedsRelease;
         StorylineBridge::GetSingleton()->MarkFollowedUp(actor);
+        g_lastMomentPlayed.store(g_played.load());
         logger::info("LivingWorld: moment {} with {:08X} counted (moments so far {}, budget {:.2f})", storyType, actor,
                      m_state.picks, m_state.budget);
     }
@@ -448,6 +463,7 @@ namespace IntelEngine {
         m_state.lastMomentDay = now;
         m_state.lastBigDay = now;
         ++m_state.picks;
+        g_lastMomentPlayed.store(g_played.load());
         logger::info("LivingWorld: a faction's patrol counted as a big moment (moments so far {}, budget {:.2f})", m_state.picks, m_state.budget);
     }
 
@@ -588,6 +604,7 @@ namespace IntelEngine {
         g_sceneLastAt.store(-1.0);
         g_placeBars.store(0);
         g_lastOutdoorLand.store(0);
+        g_lastMomentPlayed.store(-1.0);   // another game: its last moment was not on this session's clock
         {
             std::scoped_lock where(g_whereMutex);   // another game: where the player was is not where they are
             g_wheres = {};

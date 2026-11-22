@@ -377,6 +377,7 @@ namespace IntelEngine::LivingWorld {
         Seam seam = Seam::Timer;
         float now = 0.0f;                // game days
         bool badMoment = false;          // a scene, sleep, combat, a menu or a conversation is going on
+        float playedSince = -1.0f;       // seconds of play since the last moment; below 0: none this session
     };
 
     struct Candidate {
@@ -393,6 +394,12 @@ namespace IntelEngine::LivingWorld {
 
     constexpr float kMaxBudget = 2.0f;
     constexpr float kMinGapDays = 0.125f;     // three game hours between ordinary moments
+    // And time actually played between them. Everything above counts the game's clock, which the player can turn
+    // forward at will: whoever waits a day, and then another, was owed a moment after each wait (the user,
+    // 2026-11-22: "What about player constantly skipping time. Will that ruin the pacing?"). Played time is the time
+    // the game ran, not paused and not skipped. Eight minutes is what three game hours are at the game's own pace
+    // (a timescale of 20), so in ordinary play this never binds; it binds when time is skipped or runs fast.
+    constexpr float kMinGapPlayedSeconds = 480.0f;
     constexpr float kRestAfterBigDays = 1.0f;
     constexpr float kForgottenBond = 0.35f;
     constexpr float kForgottenDays = 20.0f;
@@ -431,6 +438,7 @@ namespace IntelEngine::LivingWorld {
         if (urgent) return true;
         if (state.budget < 1.0f) return false;
         if (at.now - state.lastMomentDay < kMinGapDays) return false;
+        if (at.playedSince >= 0.0f && at.playedSince < kMinGapPlayedSeconds) return false;
         if (big && at.now - state.lastBigDay < kRestAfterBigDays) return false;
         return true;
     }
