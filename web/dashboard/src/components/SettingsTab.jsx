@@ -13,13 +13,13 @@ const LW_LEVEL_HINTS = [
   'The world moves on while you are away and you hear about it, but followers you left wait where you left them.',
   'Followers you left behind live lives of their own (work at an inn, an adventure, a trip) and you can come upon them later; people close to you miss you while you are away.',
 ];
-const LW_INTERRUPTIONS = ['Never', 'Only when urgent', 'Realistic'];
+const LW_INTERRUPTIONS = ['Never', 'If urgent', 'Realistic'];
 const LW_INTERRUPTION_HINTS = [
   'Nobody turns up during a fight, a conversation, a scene or a menu.',
   'Only something urgent may interrupt a fight, a conversation, a scene or a menu.',
   'Now and then someone turns up at a bad moment, as in real life.',
 ];
-const LW_QUEST_NPCS = ['Never', 'For important reasons', 'Freely'];
+const LW_QUEST_NPCS = ['Never', 'If important', 'Freely'];
 const LW_QUEST_NPC_HINTS = [
   'NPCs who take part in a running quest stay where the quest needs them.',
   'They may travel or move for an important story. The target of an objective you have open never moves.',
@@ -192,7 +192,7 @@ function SettingsTab({ config, storyTypes, onSettingChange, pluginConfig, onPlug
           onChange={v => onSettingChange('livingWorldInterruptions', v)}
         />
         <PolicyRow
-          label="NPCs of running quests may move"
+          label="Quest NPCs may move"
           value={config.livingWorldQuestNpcs ?? 1}
           options={LW_QUEST_NPCS}
           hints={LW_QUEST_NPC_HINTS}
@@ -216,7 +216,7 @@ function SettingsTab({ config, storyTypes, onSettingChange, pluginConfig, onPlug
           hint="How long after you told a follower to wait they start a life of their own, once their follower mod lets them go. While it still holds them, they keep waiting."
         />
         <SliderRow
-          label="A follower left behind moves on after"
+          label="A follower left behind moves on"
           value={config.livingWorldLifeDays ?? 7}
           min={1} max={60} step={1}
           unit="days"

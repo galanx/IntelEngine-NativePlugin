@@ -20,8 +20,8 @@ namespace IntelEngine::SettingsBridge {
         constexpr const char* kConfirm = "Disabled|Followers only|Everyone";
         // 4.0 living world
         constexpr const char* kLwLevels = "Classic|Rumors|Lives";
-        constexpr const char* kLwInterruptions = "Never|Only when urgent|Realistic";
-        constexpr const char* kLwQuestNpcs = "Never|For important reasons|Freely";
+        constexpr const char* kLwInterruptions = "Never|If urgent|Realistic";
+        constexpr const char* kLwQuestNpcs = "Never|If important|Freely";
         constexpr const char* kLwPacing = "Calm|Normal|Lively";
 
         constexpr const char* kHoldText =
@@ -112,7 +112,7 @@ namespace IntelEngine::SettingsBridge {
                        "Whether someone may turn up during a fight, a conversation, a scene or a menu: never, only for "
                        "something urgent, or now and then, as in real life."),
                 Choice("livingWorldQuestNpcs", "living_world", "quest_npcs_move", kLwQuestNpcs, 1, LW,
-                       "NPCs of running quests may move",
+                       "Quest NPCs may move",
                        "Whether NPCs who take part in a running quest may travel or move for a story. The target of an "
                        "objective you have open never moves."),
                 Choice("livingWorldPacing", "living_world", "pacing", kLwPacing, 1, LW, "How often something happens",
@@ -125,7 +125,7 @@ namespace IntelEngine::SettingsBridge {
                     "How long after you told a follower to wait they start a life of their own, once their follower mod "
                     "lets them go. While it still holds them, they keep waiting."),
                 Num(Kind::Float, "livingWorldLifeDays", "living_world", "life_start_days", 1, 60, 7, LW,
-                    "A follower left behind moves on after (days)",
+                    "A follower left behind moves on (days)",
                     "How long a follower you dismissed stays where you left them before starting a life of their own."),
 
                 // ── Stories: reach ──
@@ -399,7 +399,12 @@ namespace IntelEngine::SettingsBridge {
                 continue;
             }
             double file = 0.0;
-            if (!FromYaml(entry, text, file)) continue;         // unreadable: the game keeps its value
+            if (!FromYaml(entry, text, file)) {
+                // Unreadable (a typo, or a choice word an older build wrote and this one no longer has): the game
+                // keeps its value, and the file is given it, so the page shows what is in force.
+                if (known && store.write) store.write(entry.section, entry.name, ToYaml(entry, game));
+                continue;
+            }
             if (known && Same(entry, game, file)) continue;
             Change change;
             change.event = entry.event ? entry.event : kSettingEvent;
