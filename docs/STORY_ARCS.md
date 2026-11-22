@@ -413,6 +413,22 @@ loaded, which the section after this one replaces with a rule for each person):
 - What it costs the player: one small decision call per reading (answered in about 0.3 s in the test), per person at
   most once every eight lines they say to the player.
 
+### The story clock: one pace setting above Classic (2026-11-22)
+
+The user: "What about the story checks time which is every 3h by default, do we still need that?" Above Classic two
+settings paced the same thing. "How often something happens" is the director's budget (half a moment, one or two a
+game day, three game hours apart at least: `LivingWorld::MomentsPerDay`, `kMinGapDays`). "Check interval" gated the
+clock look in `StoryEngine.TickScheduler` (seams, arriving somewhere or waking, bypass it). Set low it changed
+nothing (the budget holds the look back before any model is asked); set to a day or a week it starved the director
+while the player stayed in one place. Now `Core.GetStoryClockHours()` is what the story engine's three uses of the
+interval and the dashboard's "next look" ask: at Classic the setting, above it `IntelEngine.LivingWorldClockHours()`
+(`kMinGapDays` in hours: 3). The setting keeps its place and its name; its descriptions on the three surfaces say
+it is Classic's, and the dashboard dims the row above Classic. The two other "Check interval" settings (NPCs among
+themselves, politics) are clocks of their own systems and are untouched.
+
+Played: with the setting at 24 hours, `StartScheduler` logged "story=3.000000" at Lives and Rumors and
+"story=24.000000" at Classic.
+
 ### Places nobody is sent to (2026-11-22)
 
 A user's report the user passed on: "npcs spawn in dangerous places to talk to me and they die / im in the soul

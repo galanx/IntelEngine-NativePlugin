@@ -135,14 +135,20 @@ function SettingsTab({ config, storyTypes, onSettingChange, pluginConfig, onPlug
           onChange={v => onSettingChange('storyEnabled', v)}
           hint="The Story Engine (the dungeon master): NPCs with unfinished business autonomously seek you out based on shared history."
         />
-        <SliderRow
-          label="Check interval"
-          value={config.storyInterval}
-          min={0.5} max={168} step={0.5}
-          unit="game hours"
-          onCommit={v => onSettingChange('storyInterval', v)}
-          hint="The fallback clock: how often the dungeon master looks when nothing else prompts it. Arriving in a town, an inn or your home, leaving a dungeon and waking up bring a look of their own; how much comes of it is set by &quot;How often something happens&quot;. Max 168 = 1 week."
-        />
+        {/* Classic's pace. Above Classic the director paces by "How often something happens" and looks by its own
+            clock, so the row is shown dimmed there and says so. */}
+        <div className={Number(config.livingWorldLevel ?? 2) > 0 ? 'opacity-50' : ''}>
+          <SliderRow
+            label="Check interval"
+            value={config.storyInterval}
+            min={0.5} max={168} step={0.5}
+            unit="game hours"
+            onCommit={v => onSettingChange('storyInterval', v)}
+            hint={Number(config.livingWorldLevel ?? 2) > 0
+              ? 'Not used at this level of the living world: the pace is "How often something happens" (Living world), and the dungeon master looks when you arrive somewhere, when you wake, and every three game hours besides. It is the pace at Classic.'
+              : 'How often (game hours) the dungeon master looks for somebody with a reason to come to you. At Classic this is the pace. Max 168 = 1 week.'}
+          />
+        </div>
         {/* No "NPC Cooldown" row: the game uses the longer of it and Long Absence (three days by default), so
             its 6 to 72 hours changed nothing. Long Absence is the setting. */}
         <SliderRow

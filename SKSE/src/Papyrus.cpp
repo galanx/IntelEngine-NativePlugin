@@ -184,6 +184,7 @@ namespace IntelEngine::Papyrus {
     void FactionPatrolSent(RE::StaticFunctionTag*);
     void FactionPatrolTest(RE::StaticFunctionTag*, bool);
     RE::BSFixedString PrivateMomentNow(RE::StaticFunctionTag*);
+    float LivingWorldClockHours(RE::StaticFunctionTag*);
     std::int32_t PlaceBarsArrival(RE::StaticFunctionTag*, RE::Actor*, RE::TESObjectREFR*);
     RE::BSFixedString PlaceBarsNow(RE::StaticFunctionTag*);
     int AdjustPlayerFactionStanding(RE::StaticFunctionTag*, RE::BSFixedString, int);
@@ -634,6 +635,7 @@ namespace IntelEngine::Papyrus {
         a_vm->RegisterFunction("FactionPatrolSent", SCRIPT_NAME, FactionPatrolSent); ++count;
         a_vm->RegisterFunction("FactionPatrolTest", SCRIPT_NAME, FactionPatrolTest); ++count;
         a_vm->RegisterFunction("PrivateMomentNow", SCRIPT_NAME, PrivateMomentNow); ++count;
+        a_vm->RegisterFunction("LivingWorldClockHours", SCRIPT_NAME, LivingWorldClockHours); ++count;
         a_vm->RegisterFunction("PlaceBarsArrival", SCRIPT_NAME, PlaceBarsArrival); ++count;
         a_vm->RegisterFunction("PlaceBarsNow", SCRIPT_NAME, PlaceBarsNow); ++count;
         a_vm->RegisterFunction("AdjustPlayerFactionStanding", SCRIPT_NAME, AdjustPlayerFactionStanding); ++count;
@@ -4727,6 +4729,12 @@ namespace IntelEngine::Papyrus {
                          LivingWorldBridge::PlaceBars() == Patrols::Barred::No ? "people may come" : Patrols::Word(LivingWorldBridge::PlaceBars()));
         }
         return Patrols::Word(LivingWorldBridge::PlaceBars());
+    }
+
+    float LivingWorldClockHours(RE::StaticFunctionTag*) {
+        // How often the dungeon master looks by the clock above Classic: the director's own smallest gap between two
+        // moments (LivingWorld.h). A look that finds the budget spent ends before any model is asked.
+        return LivingWorld::kMinGapDays * 24.0f;
     }
 
     RE::BSFixedString PrivateMomentNow(RE::StaticFunctionTag*) {
