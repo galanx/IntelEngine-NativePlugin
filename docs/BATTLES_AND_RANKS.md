@@ -261,6 +261,22 @@ Imperial Legion Captain (FF000ECB) let each other be", both out of the fight wit
 drawn in by himself with the rule in place (none came into the one battle played after it). A fight with a wolf or a
 bandit is left alone, and a fight with nobody left in it is ended.
 
+**Bodies that float (open).** The user, after the battles with the cease-fire on the full list: "Why are dead bodies
+floating? Are they trying to run away too?" Not reproduced on the test profile: `DebugBodies` (test hook, native
+`BattleDebugBodies`: for every soldier of the battle how far the middle of the body is above the land, who is
+bleeding out, knocked down or in a killing blow) found every one of 13 to 20 dead on the ground in two battles, and a
+look at the field showed the same. Two ways the orders at a verdict could disturb a body were found by reading and
+are closed, without proof that either was the cause:
+
+- a soldier in the middle of a killing blow, dealt or taken (`IsInKillMove`): ending the fight of either leaves the
+  two-person animation broken. One was in progress at a verdict on the test profile (the Stormcloaks' champion).
+- a soldier who is down and alive (`IsBleedingOut`, or knocked off their feet): they were calmed and given the
+  travel order as they lay, with everybody else.
+
+`BattleManager::InAKillingBlow` keeps `CeaseFire` and `GuardsStandDown` off such a one; `CalmSoldier` and
+`SendSoldierOff` return at once for them, and `StandingAbout` sends them when they are up and standing. To be looked
+at on the full list with the hook and pictures taken right after a verdict.
+
 ## 6. The ladder (`Ranks.h`, co-save record `IERK`)
 
 What the player does for a faction earns renown with it (`Ranks::Worth`): a battle fought 6, won 6 more, each enemy

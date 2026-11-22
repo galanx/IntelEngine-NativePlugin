@@ -419,6 +419,12 @@ namespace IntelEngine {
          *  yet struck those who had been, who then defended themselves. The fight went on for minutes, and a beaten
          *  side's fresh reserves cut the winners down (seen by the user, 2026-11-22). */
         int CeaseFire(int first, int count, bool amongThemselves);
+        /** In the middle of a killing blow (dealing it or taking it), or down and not on their feet: such a one's
+         *  fight is not ended from outside. */
+        static bool InAKillingBlow(RE::Actor* actor);
+        /** Test hook: where the battle's dead lie (how far the middle of each body is above the land) and who is
+         *  held in a killing blow, into the log. For bodies left hanging in the air. */
+        void DebugBodies();
 
         /** Cleanup battle soldiers by proximity to player.
          *  Disables+deletes actors behind the player and far enough away.

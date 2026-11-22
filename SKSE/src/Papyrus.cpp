@@ -293,6 +293,7 @@ namespace IntelEngine::Papyrus {
     void SetBattleSoldiersAsTeammates(RE::StaticFunctionTag*, RE::BSFixedString);
     int CountDeadBattleSoldiers(RE::StaticFunctionTag*, RE::BSFixedString);
     int BattleCeaseFire(RE::StaticFunctionTag*, int, int, bool);
+    void BattleDebugBodies(RE::StaticFunctionTag*);
     int CleanupBattleSoldiers(RE::StaticFunctionTag*, float, float, float, float, bool);
     void ForceCleanupAllSoldiers(RE::StaticFunctionTag*);
     void ForgetBattleSoldiers(RE::StaticFunctionTag*);
@@ -775,6 +776,7 @@ namespace IntelEngine::Papyrus {
         a_vm->RegisterFunction("SetBattleSoldiersAsTeammates", SCRIPT_NAME, SetBattleSoldiersAsTeammates); ++count;
         a_vm->RegisterFunction("CountDeadBattleSoldiers", SCRIPT_NAME, CountDeadBattleSoldiers); ++count;
         a_vm->RegisterFunction("BattleCeaseFire", SCRIPT_NAME, BattleCeaseFire); ++count;
+        a_vm->RegisterFunction("BattleDebugBodies", SCRIPT_NAME, BattleDebugBodies); ++count;
         a_vm->RegisterFunction("CleanupBattleSoldiers", SCRIPT_NAME, CleanupBattleSoldiers); ++count;
         a_vm->RegisterFunction("ForceCleanupAllSoldiers", SCRIPT_NAME, ForceCleanupAllSoldiers); ++count;
         a_vm->RegisterFunction("ForgetBattleSoldiers", SCRIPT_NAME, ForgetBattleSoldiers); ++count;
@@ -5877,6 +5879,8 @@ namespace IntelEngine::Papyrus {
         auto* bm = BattleManager::GetSingleton();
         if (bm) bm->SetBattleSoldiersAsTeammates(side.c_str(), true);
     }
+
+    void BattleDebugBodies(RE::StaticFunctionTag*) { BattleManager::GetSingleton()->DebugBodies(); }
 
     int BattleCeaseFire(RE::StaticFunctionTag*, int first, int count, bool amongThemselves) {
         return BattleManager::GetSingleton()->CeaseFire(first, count, amongThemselves);
