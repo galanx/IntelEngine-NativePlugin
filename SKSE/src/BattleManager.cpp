@@ -685,8 +685,44 @@ namespace IntelEngine {
         }
     }
 
+    void BattleManager::GuardsStandDown() {
+        static FrameStats stats;
+        FrameClock clock("Battle: keeping the guards out of it", stats, FrameClock::Now(), 150);
+        std::vector<RE::FormID> ids;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (activeBattle_) {
+                for (const auto& a : activeBattle_->actors) {
+                    if (a.alive) ids.push_back(a.formId);
+                }
+            }
+        }
+        if (ids.empty()) {
+            std::lock_guard<std::mutex> lock(cleanupMutex_);
+            ids = cleanupFormIds_;
+        }
+        if (ids.empty()) return;
+        auto [sideA, sideB] = ResolveBattleFactions();
+        for (const auto id : ids) {
+            auto* soldier = RE::TESForm::LookupByID<RE::Actor>(id);
+            if (!soldier || soldier->IsDead() || !soldier->Is3DLoaded() || !soldier->IsInCombat()) continue;
+            const auto held = soldier->GetActorRuntimeData().currentCombatTarget.get();
+            auto* guard = held.get();
+            if (!guard || guard->IsDead() || !guard->IsGuard()) continue;
+            // (A guard who has been taken into a battle side fights in it like anybody.)
+            if ((sideA && guard->IsInFaction(sideA)) || (sideB && guard->IsInFaction(sideB))) continue;
+            guard->SetBeenAttacked(false);
+            guard->StopCombat();
+            soldier->SetBeenAttacked(false);
+            soldier->StopCombat();
+            logger::info("Battle: {} ({:08X}) and {} ({:08X}) let each other be: the hold's guards are not part of a battle",
+                         guard->GetDisplayFullName(), guard->GetFormID(), soldier->GetDisplayFullName(), soldier->GetFormID());
+        }
+    }
+
     void BattleManager::SuppressBountyTick() {
         StrikeBattleBounty();
+        GuardsStandDown();
         if (!suppressBattleBounty_) return;
 
         auto* player = RE::PlayerCharacter::GetSingleton();
@@ -2027,9 +2063,20 @@ namespace IntelEngine {
         }
         first = std::clamp(first, 0, total);
         count = std::clamp(count, 0, total - first);
+        // Rolled a frame ago by PrepareGroup (kind 3)? Then the first soldier's frame holds neither the roll nor the
+        // player's leaving of the two sides.
+        bool prepared = false;
+        if (first == 0) {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (activeBattle_) {
+                auto& ready = activeBattle_->preparedKind[isA ? 0 : 1];
+                prepared = ready == 3 && std::chrono::steady_clock::now() - activeBattle_->preparedAt[isA ? 0 : 1] < std::chrono::seconds(5);
+                ready = -1;
+            }
+        }
         // Whoever is left in a battle side from before is the player only by mistake: the two are enemies, and a
         // player in both is attacked by everyone.
-        if (isA && first == 0) {
+        if (isA && first == 0 && !prepared) {
             player->AddToFaction(battleFactionA, -1);
             player->AddToFaction(battleFactionB, -1);
         }
@@ -2037,7 +2084,7 @@ namespace IntelEngine {
         const auto field = Battlefield::Draw(centre, axis, total, total);
         const auto& line = isA ? field.a : field.b;
         const std::vector<Battlefield::Vec> spots(line.spots.begin() + first, line.spots.begin() + first + count);
-        const auto who = NextOf(isA, factionId, first, count, total, player);
+        const auto who = NextOf(isA, factionId, prepared ? 1 : first, count, total, player);
         const auto soldiers = MakeSoldiers(factionId, isA ? battleFactionA : battleFactionB, spots, line.facing, z, player, true, first == 0, true, &who);
         nlohmann::json ids = nlohmann::json::array();
         for (auto* s : soldiers) ids.push_back(s->GetFormID());
@@ -2206,6 +2253,7 @@ namespace IntelEngine {
         std::string factionId;
         Battlefield::Vec centre;
         float axis = 0.f, z = 0.f;
+        int lineSize = Battlefield::WaveSize(1);
         {
             std::lock_guard<std::mutex> lock(mutex_);
             if (!activeBattle_ || !activeBattle_->fieldSet || !player) return -1;
@@ -2215,6 +2263,25 @@ namespace IntelEngine {
             centre = {activeBattle_->fieldX, activeBattle_->fieldY};
             axis = activeBattle_->fieldAxis;
             z = activeBattle_->fieldZ;
+            lineSize = activeBattle_->lineSize;
+        }
+        if (kind == 3) {
+            // A line of the muster: its place is the field's, so only who they are is chosen here, and the player
+            // leaves the two battle sides (whoever is left in one from before is the player only by mistake). On a
+            // list of 1,500 plugins the roll of a line shared a frame with the first soldier's making: 1.1 ms.
+            if (isA) {
+                const auto [sideA, sideB] = ResolveBattleFactions();
+                if (sideA && sideB) {
+                    player->AddToFaction(sideA, -1);
+                    player->AddToFaction(sideB, -1);
+                }
+            }
+            NextOf(isA, factionId, 0, 0, lineSize, player);
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (!activeBattle_) return -1;
+            activeBattle_->preparedKind[isA ? 0 : 1] = 3;
+            activeBattle_->preparedAt[isA ? 0 : 1] = std::chrono::steady_clock::now();
+            return 1;
         }
         Battlefield::Vec point;
         if (!ComingPlace(player, isA, flank, centre, axis, z, factionId, point)) return 0;
@@ -3019,6 +3086,23 @@ namespace IntelEngine {
         return resolved;
     }
 
+    void BattleManager::WarmUp() {
+        const auto began = FrameClock::Now();
+        ResolveBattleFactions();
+        auto* fp = FactionPolitics::GetSingleton();
+        auto* player = RE::PlayerCharacter::GetSingleton();
+        int templates = 0;
+        for (const auto& id : fp->GetAllFactionIds()) {
+            if (auto* base = TemplateOf(fp->GetSoldierTemplate(id))) {
+                ++templates;
+                RollSoldiers(base, 1, player);          // the first walk through a leveled list
+            }
+        }
+        Papyrus::LookupLeveledActor("LvlBanditMeleeAny");       // whom a faction without a template of its own raises
+        logger::info("Battle: {} soldier templates and the two sides looked up while the save came in ({:.2f} ms)", templates,
+                     std::chrono::duration<double, std::milli>(FrameClock::Now() - began).count());
+    }
+
     namespace {
         // The game's own PlaceAtMe (the function behind Papyrus' ObjectReference.PlaceAtMe), asked for somebody switched
         // off from the start: their record is made, their body is not asked for until they are switched on.
@@ -3192,6 +3276,52 @@ namespace IntelEngine {
         out["count"] = static_cast<int>(formIds.size());
         out["alive"] = alive;
         return out.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
+    }
+
+    int BattleManager::CeaseFire(int first, int count, bool amongThemselves) {
+        static FrameStats stats;
+        FrameClock clock("Battle: calling the fighting off", stats, FrameClock::Now(), 40);
+        std::vector<RE::FormID> ids;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (activeBattle_) {
+                for (const auto& a : activeBattle_->actors) ids.push_back(a.formId);
+            }
+        }
+        if (ids.empty()) {
+            std::lock_guard<std::mutex> lock(cleanupMutex_);
+            ids = cleanupFormIds_;
+        }
+        const int total = static_cast<int>(ids.size());
+        first = std::clamp(first, 0, total);
+        const int last = (std::min)(total, first + (std::max)(count, 0));
+        int stopped = 0;
+        for (int i = first; i < last; ++i) {
+            auto* actor = RE::TESForm::LookupByID<RE::Actor>(ids[static_cast<std::size_t>(i)]);
+            if (!actor || actor->IsDead() || actor->IsDisabled()) continue;
+            const bool fighting = actor->IsInCombat();
+            if (amongThemselves) {
+                if (!fighting) continue;
+                // A fight with somebody who is not of the battle is their own business (a wolf, a bandit on the road):
+                // it is said once a look, and left alone. A fight with nobody left in it is ended like one among
+                // themselves: the one they fought has run or fallen, and they stand there with their weapon out.
+                const auto target = actor->GetActorRuntimeData().currentCombatTarget.get();
+                if (target && std::find(ids.begin(), ids.end(), target->GetFormID()) == ids.end()) {
+                    logger::info("Battle: {} ({:08X}) is still fighting {} ({:08X}), who is not of the battle: left to it",
+                                 actor->GetDisplayFullName(), actor->GetFormID(), target->GetDisplayFullName(), target->GetFormID());
+                    continue;
+                }
+            }
+            actor->AsActorValueOwner()->SetActorValue(RE::ActorValue::kAggression, 0.f);
+            actor->SetBeenAttacked(false);
+            actor->StopCombat();
+            if (fighting) ++stopped;
+        }
+        if (stopped > 0) {
+            logger::info("Battle: the fighting is called off for {} of the soldiers {} to {}{}", stopped, first, last - 1,
+                         amongThemselves ? " (they were still at each other)" : "");
+        }
+        return total - last;
     }
 
     int BattleManager::CountDeadSoldiers(const std::string& side) const {

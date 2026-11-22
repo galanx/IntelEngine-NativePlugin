@@ -541,7 +541,10 @@ namespace IntelEngine {
                     if (task) {
                         task->AddTask([]() { DispatchMaintenanceCall(true); });
                         // A new game has its first story request too: the same first lookups, made now.
-                        task->AddTask([]() { ArcBridge::GetSingleton()->WarmUp(); });
+                        task->AddTask([]() {
+                            ArcBridge::GetSingleton()->WarmUp();
+                            BattleManager::GetSingleton()->WarmUp();
+                        });
                         AsyncDispatch::Submit([] { NPCIndex::ReadStoryFilters(); });
                     }
                 }
@@ -556,7 +559,10 @@ namespace IntelEngine {
                 // comes in.
                 AsyncDispatch::Submit([] { NPCIndex::ReadStoryFilters(); });
                 if (auto* warm = SKSE::GetTaskInterface()) {
-                    warm->AddTask([] { ArcBridge::GetSingleton()->WarmUp(); });
+                    warm->AddTask([] {
+                        ArcBridge::GetSingleton()->WarmUp();
+                        BattleManager::GetSingleton()->WarmUp();      // a session's first battle: its lookups by name
+                    });
                 }
                 LanguageBridge::GetSingleton()->Decide();   // the settings may differ from when the data was loaded
                 LivingWorldBridge::GetSingleton()->OnGameLoaded(false);
