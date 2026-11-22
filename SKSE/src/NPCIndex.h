@@ -651,6 +651,8 @@ namespace IntelEngine {
          * Loaded: walks parent cell location chain. Unloaded: walks editor location chain.
          */
         static std::string GetNPCHoldName(RE::Actor* actor);
+        /** The hold a place lies in, by name (the location the game marks as a hold above it); empty when none. */
+        static std::string HoldNameAt(RE::BGSLocation* loc);
 
         /**
          * Get the settlement name (city/town) for an actor.

@@ -100,6 +100,17 @@ namespace IntelEngine {
         return static_cast<float>(now - last);
     }
 
+    float DialogueTracker::SecondsSinceOtherSpokeToPlayer(RE::FormID except, RE::FormID* who) const {
+        const auto now = std::chrono::steady_clock::now();
+        std::lock_guard<std::mutex> lock(mutex_);
+        for (auto it = lines_.rbegin(); it != lines_.rend(); ++it) {
+            if (it->speaker == 0x14 || it->speaker == except || it->target != 0x14) continue;
+            if (who) *who = it->speaker;
+            return std::chrono::duration<float>(now - it->at).count();
+        }
+        return -1.0f;
+    }
+
     void DialogueTracker::Record(const char* json, bool player) {
         if (!json) return;
         try {

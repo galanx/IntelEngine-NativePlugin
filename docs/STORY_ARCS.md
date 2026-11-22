@@ -556,6 +556,76 @@ Maintenance: "IntelEngine Maintenance skipped (duplicate call within 5s)" as the
 story visitor's arrival was looked at again. `IntelEngine.LoadStamp()` (the second the session began and a count of
 its loads) says which load a kept time belongs to. Seen before and after in the test profile's log.
 
+### What a long play session found (2026-11-22)
+
+Two and a half hours on the test profile from a new character: Riverwood, then Whiterun, three game days, two stories
+written by the model (one played to its good ending by talk), a death and a reload, the game's own wait menu, a save
+and a load in the middle of a story. No crash, no script error, no stack dump. Seven things came out of it; all are
+built, and each was seen again in the game afterwards unless it says otherwise.
+
+**A quest moved on behind the player's back held the town's stories back** (`ArcBridge::QuestMovedOn`, `QuestBusy`).
+Every stage change of a quest with a journal type set a quarter of an hour of "the player is on a quest". The game
+moves such quests all day without the player: "Animal Extermination" twice, a nameless one, and after a load "Rescue
+Mission", "Family Heirloom", "Hired Muscle" and "Take Up Arms" within three minutes. The stage event is now only noted
+(the newest six quests, each with the second its hold would end); whether it holds anything back is asked when a
+story is about to begin, and then only a quest the journal shows counts (an objective of it shown, done or failed).
+The stage is set before the quest's own script shows its first objective, which is why the question cannot be asked
+at the event. Test hook `IntelEngine_Arcs.DebugQuestBusy` (seen: False with the four above, TRUE after `setstage MS13
+10`).
+
+**Asking for a tale took 0.74 to 0.85 ms of one frame** (2.4 ms on the large list). `RequestTale` is now a thin
+caller of `GatherTale`, a coroutine (`FrameSpread.h`: `FrameJob`, `co_await NextFrame{}`, `FrameShare`) that gives the
+frame back before the people, every few people, before the places and before the words for the writer. The answer
+"a tale is on its way" is given before the first pause; a failure further down is logged and frees the writer's desk,
+as a tale that comes back unusable does. A save loaded between two parts ends the job. A test's own tale is still
+checked and planned in the one frame. Seen: five frames, at most 0.32 ms of any one.
+
+**Three stories running were the same story.** A bandit chief with a hold over a townsperson, a camp, a kill, and
+titles "The Quiet Order", "The Quiet Husband", "The Quiet Ledger", 155 gold each. Held by the engine now:
+- the master of a place is not killed in two stories running (`slayTwice`: the step is not offered, the compiler
+  refuses it, and no hunt is on offer either since a hunt ends on one); a story asked for by kind (a hunt, a
+  haunting, a rescue) is that kind whatever came before;
+- the next story that leads out goes to another kind of place than the last, as long as two places of other kinds
+  are near (`lastPlace`, `SiteKindOf`);
+- a title shares no word of five letters or more with the last six titles (`Pool::titles`, `detail::SharedTitleWord`
+  in Tales.h; in any alphabet, names of the story's own people and places are free, scripts without spaces are not
+  held to it; on the second asking a title is no longer a reason to lose the tale: `Pool::titleMayRepeat`);
+- the reward is the level's sum times 0.8 to 1.2 by the story's seed, in fives.
+The writer's prompt says what the town's first word is (what was seen or heard of the asker, never what sort of
+helper is wanted), what a title is, and that trouble mostly comes from among a story's own people. Seen: the next
+story was "The Mare's Second Ledger", wholly among people, 160 gold.
+
+**An asker spoke into somebody else's talk.** The acolyte's request was sent while the smith was still speaking, and
+SkyrimNet gave the line to the smith. `ArcBridge::PlayerTalksWithAnother(except, within)`: somebody other than this
+one said a line to the player within `within` seconds, or has one on its way or being said, or one that ended within
+`within` seconds, or one the player answered within `within` seconds (`DialogueTracker::SecondsSinceOtherSpokeToPlayer`
+with `SpeechTracker`). Nobody sets out toward the player with a story while that is so (45 s; all four doors in
+`Lapse`), and one who arrives during a talk waits (`IntelEngine_StoryEngine.WaitsTheirTurn`, 20 s; asked again every
+look; after a minute and a half a story's asker lets it be, a one-off visitor speaks after all). One who arrives after
+another story came to the player or ended within the hour lets it be (`ArcQuietNow`). Seen both: "waits their turn",
+then the request in the acolyte's own voice with a glance at the smith; and "lets it be for now" when the smith's
+story had just ended.
+
+**A decision already spoken was asked again by window.** `ArcBridge::ChoiceTalk` / `ChoiceUnread`: a tale's decision
+step is first looked for in what the player has said to the step's person since the step became the story's step,
+once both are quiet, by the same reader that reads a talk step (`SendJudge(..., decision = true, window)`; the two
+reader prompts ask whether the player has plainly said one of the answers). Named: taken as the answer
+(`pending.answer`). None: the window, as before (`pending.spoken`). Never for a step with an answer that needs Speech;
+a reading that does not come back within 25 s does not keep the window shut, and comes too late to count. Seen both
+ways ("the decision was made in talk", "no decision was spoken in the talk: the window asks").
+
+**Smaller.** The reader of a talk goes by the person's own lines (a talk was read as a confession on the strength of
+what the player had just said). A choice window waits while a menu or a text box holds the keyboard
+(`Core.ShowChoice`; the wait itself was not seen, only that windows still open). When a story's asker stays put after
+all and no talk was written for the town, the town passes on the asker's own request (`ArcBridge::TroubleTalk`, seen).
+In open country without a named place the player is in the hold they last walked in (`NPCIndex::GetNPCHoldName`,
+`HoldNameAt`; built, not seen in the game).
+
+**Not built.** A new game's inns have nothing of IntelEngine's to tell for the first six game hours (the talk of the
+day fills with the first political news and the first story). The walker of the test tools stalls on long ways to a
+person inside a far interior; the last stretch to Halted Stream Camp and the way back were made by console, so nothing
+of the road beyond eight minutes on foot was seen.
+
 ### MCM rows that fit their column (2026-11-22)
 
 Found while the new switch was looked at in the MCM itself (which had not been opened for the 4.0 settings before).

@@ -342,8 +342,9 @@ namespace IntelEngine {
             // master quest to camilla"). Only those that name a few people; the ones that name half a town say nothing.
             for (auto* quest : data->GetFormArray<RE::TESQuest>()) {
                 if (!quest || quest->GetType() != RE::QUEST_DATA::Type::kMiscellaneous) continue;
-                const char* title = quest->GetFullName();
-                if (!title || !*title) continue;
+                // By its title, or by its first objective when it has none (QuestLabel): the errands without a
+                // title were passed over, and the writer made a story about Amren's family sword.
+                if (QuestLabel(quest).empty()) continue;
                 std::vector<RE::FormID> people;
                 for (auto* alias : quest->aliases) {
                     if (!alias || alias->GetVMTypeID() != RE::BGSRefAlias::VMTYPEID) continue;
@@ -1030,6 +1031,37 @@ namespace IntelEngine {
     namespace {
         bool With(RE::Actor* who, float within);   // both further down, with the rule on who goes to the player
         bool KeepsPost(RE::Actor* who);
+        // How long after the last line of somebody else's talk with the player nobody sets out toward them with a
+        // story (real seconds). At the player's side the wait is shorter (the script's ArcTalkWithAnother).
+        constexpr float kTalkQuietSeconds = 45.0f;
+    }
+
+    bool ArcBridge::PlayerTalksWithAnother(RE::FormID except, float within) {
+        RE::FormID who = 0;
+        const float since = DialogueTracker::GetSingleton()->SecondsSinceOtherSpokeToPlayer(except, &who);
+        if (since < 0.0f) return false;
+        if (since < within) return true;
+        if (since > 240.0f || !who) return false;
+        // A line is written long before it has been said, and when it has been said the word is the player's: the
+        // talk is on while their line is on its way or being said, for `within` seconds after it ended, and for
+        // `within` seconds after the player answered it. (Acolyte Jenssen, waiting his turn, spoke three seconds after
+        // Ulfberth had asked the player a question, 2026-11-22.)
+        auto* speech = SpeechTracker::GetSingleton();
+        if (speech->IsSpeechPending(who)) return true;
+        const float ended = speech->SecondsSinceSpeechEnded(who);
+        if (ended >= 0.0f && ended < within) return true;
+        const float answered = speech->SecondsSincePlayerSpoke();
+        return answered >= 0.0f && answered < within && answered < since;
+    }
+
+    std::string ArcBridge::TroubleTalk(const std::string& asker, const std::string& ask) {
+        if (ask.size() < 12) return asker + " has trouble, and has been asking around for someone who will look into it.";
+        return asker + " has been asking people for help, in words like these: \"" + ask + "\"";
+    }
+
+    bool ArcBridge::QuietNow(std::uint32_t id) {
+        std::scoped_lock lock(m_mutex);
+        return A::QuietFor(m_book.LastBeat(id), NowDays(), A::kQuietHoursOwed);
     }
 
     std::vector<std::uint32_t> ArcBridge::Lapse() {
@@ -1053,6 +1085,7 @@ namespace IntelEngine {
                     if (pending.offerDue < 0.0f) pending.offerDue = std::max(now, a.created + 8.0f / 24.0f);
                     if (now < pending.offerDue || LivingWorldBridge::GetSingleton()->IsBadMoment()) continue;
                     if (!A::QuietFor(m_book.LastBeat(a.id), now, A::kQuietHoursOwed) || StandsBy(a)) continue;
+                    if (PlayerTalksWithAnother(a.cast[A::RAsker], kTalkQuietSeconds)) continue;
                     pending.offerSent = true;
                     const auto arcId = a.id;
                     const RE::FormID askerId = a.cast[A::RAsker];
@@ -1084,7 +1117,7 @@ namespace IntelEngine {
                         // back among its houses they come across it, as they would have.
                         if (pending.awaits && PlayerInTownProper(a.place) && !KeepsPost(asker) && !CellAnalyzer::GetSingleton()->IsPlayerInOwnHome() &&
                             !LivingWorldBridge::GetSingleton()->IsBadMoment() && A::QuietFor(m_book.LastBeat(a.id), NowDays(), A::kQuietHoursOwed) &&
-                            !StandsBy(a)) {
+                            !StandsBy(a) && !PlayerTalksWithAnother(asker->GetFormID(), kTalkQuietSeconds)) {
                             pending.awaits = false;
                             pending.offerSent = true;
                             const auto arcId = a.id;
@@ -1104,7 +1137,8 @@ namespace IntelEngine {
                         if ((a.flags & A::Flag::Rumored) && !pending.setOut && (pending.setOutForced || A::MaySetOutNow(a, NowDays(), HourNow()))) {
                             if (PlayerInTownProper(a.place) && !KeepsPost(asker) && !CellAnalyzer::GetSingleton()->IsPlayerInOwnHome() &&
                                 !LivingWorldBridge::GetSingleton()->IsBadMoment() &&
-                                A::QuietFor(m_book.LastBeat(a.id), NowDays(), A::kQuietHoursOwed) && !StandsBy(a)) {
+                                A::QuietFor(m_book.LastBeat(a.id), NowDays(), A::kQuietHoursOwed) && !StandsBy(a) &&
+                                !PlayerTalksWithAnother(asker->GetFormID(), kTalkQuietSeconds)) {
                                 pending.setOut = true;
                                 pending.setOutForced = false;
                                 pending.sought = false;
@@ -1132,10 +1166,13 @@ namespace IntelEngine {
                     if (LivingWorldBridge::GetSingleton()->IsBadMoment()) held = 1;
                     else if (!sought && !A::QuietFor(m_book.LastBeat(a.id), NowDays(), A::kQuietHoursOwed)) held = 2;
                     else if (!sought && (bystander = StandsBy(a)) != nullptr) held = 3;
+                    else if (!sought && PlayerTalksWithAnother(asker->GetFormID(), kTalkQuietSeconds)) held = 4;
                     if (held) {
                         if (held != pending.heldBy && held != 1) {
                             logger::info("Arcs: #{} {} is near the player and waits with the offer: {}", a.id, NameOf(a.cast[A::RAsker]),
-                                         held == 2 ? "another story moved within the hour" : (NameOf(bystander->GetFormID()) + " of the story stands within earshot").c_str());
+                                         held == 2   ? std::string("another story moved within the hour")
+                                         : held == 4 ? std::string("the player is in talk with somebody else")
+                                                     : NameOf(bystander->GetFormID()) + " of the story stands within earshot");
                         }
                         pending.heldBy = held;
                         continue;
@@ -1257,10 +1294,12 @@ namespace IntelEngine {
     void ArcBridge::OfferWaits(std::uint32_t id, A::Stays why, bool knowsPlayer) {
         bool talk = false;
         RE::FormID askerId = 0, town = 0, home = 0;
+        std::string ask;
         {
             std::scoped_lock lock(m_mutex);
             auto* a = m_book.Find(id);
             if (!a || a->phase != A::Phase::Planned) return;
+            ask = Fill(a->offerAsk, *a);
             auto& pending = m_pending[id];
             pending.offerSent = false;
             pending.deferredAt = RealSeconds();
@@ -1280,7 +1319,7 @@ namespace IntelEngine {
         if (!talk) return;
         // What troubles them goes round as talk, with where to find them: the innkeeper brings it up, anyone may
         // mention it, and the player may go to them or not.
-        std::string hook = NameOf(askerId) + " has trouble, and has been asking around for someone who will look into it.";
+        std::string hook = TroubleTalk(NameOf(askerId), ask);
         auto* homeCell = home ? RE::TESForm::LookupByID<RE::TESObjectCELL>(home) : nullptr;
         if (const char* homeName = homeCell ? homeCell->GetFullName() : nullptr; homeName && *homeName) {
             hook += " " + NameOf(askerId) + " lives at " + homeName + ".";
@@ -1329,7 +1368,7 @@ namespace IntelEngine {
         if (m_paceTried >= 0.0f && now >= m_paceTried && now - m_paceTried < kPaceRetryDays) return;
         if (LivingWorldBridge::GetSingleton()->IsBadMoment() || player->IsInCombat()) return;
         // The player is busy with a quest of the journal (a stage of it moved on lately): no story cuts in.
-        if (const float busy = m_questBusyUntil.load(); RealSeconds() < busy) return;
+        if (QuestBusy(RealSeconds())) return;
         if (m_taleBusy.load()) return;   // a tale is being written
         {
             std::scoped_lock lock(m_mutex);
@@ -1555,6 +1594,8 @@ namespace IntelEngine {
         // A new step: what was read or held for the one before is gone.
         if (pending.node != a->node) {
             pending.node = a->node;
+            pending.nodeAt = RealSeconds();
+            pending.spoken = 0;
             pending.turn = -1;
             pending.talked = false;
             pending.judging = false;
@@ -1721,6 +1762,7 @@ namespace IntelEngine {
         }
         const std::uint8_t nodeBefore = a->node;
         if (tale) TaleTalk(id, *a, pending, f);
+        if (tale) ChoiceTalk(id, *a, pending, f);
         const auto change = A::Advance(*a, f, now);
         pending.answer = -1;
         std::int32_t bits = 0;
@@ -1916,7 +1958,7 @@ namespace IntelEngine {
             // of minutes while it cannot be (another visitor on the way, indoors).
             if (n.kind == A::Kind::Stalk && n.who && !f.dead[n.who] && !f.with[n.who] && withinReach(n.who) && real >= pending.stalkHold && cell &&
                 !cell->IsInteriorCell() && !player->IsInCombat() && !LivingWorldBridge::GetSingleton()->IsBadMoment() &&
-                real >= m_questBusyUntil.load()) {
+                !QuestBusy(real)) {
                 auto* shadow = actors[n.who];
                 const bool inReach = shadow && shadow->Is3DLoaded() && shadow->GetWorldspace() == player->GetWorldspace();
                 const auto to = inReach ? shadow->GetPosition() - player->GetPosition() : RE::NiPoint3{};
@@ -1932,8 +1974,9 @@ namespace IntelEngine {
                     logger::info("Arcs: #{} {} is to shadow the player (step {})", id, NameOf(a->cast[n.who]), static_cast<int>(a->node));
                 }
             }
+            // (A tale's decision is first looked for in what the player has just said to them: ChoiceTalk.)
             if ((n.kind == A::Kind::Choose || n.kind == A::Kind::Brawl) && n.who && f.spoke[n.who] && !f.dead[n.who] &&
-                real >= pending.chooseHold) {
+                real >= pending.chooseHold && !ChoiceUnread(*a, pending)) {
                 pending.chooseHold = real + 30.0f;   // the popup is up; Answer sets the real hold
                 bits |= 1 << 25;
                 logger::info("Arcs: #{} step {}: {} has talked with the player; the decision is offered", id, static_cast<int>(a->node),
@@ -2172,13 +2215,64 @@ namespace IntelEngine {
     }
 
     void ArcBridge::QuestMovedOn(RE::TESQuest* quest) {
+        // Only noted here: the stage is set before the quest's own script has shown anything, so whether the journal
+        // shows this quest can only be asked later (QuestBusy). The same quest keeps its place; else the oldest goes.
+        if (!quest) return;
         const float until = RealSeconds() + kQuestBusySeconds;
-        if (until - m_questBusyUntil.load() > 60.0f) {
-            const char* name = quest ? quest->GetFullName() : nullptr;
-            logger::info("Arcs: the player is on a quest ({}); no town story for {:.0f} minutes", name && *name ? name : "a quest",
-                         kQuestBusySeconds / 60.0f);
+        std::scoped_lock lock(m_questMutex);
+        QuestMove* slot = &m_questMoves[0];
+        for (auto& move : m_questMoves) {
+            if (move.quest == quest->GetFormID()) {
+                slot = &move;
+                break;
+            }
+            if (move.until < slot->until) slot = &move;
         }
-        m_questBusyUntil.store(until);
+        // A new hold of the same quest gets a new line only when the old one had run out.
+        const bool fresh = slot->quest != quest->GetFormID() || slot->until < RealSeconds();
+        slot->quest = quest->GetFormID();
+        slot->until = until;
+        if (fresh) slot->told = false;
+    }
+
+    bool ArcBridge::QuestBusy(float real) {
+        // The player is busy with a quest when one that moved on lately is theirs to see: an objective of it stands
+        // on their list (shown, done or failed). The game moves quests on behind the player's back all day (a
+        // radiant quest making itself ready, a mod's keeper quest): "Animal Extermination" and a nameless one held
+        // the town's stories back a quarter of an hour each on a new game, and on a large mod list they might never
+        // have begun (the play session of 2026-11-22).
+        std::scoped_lock lock(m_questMutex);
+        bool busy = false;
+        for (auto& move : m_questMoves) {
+            if (!move.quest || real >= move.until) continue;
+            auto* quest = RE::TESForm::LookupByID<RE::TESQuest>(move.quest);
+            if (!quest) continue;
+            bool shown = false;
+            for (auto* objective : quest->objectives) {
+                if (!objective) continue;
+                const auto state = objective->state.get();
+                if (state == RE::QUEST_OBJECTIVE_STATE::kDisplayed || state == RE::QUEST_OBJECTIVE_STATE::kCompletedDisplayed ||
+                    state == RE::QUEST_OBJECTIVE_STATE::kFailedDisplayed) {
+                    shown = true;
+                    break;
+                }
+            }
+            // Said once a quest: at once when the journal shows it, else after a few seconds (its script shows its
+            // first objective a moment after the stage is set).
+            if (!move.told && (shown || real - (move.until - kQuestBusySeconds) > 10.0f)) {
+                move.told = true;
+                const std::string name = QuestLabel(quest);
+                if (shown) {
+                    logger::info("Arcs: the player is on a quest ({}); no town story for {:.0f} minutes", name.empty() ? "a quest" : name,
+                                 (move.until - real) / 60.0f);
+                } else {
+                    logger::info("Arcs: a quest moved on that the journal does not show ({}): it holds no story back",
+                                 name.empty() ? "a quest" : name);
+                }
+            }
+            if (shown) busy = true;
+        }
+        return busy;
     }
 
     void ArcBridge::Listen() {
@@ -2560,7 +2654,7 @@ namespace IntelEngine {
             } else if (const auto priv = LivingWorldBridge::PrivateMoment(); priv != Patrols::Private::No) {
                 // Hired men fall on a traveller, never on somebody who is with somebody or has settled somewhere.
                 wait = Patrols::Word(priv);
-            } else if (real < m_questBusyUntil.load()) {
+            } else if (QuestBusy(real)) {
                 wait = "a quest of the game moved on lately";
             }
             if (wait != pending.ambushWait) {
@@ -3724,6 +3818,16 @@ namespace IntelEngine {
             if (asker) ArcBridge::GetSingleton()->Offer(U(id), asker);
         }
         RE::Actor* ArcCompany(RE::StaticFunctionTag*, std::int32_t id) { return ArcBridge::GetSingleton()->Company(U(id)); }
+        // Somebody other than this visitor is talking with the player right now (a line to the player within fifteen
+        // seconds, or one still being said): the visitor waits their turn.
+        bool ArcTalkWithAnother(RE::StaticFunctionTag*, RE::Actor* visitor) {
+            return ArcBridge::PlayerTalksWithAnother(visitor ? visitor->GetFormID() : 0, 20.0f);
+        }
+        // Test hook: is the player in the middle of a quest of the journal right now (what holds a town's stories
+        // back)? Asking also writes the line about each quest that moved on lately, shown in the journal or not.
+        bool ArcQuestBusyNow(RE::StaticFunctionTag*) { return ArcBridge::GetSingleton()->QuestBusy(RealSeconds()); }
+        // No other story came to the player or ended within the hour.
+        bool ArcQuietNow(RE::StaticFunctionTag*, std::int32_t id) { return ArcBridge::GetSingleton()->QuietNow(U(id)); }
         // What only scripts can read of someone's heart (other mods keep it in script storage): Hearts.h, HeartBridge.
         void ArcHeart(RE::StaticFunctionTag*, RE::Actor* who, std::int32_t sparked, std::int32_t stance, std::int32_t withChild,
                       bool childIsPlayers, std::int32_t children, bool playersChild, float refusedAt) {
@@ -3826,6 +3930,9 @@ namespace IntelEngine {
         a_vm->RegisterFunction("ArcOfferDeferred", script, ArcOfferDeferred); ++count;
         a_vm->RegisterFunction("ArcOffer", script, ArcOffer); ++count;
         a_vm->RegisterFunction("ArcCompany", script, ArcCompany); ++count;
+        a_vm->RegisterFunction("ArcTalkWithAnother", script, ArcTalkWithAnother); ++count;
+        a_vm->RegisterFunction("ArcQuestBusyNow", script, ArcQuestBusyNow); ++count;
+        a_vm->RegisterFunction("ArcQuietNow", script, ArcQuietNow); ++count;
         a_vm->RegisterFunction("ArcEarshot", script, ArcEarshot); ++count;
         a_vm->RegisterFunction("ArcStoriesOn", script, ArcStoriesOn); ++count;
         a_vm->RegisterFunction("ArcStorySwitches", script, ArcStorySwitches); ++count;

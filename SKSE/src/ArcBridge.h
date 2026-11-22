@@ -1,17 +1,40 @@
 #pragma once
 
 #include "Arcs.h"
+#include "FrameSpread.h"
 
 #include <atomic>
 #include <chrono>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
 namespace IntelEngine {
+
+    // What a quest of the game is called: its title, or, for an errand that has none (it stands under Miscellaneous
+    // in the journal with an objective and no name: "Amren's family sword" is one), its first objective, with the
+    // places only the running quest can fill left as dots.
+    inline std::string QuestLabel(RE::TESQuest* quest) {
+        if (!quest) return {};
+        if (const char* title = quest->GetFullName(); title && *title) return title;
+        for (auto* objective : quest->objectives) {
+            const char* text = objective ? objective->displayText.c_str() : nullptr;
+            if (!text || !*text) continue;
+            std::string label = text;
+            for (auto at = label.find('<'); at != std::string::npos; at = label.find('<', at)) {
+                const auto end = label.find('>', at);
+                if (end == std::string::npos) break;
+                label.replace(at, end - at + 1, "...");
+                at += 3;
+            }
+            return label;
+        }
+        return {};
+    }
 
     /**
      * Story arcs in the game (docs/STORY_ARCS.md): casts an arc from the real people of a town, reads the facts of the
@@ -65,8 +88,23 @@ namespace IntelEngine {
         /** At data load: the inventory event that sees gold reach the player, and the quest stages that say the
          *  player is busy with a quest. */
         void Listen();
-        /** A quest of the journal moved on: no town story for a while. */
+        /** The player is in talk with somebody other than this one: a line said to the player within `within` real
+         *  seconds, or one of theirs still on its way or being said. Whoever comes with words of their own waits for
+         *  that talk to be over: a request sent into it was given to the other speaker by SkyrimNet (Acolyte Jenssen's,
+         *  spoken as an aside of Ulfberth's, 2026-11-22). Any thread. */
+        static bool PlayerTalksWithAnother(RE::FormID except, float within);
+        /** What the town says of someone's trouble when the story's writer wrote nothing for it (a story asked for as
+         *  one whose asker comes in person, who then did not come): the asker's own request as people would have
+         *  heard them make it. "Ysolda has trouble, and has been asking around" told nobody anything (2026-11-22). */
+        static std::string TroubleTalk(const std::string& asker, const std::string& ask);
+        /** No other story came to the player or ended within the hour (the manners every offer keeps). */
+        bool QuietNow(std::uint32_t id);
+        /** A quest moved a stage on: noted, with the hour. Whether it holds anything back is QuestBusy's to say. */
         void QuestMovedOn(RE::TESQuest* quest);
+        /** The player is in the middle of a quest of the journal: one that moved on in the last quarter of an hour
+         *  AND that the journal shows (an objective of it is on the player's list). A quest the game runs behind
+         *  the player's back holds nothing back. */
+        bool QuestBusy(float real);
         /** The player laid hands on someone (activated them): when a story holds them bound, they are cut loose. */
         void Activated(RE::Actor* actor);
         /** A tale's "give": the stamped prop goes from wherever it was put to the player. False when it was never put
@@ -249,6 +287,8 @@ namespace IntelEngine {
             int nones = 0;               // readings that found no outcome yet
             float judgedAt = -1.0f;      // real seconds of the last reading
             float askedAt = -1.0f;       // real seconds: the player's first line since that reading (< 0: none yet)
+            float nodeAt = -1.0f;        // real seconds: when this step became the story's step
+            std::uint8_t spoken = 0;     // a tale's decision: 1 = the talk was read and the decision was not in it (the window asks)
             float visitAt = -1.0f;       // game days: the step's person was last sent to the player
             float stalkHold = -1.0f;     // real seconds: a stalker is not sent after the player again before this
             bool tooFar = false;         // the step's visitor or shadow waits: the player is out of the tale's hold (logged once)
@@ -288,11 +328,19 @@ namespace IntelEngine {
             std::uint8_t standWhy = 0;   // why the men stand down: 1 the player is beaten, 2 talked out of it
         };
         void TaleTalk(std::uint32_t id, const Arcs::Arc& a, Pending& pending, const Arcs::Facts& f);   // lock held
+        /** A tale's decision step, each look (lock held): once the player and the step's person have talked and gone
+         *  quiet, the talk is read for a decision the player has already spoken. */
+        void ChoiceTalk(std::uint32_t id, const Arcs::Arc& a, Pending& pending, const Arcs::Facts& f);
+        /** That reading is still owed: the window for the decision waits for it. */
+        bool ChoiceUnread(const Arcs::Arc& a, const Pending& pending) const;
         /** A tale's ambush step, each look (lock held): when its men are placed, step out, or are called off. */
         void AmbushLook(std::uint32_t id, Arcs::Arc& a, Pending& pending, const Arcs::Node& n, float now, int placed);
         /** The leader's word and what the player says to it (lock held): true when it is over and they fall on the
          *  player, with why. A talk in between is read like a talk step's (SendJudge). */
         bool Parley(std::uint32_t id, const Arcs::Arc& a, Pending& pending, const Arcs::Node& n, float nearest, std::string& why);
+        /** RequestTale's work, a part a frame (FrameSpread.h): `answer` is written before its first pause and never
+         *  after; the asker's seed is its own copy. */
+        FrameJob GatherTale(RE::Actor* asker, std::string written, std::optional<TaleSeed> seed, bool* answer);   // main thread
         void SendTale(std::shared_ptr<void> request, int attempt, std::string fix, std::string previous);   // any thread
         void TaleWritten(std::shared_ptr<void> request, int attempt, const std::string& text);              // main thread
         void SendOffer(std::uint32_t id, RE::Actor* asker);
@@ -300,14 +348,23 @@ namespace IntelEngine {
         Arcs::Stays WhyStays(std::uint32_t id, RE::Actor* asker, bool& knowsPlayer);
         /** They stay where they are: the story waits for the two to meet, and their trouble is talk in town. */
         void OfferWaits(std::uint32_t id, Arcs::Stays why, bool knowsPlayer);
+        /** decision: the outcomes are the answers of a decision step, and the question is whether the player has
+         *  already said one of them. window: how far back the talk is read, in real seconds (0: the usual five minutes). */
         void SendJudge(std::uint32_t id, std::uint8_t node, RE::FormID who, std::string goal, std::array<std::string, 3> turns,
-                       bool force);
+                       bool force, bool decision = false, float window = 0.0f);
         /** The game's own small quests (favours with a name) of each person, by base: for the tale author only. */
         std::unordered_map<RE::FormID, std::vector<RE::FormID>> m_favours;
         std::atomic<bool> m_taleBusy{false};
         std::atomic<bool> m_storiesOn{true};   // the "Stories" switch, as the script last told it
         std::atomic<std::uint32_t> m_switchesOff{0};   // the story-type switches that are off (kSwitch* bits)
-        std::atomic<float> m_questBusyUntil{-1.0f};   // real seconds: a quest moved on lately
+        // The quests that moved a stage on lately (the newest few), each with the real second its hold would end.
+        struct QuestMove {
+            RE::FormID quest = 0;
+            float until = -1.0f;
+            bool told = false;   // its line is in the log
+        };
+        std::mutex m_questMutex;
+        std::array<QuestMove, 6> m_questMoves{};
         std::array<std::array<RE::FormID, 2>, Arcs::kSlots> m_holders{};
 
         std::string Fill(std::string text, const Arcs::Arc& a) const;

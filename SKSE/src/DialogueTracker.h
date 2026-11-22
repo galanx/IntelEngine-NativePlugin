@@ -30,6 +30,11 @@ namespace IntelEngine {
          *  this session. A SkyrimNet conversation has no menu of the game to tell it by. Any thread. */
         static float SecondsSincePlayerTalk();
 
+        /** Real seconds since somebody other than `except` last said a line to the player; below 0: nobody among
+         *  the lines kept. `who`: that speaker. What the player and `except` say to each other does not count. Any
+         *  thread. */
+        float SecondsSinceOtherSpokeToPlayer(RE::FormID except, RE::FormID* who = nullptr) const;
+
         /** Register the dialogue event callback with SkyrimNet. Call after API init. */
         void Initialize();
 

@@ -401,6 +401,10 @@ class VM:
         if method == "ArcReachOf": return 0
         # Nobody a story is about stands beside the modeled player (no visitor holds back for company).
         if method == "ArcCompany": return None
+        # Nobody else is talking with the modeled player when a visitor arrives, and no other story has moved
+        # within the hour (no visitor waits their turn or lets it be: WaitsTheirTurn).
+        if method == "ArcTalkWithAnother": return False
+        if method == "ArcQuietNow": return True
         # 4.0: nobody modeled here is in a scene or the target of an objective the player has open (such a person
         # takes no task: Core.IsUnsuitableTaskAgent), nor one of the game's drivers and ferrymen.
         if method == "LivingWorldQuestHolds": return False

@@ -1178,6 +1178,49 @@ static void Refusals() {
     Require(named.arc.price == 50 && named.arc.graph[2].edges[3].effectRole == 3, "the player pays a named person");
 }
 
+static void Titles() {
+    // Three stories running came back as "The Quiet Order", "The Quiet Husband", "The Quiet Ledger" (2026-11-22): a
+    // new title shares no word of five letters or more with the titles told lately.
+    Tales::Pool pool = Town();
+    pool.titles = {"The Quiet Husband", "A Debt of Salt"};
+    json j = Sample();
+    j["title"] = "The Quiet Ledger";
+    auto r = Tales::Compile(j, pool);
+    Require(!r.ok && r.errors.find("\"Quiet\" stood in the title of an earlier story already (\"The Quiet Husband\")") != std::string::npos,
+            "a word of an earlier title is refused, and the writer is told which");
+    // In any case, in any script.
+    j["title"] = "QUIET waters";
+    Require(!Tales::Compile(j, pool).ok, "whatever the case");
+    pool.titles = {"Тихий муж"};
+    j["title"] = "ТИХИЙ долг";
+    r = Tales::Compile(j, pool);
+    Require(!r.ok && r.errors.find("ТИХИЙ") != std::string::npos, "Cyrillic too, named as written");
+    // Short words are everybody's ("The", "of", "Debt").
+    pool.titles = {"The Quiet Husband", "A Debt of Salt"};
+    j["title"] = "The Debt of Honour";
+    Require(Tales::Compile(j, pool).ok, "short words are free");
+    // So are the names of the story's own people and places: a story that follows another may be named after the
+    // same person, in whatever form the language gives the name.
+    pool.titles = {"Brenuin's Bottle", "The Road to Mzinchaleft"};
+    j["title"] = "Brenuin's Promise";
+    Require(Tales::Compile(j, pool).ok, "a name of the cast is free");
+    j["title"] = "Under Mzinchaleft";
+    Require(Tales::Compile(j, pool).ok, "a name of a place is free");
+    j["title"] = "The Bottle of Brenuin";
+    Require(!Tales::Compile(j, pool).ok, "but not the other words beside it");
+    // A script that writes no spaces between words is not held to it (its words cannot be told apart here).
+    pool.titles = {"静かな夫の秘密"};
+    j["title"] = "静かな夫の秘密";
+    Require(Tales::Compile(j, pool).ok, "unspaced scripts are not held to it");
+    // The second asking keeps the tale whatever its title.
+    pool.titles = {"The Quiet Husband"};
+    pool.titleMayRepeat = true;
+    j["title"] = "The Quiet Ledger";
+    Require(Tales::Compile(j, pool).ok, "a title is no reason to lose a tale asked for twice");
+    // Nothing told yet: anything goes.
+    Require(Tales::Compile(j, Town()).ok, "no titles, no rule");
+}
+
 int main() {
     try {
         CompilesAndRuns();
@@ -1194,6 +1237,7 @@ int main() {
         Depth();
         LongWords();
         Refusals();
+        Titles();
     } catch (const std::exception& e) {
         std::cerr << "TalesCheck FAILED: " << e.what() << "\n";
         return 1;
