@@ -1237,6 +1237,7 @@ namespace IntelEngine {
             if (const auto it = m_pending.find(id); it != m_pending.end()) going.askingAround = it->second.setOut || it->second.sought;
         }
         going.with = With(asker, A::kWithPlayer);
+        going.barred = LivingWorldBridge::PlaceBars() != Patrols::Barred::No;
         going.post = KeepsPost(asker);
         going.inTown = PlayerInTownProper(town);
         going.knows = KnowsPlayer(asker, town);
@@ -1255,7 +1256,7 @@ namespace IntelEngine {
             pending.offerSent = false;
             pending.deferredAt = RealSeconds();
             // Who knows the player and held back only because the player is out of town comes once the player is back.
-            pending.awaits = why == A::Stays::OutOfTown && knowsPlayer;
+            pending.awaits = (why == A::Stays::OutOfTown || why == A::Stays::Barred) && knowsPlayer;
             a->deadline = std::max(a->deadline, NowDays() + 4.0f);   // it keeps for a few days
             talk = (a->flags & A::Flag::Rumored) == 0;
             a->flags |= A::Flag::Deferred | A::Flag::Rumored;
@@ -1264,7 +1265,8 @@ namespace IntelEngine {
             if (const Folk* me = FolkOf(askerId)) home = me->home;
             logger::info("Arcs: #{} {} does not go looking for the player ({}): the story waits until the two meet", id, NameOf(askerId),
                          why == A::Stays::Post ? "they have a post to keep" : why == A::Stays::OutOfTown ? "the player is not in their town"
-                                                                                                          : "they have never had to do with the player");
+                         : why == A::Stays::Barred ? "the player is where nobody is sent: another plane, or a dungeon"
+                                                   : "they have never had to do with the player");
         }
         if (!talk) return;
         // What troubles them goes round as talk, with where to find them: the innkeeper brings it up, anyone may
@@ -1855,6 +1857,7 @@ namespace IntelEngine {
                 auto* who = actors[role];
                 if (!who) return false;
                 if (NPCIndex::ReachOf(who) == 0) return true;   // with the player, or of the place the player is in
+                if (LivingWorldBridge::PlaceBars() != Patrols::Barred::No) return false;   // nobody is sent there
                 const Folk* folk = FolkOf(a->cast[role]);
                 if (!folk || folk->town != a->place) return true;
                 auto* playerHold = HoldOf(player->GetCurrentLocation());
@@ -2388,6 +2391,8 @@ namespace IntelEngine {
                 wait = "after the last try";
             } else if (player->IsInCombat() || LivingWorldBridge::GetSingleton()->IsBadMoment()) {
                 wait = "a fight or a menu";
+            } else if (const auto barred = LivingWorldBridge::PlaceBars(); barred != Patrols::Barred::No) {
+                wait = Patrols::Word(barred);
             } else if (const auto priv = LivingWorldBridge::PrivateMoment(); priv != Patrols::Private::No) {
                 // Hired men fall on a traveller, never on somebody who is with somebody or has settled somewhere.
                 wait = Patrols::Word(priv);

@@ -77,6 +77,40 @@ int main() {
         never.sinceScene = -1.0f;
         Require(PrivateMoment(never) == Private::No, "no talk and no scene this session: nothing to wait out");
         Require(Word(Private::Talk)[0] != 0 && Word(Private::No)[0] == 0, "every reason has its word");
+        // Places nobody is sent to.
+        Place town;
+        Require(PlaceBars(town) == Barred::No, "a town of Skyrim: people come");
+        Place soulCairn;
+        soulCairn.inAHold = false;
+        soulCairn.landWalkable = false;
+        Require(PlaceBars(soulCairn) == Barred::Beyond, "the Soul Cairn: no hold, no land one can walk to: nobody");
+        soulCairn.classic = true;
+        Require(PlaceBars(soulCairn) == Barred::Beyond, "at Classic too: there is no road there");
+        Place keep = soulCairn;       // a building inside it
+        keep.outdoors = false;
+        keep.lastLandKnown = true;
+        keep.lastLandWalkable = false;
+        Require(PlaceBars(keep) == Barred::Beyond, "a building in that land, entered from it");
+        keep.lastLandKnown = false;
+        Require(PlaceBars(keep) == Barred::No, "a game loaded inside: the land is not known, nothing is held against the place");
+        Place solstheim;
+        solstheim.inAHold = false;    // no hold of the game, but a land ships sail to
+        Require(PlaceBars(solstheim) == Barred::No, "Solstheim: people of the island come");
+        Place canyon;                 // a valley of its own that lies in a hold of Skyrim
+        canyon.landWalkable = false;
+        Require(PlaceBars(canyon) == Barred::No, "a place of a hold is within reach, whatever map it is drawn on");
+        Place home;                   // a house without a hold above it, entered from Skyrim
+        home.outdoors = false;
+        home.inAHold = false;
+        home.lastLandKnown = true;
+        Require(PlaceBars(home) == Barred::No, "a house of a mod with no hold above it: still Skyrim");
+        Place crypt;
+        crypt.outdoors = false;
+        crypt.dungeon = true;
+        Require(PlaceBars(crypt) == Barred::Dungeon, "a crypt: whoever has something for the player waits until they are out");
+        crypt.classic = true;
+        Require(PlaceBars(crypt) == Barred::No, "at Classic the old setting decides who is sent into a dungeon");
+        Require(Word(Barred::Beyond)[0] != 0 && Word(Barred::Dungeon)[0] != 0 && Word(Barred::No)[0] == 0, "each has its word");
     } catch (const std::exception& e) {
         std::cerr << "PatrolsCheck FAILED: " << e.what() << "\n";
         return 1;

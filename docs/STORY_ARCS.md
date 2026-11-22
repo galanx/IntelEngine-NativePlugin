@@ -413,6 +413,47 @@ loaded, which the section after this one replaces with a rule for each person):
 - What it costs the player: one small decision call per reading (answered in about 0.3 s in the test), per person at
   most once every eight lines they say to the player.
 
+### Places nobody is sent to (2026-11-22)
+
+A user's report the user passed on: "npcs spawn in dangerous places to talk to me and they die / im in the soul
+carion / how did they even manage to get here", with the question whether 4.0 solves it and whether the hold and
+danger settings are still needed. Read in code: partly. `NPCIndex::ReachOf` put everybody "in another hold" for a
+player in the Soul Cairn, and `StoryDirectorPick::MayCome` lets somebody close come from another hold on a pressing
+reason (anybody on an urgent one); the old setting "NPCs sent into dangerous places" blocks civilians only by
+default; and an unseen traveller whose destination is the player is set down at the player's cell
+(`Core.HandleOffScreenTravel`). Nothing said a place cannot be reached.
+
+The rule (`Patrols::PlaceBars`, pure, in `PatrolsCheck`; `LivingWorldBridge::PlaceBars`, taken with the look of the
+living world and read from any thread):
+
+- **Beyond reach**: the place has no hold of the game above it (`LocTypeHold` up the location's parents) and, out
+  of doors, its land is neither Skyrim's nor Solstheim's; indoors, the last land seen out of doors was not. The land
+  of a worldspace is its parent's only while it takes its *ground* from the parent (`kUseLandData`): Whiterun's
+  streets take everything from Tamriel (0x7f), the Soul Cairn takes only its map (0x4), and read as "Skyrim" the
+  first version of this rule let people through (seen in the test game). At every level, whatever the settings.
+- **A dungeon** (`LivingWorldBridge::IsDungeon`: the game's own location kinds) above Classic. At Classic the setting
+  decides as before.
+- Whoever is with the player already (`ReachOf` 0) is not being sent and may speak.
+
+Where it is asked: `MayCome` (`Verdict::barred`), `LivingWorldBridge::MayMoveForStory` (every dispatch of the story
+engine), `Arcs::StaysPut` (`Going::barred`, before even somebody the director lets come from afar; the offer waits
+and becomes talk in the asker's town), a tale's visit and stalk steps, `QuestBridge::PlanVenture`,
+`FactionPatrolDue`, `ArcBridge::AmbushLook`, and `Core.HandleOffScreenTravel` through the native `PlaceBarsArrival`:
+a story's visitor is called off (`StoryEngine.CallOffWhereNobodyComes`), somebody on the player's own errand waits
+when the place is beyond reach. Test hook: `IntelEngine_Arcs.DebugPlace` (it also logs the worldspace, its parent
+and what it takes from it).
+
+The settings: the seven "how far NPCs travel" choices and "NPCs sent into dangerous places" still work and can only
+tighten what the director decides; at the default nobody needs to touch them. They are what Classic has instead of
+the director's distance rule, so they stay. Their descriptions say what is automatic now.
+
+Played on the test profile: the inn and Whiterun's streets "people may come", the Soul Cairn "nobody could have
+followed", Bleak Falls Barrow "a dungeon", and back; in the Soul Cairn Hulda's story "does not go looking for the
+player (the player is where nobody is sent)" and became talk in town, a forced patrol "nobody comes now", Ysolda
+dispatched from the Director tab set out and let it be. Not played: somebody already on the way when the player
+steps through the portal, a hurried visitor, a follower on the player's own errand returning, Apocrypha, Sovngarde,
+a mod's land, Solstheim.
+
 ### Private moments: nobody in arms comes upon the player (2026-11-22)
 
 The user, about the faction patrols restored the same night: "I am also not sure about faction patrols either

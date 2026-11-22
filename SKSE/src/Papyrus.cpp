@@ -184,6 +184,8 @@ namespace IntelEngine::Papyrus {
     void FactionPatrolSent(RE::StaticFunctionTag*);
     void FactionPatrolTest(RE::StaticFunctionTag*, bool);
     RE::BSFixedString PrivateMomentNow(RE::StaticFunctionTag*);
+    std::int32_t PlaceBarsArrival(RE::StaticFunctionTag*, RE::Actor*, RE::TESObjectREFR*);
+    RE::BSFixedString PlaceBarsNow(RE::StaticFunctionTag*);
     int AdjustPlayerFactionStanding(RE::StaticFunctionTag*, RE::BSFixedString, int);
     bool IsFactionAtWar(RE::StaticFunctionTag*, RE::BSFixedString, RE::BSFixedString);
     int GetWarMorale(RE::StaticFunctionTag*, RE::BSFixedString, RE::BSFixedString, RE::BSFixedString);
@@ -632,6 +634,8 @@ namespace IntelEngine::Papyrus {
         a_vm->RegisterFunction("FactionPatrolSent", SCRIPT_NAME, FactionPatrolSent); ++count;
         a_vm->RegisterFunction("FactionPatrolTest", SCRIPT_NAME, FactionPatrolTest); ++count;
         a_vm->RegisterFunction("PrivateMomentNow", SCRIPT_NAME, PrivateMomentNow); ++count;
+        a_vm->RegisterFunction("PlaceBarsArrival", SCRIPT_NAME, PlaceBarsArrival); ++count;
+        a_vm->RegisterFunction("PlaceBarsNow", SCRIPT_NAME, PlaceBarsNow); ++count;
         a_vm->RegisterFunction("AdjustPlayerFactionStanding", SCRIPT_NAME, AdjustPlayerFactionStanding); ++count;
         a_vm->RegisterFunction("IsFactionAtWar", SCRIPT_NAME, IsFactionAtWar); ++count;
         a_vm->RegisterFunction("GetWarMorale", SCRIPT_NAME, GetWarMorale); ++count;
@@ -4657,6 +4661,12 @@ namespace IntelEngine::Papyrus {
         auto* politics = FactionPolitics::GetSingleton();
         auto* db = PoliticalDB::GetSingleton();
         if (!politics->IsEnabled() || !db->IsReady()) return "";
+        // Not where nobody could have followed the player (the Soul Cairn has no patrols of the Legion), nor into a
+        // dungeon after them.
+        if (const auto barred = LivingWorldBridge::PlaceBars(); barred != Patrols::Barred::No) {
+            logger::info("Patrols: nobody comes now: {}", Patrols::Word(barred));
+            return "";
+        }
         // Never upon somebody who is with somebody or has settled somewhere (the test switch does not lift this).
         if (const auto priv = LivingWorldBridge::PrivateMoment(); priv != Patrols::Private::No) {
             logger::info("Patrols: nobody comes now: {}", Patrols::Word(priv));
@@ -4695,6 +4705,28 @@ namespace IntelEngine::Papyrus {
         auto* calendar = RE::Calendar::GetSingleton();
         g_lastPatrolDay.store(calendar ? calendar->GetCurrentGameTime() : 0.0f);
         LivingWorldBridge::GetSingleton()->OnPatrolSent();
+    }
+
+    std::int32_t PlaceBarsArrival(RE::StaticFunctionTag*, RE::Actor* who, RE::TESObjectREFR* dest) {
+        // 0: no. 1: the player is in a dungeon (a story's visitor is not set down there). 2: the player is where nobody
+        // could have followed (nobody at all is set down there).
+        return static_cast<std::int32_t>(LivingWorldBridge::BarsArrival(who, dest));
+    }
+
+    RE::BSFixedString PlaceBarsNow(RE::StaticFunctionTag*) {
+        LivingWorldBridge::NotePlayerWhere();   // a test asks right after moving: look now
+        if (auto* player = RE::PlayerCharacter::GetSingleton()) {
+            auto* world = player->GetWorldspace();
+            auto* location = player->GetCurrentLocation();
+            logger::info("LivingWorld: test: the player is in {} (worldspace {:08X} '{}', parent {:08X}, takes from it {:#x}), location '{}': {}",
+                         player->GetParentCell() && player->GetParentCell()->IsInteriorCell() ? "a room" : "the open",
+                         world ? world->GetFormID() : 0, world && world->GetFormEditorID() ? world->GetFormEditorID() : "",
+                         world && world->parentWorld ? world->parentWorld->GetFormID() : 0,
+                         world ? static_cast<unsigned>(world->parentUseFlags.underlying()) : 0u,
+                         location && location->GetFullName() ? location->GetFullName() : "none",
+                         LivingWorldBridge::PlaceBars() == Patrols::Barred::No ? "people may come" : Patrols::Word(LivingWorldBridge::PlaceBars()));
+        }
+        return Patrols::Word(LivingWorldBridge::PlaceBars());
     }
 
     RE::BSFixedString PrivateMomentNow(RE::StaticFunctionTag*) {

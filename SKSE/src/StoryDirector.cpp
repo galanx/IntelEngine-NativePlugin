@@ -435,6 +435,7 @@ namespace IntelEngine::StoryDirector {
             v.bonded = candidate.a->bonded;
             v.known = candidate.a->fromMemoryDB || candidate.a->bonded;
             v.farRested = farRested;
+            v.barred = LivingWorldBridge::PlaceBars() != Patrols::Barred::No;
             const auto kinds = KindsFor(*candidate.a, session->excluded);
             nlohmann::json context;
             context["name"] = v.name;
