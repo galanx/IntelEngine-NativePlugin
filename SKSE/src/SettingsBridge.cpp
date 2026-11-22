@@ -97,7 +97,7 @@ namespace IntelEngine::SettingsBridge {
                      "Someone shadows you from a distance, out of doors. Off: nobody does inside a town's story either.",
                      kToggleStoryEvent, "stalker"),
                 Choice("dangerZonePolicy", "stories", "danger_zone_policy", kNpcPolicy, 1, S, "NPCs sent into dangerous places",
-                       "Who may be sent to you while you are in a dungeon or another dangerous place."),
+                       "Who may be sent to you while you are out in the wilds, away from any settlement. Above Classic nobody is sent into a dungeon after you whatever this says (they wait until you are out), and nobody is ever sent to another plane."),
                 Choice("playerHomePolicy", "stories", "player_home_policy", kNpcPolicy, 0, S, "NPCs sent into your home",
                        "Who may come to you while you are in one of your homes."),
 

@@ -470,7 +470,7 @@ namespace IntelEngine::Arcs {
     constexpr int kAcquaintedEvents = 6;    // SkyrimNet has seen the two have to do with each other this often: talk, not a greeting
     constexpr float kWithPlayer = 3000.0f;  // "with the player": the same room, or out of doors this near
     constexpr float kTownReach = 4500.0f;   // an open town reaches this far round its marker on the map
-    enum class Stays : std::uint8_t { No = 0, Post, OutOfTown, Stranger };
+    enum class Stays : std::uint8_t { No = 0, Post, OutOfTown, Stranger, Barred };
     struct Going {
         bool with = false;          // the player is with them
         bool sent = false;          // let come from elsewhere by the director's rule (Flag::CameFar, Flag::Sent)
@@ -478,9 +478,14 @@ namespace IntelEngine::Arcs {
         bool inTown = false;        // the player is among the houses of their town
         int knows = 0;              // 2 has had to do with the player, 1 their town has heard of the player, 0 a stranger
         bool askingAround = false;  // they have set out to ask round their town for anyone
+        bool barred = false;        // the player is where nobody is sent (another plane, a dungeon; Patrols::PlaceBars)
     };
     inline constexpr Stays StaysPut(const Going& g) {
-        if (g.with || g.sent) return Stays::No;
+        if (g.with) return Stays::No;
+        // Not even somebody the director lets come from afar: there is no road to where the player is, or it leads
+        // into a dungeon after them.
+        if (g.barred) return Stays::Barred;
+        if (g.sent) return Stays::No;
         if (g.post) return Stays::Post;
         if (!g.inTown) return Stays::OutOfTown;
         if (g.knows <= 0 && !g.askingAround) return Stays::Stranger;

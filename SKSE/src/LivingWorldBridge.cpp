@@ -4,6 +4,7 @@
 #include "StorylineBridge.h"
 #include "BattleManager.h"
 #include "DialogueTracker.h"
+#include "NPCIndex.h"
 
 #include <algorithm>
 #include <array>
@@ -57,6 +58,42 @@ namespace IntelEngine {
         std::size_t g_whereNext = 0;
         std::atomic<bool> g_resting{false};
         std::atomic<bool> g_undressed{false};
+        // Places nobody is sent to (Patrols::PlaceBars), as the last look saw it, and the last land seen out of doors.
+        std::atomic<std::uint8_t> g_placeBars{0};
+        std::atomic<RE::FormID> g_lastOutdoorLand{0};
+
+        // The land a worldspace belongs to: its parent's while it is a piece of the parent's own ground (Whiterun's
+        // streets are Skyrim's: they take everything from it). A parent named only for its map, sky, water or climate
+        // is not the land: the Soul Cairn names Skyrim for its map alone, and read as "Skyrim" people could be sent
+        // there (seen in the test game, 2026-11-22: worldspace DLC01SoulCairn, parent Tamriel, taking 0x4 from it).
+        RE::FormID LandOf(RE::TESWorldSpace* world) {
+            using Use = RE::TESWorldSpace::ParentUseFlag;
+            int depth = 0;
+            while (world && world->parentWorld && depth++ < 8 && world->parentUseFlags.any(Use::kUseLandData)) {
+                world = world->parentWorld;
+            }
+            return world ? world->GetFormID() : 0;
+        }
+
+        // Lands one can walk or sail to from the towns: Skyrim, and Solstheim where it is installed.
+        bool Walkable(RE::FormID land) {
+            static std::once_flag looked;
+            static RE::FormID solstheim = 0;
+            std::call_once(looked, []() {
+                if (auto* data = RE::TESDataHandler::GetSingleton()) {
+                    if (auto* world = data->LookupForm<RE::TESWorldSpace>(0x000800, "Dragonborn.esm")) solstheim = world->GetFormID();
+                }
+            });
+            return land == 0x0000003C || (solstheim != 0 && land == solstheim);
+        }
+
+        bool InAHold(const RE::BGSLocation* location) {
+            int depth = 0;
+            for (auto* at = location; at && depth < 12; at = at->parentLoc, ++depth) {
+                if (at->HasKeywordString("LocTypeHold")) return true;
+            }
+            return false;
+        }
 
         // In the middle of a scene: one of the game's that the player is part of, or another mod's. Nobody walks in
         // on that, at any level of the living world ("is this a bad time to say bandits are getting close to
@@ -150,6 +187,32 @@ namespace IntelEngine {
         if (player->GetCurrentScene()) g_sceneLastAt.store(now);   // a scene of the game: over at the last look that saw it
         g_resting.store(player->AsActorState()->GetSitSleepState() != RE::SIT_SLEEP_STATE::kNormal);
         g_undressed.store(player->GetWornArmor(RE::BGSBipedObjectForm::BipedObjectSlot::kBody) == nullptr);
+        {
+            // Is this a place nobody is sent to?
+            Patrols::Place place;
+            auto* location = player->GetCurrentLocation();
+            if (!location) location = cell->GetLocation();
+            place.outdoors = !cell->IsInteriorCell();
+            place.inAHold = InAHold(location);
+            if (place.outdoors) {
+                const RE::FormID land = LandOf(player->GetWorldspace());
+                if (land) g_lastOutdoorLand.store(land);
+                place.landWalkable = land == 0 || Walkable(land);
+            } else if (const RE::FormID last = g_lastOutdoorLand.load(); last != 0) {
+                place.lastLandKnown = true;
+                place.lastLandWalkable = Walkable(last);
+            }
+            place.dungeon = IsDungeon(location);
+            place.classic = GetSingleton()->IsClassic();
+            const auto barred = Patrols::PlaceBars(place);
+            if (g_placeBars.exchange(static_cast<std::uint8_t>(barred)) != static_cast<std::uint8_t>(barred)) {
+                const char* name = location ? location->GetFullName() : nullptr;
+                logger::info("LivingWorld: {}: {}", name && *name ? name : "this place",
+                             barred == Patrols::Barred::No ? "people may come to the player here again"
+                             : barred == Patrols::Barred::Beyond ? "nobody could have followed the player here: nobody is sent, nobody is set down beside them"
+                                                                 : "a dungeon: whoever has something for the player waits until they are out");
+            }
+        }
         Where w;
         w.at = now;
         w.pos = player->GetPosition();
@@ -161,6 +224,33 @@ namespace IntelEngine {
         if (last.at > 0.0 && now - last.at < 5.0) return;
         g_wheres[g_whereNext] = w;
         g_whereNext = (g_whereNext + 1) % g_wheres.size();
+    }
+
+    Patrols::Barred LivingWorldBridge::PlaceBars() { return static_cast<Patrols::Barred>(g_placeBars.load()); }
+
+    Patrols::Barred LivingWorldBridge::BarsArrival(RE::Actor* who, RE::TESObjectREFR* dest) {
+        auto* player = RE::PlayerCharacter::GetSingleton();
+        const auto barred = PlaceBars();
+        if (barred == Patrols::Barred::No || !who || !dest || !player) return Patrols::Barred::No;
+        // Only when the destination is where the player is: the player, or something in their room or near them.
+        bool withPlayer = dest == player;
+        if (!withPlayer) {
+            auto* theirs = dest->GetParentCell();
+            auto* cell = player->GetParentCell();
+            if (theirs && cell) {
+                withPlayer = theirs == cell || (!theirs->IsInteriorCell() && !cell->IsInteriorCell() && dest->GetWorldspace() == player->GetWorldspace() &&
+                                                dest->GetPosition().GetDistance(player->GetPosition()) < 10000.0f);
+            }
+        }
+        if (!withPlayer) return Patrols::Barred::No;
+        // Whoever is there already is not being sent anywhere.
+        auto* theirs = who->GetParentCell();
+        auto* cell = player->GetParentCell();
+        if (theirs && cell && (theirs == cell || (!theirs->IsInteriorCell() && !cell->IsInteriorCell() && who->GetWorldspace() == player->GetWorldspace() &&
+                                                  who->GetPosition().GetDistance(player->GetPosition()) < 10000.0f))) {
+            return Patrols::Barred::No;
+        }
+        return barred;
     }
 
     Patrols::Private LivingWorldBridge::PrivateMoment() {
@@ -207,6 +297,12 @@ namespace IntelEngine {
     }
 
     bool LivingWorldBridge::MayMoveForStory(RE::Actor* actor, const std::string& storyType, bool skipStorylines) const {
+        // Nobody is sent to a player who is where nobody could have followed, at any level; nor, above Classic, into
+        // a dungeon after them (Patrols::PlaceBars). Whoever is there with the player already is not being sent.
+        if (actor && PlaceBars() != Patrols::Barred::No && NPCIndex::ReachOf(actor) > 0) {
+            logger::info("LivingWorld: {} is not sent to the player now: {}", Safe::Name(actor->GetDisplayFullName()), Patrols::Word(PlaceBars()));
+            return false;
+        }
         const auto settings = GetSettings();
         if (settings.level == LivingWorld::WorldLevel::Classic || !actor || storyType == "message") return true;
         const int tie = QuestTie(actor, skipStorylines);
@@ -490,6 +586,8 @@ namespace IntelEngine {
     void LivingWorldBridge::Revert() {
         g_sceneBusyUntil.store(0.0);
         g_sceneLastAt.store(-1.0);
+        g_placeBars.store(0);
+        g_lastOutdoorLand.store(0);
         {
             std::scoped_lock where(g_whereMutex);   // another game: where the player was is not where they are
             g_wheres = {};

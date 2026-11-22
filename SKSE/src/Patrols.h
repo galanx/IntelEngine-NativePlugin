@@ -93,6 +93,42 @@ namespace IntelEngine::Patrols {
         }
     }
 
+    // ------------------------------------------------------------------ places nobody is sent to
+    //
+    // A user, 2026-11-20: "npcs spawn in dangerous places to talk to me and they die / im in the soul carion / how
+    // did they even manage to get here". Nobody is sent to the player, and nobody on the way is set down beside them:
+    //  - beyond reach: a place that lies in no hold and in no land one can walk or sail to from the towns (the Soul
+    //    Cairn, Apocrypha, Sovngarde, the vale behind a mountain, a mod's own island). At every level of the living
+    //    world, whatever the settings say: there is no road there. Indoors the land is the last one seen out of
+    //    doors; where that is not known (a game loaded inside), nothing is held against the place;
+    //  - a dungeon (the game's own kinds: a cave, a crypt, a ruin, a camp of bandits, a lair): above "Classic" whoever
+    //    has something for the player waits until they are out again (leaving a dungeon brings a look of its own).
+    //    At "Classic" the setting "NPCs sent into dangerous places" decides, as before 4.0.
+    // Whoever is already there with the player is not sent anywhere and is free to speak.
+    struct Place {
+        bool outdoors = true;
+        bool inAHold = true;          // the place has a hold of the game above it
+        bool landWalkable = true;     // out of doors: the land is Skyrim's or Solstheim's
+        bool lastLandKnown = false;   // indoors: a land was seen out of doors this session
+        bool lastLandWalkable = true;
+        bool dungeon = false;
+        bool classic = false;
+    };
+    enum class Barred : std::uint8_t { No = 0, Dungeon = 1, Beyond = 2 };
+
+    inline constexpr Barred PlaceBars(const Place& p) {
+        if (!p.inAHold) {
+            const bool beyond = p.outdoors ? !p.landWalkable : (p.lastLandKnown && !p.lastLandWalkable);
+            if (beyond) return Barred::Beyond;
+        }
+        if (p.dungeon && !p.classic) return Barred::Dungeon;
+        return Barred::No;
+    }
+
+    inline constexpr const char* Word(Barred why) {
+        return why == Barred::Beyond ? "the player is where nobody could have followed" : why == Barred::Dungeon ? "the player is in a dungeon" : "";
+    }
+
     // roll: 0 to 9999, drawn afresh each time. lastDays below 0: no patrol yet (or not known after a load).
     inline constexpr bool Due(int standing, float nowDays, float lastDays, std::uint32_t roll) {
         if (standing > kHostile) return false;

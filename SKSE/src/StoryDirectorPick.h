@@ -61,6 +61,7 @@ namespace IntelEngine::StoryDirector {
                                     // in the same hold, 2 another hold (or nobody knows where)
         bool bonded = false;        // close to the player in the game's own terms (travelled together, a confidant, wed)
         bool farRested = true;      // nobody came from another hold lately
+        bool barred = false;        // the player is where nobody is sent (another plane, a dungeon): only who is there may act
         bool known = true;          // they have had to do with the player before (SkyrimNet's record), or are close to them
     };
 
@@ -106,6 +107,8 @@ namespace IntelEngine::StoryDirector {
 
     inline bool MayCome(const Verdict& v) {
         if (v.reach <= 0) return true;   // with the player, or of the place the player is in
+        // Where nobody could have followed the player, or into a dungeon after them: nobody, whatever the reason.
+        if (v.barred) return false;
         // Someone who has never had to do with the player does not set out to find them, whatever the model made of
         // their reason (the user, 2026-11-19: "it wouldn't make sense if a faendal or sven who neither have heard
         // anything about the player, nor have met him, to just run to him for some errand"). Whoever lies in wait

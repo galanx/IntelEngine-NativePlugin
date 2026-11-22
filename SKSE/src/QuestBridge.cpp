@@ -394,6 +394,11 @@ namespace IntelEngine {
             logger::info("Quests: no venture for {:08X} now", ally ? ally->GetFormID() : 0);
             return 0;
         }
+        // Nobody is met on the road where there is no road to (another plane), nor set ahead of the player in a dungeon.
+        if (const auto barred = LivingWorldBridge::PlaceBars(); barred != Patrols::Barred::No) {
+            logger::info("Quests: no venture for {} now: {}", ally->GetDisplayFullName(), Patrols::Word(barred));
+            return 0;
+        }
         const auto allyId = ally->GetFormID();
         auto* lives = LivingWorldBridge::GetSingleton();
         if (!lives->HasOwnLife(allyId)) {

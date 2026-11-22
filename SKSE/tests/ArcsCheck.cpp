@@ -374,6 +374,15 @@ static void WhoGoes() {
     Require(StaysPut(stranger) == Stays::OutOfTown, "and never beyond its houses");
     stranger.with = true;
     Require(StaysPut(stranger) == Stays::No, "a stranger with trouble may take a chance on the stranger beside them");
+    // Where nobody is sent (another plane, a dungeon): not even somebody the director lets come from afar.
+    Going afar;
+    afar.sent = true;
+    afar.knows = 2;
+    Require(StaysPut(afar) == Stays::No, "somebody let come from afar comes");
+    afar.barred = true;
+    Require(StaysPut(afar) == Stays::Barred, "but not to where nobody could have followed the player");
+    afar.with = true;
+    Require(StaysPut(afar) == Stays::No, "whoever is there with the player already may speak");
     Going friendly;
     friendly.knows = 2;
     Require(StaysPut(friendly) == Stays::OutOfTown, "who knows the player waits while the player is out of town");

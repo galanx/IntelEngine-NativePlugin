@@ -155,6 +155,12 @@ namespace IntelEngine {
         /** The look that follows where the player goes, how they sit and what they wear (every ten seconds or so, with
          *  the look of the living world). The game's thread. */
         static void NotePlayerWhere();
+        /** Is the player where nobody is sent (Patrols::PlaceBars): beyond reach, or in a dungeon above Classic? As
+         *  the last look saw it (NotePlayerWhere, every ten seconds or so): any thread. */
+        static Patrols::Barred PlaceBars();
+        /** Would this person, arriving at `dest` unseen, be set down beside a player who is where nobody is sent?
+         *  No when the destination is not where the player is, or they are there already. The game's thread. */
+        static Patrols::Barred BarsArrival(RE::Actor* who, RE::TESObjectREFR* dest);
         /** Another mod's scene with the player in it has begun or ended (OStim's thread events, told by the script). */
         static void SetSceneBusy(bool busy);
         /** A dungeon, cave, crypt, camp, lair or den: the place itself, not its parents. */
