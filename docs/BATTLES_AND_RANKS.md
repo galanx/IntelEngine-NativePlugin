@@ -261,8 +261,12 @@ Imperial Legion Captain (FF000ECB) let each other be", both out of the fight wit
 drawn in by himself with the rule in place (none came into the one battle played after it). A fight with a wolf or a
 bandit is left alone, and a fight with nobody left in it is ended.
 
-**Bodies that float (open).** The user, after the battles with the cease-fire on the full list: "Why are dead bodies
-floating? Are they trying to run away too?" Not reproduced on the test profile: `DebugBodies` (test hook, native
+**Bodies that float (seen once, not seen again).** The user, of one of the first battles of that night on the full
+list, before the cease-fire: "Why are dead bodies floating? Are they trying to run away too?", and later: "the
+floating bodies was a few battles back in the isekai profile but I couldn't see it anymore even in isekai, so I assume
+that could have been other mods, not only intelengine". In those first battles the fighting went on after the verdict
+while the leave orders were out (see above); in the battles with the cease-fire they did not see it. Not reproduced on
+the test profile: `DebugBodies` (test hook, native
 `BattleDebugBodies`: for every soldier of the battle how far the middle of the body is above the land, who is
 bleeding out, knocked down or in a killing blow) found every one of 13 to 20 dead on the ground in two battles, and a
 look at the field showed the same. Two ways the orders at a verdict could disturb a body were found by reading and
@@ -274,8 +278,8 @@ are closed, without proof that either was the cause:
   travel order as they lay, with everybody else.
 
 `BattleManager::InAKillingBlow` keeps `CeaseFire` and `GuardsStandDown` off such a one; `CalmSoldier` and
-`SendSoldierOff` return at once for them, and `StandingAbout` sends them when they are up and standing. To be looked
-at on the full list with the hook and pictures taken right after a verdict.
+`SendSoldierOff` return at once for them, and `StandingAbout` sends them when they are up and standing. Should it
+show again on the full list: the hook every few seconds and pictures right after a verdict.
 
 ## 6. The ladder (`Ranks.h`, co-save record `IERK`)
 
