@@ -401,7 +401,7 @@ namespace IntelEngine {
                     });
                 if (!queued) done({}, {}, {}, 0.0f, "the model could not be asked");
             };
-            if (!SkyrimNetAPI::SendCustomDecisionToLLM || SkyrimNetAPI::OwnModelSet()) return byChat();   // the player's own model reads it
+            if (!SkyrimNetAPI::SendCustomDecisionToLLM) return byChat();
             const bool queued = SkyrimNetAPI::SendCustomDecisionToLLM("intel_bond", context.c_str(), 4,
                 [done, byChat, heartAsked](const char*, const char* resultJson, int success) {
                     const auto json = nlohmann::json::parse(resultJson ? resultJson : "", nullptr, false);

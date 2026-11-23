@@ -15,8 +15,6 @@
  * Based on SkyrimNet Public API v3.
  */
 
-#include <atomic>
-#include <chrono>
 #include <string>
 #include <functional>
 #ifndef WIN32_LEAN_AND_MEAN
@@ -85,22 +83,6 @@ namespace IntelEngine::SkyrimNetAPI {
 
     /** Get a single string config value by dot-path from a plugin's settings. */
     inline std::string (*GetPluginConfigValue)(const char* pluginName, const char* path, const char* defaultValue) = nullptr;
-
-    /** IntelEngine's own model is set on SkyrimNet's plugin page ("LLM Overrides": an endpoint or a model name). Then
-     *  every question of IntelEngine's goes to that model by the chat route, through the plugin's own variant, as all
-     *  of 3.8's did: the typed decisions route has no override of its own, and 4.0's judging, bond and tale readings
-     *  went to SkyrimNet's decision model whatever the player had set. Read again at most every 30 seconds; any thread. */
-    inline bool OwnModelSet() {
-        static std::atomic<long long> readAt{0};
-        static std::atomic<bool> own{false};
-        const long long now = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now().time_since_epoch()).count() + 1;
-        if (const long long last = readAt.load(); last != 0 && now - last < 30) return own.load();
-        readAt.store(now);
-        const bool set = GetPluginConfigValue &&
-                         (!GetPluginConfigValue("IntelEngine", "llm.endpoint", "").empty() || !GetPluginConfigValue("IntelEngine", "llm.model_name", "").empty());
-        own.store(set);
-        return set;
-    }
 
     // ---- Decorator API (v3.1+) ----
 

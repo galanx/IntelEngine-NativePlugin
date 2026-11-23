@@ -171,7 +171,7 @@ namespace IntelEngine::StoryDirector {
         }
 
         void Ask(const std::shared_ptr<Session>& session, std::size_t index) {
-            if (g_noDecisionRoute.load() || !SkyrimNetAPI::SendCustomDecisionToLLM || SkyrimNetAPI::OwnModelSet()) {
+            if (g_noDecisionRoute.load() || !SkyrimNetAPI::SendCustomDecisionToLLM) {
                 AskByChat(session, index);
                 return;
             }
@@ -468,9 +468,7 @@ namespace IntelEngine::StoryDirector {
             session->left = static_cast<int>(toAsk.size());
         }
         logger::info("[Director] asking about {} candidates, each on their own ({})", toAsk.size(),
-                     g_noDecisionRoute.load() || !SkyrimNetAPI::SendCustomDecisionToLLM ? "chat model"
-                     : SkyrimNetAPI::OwnModelSet()                                     ? "IntelEngine's own model"
-                                                                                      : "decision model");
+                     g_noDecisionRoute.load() || !SkyrimNetAPI::SendCustomDecisionToLLM ? "chat model" : "decision model");
         for (const auto index : toAsk) Ask(session, index);
         // Whatever has come back by then decides; a candidate who never answered has no reason.
         std::thread([session] {
