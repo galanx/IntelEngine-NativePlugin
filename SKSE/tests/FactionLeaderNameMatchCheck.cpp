@@ -50,6 +50,13 @@ int main() {
     Require(!IsFactionLeaderNameMatch("Rikke\xC3\xA9", "Rikke"), "UTF-8 name suffix matched");
     Require(!IsFactionLeaderNameMatch("\xC3\xA9Rikke", "Rikke"), "UTF-8 name prefix matched");
     Require(IsFactionLeaderNameMatch("Legate Rikke", "Rikke"), "word-boundary leader match failed");
+    // any alphabet, any case, with marks or without (UTF-8 written as escapes: this file is ASCII)
+    Require(IsFactionLeaderNameMatch("\xD0\xA3\xD0\xBB\xD1\x8C\xD1\x84\xD1\x80\xD0\xB8\xD0\xBA \xD0\x91\xD1\x83\xD1\x80\xD0\xB5\xD0\xB2\xD0\xB5\xD1\x81\xD1\x82\xD0\xBD\xD0\xB8\xD0\xBA",
+                                     "\xD1\x83\xD0\xBB\xD1\x8C\xD1\x84\xD1\x80\xD0\xB8\xD0\xBA"),
+            "a Cyrillic leader's name in lower case did not match");
+    Require(IsFactionLeaderNameMatch("\xC3\x89lisif la Belle", "Elisif"), "a name without its accent did not match");
+    Require(IsFactionLeaderNameMatch("Galmar Stein-Faust", "galmar stein-faust") && !IsFactionLeaderNameMatch("Galmar", "Galmar Stein-Faust"),
+            "a translated name as configured, and never the reverse");
 
     std::cout << "FactionLeaderNameMatchCheck: PASS\n";
 }

@@ -1,13 +1,22 @@
 #pragma once
 
+#include "LetterFold.h"
+
 #include <algorithm>
 #include <cctype>
 #include <cstdint>
+#include <string>
 #include <string_view>
 
 namespace IntelEngine {
 
-inline bool IsFactionLeaderNameMatch(std::string_view displayName, std::string_view configuredName) {
+// Both names in plain letters first (LetterFold.h): "Legatin Rikke" written by the game and "legatin rikke" by a
+// user, a Cyrillic name with its capitals or without, "Elisif" for the name with an acute E, are one name.
+inline bool IsFactionLeaderNameMatch(std::string_view displayNameAsGiven, std::string_view configuredNameAsGiven) {
+    const std::string displayPlain = LetterFold::Plain(displayNameAsGiven);
+    const std::string configuredPlain = LetterFold::Plain(configuredNameAsGiven);
+    const std::string_view displayName = displayPlain;
+    const std::string_view configuredName = configuredPlain;
     if (displayName.empty() || configuredName.empty() || configuredName.size() > displayName.size()) return false;
 
     const auto equalIgnoringCase = [](char lhs, char rhs) {

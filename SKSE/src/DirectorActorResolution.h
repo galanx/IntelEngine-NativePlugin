@@ -1,5 +1,7 @@
 #pragma once
 
+#include "GameText.h"
+#include "LetterFold.h"
 #include "Utf8Fold.h"
 
 #include <algorithm>
@@ -38,9 +40,11 @@ template <typename Entries, typename Eligibility>
 DirectorActorMatch ResolveDirectorActorFormID(std::string_view name, const Entries& entries, Eligibility eligibility) {
     DirectorActorMatch result;
     if (name.empty()) return result;
-    const std::string wanted = FoldUtf8(std::string(name));   // lower case in every script, not byte by byte
+    // lower case in every script, not byte by byte; the same letters with their marks or without ("Elisif" for the
+    // name with an acute E); the whole name still
+    const std::string wanted = LetterFold::Plain(FoldUtf8(GameText::In(std::string(name))));
     for (const auto& [id, candidate] : entries) {
-        if (!id || FoldUtf8(std::string(candidate)) != wanted) continue;
+        if (!id || LetterFold::Plain(FoldUtf8(std::string(candidate))) != wanted) continue;
         const auto reason = eligibility(id);
         if (reason != DirectorActorRejection::None) {
             if (!result.formId && (reason > result.rejection ||

@@ -20,6 +20,20 @@ repo = pathlib.Path(__file__).resolve().parents[2]
 bridge_src = (repo / 'SKSE' / 'src' / 'SettingsBridge.cpp').read_text(encoding='utf-8')
 manifest_src = (repo / 'SKSE' / 'Plugins' / 'SkyrimNet' / 'config' / 'plugins' / 'IntelEngine' / 'manifest.yaml').read_text(encoding='utf-8')
 mcm_src = (repo / 'Source' / 'Scripts' / 'IntelEngine_MCM.psc').read_text(encoding='utf-8')
+# The MCM shows its texts by key ("$IntelEngine_FactionPolitics"), SkyUI fills them from the translation files written
+# from SKSE/tools/mcm/strings_<lang>.txt. The English the player reads is what is compared: each plain key is put back
+# as its English text (a key that takes values stays a key; none of those is a setting's name).
+sys.path.insert(0, str(repo / 'SKSE' / 'tools'))
+import gen_mcm_translations  # noqa: E402
+_english = gen_mcm_translations.compose(gen_mcm_translations.read('en'))
+def _as_literal(match):
+    text = _english.get(match.group(1))
+    if text is None:
+        return match.group(0)
+    return '"' + text.replace('\\', '\\\\').replace('"', '\\"') + '"'
+
+
+mcm_src = re.sub(r'"\$IntelEngine_([A-Za-z0-9_]+)"', _as_literal, mcm_src)
 settings_src = (repo / 'web' / 'dashboard' / 'src' / 'components' / 'SettingsTab.jsx').read_text(encoding='utf-8')
 story_src = (repo / 'web' / 'dashboard' / 'src' / 'components' / 'StoryTab.jsx').read_text(encoding='utf-8')
 

@@ -34,6 +34,9 @@ with tempfile.TemporaryDirectory(prefix="pe-prompts-") as directory:
                 (b"(Imperial Legion, Stormcloaks, Thalmor): border_skirmish, war_declaration", b"(Imperial Legion, Stormcloaks, Thalmor): border_skirmish, and war_declaration only for pairs with `war_possible: true`")]:
                 assert o in data, o
                 data = data.replace(o, n)
+            # 4.0: IntelEngine says nothing of worship (faith neutrality, 2026-11-23): the Thalmor's line names what they
+            # do without a word on whose worship they suppress.
+            data = data.replace(b"diplomacy, and Talos worship crackdowns.", b"diplomacy, and crackdowns on dissent.")
             # 4.0: the game's own civil war is told at the head of the lore section, with or without Political Engine
             # (VanillaWar.h). The same paragraph goes into the baseline, so that only the PE gating is compared.
             current = (repo / (base+name)).read_bytes()

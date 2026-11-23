@@ -6,8 +6,10 @@
  */
 
 #include "LocationResolver.h"
+#include "GameText.h"
 #include "LanguageBridge.h"
 #include "NameForms.h"
+#include "PlaceWords.h"
 #include "PlaceNameFile.h"
 #include "CellAnalyzer.h"
 #include "NPCIndex.h"
@@ -28,6 +30,24 @@
 #include <nlohmann/json.hpp>
 
 namespace IntelEngine {
+
+    namespace {
+        // An exact name with and without the little word in front of it: "The Drunken Huntsman" is said without its
+        // "the", "die Beflaggte Maehre" without its "die", and "in Weisslauf" names Weisslauf. The little words are
+        // English's articles and those of the language packs in force (LanguageBridge::Free); only English's "the"
+        // is put in front of a name, since another language's article depends on the word it stands before.
+        std::vector<std::string> ExactNames(const std::string& lowerName) {
+            std::vector<std::string> names{lowerName};
+            const auto space = lowerName.find(' ');
+            if (space != std::string::npos && space > 0 && space + 1 < lowerName.size()) {
+                const NameForms::Words first = NameForms::Read(std::string_view(lowerName).substr(0, space));
+                const auto free = LanguageBridge::GetSingleton()->Free();
+                if (first.at.size() == 1 && free && free(first.Word(0))) names.push_back(lowerName.substr(space + 1));
+            }
+            if (lowerName.rfind("the ", 0) != 0) names.push_back("the " + lowerName);
+            return names;
+        }
+    }
 
     void LocationResolver::BuildLocationIndex() {
         std::unique_lock lock(m_mutex);
@@ -56,7 +76,7 @@ namespace IntelEngine {
             totalCells++;
 
             // Get cell display name
-            auto name = cell->GetName();
+            auto name = GameText::In(cell->GetName());
             if (name && strlen(name) > 0) {
                 namedCells++;
                 std::string lowerName = StringUtils::ToLowerStd(name);
@@ -87,7 +107,7 @@ namespace IntelEngine {
         for (auto* loc : dataHandler->GetFormArray<RE::BGSLocation>()) {
             if (!loc) continue;
 
-            auto name = loc->GetFullName();
+            auto name = GameText::In(loc->GetFullName());
             if (name && strlen(name) > 0) {
                 std::string lowerName = StringUtils::ToLowerStd(name);
 
@@ -165,6 +185,12 @@ namespace IntelEngine {
         }
         if (dirError) logger::info("No place-name files ({})", dirError.message());
 
+        // Every location's name in plain letters as well (ExactLocation): two spellings of one name, one key.
+        m_locationPlain.clear();
+        for (const auto& name : m_allLocationNames) {
+            if (const auto it = m_locationIndex.find(name); it != m_locationIndex.end()) m_locationPlain.try_emplace(NameForms::Key(name), it->second);
+        }
+
         // Cache LocTypePlayerHouse keyword for player home resolution
         m_locTypePlayerHouse = RE::TESForm::LookupByEditorID<RE::BGSKeyword>("LocTypePlayerHouse");
         if (m_locTypePlayerHouse) {
@@ -189,7 +215,7 @@ namespace IntelEngine {
 
         if (locationName.empty()) return nullptr;
 
-        std::string lowerName = StringUtils::ToLowerStd(locationName);
+        std::string lowerName = StringUtils::ToLowerStd(GameText::In(locationName));
 
         // 1. Exact match
         auto it = m_cellIndex.find(lowerName);
@@ -234,7 +260,7 @@ namespace IntelEngine {
 
         if (locationName.empty()) return nullptr;
 
-        std::string lowerName = StringUtils::ToLowerStd(locationName);
+        std::string lowerName = StringUtils::ToLowerStd(GameText::In(locationName));
 
         // 1. Exact match
         auto it = m_locationIndex.find(lowerName);
@@ -272,6 +298,20 @@ namespace IntelEngine {
         }
 
         logger::info("ResolveLocation('{}') -> Not found (no exact or fuzzy match)", locationName);
+        return nullptr;
+    }
+
+    RE::BGSLocation* LocationResolver::ExactLocation(const std::string& locationName) const {
+        if (locationName.empty()) return nullptr;
+        const std::string lowerName = StringUtils::ToLowerStd(GameText::In(locationName));
+        std::shared_lock lock(m_mutex);
+        if (const auto it = m_locationIndex.find(lowerName); it != m_locationIndex.end()) {
+            return RE::TESForm::LookupByID<RE::BGSLocation>(it->second);
+        }
+        // the same name in other letters ("Weisslauf" for the name with a sharp s): plain letters, compared whole
+        if (const auto it = m_locationPlain.find(NameForms::Key(lowerName)); it != m_locationPlain.end()) {
+            return RE::TESForm::LookupByID<RE::BGSLocation>(it->second);
+        }
         return nullptr;
     }
 
@@ -361,17 +401,12 @@ namespace IntelEngine {
         // Uses EXACT match only — fuzzy would let "Riften" match "Riften Jail", hijacking
         // settlement lookups that should resolve via BGSLocation world markers.
         {
-            std::string lowerName = StringUtils::ToLowerStd(locationName);
+            std::string lowerName = StringUtils::ToLowerStd(GameText::In(locationName));
             RE::TESObjectCELL* destCell = nullptr;
             {
                 // "Drunken Huntsman" names the cell "The Drunken Huntsman" (and "The Bannered Mare" is often said
-                // without "the"): an exact name with or without a leading "the " is still exact.
-                std::vector<std::string> names{lowerName};
-                if (lowerName.rfind("the ", 0) == 0) {
-                    names.push_back(lowerName.substr(4));
-                } else {
-                    names.push_back("the " + lowerName);
-                }
+                // without "the"): an exact name with or without a leading article is still exact (ExactNames).
+                const std::vector<std::string> names = ExactNames(lowerName);
                 std::shared_lock lock(m_mutex);
                 for (const auto& name : names) {
                     auto cellIt = m_cellIndex.find(name);
@@ -388,13 +423,13 @@ namespace IntelEngine {
                     if (extDoor) {
                         auto pos = extDoor->GetPosition();
                         logger::info("  Strategy 0 SUCCESS: interior cell '{}' exterior door at ({:.0f}, {:.0f}, {:.0f})",
-                                    destCell->GetName() ? destCell->GetName() : "unnamed",
+                                    GameText::In(destCell->GetName()) ? GameText::In(destCell->GetName()) : "unnamed",
                                     pos.x, pos.y, pos.z);
                         return extDoor;
                     }
                 }
                 logger::info("  Strategy 0: interior cell '{}' found but no exterior door",
-                            destCell->GetName() ? destCell->GetName() : "unnamed");
+                            GameText::In(destCell->GetName()) ? GameText::In(destCell->GetName()) : "unnamed");
             }
         }
 
@@ -403,7 +438,7 @@ namespace IntelEngine {
         // Skyrim's AI can always pathfind to these.
         auto* bgsLocation = ResolveLocation(locationName);
         if (bgsLocation) {
-            auto locName = bgsLocation->GetFullName();
+            auto locName = GameText::In(bgsLocation->GetFullName());
             logger::info("  BGSLocation matched: '{}' (FormID {:08X})",
                         locName ? locName : "unnamed", bgsLocation->GetFormID());
 
@@ -419,7 +454,7 @@ namespace IntelEngine {
                     if (markerCell && markerCell->IsInteriorCell() && markerLoc && markerLoc != bgsLocation &&
                         !markerLoc->IsParent(bgsLocation)) {
                         logger::info("  Strategy 1: worldLocMarker lies in '{}', another place: not used",
-                                     markerCell->GetName() ? markerCell->GetName() : "unnamed");
+                                     GameText::In(markerCell->GetName()) ? GameText::In(markerCell->GetName()) : "unnamed");
                         markerRef = nullptr;
                     }
                 }
@@ -447,13 +482,13 @@ namespace IntelEngine {
                         if (extDoor) {
                             auto pos = extDoor->GetPosition();
                             logger::info("  Strategy 1b SUCCESS: exterior door of '{}' at ({:.0f}, {:.0f}, {:.0f})",
-                                        destCell->GetName() ? destCell->GetName() : "unnamed",
+                                        GameText::In(destCell->GetName()) ? GameText::In(destCell->GetName()) : "unnamed",
                                         pos.x, pos.y, pos.z);
                             return extDoor;
                         }
                     }
                     logger::info("  Strategy 1b: no exterior door found for cell '{}'",
-                                destCell->GetName() ? destCell->GetName() : "unnamed");
+                                GameText::In(destCell->GetName()) ? GameText::In(destCell->GetName()) : "unnamed");
                 }
             }
 
@@ -461,7 +496,7 @@ namespace IntelEngine {
             // whose parent is an exterior settlement with a map marker)
             auto* parentLoc = bgsLocation->parentLoc;
             if (parentLoc) {
-                auto parentName = parentLoc->GetFullName();
+                auto parentName = GameText::In(parentLoc->GetFullName());
                 logger::info("  Parent location: '{}' (FormID {:08X})",
                             parentName ? parentName : "unnamed", parentLoc->GetFormID());
 
@@ -481,7 +516,7 @@ namespace IntelEngine {
                 // e.g., "Sleeping Giant Inn" → "Riverwood" → "Whiterun Hold"
                 auto* grandparentLoc = parentLoc->parentLoc;
                 if (grandparentLoc) {
-                    auto gpName = grandparentLoc->GetFullName();
+                    auto gpName = GameText::In(grandparentLoc->GetFullName());
                     logger::info("  Grandparent location: '{}' (FormID {:08X})",
                                 gpName ? gpName : "unnamed", grandparentLoc->GetFormID());
 
@@ -555,7 +590,7 @@ namespace IntelEngine {
             RE::TESObjectREFR* strategy3Result = nullptr;
             ProcessUtils::ForEachLoadedActor([&](RE::Actor* loadedActor) -> bool {
                 if (loadedActor->GetCurrentLocation() == bgsLocation) {
-                    auto actorName = loadedActor->GetDisplayFullName();
+                    auto actorName = GameText::In(loadedActor->GetDisplayFullName());
                     auto pos = loadedActor->GetPosition();
                     logger::info("  Strategy 3 SUCCESS: found '{}' at ({:.0f}, {:.0f}, {:.0f})",
                                 actorName ? actorName : "unnamed",
@@ -584,7 +619,7 @@ namespace IntelEngine {
         // without BGSLocation or world markers)
         auto* targetCell = ResolveCell(locationName);
         if (targetCell) {
-            auto cellName = targetCell->GetName();
+            auto cellName = GameText::In(targetCell->GetName());
             logger::info("  Strategy 5: matched interior cell '{}' (FormID {:08X})",
                         cellName ? cellName : "unnamed", targetCell->GetFormID());
 
@@ -630,39 +665,15 @@ namespace IntelEngine {
     RE::TESObjectREFR* LocationResolver::ResolveSemantic(RE::Actor* actor, const std::string& semanticTerm) {
         if (!actor) return nullptr;
 
-        std::string lowerTerm = StringUtils::ToLowerStd(semanticTerm);
-
         // Log all doors for diagnostics
         LogAllDoors(actor);
 
         logger::debug("ResolveSemantic: Resolving '{}'", semanticTerm);
 
-        // Route to specific resolver
-        if (lowerTerm == "upstairs" || lowerTerm == "up" || lowerTerm == "above") {
-            return ResolveUpstairs(actor);
-        }
-        if (lowerTerm == "downstairs" || lowerTerm == "down" || lowerTerm == "below") {
-            return ResolveDownstairs(actor);
-        }
-        if (lowerTerm == "outside" || lowerTerm == "out" || lowerTerm == "exterior") {
-            return ResolveOutside(actor);
-        }
-        if (lowerTerm == "inside" || lowerTerm == "in" || lowerTerm == "interior") {
-            return ResolveInside(actor);
-        }
-        if (lowerTerm == "the back" || lowerTerm == "back room" || lowerTerm == "back") {
-            return ResolveBack(actor);
-        }
-        if (lowerTerm == "cellar" || lowerTerm == "basement" || lowerTerm == "below stairs") {
-            return ResolveCellar(actor);
-        }
-        if (lowerTerm == "bedroom" || lowerTerm == "the bedroom" || lowerTerm == "my room" ||
-            lowerTerm == "my bed" || lowerTerm == "bed") {
-            return ResolveBedroom(actor);
-        }
-        if (lowerTerm == "kitchen" || lowerTerm == "the kitchen") {
-            return ResolveKitchen(actor);
-        }
+        // The word is read by the same rows as every destination (PlaceWords.h), in whatever language it was said.
+        const SemanticIntent intent = DetectSemanticIntent(semanticTerm);
+        if (intent.type == SemanticIntent::HOME) return ResolveHome(actor, intent);
+        if (intent.type != SemanticIntent::NONE) return ResolveSemantic(actor, intent);
 
         logger::debug("ResolveSemantic: '{}' not matched to any resolver", semanticTerm);
         return nullptr;
@@ -677,8 +688,8 @@ namespace IntelEngine {
 
         auto* cell = actor->GetParentCell();
         logger::debug("ResolveSemantic: Actor '{}' in cell '{}' ({} doors)",
-                     actor->GetDisplayFullName(),
-                     cell ? cell->GetName() : "null",
+                     GameText::In(actor->GetDisplayFullName()),
+                     cell ? GameText::In(cell->GetName()) : "null",
                      doors.size());
 
         for (size_t i = 0; i < doors.size(); i++) {
@@ -690,7 +701,7 @@ namespace IntelEngine {
             bool nameUp = analyzer->IsDoorNameUpward(door);
             bool nameDown = analyzer->IsDoorNameDownward(door);
 
-            auto doorRefName = door->GetName();
+            auto doorRefName = GameText::In(door->GetName());
             logger::debug("  Door[{}]: refName='{}' dest='{}' exterior={} zUp={} zDown={} nameUp={} nameDown={}",
                          i, doorRefName ? doorRefName : "(null)", destName.c_str(),
                          isExterior, isUp, isDown, nameUp, nameDown);
@@ -719,7 +730,7 @@ namespace IntelEngine {
             if (preferBeds) {
                 for (auto* ref : furniture) {
                     if (analyzer->IsBedFurniture(ref)) {
-                        auto* name = ref->GetBaseObject() ? ref->GetBaseObject()->GetName() : "furniture";
+                        auto* name = ref->GetBaseObject() ? GameText::In(ref->GetBaseObject()->GetName()) : "furniture";
                         logger::debug("ResolveUpstairs: Bed above -> '{}'", name ? name : "unnamed");
                         return ref;
                     }
@@ -727,7 +738,7 @@ namespace IntelEngine {
             }
             // Return first furniture above (any type)
             auto* first = furniture[0];
-            auto* name = first->GetBaseObject() ? first->GetBaseObject()->GetName() : "furniture";
+            auto* name = first->GetBaseObject() ? GameText::In(first->GetBaseObject()->GetName()) : "furniture";
             logger::debug("ResolveUpstairs: Furniture above -> '{}'", name ? name : "unnamed");
             return first;
         }
@@ -747,25 +758,17 @@ namespace IntelEngine {
         // WITHOUT those keywords is effectively "upstairs"
         auto* cell = actor->GetParentCell();
         if (cell) {
-            auto cellName = cell->GetName();
+            auto cellName = GameText::In(cell->GetName());
             if (cellName && strlen(cellName) > 0) {
-                std::string lowerCellName = StringUtils::ToLowerStd(cellName);
-                if (lowerCellName.find("cellar") != std::string::npos ||
-                    lowerCellName.find("basement") != std::string::npos ||
-                    lowerCellName.find("lower") != std::string::npos ||
-                    lowerCellName.find("dungeon") != std::string::npos ||
-                    lowerCellName.find("undercroft") != std::string::npos) {
+                // (the words are data: PlaceWords.h, `name downstairs` of English and of the language in force)
+                auto* language = LanguageBridge::GetSingleton();
+                if (language->NameSays(cellName, "downstairs")) {
 
                     logger::debug("ResolveUpstairs: Cell '{}' is downstairs-named, trying inverse heuristic", cellName);
 
                     for (auto* door : doors) {
                         auto destName = analyzer->GetDoorDestinationName(door);
-                        std::string lowerDest = StringUtils::ToLowerStd(destName.c_str());
-                        if (lowerDest.find("cellar") == std::string::npos &&
-                            lowerDest.find("basement") == std::string::npos &&
-                            lowerDest.find("lower") == std::string::npos &&
-                            lowerDest.find("dungeon") == std::string::npos &&
-                            lowerDest.find("undercroft") == std::string::npos) {
+                        if (!language->NameSays(destName.c_str(), "downstairs")) {
                             logger::debug("ResolveUpstairs: Inverse heuristic -> '{}'", destName.c_str());
                             return door;
                         }
@@ -799,14 +802,14 @@ namespace IntelEngine {
             if (preferBeds) {
                 for (auto* ref : furniture) {
                     if (analyzer->IsBedFurniture(ref)) {
-                        auto* name = ref->GetBaseObject() ? ref->GetBaseObject()->GetName() : "furniture";
+                        auto* name = ref->GetBaseObject() ? GameText::In(ref->GetBaseObject()->GetName()) : "furniture";
                         logger::debug("ResolveDownstairs: Bed below -> '{}'", name ? name : "unnamed");
                         return ref;
                     }
                 }
             }
             auto* first = furniture[0];
-            auto* name = first->GetBaseObject() ? first->GetBaseObject()->GetName() : "furniture";
+            auto* name = first->GetBaseObject() ? GameText::In(first->GetBaseObject()->GetName()) : "furniture";
             logger::debug("ResolveDownstairs: Furniture below -> '{}'", name ? name : "unnamed");
             return first;
         }
@@ -827,24 +830,17 @@ namespace IntelEngine {
         // has a door to "The Resting Pilgrim" — that's downstairs)
         auto* cell = actor->GetParentCell();
         if (cell) {
-            auto cellName = cell->GetName();
+            auto cellName = GameText::In(cell->GetName());
             if (cellName && strlen(cellName) > 0) {
-                std::string lowerCellName = StringUtils::ToLowerStd(cellName);
-                if (lowerCellName.find("upstairs") != std::string::npos ||
-                    lowerCellName.find("upper") != std::string::npos ||
-                    lowerCellName.find("second floor") != std::string::npos ||
-                    lowerCellName.find("top floor") != std::string::npos) {
+                auto* language = LanguageBridge::GetSingleton();
+                if (language->NameSays(cellName, "upstairs")) {
 
                     logger::debug("ResolveDownstairs: Cell '{}' is upstairs-named, trying inverse heuristic", cellName);
 
                     for (auto* door : doors) {
                         auto destName = analyzer->GetDoorDestinationName(door);
-                        std::string lowerDest = StringUtils::ToLowerStd(destName.c_str());
                         // Any door NOT leading to an upstairs destination is "downstairs"
-                        if (lowerDest.find("upstairs") == std::string::npos &&
-                            lowerDest.find("upper") == std::string::npos &&
-                            lowerDest.find("second floor") == std::string::npos &&
-                            lowerDest.find("top floor") == std::string::npos) {
+                        if (!language->NameSays(destName.c_str(), "upstairs")) {
                             logger::debug("ResolveDownstairs: Inverse heuristic -> '{}'", destName.c_str());
                             return door;
                         }
@@ -1025,7 +1021,7 @@ namespace IntelEngine {
         });
 
         if (nearestBed) {
-            auto* name = nearestBed->GetBaseObject() ? nearestBed->GetBaseObject()->GetName() : "bed";
+            auto* name = nearestBed->GetBaseObject() ? GameText::In(nearestBed->GetBaseObject()->GetName()) : "bed";
             logger::debug("ResolveBedroom: Found bed -> '{}' (dist={:.0f})", name ? name : "unnamed", nearestDist);
         } else {
             logger::debug("ResolveBedroom: No bed found in cell");
@@ -1059,7 +1055,7 @@ namespace IntelEngine {
         }
 
         if (nearest) {
-            auto* name = nearest->GetBaseObject() ? nearest->GetBaseObject()->GetName() : "cooking station";
+            auto* name = nearest->GetBaseObject() ? GameText::In(nearest->GetBaseObject()->GetName()) : "cooking station";
             logger::debug("ResolveKitchen: Found '{}' (dist={:.0f})", name ? name : "unnamed", nearestDist);
         }
 
@@ -1077,24 +1073,13 @@ namespace IntelEngine {
         if (!currentCell) return nullptr;
 
         logger::debug("ResolveWater: preferInterior={}, cell='{}', interior={}",
-                     preferInterior, currentCell->GetName() ? currentCell->GetName() : "unnamed",
+                     preferInterior, GameText::In(currentCell->GetName()) ? GameText::In(currentCell->GetName()) : "unnamed",
                      currentCell->IsInteriorCell());
 
-        // Keywords for interior water features (modded baths, hot springs)
-        static const std::vector<std::string> interiorKeywords = {
-            "bath", "tub", "pool", "jacuzzi", "hot spring", "basin", "wash"
-        };
-
-        // Keywords for exterior water landmarks
-        static const std::vector<std::string> exteriorKeywords = {
-            "dock", "pier", "boat", "canoe", "ship",
-            "fish", "fishing",
-            "bridge",
-            "mill", "lumber",
-            "waterfall",
-            "river", "lake", "stream", "pond", "harbor", "harbour",
-            "well", "fountain"
-        };
+        // What a thing by the water is called is data (PlaceWords.h: `name bath` for baths and hot springs indoors,
+        // `name water` for docks, bridges, mills and the like outdoors), in English and in the language in force.
+        static const std::string interiorKeywords = "bath";
+        static const std::string exteriorKeywords = "water";
 
         struct WaterCandidate {
             RE::TESObjectREFR* ref;
@@ -1104,22 +1089,19 @@ namespace IntelEngine {
         auto actorPos = actor->GetPosition();
 
         // Helper: check if reference base name matches any keyword in a list
-        auto matchesKeywords = [](RE::TESObjectREFR& ref,
-                                  const std::vector<std::string>& keywords) -> bool {
+        auto matchesKeywords = [](RE::TESObjectREFR& ref, const std::string& what) -> bool {
             auto* baseObj = ref.GetBaseObject();
             if (!baseObj) return false;
-            auto* name = baseObj->GetName();
-            if (!name || strlen(name) == 0) return false;
-            std::string lowerName = StringUtils::ToLowerStd(name);
-            for (const auto& kw : keywords) {
-                if (lowerName.find(kw) != std::string::npos) return true;
-            }
-            return false;
+            auto* language = LanguageBridge::GetSingleton();
+            auto* name = GameText::In(baseObj->GetName());
+            if (name && name[0] && language->NameSays(name, what)) return true;
+            // The editor id is English whatever the game is in (where a load order keeps editor ids at all).
+            auto* editorId = baseObj->GetFormEditorID();
+            return editorId && editorId[0] && language->NameSays(editorId, what, true);
         };
 
         // Helper: scan a cell for references matching keywords, return nearest
-        auto scanCell = [&](RE::TESObjectCELL* cell,
-                           const std::vector<std::string>& keywords) -> RE::TESObjectREFR* {
+        auto scanCell = [&](RE::TESObjectCELL* cell, const std::string& keywords) -> RE::TESObjectREFR* {
             std::vector<WaterCandidate> candidates;
             cell->ForEachReference([&](RE::TESObjectREFR* ref) -> RE::BSContainer::ForEachResult {
                 if (!ref || ref->IsDisabled() || ref->IsDeleted())
@@ -1140,7 +1122,7 @@ namespace IntelEngine {
                 if (candidates[i].distSq < best->distSq) best = &candidates[i];
             }
 
-            auto* baseName = best->ref->GetBaseObject() ? best->ref->GetBaseObject()->GetName() : "unknown";
+            auto* baseName = best->ref->GetBaseObject() ? GameText::In(best->ref->GetBaseObject()->GetName()) : "unknown";
             logger::debug("ResolveWater: Found '{}' at distance {:.0f} ({} candidates)",
                          baseName, std::sqrt(best->distSq), candidates.size());
             return best->ref;
@@ -1383,7 +1365,7 @@ namespace IntelEngine {
                 else fallbackMatches++;
             } else {
                 // Log dungeons with NO interior anchor for diagnostics
-                auto locName = loc->GetFullName();
+                auto locName = GameText::In(loc->GetFullName());
                 if (locName && locName[0]) {
                     logger::info("DungeonIndex: NO interior anchor for '{}' ({:08X}), {} specialRefs",
                                  locName, loc->GetFormID(), loc->specialRefs.size());
@@ -1412,11 +1394,11 @@ namespace IntelEngine {
             auto* cell = RE::TESForm::LookupByID<RE::TESObjectCELL>(it->second.cellFormId);
             auto pos = ref->GetPosition();
             logger::info("[IntelEngine] GetDungeonBossAnchor: '{}' → ref {:08X} '{}' in cell {:08X} '{}' pos({:.0f},{:.0f},{:.0f})",
-                         loc->GetFullName() ? loc->GetFullName() : "?",
+                         GameText::In(loc->GetFullName()) ? GameText::In(loc->GetFullName()) : "?",
                          it->second.anchorRefId,
-                         ref->GetName() ? ref->GetName() : "unnamed",
+                         GameText::In(ref->GetName()) ? GameText::In(ref->GetName()) : "unnamed",
                          it->second.cellFormId,
-                         cell ? (cell->GetName() ? cell->GetName() : "unnamed") : "null",
+                         cell ? (GameText::In(cell->GetName()) ? GameText::In(cell->GetName()) : "unnamed") : "null",
                          pos.x, pos.y, pos.z);
         }
         return ref;
@@ -1511,7 +1493,7 @@ namespace IntelEngine {
 
         if (candidates.empty()) {
             logger::debug("FindExteriorDoorInCell '{}': {} doors, {} noTeleport, {} noLinked, {} noDest, {} interiorDest, 0 exterior",
-                         cell->GetName() ? cell->GetName() : "unnamed",
+                         GameText::In(cell->GetName()) ? GameText::In(cell->GetName()) : "unnamed",
                          doorCount, noTeleport, noLinked, noDest, interiorDest);
             return nullptr;
         }
@@ -1544,7 +1526,7 @@ namespace IntelEngine {
         if (!cell || !cell->IsInteriorCell()) return nullptr;
 
         logger::debug("GetPlayerHomeExteriorDoorRef: scanning cell '{}' ({:08X})",
-                     cell->GetName() ? cell->GetName() : "unnamed", cell->GetFormID());
+                     GameText::In(cell->GetName()) ? GameText::In(cell->GetName()) : "unnamed", cell->GetFormID());
 
         // Direct: door in player's cell leading to exterior
         auto* directDoor = FindExteriorDoorInCell(cell);
@@ -1643,7 +1625,7 @@ namespace IntelEngine {
         auto it = m_npcHomeIndex.find(actorBase->GetFormID());
         if (it == m_npcHomeIndex.end()) {
             logger::debug("ResolveNPCHome: No home indexed for '{}'",
-                         actorBase->GetFullName() ? actorBase->GetFullName() : "unknown");
+                         GameText::In(actorBase->GetFullName()) ? GameText::In(actorBase->GetFullName()) : "unknown");
             return nullptr;
         }
 
@@ -1651,13 +1633,13 @@ namespace IntelEngine {
         if (!homeCell) {
             logger::warn("ResolveNPCHome: Home cell {:08X} not found for '{}'",
                         it->second.cellFormId,
-                        actorBase->GetFullName() ? actorBase->GetFullName() : "unknown");
+                        GameText::In(actorBase->GetFullName()) ? GameText::In(actorBase->GetFullName()) : "unknown");
             return nullptr;
         }
 
-        auto cellName = homeCell->GetName();
+        auto cellName = GameText::In(homeCell->GetName());
         logger::info("ResolveNPCHome: '{}' -> cell '{}' ({:08X})",
-                    actorBase->GetFullName() ? actorBase->GetFullName() : "unknown",
+                    GameText::In(actorBase->GetFullName()) ? GameText::In(actorBase->GetFullName()) : "unknown",
                     cellName ? cellName : "unnamed", it->second.cellFormId);
 
         return GetLocationTravelTarget(homeCell);
@@ -1738,8 +1720,8 @@ namespace IntelEngine {
                     auto* editorLoc = actor->GetEditorLocation();
                     if (editorLoc) {
                         logger::debug("ResolveHome: falling back to editor location '{}'",
-                                     editorLoc->GetFullName() ? editorLoc->GetFullName() : "unnamed");
-                        return FindTravelTarget(editorLoc->GetFullName() ? editorLoc->GetFullName() : "");
+                                     GameText::In(editorLoc->GetFullName()) ? GameText::In(editorLoc->GetFullName()) : "unnamed");
+                        return FindTravelTarget(GameText::In(editorLoc->GetFullName()) ? GameText::In(editorLoc->GetFullName()) : "");
                     }
                 }
                 return result;
@@ -1759,10 +1741,13 @@ namespace IntelEngine {
                 // since template variables aren't available in dynamic params.
                 auto* player = RE::PlayerCharacter::GetSingleton();
                 if (player) {
-                    auto playerName = player->GetDisplayFullName();
+                    auto playerName = GameText::In(player->GetDisplayFullName());
                     if (playerName && strlen(playerName) > 0) {
                         std::string lowerPlayer = StringUtils::ToLowerStd(playerName);
-                        if (lowerPlayer == intent.homeOwnerHint) {
+                        // (their name with an ending or an article is still their name: NameForms.h)
+                        if (lowerPlayer == intent.homeOwnerHint ||
+                            NameForms::Stands(NameForms::Read(lowerPlayer), NameForms::Read(intent.homeOwnerHint),
+                                              LanguageBridge::GetSingleton()->Free()).stand >= NameForms::Forms) {
                             logger::debug("ResolveHome: '{}' is the player — routing to player home",
                                          intent.homeOwnerHint);
                             return ResolvePlayerHome();
@@ -1783,7 +1768,7 @@ namespace IntelEngine {
                     if (editorLoc) {
                         logger::debug("ResolveHome: falling back to '{}' editor location",
                                      intent.homeOwnerHint);
-                        return FindTravelTarget(editorLoc->GetFullName() ? editorLoc->GetFullName() : "");
+                        return FindTravelTarget(GameText::In(editorLoc->GetFullName()) ? GameText::In(editorLoc->GetFullName()) : "");
                     }
                 }
                 logger::debug("ResolveHome: NPC '{}' not found", intent.homeOwnerHint);
@@ -1800,21 +1785,11 @@ namespace IntelEngine {
     // =========================================================================
 
     bool LocationResolver::IsExactPlaceName(const std::string& destination) {
-        std::string lower = StringUtils::ToLowerStd(destination);
-        // The plain words of a direction keep their meaning even if some cell's editor ID happens to be one of them.
-        static const std::unordered_set<std::string> plainWords{
-            "upstairs", "up", "above", "downstairs", "down", "below", "outside", "out", "exterior", "inside", "in",
-            "interior", "back", "the back", "back room", "cellar", "basement", "stairs", "stairwell", "staircase",
-            "bedroom", "the bedroom", "room", "my room", "bed", "my bed", "kitchen", "the kitchen", "bath", "the bath",
-            "pool", "the pool", "river", "the river", "lake", "the lake", "stream", "the stream", "water", "the water",
-            "the shore", "home", "my home", "your home"};
-        if (plainWords.contains(lower)) return false;
-        std::vector<std::string> names{lower};
-        if (lower.rfind("the ", 0) == 0) {
-            names.push_back(lower.substr(4));
-        } else {
-            names.push_back("the " + lower);
-        }
+        std::string lower = StringUtils::ToLowerStd(GameText::In(destination));
+        // The plain words of a direction keep their meaning even if some cell's editor ID happens to be one of them
+        // (the words are data: PlaceWords.h, English's rows and those of the languages in force).
+        if (LanguageBridge::GetSingleton()->IsPlaceWord(destination)) return false;
+        const std::vector<std::string> names = ExactNames(lower);
         std::shared_lock lock(m_mutex);
         for (const auto& name : names) {
             if (m_cellIndex.contains(name) || m_locationIndex.contains(name)) return true;
@@ -1823,197 +1798,36 @@ namespace IntelEngine {
     }
 
     SemanticIntent LocationResolver::DetectSemanticIntent(const std::string& said) {
-        // A word of place said in another language ("domoi", "nach Hause", "n'shpi": home) is read as its English,
-        // when it is the whole of what was said (LanguagePack.h); a name stays a name.
-        const std::string english = LanguageBridge::GetSingleton()->PlaceToEnglish(said);
-        const std::string& destination = english.empty() ? said : english;
-        std::string lower = StringUtils::ToLowerStd(destination);
-
-        // Helper: check if string mentions bed/bedroom
-        auto hasBedContext = [&lower]() {
-            return lower.find("bedroom") != std::string::npos ||
-                   lower.find("my room") != std::string::npos ||
-                   lower.find("my bed") != std::string::npos;
-        };
-
-        // === Exact semantic terms (fast path) ===
-        if (lower == "upstairs" || lower == "up" || lower == "above")
-            return {SemanticIntent::UPSTAIRS, "", false};
-        if (lower == "downstairs" || lower == "down" || lower == "below")
-            return {SemanticIntent::DOWNSTAIRS, "", false};
-        if (lower == "outside" || lower == "out" || lower == "exterior")
-            return {SemanticIntent::OUTSIDE, "", false};
-        if (lower == "inside" || lower == "in" || lower == "interior")
-            return {SemanticIntent::INSIDE, "", false};
-        if (lower == "the back" || lower == "back room" || lower == "back")
-            return {SemanticIntent::BACK, "", false};
-        if (lower == "cellar" || lower == "basement" || lower == "below stairs")
-            return {SemanticIntent::CELLAR, "", false};
-
-        // === Stairs terms (exact) — map to DOWNSTAIRS (NPC goes toward stairwell area) ===
-        if (lower == "stairs" || lower == "stairwell" || lower == "staircase")
-            return {SemanticIntent::DOWNSTAIRS, "", false};
-
-        // === Bedroom terms (exact) ===
-        if (lower == "bedroom" || lower == "the bedroom" || lower == "my room" ||
-            lower == "my bed" || lower == "bed" || lower == "room")
-            return {SemanticIntent::BEDROOM, "", true};
-
-        // === Kitchen terms (exact) ===
-        if (lower == "kitchen" || lower == "the kitchen")
-            return {SemanticIntent::KITCHEN, "", false};
-
-        // === Water/bath terms (exact) — interior preferred ===
-        if (lower == "bath" || lower == "the bath" || lower == "bathe" ||
-            lower == "hot spring" || lower == "hot springs" || lower == "pool" ||
-            lower == "the pool")
-            return {SemanticIntent::WATER, "", false, HomeOwner::NONE, "", true};
-
-        // === Water terms (exact) — exterior ===
-        if (lower == "the river" || lower == "river" || lower == "the lake" ||
-            lower == "lake" || lower == "stream" || lower == "the stream" ||
-            lower == "the water" || lower == "water" || lower == "the shore")
-            return {SemanticIntent::WATER, "", false};
-
-        // === Water action phrases ===
-        if (lower == "wash" || lower == "wash up" || lower == "go wash" ||
-            lower == "clean up" || lower == "take a bath" ||
-            lower.find("wash yourself") != std::string::npos ||
-            lower.find("wash myself") != std::string::npos ||
-            lower.find("clean yourself") != std::string::npos)
-            return {SemanticIntent::WATER, "", false, HomeOwner::NONE, "", true};
-
-        if (lower == "swim" || lower == "go swim" || lower == "go swimming" ||
-            lower == "go fishing" || lower == "fishing" ||
-            lower.find("go to the river") != std::string::npos ||
-            lower.find("go to the lake") != std::string::npos)
-            return {SemanticIntent::WATER, "", false};
-
-        // === Home terms (exact) — NPC's own home ===
-        if (lower == "home" || lower == "my home" || lower == "my house" || lower == "my place" ||
-            lower == "go home" || lower == "head home" || lower == "back home")
-            return {SemanticIntent::HOME, "", false, HomeOwner::NPC, ""};
-
-        // === Home terms (exact) — player's home ===
-        if (lower == "your home" || lower == "your house" || lower == "your place" ||
-            lower == "the player's home" || lower == "player's home")
-            return {SemanticIntent::HOME, "", false, HomeOwner::PLAYER, ""};
-
-        // === Possessive and bare-name home patterns ===
-        // Matches: "Alvor's home", "Camilla Valerius's house", "Camilla Valerius home"
-        {
-            std::vector<std::string> homeSuffixes = {
-                "'s home", "'s house", "'s place",   // possessive: "Alvor's home"
-                " home", " house", " place"          // bare: "Camilla Valerius home"
-            };
-
-            // Words that precede "home" but are NOT names — prevents
-            // "go home", "back home", "head home" from being misdetected.
-            std::unordered_set<std::string> nonNameWords = {
-                "go", "my", "your", "head", "back", "the", "get",
-                "at", "to", "a", "our", "their", "its", "this"
-            };
-
-            for (const auto& suffix : homeSuffixes) {
-                auto pos = lower.find(suffix);
-                if (pos == std::string::npos || pos == 0) continue;
-
-                std::string ownerName = lower.substr(0, pos);
-
-                // Strip leading travel prefixes
-                std::vector<std::string> travelPrefixes = {"go to ", "head to ", "travel to ", "get to "};
-                for (const auto& tp : travelPrefixes) {
-                    if (ownerName.length() > tp.length() && ownerName.substr(0, tp.length()) == tp) {
-                        ownerName = ownerName.substr(tp.length());
-                        break;
-                    }
-                }
-                ownerName = StringUtils::TrimStd(ownerName);
-                if (ownerName.empty()) continue;
-
-                // For bare suffixes (no apostrophe), reject single non-name words
-                // to avoid "go home" → NAMED("go") or "my home" → NAMED("my").
-                // Multi-word names like "camilla valerius" are always accepted.
-                bool isBare = (suffix.front() == ' ');
-                if (isBare && ownerName.find(' ') == std::string::npos) {
-                    if (nonNameWords.count(ownerName)) continue;
-                }
-
-                return {SemanticIntent::HOME, "", false, HomeOwner::NAMED, ownerName};
-            }
+        // Words of place are data, not code (PlaceWords.h): English's rows and the rows of the language packs in
+        // force are read by one rule, so "upstairs", "nach oben" and "naverkh" are the same word, and so are "Alvor's
+        // house" and the same in a language whose pack names its word for a house. (Until 4.0 this was a ladder of
+        // English lists; PlaceWordsCheck holds that ladder and compares.)
+        const PlaceWords::Intent read = LanguageBridge::GetSingleton()->ReadPlace(said);
+        SemanticIntent intent;
+        switch (read.kind) {
+            case PlaceWords::Kind::Upstairs:   intent.type = SemanticIntent::UPSTAIRS; break;
+            case PlaceWords::Kind::Downstairs: intent.type = SemanticIntent::DOWNSTAIRS; break;
+            case PlaceWords::Kind::Outside:    intent.type = SemanticIntent::OUTSIDE; break;
+            case PlaceWords::Kind::Inside:     intent.type = SemanticIntent::INSIDE; break;
+            case PlaceWords::Kind::Back:       intent.type = SemanticIntent::BACK; break;
+            case PlaceWords::Kind::Cellar:     intent.type = SemanticIntent::CELLAR; break;
+            case PlaceWords::Kind::Bedroom:    intent.type = SemanticIntent::BEDROOM; break;
+            case PlaceWords::Kind::Kitchen:    intent.type = SemanticIntent::KITCHEN; break;
+            case PlaceWords::Kind::Home:       intent.type = SemanticIntent::HOME; break;
+            case PlaceWords::Kind::Water:      intent.type = SemanticIntent::WATER; break;
+            case PlaceWords::Kind::None:       return intent;
         }
-
-        // === Compound phrase patterns ===
-
-        // "out of X" / "outside of X" / "outside X" → OUTSIDE + context
-        std::vector<std::string> outsidePrefixes = {"out of ", "outside of ", "outside "};
-        for (const auto& prefix : outsidePrefixes) {
-            if (lower.length() > prefix.length() && lower.substr(0, prefix.length()) == prefix) {
-                std::string context = lower.substr(prefix.length());
-                if (context == "here" || context == "this place" || context == "this building")
-                    return {SemanticIntent::OUTSIDE, "", false};
-                return {SemanticIntent::OUTSIDE, context, false};
-            }
+        intent.locationContext = read.context;
+        intent.preferBeds = read.preferBeds;
+        intent.preferInterior = read.preferInterior;
+        intent.homeOwnerHint = read.ownerName;
+        switch (read.owner) {
+            case PlaceWords::Owner::Self:   intent.homeOwner = HomeOwner::NPC; break;
+            case PlaceWords::Owner::Player: intent.homeOwner = HomeOwner::PLAYER; break;
+            case PlaceWords::Owner::Named:  intent.homeOwner = HomeOwner::NAMED; break;
+            case PlaceWords::Owner::None:   break;
         }
-
-        // "leave" / "get out" / "away" → OUTSIDE (no context)
-        if (lower == "leave" || lower == "get out" || lower == "get out of here" || lower == "away")
-            return {SemanticIntent::OUTSIDE, "", false};
-
-        // "leave X" → OUTSIDE + context
-        if (lower.length() > 6 && lower.substr(0, 6) == "leave ") {
-            std::string context = lower.substr(6);
-            if (context == "here" || context == "this place")
-                return {SemanticIntent::OUTSIDE, "", false};
-            return {SemanticIntent::OUTSIDE, context, false};
-        }
-
-        // === Embedded keywords (catches "go upstairs", "head downstairs", etc.) ===
-        // Also detects bed context for compound phrases like "upstairs bedroom"
-        if (lower.find("upstairs") != std::string::npos || lower.find("upper floor") != std::string::npos)
-            return {SemanticIntent::UPSTAIRS, "", hasBedContext()};
-        if (lower.find("downstairs") != std::string::npos || lower.find("basement") != std::string::npos ||
-            lower.find("cellar") != std::string::npos || lower.find("stairwell") != std::string::npos ||
-            lower.find("staircase") != std::string::npos || lower.find("stairs") != std::string::npos)
-            return {SemanticIntent::DOWNSTAIRS, "", hasBedContext()};
-        if (lower.find("outside") != std::string::npos || lower.find("exterior") != std::string::npos)
-            return {SemanticIntent::OUTSIDE, "", false};
-
-        // === Bedroom embedded (catches "the bedroom", "go to bed")
-        if (lower.find("bedroom") != std::string::npos || lower.find("my bed") != std::string::npos)
-            return {SemanticIntent::BEDROOM, "", true};
-
-        // === Kitchen embedded (catches "the kitchen", "go to the kitchen")
-        if (lower.find("kitchen") != std::string::npos)
-            return {SemanticIntent::KITCHEN, "", false};
-
-        // === Water embedded (catches "head to the river", "find a river") ===
-        if (lower.find("river") != std::string::npos || lower.find("lake") != std::string::npos ||
-            lower.find("swim") != std::string::npos || lower.find("fishing") != std::string::npos)
-            return {SemanticIntent::WATER, "", false};
-        if (lower.find("bath") != std::string::npos || lower.find("hot spring") != std::string::npos)
-            return {SemanticIntent::WATER, "", false, HomeOwner::NONE, "", true};
-
-        // === Home embedded — catch phrases like "go to my home", "head to your place" ===
-        if (lower.find("my home") != std::string::npos || lower.find("my house") != std::string::npos ||
-            lower.find("my place") != std::string::npos)
-            return {SemanticIntent::HOME, "", false, HomeOwner::NPC, ""};
-        if (lower.find("your home") != std::string::npos || lower.find("your house") != std::string::npos ||
-            lower.find("your place") != std::string::npos)
-            return {SemanticIntent::HOME, "", false, HomeOwner::PLAYER, ""};
-        // Bare "home" as embedded keyword (e.g., "head home now") — NPC's own home
-        // Must be a standalone word — not part of a compound like "breezehome" or "homebrew"
-        {
-            auto homePos = lower.find("home");
-            if (homePos != std::string::npos) {
-                bool wordStart = (homePos == 0 || !std::isalpha(static_cast<unsigned char>(lower[homePos - 1])));
-                bool wordEnd = (homePos + 4 >= lower.length() || !std::isalpha(static_cast<unsigned char>(lower[homePos + 4])));
-                if (wordStart && wordEnd)
-                    return {SemanticIntent::HOME, "", false, HomeOwner::NPC, ""};
-            }
-        }
-
-        return {SemanticIntent::NONE, "", false};
+        return intent;
     }
 
     RE::TESObjectREFR* LocationResolver::ResolveSemantic(RE::Actor* actor, const SemanticIntent& intent) {
@@ -2041,7 +1855,7 @@ namespace IntelEngine {
         auto* parent = loc->parentLoc;
         if (!parent) return nullptr;
 
-        auto name = parent->GetFullName();
+        auto name = GameText::In(parent->GetFullName());
         if (!name || strlen(name) == 0) return nullptr;
 
         logger::debug("  ResolveViaParentLocation: Trying parent '{}'", name);
@@ -2049,23 +1863,8 @@ namespace IntelEngine {
     }
 
     std::string LocationResolver::ExtractLocationName(const std::string& text) {
-        std::string lower = StringUtils::ToLowerStd(text);
-
-        std::vector<std::string> prefixes = {
-            "out of ", "outside of ", "outside ", "leave ",
-            "go to ", "head to ", "get to ", "travel to "
-        };
-
-        for (const auto& prefix : prefixes) {
-            if (lower.length() > prefix.length() && lower.substr(0, prefix.length()) == prefix) {
-                std::string remainder = lower.substr(prefix.length());
-                if (remainder.empty() || remainder == "here" || remainder == "this place")
-                    continue;
-                return remainder;
-            }
-        }
-
-        return "";
+        // "out of X", "leave X", "go to X" in English and in the languages in force (PlaceWords.h): X.
+        return LanguageBridge::GetSingleton()->PlaceBehind(text);
     }
 
     RE::TESObjectREFR* LocationResolver::ResolveNamedPlace(RE::Actor* actor, const std::string& destination) {
@@ -2140,7 +1939,7 @@ namespace IntelEngine {
         // Reset home cell tracking — only set if this destination resolves to a home
         m_lastResolvedHomeCellId = 0;
 
-        logger::debug("ResolveAnyDestination: '{}' for '{}'", destination, actor->GetDisplayFullName());
+        logger::debug("ResolveAnyDestination: '{}' for '{}'", destination, GameText::In(actor->GetDisplayFullName()));
 
         // SkyrimNet's Named Places are not asked for here (3.8.3's ResolveNamedPlace, above, stays for whoever wants
         // the nearest reference of a place by its exact name): in 4.0 every trip asks them first, before this
@@ -2262,10 +2061,8 @@ namespace IntelEngine {
     // =========================================================================
 
     bool LocationResolver::IsSemanticTerm(const std::string& said) {
-        const std::string english = LanguageBridge::GetSingleton()->PlaceToEnglish(said);   // "naverkh" is "upstairs"
-        const std::string& term = english.empty() ? said : english;
-        std::string lowerTerm = StringUtils::ToLowerStd(term);
-        return m_semanticTerms.find(lowerTerm) != m_semanticTerms.end();
+        // A plain word of place or of a spot in a room, in English or a language in force (PlaceWords.h).
+        return LanguageBridge::GetSingleton()->IsPlaceWord(said);
     }
 
     std::vector<RE::BSFixedString> LocationResolver::GetAvailableDirections(RE::Actor* actor) {
@@ -2308,7 +2105,7 @@ namespace IntelEngine {
         if (!cell) return "";
 
         // 1. Try cell display name
-        auto cellName = cell->GetName();
+        auto cellName = GameText::In(cell->GetName());
         if (cellName && strlen(cellName) > 0) {
             return cellName;
         }
@@ -2316,7 +2113,7 @@ namespace IntelEngine {
         // 2. Fallback: BGSLocation name (works for modded interiors in exterior cells)
         auto* location = actor->GetCurrentLocation();
         if (location) {
-            auto locName = location->GetFullName();
+            auto locName = GameText::In(location->GetFullName());
             if (locName && strlen(locName) > 0) {
                 return locName;
             }
@@ -2336,7 +2133,7 @@ namespace IntelEngine {
 
         if (searchTerm.empty()) return "";
 
-        std::string lowerSearch = StringUtils::ToLowerStd(searchTerm);
+        std::string lowerSearch = StringUtils::ToLowerStd(GameText::In(searchTerm));
 
         // Find closest match across both cells and locations
         auto cellFuzzy = StringUtils::FuzzyFind(lowerSearch, m_allCellNames, 5);
@@ -2359,7 +2156,7 @@ namespace IntelEngine {
         nlohmann::json stats;
         stats["cellCount"] = m_allCellNames.size();
         stats["locationCount"] = m_allLocationNames.size();
-        stats["semanticTermCount"] = m_semanticTerms.size();
+        stats["semanticTermCount"] = PlaceWords::English().place.size();
         stats["npcHomesIndexed"] = m_npcHomeIndex.size();
         stats["indexBuilt"] = m_indexBuilt;
 
@@ -2466,7 +2263,7 @@ namespace IntelEngine {
         auto it = m_npcHomeIndex.find(actorBase->GetFormID());
         if (it == m_npcHomeIndex.end()) {
             logger::debug("SetHomeDoorAccess: No home indexed for '{}'",
-                         actorBase->GetFullName() ? actorBase->GetFullName() : "unknown");
+                         GameText::In(actorBase->GetFullName()) ? GameText::In(actorBase->GetFullName()) : "unknown");
             return nullptr;
         }
 
@@ -2485,7 +2282,7 @@ namespace IntelEngine {
             return nullptr;
         }
 
-        auto cellName = homeCell->GetName();
+        auto cellName = GameText::In(homeCell->GetName());
         auto* interiorDoor = FindExteriorDoorInCell(homeCell);
 
         if (!interiorDoor) {

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "GameText.h"
 #include "NameForms.h"
 #include "Utf8Fold.h"
 
@@ -40,7 +41,7 @@ inline std::string NormalizeStoryCandidateName(std::string_view name) {
     }
     // Lower case for every script: the pools' keys are folded this way (NPCIndex), and a Cyrillic name lowered byte
     // by byte kept its capital and matched nobody.
-    return FoldUtf8(result);
+    return FoldUtf8(GameText::In(result));
 }
 
 struct StoryCandidateRejection {
@@ -59,7 +60,7 @@ inline std::uint32_t ResolveStoryCandidateFormID(std::string_view name,
         if (rejection) rejection->branch = "empty-pools";
         return 0;
     }
-    const std::string lower = FoldUtf8(std::string(name));
+    const std::string lower = FoldUtf8(GameText::In(std::string(name)));
     for (const bool exact : {true, false}) {
         const auto normalized = exact ? std::string{} : NormalizeStoryCandidateName(name);
         if (rejection) rejection->exact = exact;

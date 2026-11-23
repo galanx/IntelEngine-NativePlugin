@@ -6,6 +6,7 @@
  */
 
 #include "SlotTracker.h"
+#include "GameText.h"
 #include "SkyrimNetAPI.h"
 #include "StringUtils.h"
 #include <chrono>
@@ -62,7 +63,7 @@ namespace IntelEngine {
         }
 
         logger::debug("SlotTracker: Updated slot {} -> agent={}, state={}, type={}, target={}",
-                     slot, agent ? agent->GetDisplayFullName() : "null", state, taskType, targetName);
+                     slot, agent ? GameText::In(agent->GetDisplayFullName()) : "null", state, taskType, targetName);
     }
 
     void SlotTracker::ClearSlot(int slot) {
@@ -116,7 +117,7 @@ namespace IntelEngine {
         // Also store in a separate map for post-clear lookups
         m_cooldowns[actor->GetFormID()] = expiry;
 
-        logger::debug("SlotTracker: Cooldown set for {} -> {}s", actor->GetDisplayFullName(), durationSeconds);
+        logger::debug("SlotTracker: Cooldown set for {} -> {}s", GameText::In(actor->GetDisplayFullName()), durationSeconds);
     }
 
     bool SlotTracker::HasActiveTask(RE::Actor* actor) const {
@@ -207,7 +208,7 @@ namespace IntelEngine {
             if (s.startTime >= 0.0f) slot["startTime"] = s.startTime;
             slot["reason"] = s.reason;
             slot["agentName"] = (s.agent && s.state != 0)
-                ? s.agent->GetDisplayFullName() : "";
+                ? GameText::In(s.agent->GetDisplayFullName()) : "";
             slot["agentFormId"] = (s.agent && s.state != 0)
                 ? static_cast<int>(s.agent->GetFormID()) : 0;
 
@@ -400,7 +401,7 @@ namespace IntelEngine {
             recovered++;
 
             logger::info("SlotTracker::Load: Recovered slot {} -> {} ({}), state={}, target={}",
-                        i, actor->GetDisplayFullName(), r.taskType, r.state, r.targetName);
+                        i, GameText::In(actor->GetDisplayFullName()), r.taskType, r.state, r.targetName);
         }
 
         m_hasCoSaveData.store(true, std::memory_order_release);

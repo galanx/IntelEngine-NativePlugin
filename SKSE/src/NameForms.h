@@ -14,7 +14,12 @@
 // are no part of the name (an article, a preposition) are let go. Nothing here knows a single word of any language;
 // a language pack may name further words to let go (LanguagePack.h). Pure logic, checked by NameFormsCheck.
 //
-// Everything takes text already folded to lower case (StringUtils::ToLowerStd / FoldUtf8).
+// Letters are compared as their plain letters (LetterFold.h): lower case, without marks, a sharp s as two s, either
+// apostrophe as one. So "Weisslauf" written with a sharp s by the game and with two s by the model is one name, and
+// so are a name with its accents and without. Callers still hand in text folded to lower case (StringUtils::
+// ToLowerStd / FoldUtf8), which covers the scripts the plain letters do not.
+
+#include "LetterFold.h"
 
 #include <algorithm>
 #include <cstdint>
@@ -97,21 +102,29 @@ namespace IntelEngine::NameForms {
         std::uint32_t begun = 0;
         bool in = false;
         char32_t c = 0;
+        char32_t plain[2];
         for (std::size_t i = 0; i < folded.size();) {
             i += Decode(folded, i, c);
-            if (Separator(c)) {
-                if (in) w.at.push_back({begun, static_cast<std::uint32_t>(w.text.size()) - begun});
-                in = false;
-                continue;
+            const int letters = LetterFold::Fold(c, plain);   // none for a mark standing by itself
+            for (int k = 0; k < letters; ++k) {
+                if (Separator(plain[k])) {
+                    if (in) w.at.push_back({begun, static_cast<std::uint32_t>(w.text.size()) - begun});
+                    in = false;
+                    continue;
+                }
+                if (!in) {
+                    begun = static_cast<std::uint32_t>(w.text.size());
+                    in = true;
+                }
+                w.text.push_back(plain[k]);
             }
-            if (!in) {
-                begun = static_cast<std::uint32_t>(w.text.size());
-                in = true;
-            }
-            w.text.push_back(c);
         }
         if (in) w.at.push_back({begun, static_cast<std::uint32_t>(w.text.size()) - begun});
     }
+
+    // A name as the key of a table: its plain letters as UTF-8 (lower case, no marks), so that two spellings of one
+    // name are one key. For names that are looked up exactly; the forms a language puts a name in are Stands' business.
+    inline std::string Key(std::string_view name) { return LetterFold::Plain(name); }
     inline Words Read(std::string_view folded) {
         Words w;
         ReadInto(w, folded);

@@ -6,6 +6,7 @@
  */
 
 #include "BattleManager.h"
+#include "GameText.h"
 #include "LanguageBridge.h"
 #include "SoldierTemplates.h"
 #include "Papyrus.h"
@@ -68,7 +69,7 @@ namespace IntelEngine {
             int depth = 0;
             for (auto* at = location; at && depth < 12; at = at->parentLoc, ++depth) {
                 if (!at->HasKeywordString("LocTypeHold")) continue;
-                if (const char* name = at->GetFullName(); name && name[0]) return name;
+                if (const char* name = GameText::In(at->GetFullName()); name && name[0]) return name;
             }
             return {};
         }
@@ -665,7 +666,7 @@ namespace IntelEngine {
         for (const auto& [faction, extra] : over) {
             faction->ModCrimeGold(-static_cast<std::int32_t>(std::lround(extra)), true);
             logger::info("Battle: {:.0f} gold of bounty with {} for what happened in the battle is struck out", extra,
-                         faction->GetFullName() && *faction->GetFullName() ? faction->GetFullName() : "a hold");
+                         GameText::In(faction->GetFullName()) && *GameText::In(faction->GetFullName()) ? GameText::In(faction->GetFullName()) : "a hold");
         }
         // The guards who came for it stand down (nobody of the battle: its soldiers have their own reasons).
         player->StopAlarmOnActor();
@@ -680,7 +681,7 @@ namespace IntelEngine {
                 actor->SetBeenAttacked(false);
                 actor->GetActorRuntimeData().boolFlags.reset(RE::Actor::BOOL_FLAGS::kAngryWithPlayer);
                 actor->StopCombat();
-                logger::info("Battle: {} ({:08X}) stands down: a battle is no crime", actor->GetDisplayFullName(), actor->GetFormID());
+                logger::info("Battle: {} ({:08X}) stands down: a battle is no crime", GameText::In(actor->GetDisplayFullName()), actor->GetFormID());
             }
         }
     }
@@ -717,7 +718,7 @@ namespace IntelEngine {
             soldier->SetBeenAttacked(false);
             soldier->StopCombat();
             logger::info("Battle: {} ({:08X}) and {} ({:08X}) let each other be: the hold's guards are not part of a battle",
-                         guard->GetDisplayFullName(), guard->GetFormID(), soldier->GetDisplayFullName(), soldier->GetFormID());
+                         GameText::In(guard->GetDisplayFullName()), guard->GetFormID(), GameText::In(soldier->GetDisplayFullName()), soldier->GetFormID());
         }
     }
 
@@ -745,7 +746,7 @@ namespace IntelEngine {
             actor->SetBeenAttacked(false);
             actor->GetActorRuntimeData().boolFlags.reset(RE::Actor::BOOL_FLAGS::kAngryWithPlayer);
             actor->StopCombat();
-            logger::info("Battle: {} ({:08X}) of the player's own side forgets a stray blow", actor->GetDisplayFullName(), actor->GetFormID());
+            logger::info("Battle: {} ({:08X}) of the player's own side forgets a stray blow", GameText::In(actor->GetDisplayFullName()), actor->GetFormID());
         }
     }
 
@@ -1323,7 +1324,7 @@ namespace IntelEngine {
 
         // --- What is told of it ---
         auto* player = RE::PlayerCharacter::GetSingleton();
-        std::string playerName = player ? player->GetDisplayFullName() : "the Dragonborn";
+        std::string playerName = player ? GameText::In(player->GetDisplayFullName()) : "the Dragonborn";
         std::string playerDesc = "someone matching the description of " + playerName;
         // Word of it starts where it was fought. (It started where the first faction sits: a battle at Whiterun was
         // first talked of in Solitude.)
@@ -2712,7 +2713,7 @@ namespace IntelEngine {
         }
         auto* fp = FactionPolitics::GetSingleton();
         auto* player = RE::PlayerCharacter::GetSingleton();
-        const std::string name = player ? player->GetDisplayFullName() : "the traveller";
+        const std::string name = player ? GameText::In(player->GetDisplayFullName()) : "the traveller";
         std::string line = leads ? "Right now you lead the soldiers of " : "Right now you are a soldier of ";
         line += The(fp->GetFactionDisplayName(own));
         line += mustering ? ", drawn up in line of battle against " : ", in the middle of a battle against ";
@@ -2751,6 +2752,10 @@ namespace IntelEngine {
             }
             return true;
         };
+        // ... and the same place by the game's own record, which is how it is found in a game in another language
+        // (the entry is English: "Whiterun" is "Weisslauf" there; LocationResolver also knows the English names).
+        const auto* homeLocation = home.empty() ? nullptr : LocationResolver::GetSingleton()->ExactLocation(home);
+        const RE::FormID homeId = homeLocation ? homeLocation->GetFormID() : 0;
         std::vector<Battlefield::Town> towns;
         for (const auto& mark : LivingWorldBridge::GetSingleton()->Towns()) {
             const auto* marker = RE::TESForm::LookupByID<RE::TESObjectREFR>(mark.marker);
@@ -2761,7 +2766,8 @@ namespace IntelEngine {
             if (!home.empty()) {
                 const auto* location = RE::TESForm::LookupByID<RE::BGSLocation>(mark.location);
                 const auto* hold = RE::TESForm::LookupByID<RE::BGSLocation>(mark.hold);
-                town.home = same(location ? location->GetFullName() : nullptr, home) || same(hold ? hold->GetFullName() : nullptr, home);
+                town.home = (homeId && (mark.location == homeId || mark.hold == homeId)) ||
+                            same(location ? GameText::In(location->GetFullName()) : nullptr, home) || same(hold ? GameText::In(hold->GetFullName()) : nullptr, home);
             }
             towns.push_back(town);
         }
@@ -2771,7 +2777,7 @@ namespace IntelEngine {
             const auto& town = towns[static_cast<std::size_t>(pick)];
             const auto* location = to->GetCurrentLocation();
             logger::info("Battle: {} {} toward {} ({:.0f} units off{}; {} towns known)", factionId, beaten ? "run" : "march off",
-                         location && location->GetFullName() ? location->GetFullName() : "a town", Battlefield::Dist(field, town.at),
+                         location && GameText::In(location->GetFullName()) ? GameText::In(location->GetFullName()) : "a town", Battlefield::Dist(field, town.at),
                          town.home ? ", their home" : "", towns.size());
         } else {
             logger::info("Battle: no town for {} to march off to ({} known): a point far off instead", factionId, towns.size());
@@ -3325,7 +3331,7 @@ namespace IntelEngine {
             if (isDead && above > 45.f) ++high;
             if (odd) {
                 logger::info("Battle: [bodies] {} ({:08X}) {} at ({:.0f}, {:.0f}): the middle of the body {:.0f} units above the land{}{}{}{}",
-                             actor->GetDisplayFullName(), id, isDead ? "dead" : "alive", at.x, at.y, above,
+                             GameText::In(actor->GetDisplayFullName()), id, isDead ? "dead" : "alive", at.x, at.y, above,
                              bleeding ? ", bleeding out" : "", knock != 0 ? ", knocked down" : "", killing ? ", in a killing blow" : "",
                              actor->IsInCombat() ? ", fighting" : "");
             }
@@ -3361,7 +3367,7 @@ namespace IntelEngine {
             // The same for anybody who is down and not on their feet.
             if (InAKillingBlow(actor)) {
                 logger::info("Battle: {} ({:08X}) is in the middle of a killing blow or down: their fight is not called off now",
-                             actor->GetDisplayFullName(), actor->GetFormID());
+                             GameText::In(actor->GetDisplayFullName()), actor->GetFormID());
                 continue;
             }
             const bool fighting = actor->IsInCombat();
@@ -3373,7 +3379,7 @@ namespace IntelEngine {
                 const auto target = actor->GetActorRuntimeData().currentCombatTarget.get();
                 if (target && std::find(ids.begin(), ids.end(), target->GetFormID()) == ids.end()) {
                     logger::info("Battle: {} ({:08X}) is still fighting {} ({:08X}), who is not of the battle: left to it",
-                                 actor->GetDisplayFullName(), actor->GetFormID(), target->GetDisplayFullName(), target->GetFormID());
+                                 GameText::In(actor->GetDisplayFullName()), actor->GetFormID(), GameText::In(target->GetDisplayFullName()), target->GetFormID());
                     continue;
                 }
             }
@@ -3414,6 +3420,7 @@ namespace IntelEngine {
             std::lock_guard<std::mutex> cLock(cleanupMutex_);
             formIds = cleanupFormIds_;
         }
+        const bool fromList = !formIds.empty();
         if (formIds.empty()) {
             std::lock_guard<std::mutex> lock(mutex_);
             if (activeBattle_) {
@@ -3423,50 +3430,34 @@ namespace IntelEngine {
             }
         }
 
+        // Only those whose bodies the game no longer holds are switched off: never a loaded actor, whatever forceAll or
+        // the distance say. Switching off a loaded soldier (behind the player, or "all of them") is what crashed the
+        // game in a physics mod (FSMP) after a battle; the battle script sends them off or leaves them where they fell
+        // instead (Battle.SweepSoldiers). Nothing calls this any more; the native stays bound for old scripts.
+        (void)playerX;
+        (void)playerY;
+        (void)playerZ;
+        (void)playerAngleZ;
         int remaining = 0;
-        float sinA = std::sin(playerAngleZ * 3.14159265f / 180.f);
-        float cosA = std::cos(playerAngleZ * 3.14159265f / 180.f);
-
+        std::vector<RE::FormID> kept;
         for (auto formId : formIds) {
             auto* actor = RE::TESForm::LookupByID<RE::Actor>(formId);
             if (!actor) continue;  // already deleted or invalid
-
-            if (forceAll) {
-                actor->Disable();
+            if (actor->Is3DLoaded()) {
+                kept.push_back(formId);
+                remaining++;
                 continue;
             }
-
-            if (!actor->Is3DLoaded()) {
-                // Unloaded (player changed cells) — safe to clean
-                actor->Disable();
-                continue;
-            }
-
-            float ax = actor->GetPositionX();
-            float ay = actor->GetPositionY();
-            float dx = ax - playerX;
-            float dy = ay - playerY;
-            float dist = std::sqrt(dx * dx + dy * dy);
-
-            float threshold = actor->IsDead() ? 2000.f : 2500.f;
-            if (dist > threshold) {
-                // Check if actor is behind player (heading angle > 90 degrees)
-                float dotForward = dx * sinA + dy * cosA;
-                if (dotForward < 0.f) {
-                    actor->Disable();
-                    continue;
-                }
-            }
-
-            remaining++;
+            actor->Disable();   // unloaded (the player changed cells): nobody holds their body
         }
 
-        if (remaining == 0 || forceAll) {
+        if (fromList || remaining == 0) {
             std::lock_guard<std::mutex> cLock(cleanupMutex_);
-            cleanupFormIds_.clear();
+            cleanupFormIds_ = std::move(kept);   // what is left on the list: the loaded ones, for a later pass
         }
 
-        logger::info("[BattleManager] CleanupBattleSoldiers: {} remaining, forceAll={}", remaining, forceAll);
+        logger::info("[BattleManager] CleanupBattleSoldiers: {} remaining (loaded: left alone), forceAll={} (not honoured for loaded actors)",
+                     remaining, forceAll);
         return remaining;
     }
 
@@ -3492,15 +3483,25 @@ namespace IntelEngine {
             }
         }
 
+        // Unloaded actors only (see CleanupBattleSoldiers): a loaded one is kept on the list for a later pass, when the
+        // game has let go of their body. Nothing calls this any more; the native stays bound for old scripts.
         int cleaned = 0;
+        std::vector<RE::FormID> kept;
         for (auto formId : formIds) {
             auto* actor = RE::TESForm::LookupByID<RE::Actor>(formId);
-            if (actor) {
-                actor->Disable();
-                cleaned++;
+            if (!actor) continue;
+            if (actor->Is3DLoaded()) {
+                kept.push_back(formId);
+                continue;
             }
+            actor->Disable();
+            cleaned++;
         }
-        logger::info("[BattleManager] ForceCleanupAllSoldiers: disabled {} actors", cleaned);
+        if (!kept.empty()) {
+            std::lock_guard<std::mutex> cLock(cleanupMutex_);
+            cleanupFormIds_.insert(cleanupFormIds_.end(), kept.begin(), kept.end());
+        }
+        logger::info("[BattleManager] ForceCleanupAllSoldiers: disabled {} unloaded actor(s), left {} loaded one(s) alone", cleaned, kept.size());
     }
 
     // =========================================================================

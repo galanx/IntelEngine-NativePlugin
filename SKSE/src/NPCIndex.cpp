@@ -5,6 +5,7 @@
  */
 
 #include "NPCIndex.h"
+#include "GameText.h"
 #include "LanguageBridge.h"
 #include "NameForms.h"
 #include "ArcBridge.h"
@@ -274,7 +275,7 @@ namespace IntelEngine {
     static bool IsBlockedByName(RE::Actor* actor) {
         std::lock_guard<std::mutex> lock(s_npcNameMutex);
         if (s_blockedNPCNames.empty()) return false;
-        auto displayName = actor->GetDisplayFullName();
+        auto displayName = GameText::In(actor->GetDisplayFullName());
         if (!displayName || !displayName[0]) return false;
         std::string nameLower = StringUtils::ToLowerStd(displayName);
         for (const auto& blocked : s_blockedNPCNames) {
@@ -297,7 +298,7 @@ namespace IntelEngine {
         RefreshNPCWhitelist();
         std::lock_guard<std::mutex> lock(s_npcWhitelistMutex);
         if (s_whitelistedNPCNames.empty()) return true;  // empty = everything allowed
-        auto displayName = actor->GetDisplayFullName();
+        auto displayName = GameText::In(actor->GetDisplayFullName());
         if (!displayName || !displayName[0]) return false;
         std::string nameLower = StringUtils::ToLowerStd(displayName);
         for (const auto& allowed : s_whitelistedNPCNames) {
@@ -438,7 +439,7 @@ namespace IntelEngine {
             if (!npcForm) continue;
 
             // Get the NPC's name
-            auto name = npcForm->GetFullName();
+            auto name = GameText::In(npcForm->GetFullName());
             if (!name || strlen(name) == 0) continue;
 
             // Skip generic NPCs (no unique name)
@@ -467,13 +468,13 @@ namespace IntelEngine {
 
                 auto* actor = ref->As<RE::Actor>();
                 if (!actor || actor->IsDeleted()) return RE::BSContainer::ForEachResult::kContinue;
-                const char* displayName = actor->GetDisplayFullName();
+                const char* displayName = GameText::In(actor->GetDisplayFullName());
                 if (displayName && *displayName) m_directorActorNames[actor->GetFormID()] = displayName;
 
                 auto* base = actor->GetActorBase();
                 if (!base || !base->IsUnique()) return RE::BSContainer::ForEachResult::kContinue;
 
-                auto baseName = base->GetFullName();
+                auto baseName = GameText::In(base->GetFullName());
                 if (!baseName || strlen(baseName) == 0) return RE::BSContainer::ForEachResult::kContinue;
 
                 std::string lowerName = StringUtils::ToLowerStd(baseName);
@@ -537,7 +538,7 @@ namespace IntelEngine {
     void NPCIndex::IndexLoadedNPC(RE::Actor* actor) {
         if (!actor) return;
 
-        auto name = actor->GetDisplayFullName();
+        auto name = GameText::In(actor->GetDisplayFullName());
         if (!name || strlen(name) == 0) return;
 
         std::string lowerName = StringUtils::ToLowerStd(name);
@@ -551,7 +552,7 @@ namespace IntelEngine {
 
         // Update current location
         if (auto* cell = actor->GetParentCell()) {
-            auto cellName = cell->GetName();
+            auto cellName = GameText::In(cell->GetName());
             if (cellName && strlen(cellName) > 0) {
                 m_npcCurrentLocations[lowerName] = cellName;
             }
@@ -596,7 +597,7 @@ namespace IntelEngine {
 
         if (searchTerm.empty()) return nullptr;
 
-        std::string lowerSearch = StringUtils::ToLowerStd(searchTerm);
+        std::string lowerSearch = StringUtils::ToLowerStd(GameText::In(searchTerm));
         std::string matchedName;
         const auto saidWords = NameForms::Read(lowerSearch);
         const auto freeWords = LanguageBridge::GetSingleton()->Free();
@@ -704,7 +705,7 @@ namespace IntelEngine {
         ProcessUtils::ForEachLoadedActor([&](RE::Actor* actor) {
             // The dead and the disabled are nobody to send for.
             if (!actor || actor->IsDeleted() || actor->IsDead() || actor->IsDisabled()) return false;
-            auto displayName = actor->GetDisplayFullName();
+            auto displayName = GameText::In(actor->GetDisplayFullName());
             if (!displayName || strlen(displayName) == 0) return false;
 
             std::string lowerName = StringUtils::ToLowerStd(displayName);
@@ -741,7 +742,7 @@ namespace IntelEngine {
 
         if (bestLiveMatch && bestLiveDist <= maxDist) {
             logger::info("FindNPCByName('{}') -> Live scan found '{}' (distance={})",
-                        searchTerm, bestLiveMatch->GetDisplayFullName(), bestLiveDist);
+                        searchTerm, GameText::In(bestLiveMatch->GetDisplayFullName()), bestLiveDist);
             return bestLiveMatch;
         }
 
@@ -758,7 +759,7 @@ namespace IntelEngine {
         std::shared_lock lock(m_mutex);
         if (searchTerm.empty()) return nullptr;
 
-        std::string lowerSearch = StringUtils::ToLowerStd(searchTerm);
+        std::string lowerSearch = StringUtils::ToLowerStd(GameText::In(searchTerm));
         int maxDist = Settings::GetSingleton()->fuzzyMatchThreshold;
         auto nearPos = nearActor->GetPosition();
         const auto saidWords = NameForms::Read(lowerSearch);
@@ -777,7 +778,7 @@ namespace IntelEngine {
         ProcessUtils::ForEachLoadedActor([&](RE::Actor* actor) {
             if (!actor || actor->IsDeleted() || actor->IsDead() || actor->IsDisabled()) return false;
             if (!allowSelf && actor == nearActor) return false;  // skip self unless allowed
-            auto displayName = actor->GetDisplayFullName();
+            auto displayName = GameText::In(actor->GetDisplayFullName());
             if (!displayName || strlen(displayName) == 0) return false;
 
             std::string lowerName = StringUtils::ToLowerStd(displayName);
@@ -828,7 +829,7 @@ namespace IntelEngine {
         }
 
         logger::debug("FindByNameNear('{}') -> '{}' (score={}, dist={:.0f}, {} candidates)",
-                     searchTerm, best->actor->GetDisplayFullName(), best->nameScore,
+                     searchTerm, GameText::In(best->actor->GetDisplayFullName()), best->nameScore,
                      std::sqrt(best->distSq), candidates.size());
         return best->actor;
     }
@@ -866,7 +867,7 @@ namespace IntelEngine {
 
         if (searchTerm.empty()) return 0;
 
-        std::string lowerSearch = StringUtils::ToLowerStd(searchTerm);
+        std::string lowerSearch = StringUtils::ToLowerStd(GameText::In(searchTerm));
 
         // 1. Exact match
         auto exactIt = m_npcFormIds.find(lowerSearch);
@@ -898,7 +899,7 @@ namespace IntelEngine {
 
         if (searchTerm.empty()) return "";
 
-        std::string lowerSearch = StringUtils::ToLowerStd(searchTerm);
+        std::string lowerSearch = StringUtils::ToLowerStd(GameText::In(searchTerm));
 
         // Exact match
         auto exactIt = m_npcCurrentLocations.find(lowerSearch);
@@ -970,7 +971,7 @@ namespace IntelEngine {
         // Merge current references: actors can spawn or change display names after the load-time build.
         ProcessUtils::ForEachLoadedActor([this](RE::Actor* actor) {
             if (!actor) return false;
-            const char* displayName = actor->GetDisplayFullName();
+            const char* displayName = GameText::In(actor->GetDisplayFullName());
             if (displayName && *displayName) m_directorActorNames[actor->GetFormID()] = displayName;
             else m_directorActorNames.erase(actor->GetFormID());
             return false;
@@ -1149,7 +1150,7 @@ namespace IntelEngine {
             return "";
         }
 
-        std::string lowerSearch = StringUtils::ToLowerStd(searchTerm);
+        std::string lowerSearch = StringUtils::ToLowerStd(GameText::In(searchTerm));
 
         // Find closest match (distance <= 5 for suggestions)
         auto fuzzy = StringUtils::FuzzyFind(lowerSearch, m_allNames, 5);
@@ -1159,7 +1160,7 @@ namespace IntelEngine {
             auto it = m_npcIndex.find(fuzzy.match);
             if (it != m_npcIndex.end()) {
                 if (auto* valid = ValidateCachedActor(it->second)) {
-                    return valid->GetDisplayFullName();
+                    return GameText::In(valid->GetDisplayFullName());
                 }
             }
         }
@@ -1194,7 +1195,7 @@ namespace IntelEngine {
     static bool PassesCommonEligibility(RE::Actor* actor, RE::Actor* player, SlotTracker* tracker, bool verbose) {
         if (!actor || actor == player) return false;
 
-        auto displayName = actor->GetDisplayFullName();
+        auto displayName = GameText::In(actor->GetDisplayFullName());
         if (!displayName || !displayName[0] || std::string_view(displayName) == "Unknown") {
             if (verbose) logger::debug("[StoryDM] Rejected 0x{:08X}: no display name", actor->GetFormID());
             return false;
@@ -1359,18 +1360,18 @@ namespace IntelEngine {
 
         // Loaded: use current cell/location
         if (auto* cell = actor->GetParentCell()) {
-            auto cellName = cell->GetName();
+            auto cellName = GameText::In(cell->GetName());
             if (cellName && cellName[0]) return cellName;
 
             if (auto* loc = actor->GetCurrentLocation()) {
-                auto locName = loc->GetFullName();
+                auto locName = GameText::In(loc->GetFullName());
                 if (locName && locName[0]) return locName;
             }
         }
 
         // Unloaded: fall back to editor location
         if (auto* editorLoc = actor->GetEditorLocation()) {
-            auto locName = editorLoc->GetFullName();
+            auto locName = GameText::In(editorLoc->GetFullName());
             if (locName && locName[0]) return locName;
         }
 
@@ -1409,7 +1410,7 @@ namespace IntelEngine {
         int depth = 0;
         for (auto* at = location; at && depth < 12; at = at->parentLoc, ++depth) {
             if (!at->HasKeywordString("LocTypeHold")) continue;
-            const char* name = at->GetFullName();
+            const char* name = GameText::In(at->GetFullName());
             if (!name || !name[0]) return;
             const auto generation = SlotTracker::GetSingleton()->loadGeneration.load(std::memory_order_relaxed);
             std::scoped_lock lock(g_playerHoldMutex);
@@ -1430,7 +1431,7 @@ namespace IntelEngine {
             int depth = 0;
             for (auto* at = place; at && depth < 12; at = at->parentLoc, ++depth) {
                 if (!at->HasKeywordString("LocTypeHold")) continue;
-                if (auto holdName = at->GetFullName(); holdName && holdName[0]) hold = holdName;
+                if (auto holdName = GameText::In(at->GetFullName()); holdName && holdName[0]) hold = holdName;
                 break;
             }
             const auto generation = SlotTracker::GetSingleton()->loadGeneration.load(std::memory_order_relaxed);
@@ -1458,7 +1459,7 @@ namespace IntelEngine {
             int depth = 0;
             for (auto* at = loc; at && depth < 12; at = at->parentLoc, ++depth) {
                 if (!at->HasKeywordString("LocTypeHold")) continue;
-                if (auto holdName = at->GetFullName(); holdName && holdName[0]) return holdName;
+                if (auto holdName = GameText::In(at->GetFullName()); holdName && holdName[0]) return holdName;
             }
         }
         // Walk up but stop at the hold level — the topmost is "Tamriel" (worldspace), one too far.
@@ -1466,7 +1467,7 @@ namespace IntelEngine {
         while (loc->parentLoc && loc->parentLoc->parentLoc) {
             loc = loc->parentLoc;
         }
-        auto name = loc->GetFullName();
+        auto name = GameText::In(loc->GetFullName());
         return (name && name[0]) ? name : "";
     }
 
@@ -1483,7 +1484,7 @@ namespace IntelEngine {
         while (current) {
             if ((s_cityKW && current->HasKeyword(s_cityKW)) ||
                 (s_townKW && current->HasKeyword(s_townKW))) {
-                auto name = current->GetFullName();
+                auto name = GameText::In(current->GetFullName());
                 return (name && name[0]) ? name : "";
             }
             current = current->parentLoc;
@@ -1491,7 +1492,7 @@ namespace IntelEngine {
 
         // No city/town keyword found — NPC is in wilderness/unnamed area.
         // Return the immediate location name as fallback.
-        auto name = loc->GetFullName();
+        auto name = GameText::In(loc->GetFullName());
         return (name && name[0]) ? name : "";
     }
 
@@ -1539,7 +1540,7 @@ namespace IntelEngine {
             if (!IsEligibleStoryCandidate(actor, player, playerCell, tracker)) continue;
 
             logger::info("GetMemoryDrivenCandidate: '{}' (score: {:.1f})",
-                        actor->GetDisplayFullName(), score);
+                        GameText::In(actor->GetDisplayFullName()), score);
             return actor;
         }
 
@@ -1569,7 +1570,7 @@ namespace IntelEngine {
             if (!IsEligibleStoryCandidate(actor, player, playerCell, tracker)) continue;
 
             logger::info("GetRelatedCandidate: '{}' related to '{}' (score: {:.1f})",
-                        actor->GetDisplayFullName(), relatedTo->GetDisplayFullName(), score);
+                        GameText::In(actor->GetDisplayFullName()), GameText::In(relatedTo->GetDisplayFullName()), score);
             return actor;
         }
 
@@ -1583,7 +1584,7 @@ namespace IntelEngine {
             if (!IsEligibleStoryCandidate(actor, player, playerCell, tracker)) continue;
 
             logger::info("GetRelatedCandidate: '{}' (fallback, score: {:.1f})",
-                        actor->GetDisplayFullName(), score);
+                        GameText::In(actor->GetDisplayFullName()), score);
             return actor;
         }
 
@@ -1634,7 +1635,7 @@ namespace IntelEngine {
                 for (auto* actor : householdActors) {
                     if (isValidMessenger(actor)) {
                         logger::info("FindMessengerForSender: household '{}' for '{}'",
-                            actor->GetDisplayFullName(), sender->GetDisplayFullName());
+                            GameText::In(actor->GetDisplayFullName()), GameText::In(sender->GetDisplayFullName()));
                         return actor;
                     }
                 }
@@ -1650,7 +1651,7 @@ namespace IntelEngine {
                 auto* actor = ResolveFromMemoryDB(formId, name);
                 if (isValidMessenger(actor) && !senderHold.empty() && GetNPCHoldName(actor) == senderHold) {
                     logger::info("FindMessengerForSender: associate '{}' for '{}' (score: {:.1f})",
-                        actor->GetDisplayFullName(), sender->GetDisplayFullName(), score);
+                        GameText::In(actor->GetDisplayFullName()), GameText::In(sender->GetDisplayFullName()), score);
                     return actor;
                 }
             }
@@ -1684,7 +1685,7 @@ namespace IntelEngine {
             std::uniform_int_distribution<size_t> dist(0, guards.size() - 1);
             auto* guard = guards[dist(rng)];
             logger::info("FindMessengerForSender: guard '{}' from {} for '{}'",
-                guard->GetDisplayFullName(), senderHold, sender->GetDisplayFullName());
+                GameText::In(guard->GetDisplayFullName()), senderHold, GameText::In(sender->GetDisplayFullName()));
             return guard;
         }
 
@@ -1694,7 +1695,7 @@ namespace IntelEngine {
             std::uniform_int_distribution<size_t> dist(0, sameHoldCivilians.size() - 1);
             auto* civ = sameHoldCivilians[dist(rng)];
             logger::info("FindMessengerForSender: civilian '{}' for '{}'",
-                civ->GetDisplayFullName(), sender->GetDisplayFullName());
+                GameText::In(civ->GetDisplayFullName()), GameText::In(sender->GetDisplayFullName()));
             return civ;
         }
 
@@ -1706,12 +1707,12 @@ namespace IntelEngine {
             std::uniform_int_distribution<size_t> dist(0, anyHoldMessengers.size() - 1);
             auto* msg = anyHoldMessengers[dist(rng)];
             logger::info("FindMessengerForSender: any-hold fallback '{}' ({}) for '{}'",
-                msg->GetDisplayFullName(), GetNPCHoldName(msg), sender->GetDisplayFullName());
+                GameText::In(msg->GetDisplayFullName()), GetNPCHoldName(msg), GameText::In(sender->GetDisplayFullName()));
             return msg;
         }
 
         logger::info("FindMessengerForSender: no messenger found for '{}'",
-            sender->GetDisplayFullName());
+            GameText::In(sender->GetDisplayFullName()));
         return nullptr;
     }
 
@@ -1725,11 +1726,21 @@ namespace IntelEngine {
         // Only known civilian classes get mapped to CIVILIAN — everything else
         // is returned uppercased so the DM LLM can interpret it contextually.
         if (auto* cls = base->npcClass) {
-            auto raw = cls->GetFullName();
+            // The game's own civilian classes by their records: their names are the game's language's ("Buerger",
+            // "Krestyanin"), the records are the same in every game. Read from Skyrim.esm 1.5.97 with the English
+            // string table: every class named Citizen, Farmer, Beggar, Child, Lumberjack, Miner, Food Vendor,
+            // Apothecary or Blacksmith (the trainers so named among them). The DLCs add none.
+            static constexpr RE::FormID kCivilianClasses[] = {
+                0x0001326B, 0x0001326C, 0x0001327B, 0x00013279, 0x0001326E, 0x0001326D, 0x00013256, 0x00013258, 0x00013257,
+                0x000B8340, 0x000AEDD2, 0x00042DC1, 0x000E7F45, 0x000E3A6E, 0x000E3A61, 0x000E3A60, 0x000E3A5F, 0x000E3A5D};
+            if (std::find(std::begin(kCivilianClasses), std::end(kCivilianClasses), cls->GetFormID()) != std::end(kCivilianClasses)) {
+                return "CIVILIAN";
+            }
+            auto raw = GameText::In(cls->GetFullName());
             if (raw && raw[0]) {
                 std::string classLower = StringUtils::ToLowerStd(raw);
 
-                // Known civilian classes → CIVILIAN
+                // Known civilian classes → CIVILIAN (a mod's classes, by their English names)
                 if (classLower == "citizen" || classLower == "farmer" ||
                     classLower == "beggar" || classLower == "child" ||
                     classLower == "bard's college" || classLower == "food vendor" ||
@@ -1790,7 +1801,7 @@ namespace IntelEngine {
             return true;
 
         // Name-based fallback for modded games that strip vanilla factions
-        auto name = actor->GetDisplayFullName();
+        auto name = GameText::In(actor->GetDisplayFullName());
         if (name && std::string_view(name).substr(0, 5) == "Jarl ") {
             logger::debug("IsJarl: '{}' matched by name prefix (faction check failed)", name);
             return true;
@@ -1914,7 +1925,7 @@ namespace IntelEngine {
         // message + quest only — they NEVER travel personally.
         // For quest, the DM prompt enforces courier mode (NPC as sender, not courier).
         if (IsHighStatus(actor)) {
-            auto name = actor->GetDisplayFullName();
+            auto name = GameText::In(actor->GetDisplayFullName());
             logger::debug("GetEligibleStoryTypes: '{}' is high-status -> message, quest only", name ? name : "?");
             return "message, quest";
         }
@@ -1981,7 +1992,7 @@ namespace IntelEngine {
         std::string result;
 
         if (auto* race = base->GetRace()) {
-            auto raceName = race->GetFullName();
+            auto raceName = GameText::In(race->GetFullName());
             if (raceName && raceName[0]) {
                 result = raceName;
             }
@@ -1993,7 +2004,7 @@ namespace IntelEngine {
             if (fr.faction->GetFormType() != RE::FormType::Faction) {
                 static bool warned = false;
                 if (!warned) {
-                    logger::warn("[NPCIndex] Skipping non-faction entry {:08X} (type {}) in faction list of {:08X} '{}'", fr.faction->GetFormID(), static_cast<uint32_t>(fr.faction->GetFormType()), base->GetFormID(), base->GetFullName());
+                    logger::warn("[NPCIndex] Skipping non-faction entry {:08X} (type {}) in faction list of {:08X} '{}'", fr.faction->GetFormID(), static_cast<uint32_t>(fr.faction->GetFormType()), base->GetFormID(), GameText::In(base->GetFullName()));
                     warned = true;
                 }
                 continue;
@@ -2020,7 +2031,7 @@ namespace IntelEngine {
             if (eid.find("Favor") != std::string::npos) continue;
             if (eid.find("defaultDisallow") != std::string::npos) continue;
 
-            auto dispName = fr.faction->GetFullName();
+            auto dispName = GameText::In(fr.faction->GetFullName());
             if (dispName && dispName[0]) {
                 factionNames.push_back(dispName);
             } else {
@@ -2121,7 +2132,7 @@ namespace IntelEngine {
         if (!playerCell) return false;
 
         snap.playerCellFormId = playerCell->GetFormID();
-        if (auto* nm = player->GetDisplayFullName()) snap.playerName = nm;
+        if (auto* nm = GameText::In(player->GetDisplayFullName())) snap.playerName = nm;
 
         auto* locResolver = LocationResolver::GetSingleton();
         snap.playerLocation = locResolver->GetActorLocationName(player).c_str();
@@ -2149,7 +2160,7 @@ namespace IntelEngine {
         // Exclude active followers — they're with the player, not independently socializing.
         if (actor->IsPlayerTeammate()) return false;
 
-        auto displayName = actor->GetDisplayFullName();
+        auto displayName = GameText::In(actor->GetDisplayFullName());
         if (!displayName || !displayName[0]) return false;
         std::string nameStr(displayName);
         if (IsGenericCreatureName(nameStr)) return false;
@@ -2429,7 +2440,7 @@ namespace IntelEngine {
         a.dbScore      = dbScore;
         a.fromMemoryDB = fromMemoryDB;
 
-        if (auto* nm = actor->GetDisplayFullName()) a.nameDisplay = nm;
+        if (auto* nm = GameText::In(actor->GetDisplayFullName())) a.nameDisplay = nm;
         a.nameLower    = StringUtils::ToLowerStd(a.nameDisplay);
 
         a.location     = NPCIndex::GetNPCLocationName(actor);
@@ -2553,7 +2564,7 @@ namespace IntelEngine {
         auto* cellAnalyzer = CellAnalyzer::GetSingleton();
 
         // Player snapshot
-        if (auto* nm = player->GetDisplayFullName()) snap.playerName = nm;
+        if (auto* nm = GameText::In(player->GetDisplayFullName())) snap.playerName = nm;
         snap.playerLocation = locResolver->GetActorLocationName(player).c_str();
         if (snap.playerLocation.empty()) snap.playerLocation = "Unknown";
         snap.playerHold = GetNPCHoldName(player);
@@ -2664,7 +2675,7 @@ namespace IntelEngine {
                 continue;
             }
             // Passes 2 and 3: someone elsewhere who may be part of a story.
-            if (recentPlayerNPCs.count(StringUtils::ToLowerStd(actor->GetDisplayFullName()))) continue;
+            if (recentPlayerNPCs.count(StringUtils::ToLowerStd(GameText::In(actor->GetDisplayFullName())))) continue;
             if (!IsEligibleStoryCandidate(actor, player, playerCell, tracker)) continue;
             StoryDMScan::Seen seen{handle, actor->GetFormID()};
             seen.sameHold = GetNPCHoldName(actor) == scan.snap.playerHold;
@@ -2696,7 +2707,7 @@ namespace IntelEngine {
                     scan.staged.push_back({s->actor, s->id, 0.f, false});
                     scan.stagedIds.insert(s->id);
                     randomsAdded++;
-                    logger::info("[StoryDM Pass2] ACCEPTED-loaded: '{}'", held->GetDisplayFullName());
+                    logger::info("[StoryDM Pass2] ACCEPTED-loaded: '{}'", GameText::In(held->GetDisplayFullName()));
                 }
             }
             logger::info("[StoryDM Pass2] added {} random-encounter slots", randomsAdded);
@@ -2723,7 +2734,7 @@ namespace IntelEngine {
                 scan.staged.push_back({s.actor, s.id, 1.f, false});
                 scan.stagedIds.insert(s.id);
                 locationMatesAdded++;
-                logger::info("[StoryDM Pass3] ACCEPTED-locmate: '{}' at '{}'", held->GetDisplayFullName(), GetNPCLocationName(held.get()));
+                logger::info("[StoryDM Pass3] ACCEPTED-locmate: '{}' at '{}'", GameText::In(held->GetDisplayFullName()), GetNPCLocationName(held.get()));
             }
             logger::info("[StoryDM Pass3] added {} location-mate slots (pool locations: {})",
                 locationMatesAdded, poolLocations.size());
@@ -2741,7 +2752,7 @@ namespace IntelEngine {
                 if (!held) continue;
                 scan.staged.push_back({s.actor, s.id, 0.f, false});
                 hereIds.insert(s.id);
-                logger::info("[StoryDM Pass4] ACCEPTED-here: '{}' (a public plea)", held->GetDisplayFullName());
+                logger::info("[StoryDM Pass4] ACCEPTED-here: '{}' (a public plea)", GameText::In(held->GetDisplayFullName()));
             }
         }
 
@@ -3421,7 +3432,7 @@ namespace IntelEngine {
         if (!npcNamesLower.empty()) {
             ProcessUtils::ForEachLoadedActor([&](RE::Actor* actor) -> bool {
                 if (!actor) return false;
-                auto* dispName = actor->GetDisplayFullName();
+                auto* dispName = GameText::In(actor->GetDisplayFullName());
                 if (!dispName) return false;
                 std::string nameLower = StringUtils::ToLowerStd(dispName);
                 if (npcNamesLower.count(nameLower)) {
@@ -3603,7 +3614,7 @@ namespace IntelEngine {
             auto* baseForm = RE::TESForm::LookupByID<RE::TESNPC>(baseFormId);
             if (!baseForm) continue;
 
-            auto name = baseForm->GetFullName();
+            auto name = GameText::In(baseForm->GetFullName());
             if (!name || name[0] == '\0') continue;
 
             // Skip dead or disabled household members — prevents DM from picking
@@ -3676,7 +3687,7 @@ namespace IntelEngine {
                 if (!first) json += ",";
                 first = false;
                 json += "{\"name\":\"";
-                auto name = actor->GetDisplayFullName();
+                auto name = GameText::In(actor->GetDisplayFullName());
                 std::string nameStr = name ? name : "Unknown";
                 json += MemoryDB::EscapeJsonString(nameStr);
                 json += "\",\"formId\":";

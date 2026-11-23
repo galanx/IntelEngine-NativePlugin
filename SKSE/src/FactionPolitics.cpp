@@ -7,6 +7,7 @@
  */
 
 #include "FactionPolitics.h"
+#include "GameText.h"
 #include "LivingWorldBridge.h"
 #include "FactionPairValidation.h"
 #include "VanillaWar.h"
@@ -496,7 +497,7 @@ war_allowed:
             auto* form = RE::TESForm::LookupByID(ruler->get<RE::FormID>());
             auto* ref = form ? form->As<RE::TESObjectREFR>() : nullptr;
             auto* base = ref ? ref->GetBaseObject() : form;
-            const char* name = ref && ref->IsPlayerRef() ? ref->GetDisplayFullName() : (base ? base->GetName() : nullptr);
+            const char* name = ref && ref->IsPlayerRef() ? GameText::In(ref->GetDisplayFullName()) : (base ? GameText::In(base->GetName()) : nullptr);
             if (!name || !*name) {
                 logger::debug("[diag:pe] ruler sync {}: form {:08X} unresolved (form={})", kRealms[i], ruler->get<RE::FormID>(), form != nullptr);
                 continue;
@@ -848,7 +849,7 @@ war_allowed:
             for (const auto& leader : fj["leaders"]) {
                 if (!leader.is_string()) continue;
                 auto* actor = npcIndex->GetActorFromFormId(npcIndex->FindFactionLeaderFormId(leader.get<std::string>()));
-                const char* name = actor ? actor->GetDisplayFullName() : nullptr;
+                const char* name = actor ? GameText::In(actor->GetDisplayFullName()) : nullptr;
                 if (name && *name && leader.get<std::string>() != name) shown.push_back(name);
             }
             if (!shown.empty()) fj["leaders_shown"] = std::move(shown);
@@ -975,7 +976,7 @@ war_allowed:
                 });
                 if (open.empty()) continue;
                 auto* quest = RE::TESForm::LookupByEditorID<RE::TESQuest>(open);
-                const char* name = quest ? quest->GetFullName() : nullptr;
+                const char* name = quest ? GameText::In(quest->GetFullName()) : nullptr;
                 bound[f.id] = name && *name ? name : open;
             }
             {
@@ -999,7 +1000,7 @@ war_allowed:
             if (keyword && data) for (auto* location : data->GetFormArray<RE::BGSLocation>()) {
                 if (!location) continue;
                 for (const auto& value : location->keywordData) if (value.keyword == keyword && (value.data == 1.f || value.data == 2.f)) {
-                    snap.vanillaSides.push_back({{"location_id", location->GetFormID()}, {"name", location->GetName()}, {"side_id", static_cast<int>(value.data)}});
+                    snap.vanillaSides.push_back({{"location_id", location->GetFormID()}, {"name", GameText::In(location->GetName())}, {"side_id", static_cast<int>(value.data)}});
                     break;
                 }
             }
@@ -1046,7 +1047,7 @@ war_allowed:
             }
             // Dead for good is remembered (see MarkFallen), and whoever is remembered as dead is dead here too.
             if (e.confirmedDead) {
-                MarkFallen(info.factionId, info.name, leader ? leader->GetDisplayFullName() : info.name);
+                MarkFallen(info.factionId, info.name, leader ? GameText::In(leader->GetDisplayFullName()) : info.name);
             } else if (IsFallen(info.factionId, info.name)) {
                 e.wasResolved = true;
                 e.confirmedDead = true;
@@ -1651,7 +1652,7 @@ war_allowed:
     std::optional<FactionConfig> FactionPolitics::GetNPCFaction(RE::Actor* actor) const {
         if (!actor) return std::nullopt;
 
-        std::string actorName = actor->GetDisplayFullName();
+        std::string actorName = GameText::In(actor->GetDisplayFullName());
 
         std::lock_guard<std::mutex> lock(configMutex_);
 
@@ -2071,9 +2072,99 @@ war_allowed:
     bool FactionPolitics::MarkFallen(const std::string& factionId, const std::string& leaderName, const std::string& shownName) {
         std::lock_guard<std::mutex> lock(fallenMutex_);
         if (!fallen_.insert(factionId + "|" + leaderName).second) return false;
+        // A game saved before the dead were kept (3.8): whoever is dead in it died long ago, as far as anyone knows.
+        if (fallenQuiet_.load()) {
+            logger::info("Politics: {} of {} was dead already when this game was saved: remembered as that, not told as news", leaderName, factionId);
+            return false;
+        }
         fallenToTell_.emplace_back(factionId, shownName.empty() ? leaderName : shownName);
         logger::info("Politics: {} of {} is dead, and is remembered as that", leaderName, factionId);
         return true;
+    }
+
+    void FactionPolitics::NoteTheDeadQuietly() {
+        if (!fallenQuiet_.load()) return;
+        const auto started = std::chrono::steady_clock::now();
+        auto* npcIndex = NPCIndex::GetSingleton();
+        std::vector<std::pair<std::string, std::string>> leaders;   // faction, leader's name as configured
+        {
+            std::lock_guard<std::mutex> lock(configMutex_);
+            for (const auto& f : factions_) {
+                for (const auto& name : f.leaderNames) leaders.emplace_back(f.id, name);
+            }
+        }
+        int dead = 0;
+        for (const auto& [factionId, name] : leaders) {
+            auto* leader = npcIndex ? npcIndex->GetActorFromFormId(npcIndex->FindFactionLeaderFormId(name)) : nullptr;
+            if (leader && leader->IsDead() && !leader->IsEssential()) {
+                MarkFallen(factionId, name, name);   // quiet: fallenQuiet_ still holds
+                ++dead;
+            }
+        }
+        fallenQuiet_.store(false);
+        const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
+        logger::info("Politics: this game was saved without a record of the fallen: {} of {} leader(s) found dead already, none of them told as news "
+                     "({:.2f} ms, once, at load)", dead, leaders.size(), ms);
+    }
+
+    void FactionPolitics::SaveHeld(SKSE::SerializationInterface* intfc) {
+        HeldEvent held;
+        {
+            std::lock_guard lock(heldMutex_);
+            held = held_;
+        }
+        if (!held.set) return;
+        if (!intfc->OpenRecord(kHeldEventRecord, 1)) {
+            logger::error("Politics: could not open the co-save record of the event held back to be seen");
+            return;
+        }
+        for (const auto* text : {&held.factionA, &held.factionB, &held.eventType, &held.description}) {
+            const auto size = static_cast<std::uint32_t>(std::min<std::size_t>(text->size(), 1u << 14));
+            intfc->WriteRecordData(&size, sizeof(size));
+            if (size) intfc->WriteRecordData(text->data(), size);
+        }
+        const std::int32_t delta = held.delta;
+        intfc->WriteRecordData(&delta, sizeof(delta));
+        intfc->WriteRecordData(&held.gameTime, sizeof(held.gameTime));
+    }
+
+    void FactionPolitics::LoadHeld(SKSE::SerializationInterface* intfc, std::uint32_t version, std::uint32_t length) {
+        if (version != 1 || length > (1u << 16)) {
+            logger::warn("Politics: skipping a co-save record of a held event of version {} ({} bytes)", version, length);
+            return;
+        }
+        std::vector<std::uint8_t> bytes(length);
+        if (length > 0 && intfc->ReadRecordData(bytes.data(), length) != length) {
+            logger::warn("Politics: the co-save record of a held event is short: nothing is held");
+            return;
+        }
+        std::size_t at = 0;
+        const auto take = [&bytes, &at](void* into, std::size_t size) {
+            if (at + size > bytes.size()) return false;
+            std::memcpy(into, bytes.data() + at, size);
+            at += size;
+            return true;
+        };
+        HeldEvent held;
+        for (auto* text : {&held.factionA, &held.factionB, &held.eventType, &held.description}) {
+            std::uint32_t size = 0;
+            if (!take(&size, sizeof(size)) || size > bytes.size() - at) {
+                logger::warn("Politics: the co-save record of a held event is broken: nothing is held");
+                return;
+            }
+            text->assign(reinterpret_cast<const char*>(bytes.data() + at), size);
+            at += size;
+        }
+        std::int32_t delta = 0;
+        if (!take(&delta, sizeof(delta)) || !take(&held.gameTime, sizeof(held.gameTime))) {
+            logger::warn("Politics: the co-save record of a held event is broken: nothing is held");
+            return;
+        }
+        held.delta = delta;
+        held.set = !held.eventType.empty();
+        std::lock_guard lock(heldMutex_);
+        held_ = std::move(held);
+        logger::info("Politics: {} between {} and {} was held back to be seen when the game was saved", held_.eventType, held_.factionA, held_.factionB);
     }
 
     int FactionPolitics::AnnounceFallen(float gameTime) {
@@ -2114,6 +2205,9 @@ war_allowed:
         fallen_.clear();
         fallenToTell_.clear();
         lastDriftTime_.store(0.0f);
+        // Until the save's record of the fallen is read (Load), the dead are not news: a save without one is quiet
+        // until NoteTheDeadQuietly has looked (once it is loaded).
+        fallenQuiet_.store(true);
     }
 
     void FactionPolitics::Save(SKSE::SerializationInterface* intfc) const {
@@ -2164,6 +2258,7 @@ war_allowed:
         std::lock_guard<std::mutex> lock(fallenMutex_);
         fallen_ = std::move(loaded);
         fallenToTell_.clear();
+        fallenQuiet_.store(false);   // the save keeps its dead: whoever dies from now on is news
         logger::info("Politics: {} leader(s) are remembered as dead", fallen_.size());
     }
 
@@ -2358,7 +2453,7 @@ war_allowed:
     std::string FactionPolitics::GetNPCFactionId(RE::Actor* actor) const {
         if (!actor) return "";
 
-        std::string actorName = actor->GetDisplayFullName();
+        std::string actorName = GameText::In(actor->GetDisplayFullName());
 
         std::lock_guard<std::mutex> lock(configMutex_);
 
@@ -2385,7 +2480,7 @@ war_allowed:
     int FactionPolitics::ProcessPlayerConduct(RE::Actor* reporter, const std::string& factionInput,
                                                const std::string& sentiment, const std::string& reason) {
         logger::debug("[diag:conduct] reporter='{}' FormID={} faction='{}' action='{}' details='{}' politicsEnabled={}",
-            reporter ? reporter->GetDisplayFullName() : "null",
+            reporter ? GameText::In(reporter->GetDisplayFullName()) : "null",
             reporter ? reporter->GetFormID() : 0, factionInput, sentiment, reason, enabled_.load());
         if (!initialized_.load()) {
             RE::SendHUDMessage::ShowHUDMessage("Conduct report failed: politics is not initialized.");

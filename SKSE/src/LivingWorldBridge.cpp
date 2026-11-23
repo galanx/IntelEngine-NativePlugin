@@ -1,4 +1,5 @@
 #include "LivingWorldBridge.h"
+#include "GameText.h"
 #include "Safe.h"
 
 #include "StorylineBridge.h"
@@ -218,7 +219,7 @@ namespace IntelEngine {
             place.classic = GetSingleton()->IsClassic();
             const auto barred = Patrols::PlaceBars(place);
             if (g_placeBars.exchange(static_cast<std::uint8_t>(barred)) != static_cast<std::uint8_t>(barred)) {
-                const char* name = location ? location->GetFullName() : nullptr;
+                const char* name = location ? GameText::In(location->GetFullName()) : nullptr;
                 logger::info("LivingWorld: {}: {}", name && *name ? name : "this place",
                              barred == Patrols::Barred::No ? "people may come to the player here again"
                              : barred == Patrols::Barred::Beyond ? "nobody could have followed the player here: nobody is sent, nobody is set down beside them"
@@ -314,7 +315,7 @@ namespace IntelEngine {
         // Nobody is sent to a player who is where nobody could have followed, at any level; nor, above Classic, into
         // a dungeon after them (Patrols::PlaceBars). Whoever is there with the player already is not being sent.
         if (actor && PlaceBars() != Patrols::Barred::No && NPCIndex::ReachOf(actor) > 0) {
-            logger::info("LivingWorld: {} is not sent to the player now: {}", Safe::Name(actor->GetDisplayFullName()), Patrols::Word(PlaceBars()));
+            logger::info("LivingWorld: {} is not sent to the player now: {}", Safe::Name(GameText::In(actor->GetDisplayFullName())), Patrols::Word(PlaceBars()));
             return false;
         }
         const auto settings = GetSettings();
@@ -494,7 +495,7 @@ namespace IntelEngine {
         if (newGame) return;
         m_lastLocation = here;
         m_lastLocationKnown = true;
-        logger::info("LivingWorld: the game begins in '{}' (no arrival)", here ? here->GetFullName() : "the wilds");
+        logger::info("LivingWorld: the game begins in '{}' (no arrival)", here ? GameText::In(here->GetFullName()) : "the wilds");
     }
 
     void LivingWorldBridge::OnPlayerLocation(const RE::BGSLocation* location) {
@@ -511,8 +512,8 @@ namespace IntelEngine {
             if (firstAfterLoad) return;  // where a save loads is no arrival
         }
         const auto seam = LivingWorld::ClassifySeam(KindOf(from), KindOf(location));
-        logger::info("LivingWorld: the player went from '{}' to '{}' (seam {})", from ? Safe::Name(from->GetFullName(), "a place") : "the wilds",
-                     location ? Safe::Name(location->GetFullName(), "a place") : "the wilds", static_cast<int>(seam));
+        logger::info("LivingWorld: the player went from '{}' to '{}' (seam {})", from ? Safe::Name(GameText::In(from->GetFullName()), "a place") : "the wilds",
+                     location ? Safe::Name(GameText::In(location->GetFullName()), "a place") : "the wilds", static_cast<int>(seam));
         if (seam == LivingWorld::Seam::InDungeon) return;
         if (seam == LivingWorld::Seam::OnRoad) {
             // Wandering between named wilderness places: a look at most every two game hours.
@@ -558,7 +559,7 @@ namespace IntelEngine {
     }
 
     void LivingWorldBridge::Load(SKSE::SerializationInterface* intfc, std::uint32_t version, std::uint32_t length) {
-        if (version != LivingWorld::kRecordVersion || length > (1u << 20)) {
+        if (version < 2 || version > LivingWorld::kRecordVersion || length > (1u << 20)) {
             logger::warn("LivingWorld: skipping a co-save record of version {} ({} bytes)", version, length);
             return;
         }
@@ -569,7 +570,7 @@ namespace IntelEngine {
         }
         std::vector<LivingWorld::Life> lives;
         LivingWorld::DirectorState state;
-        if (!LivingWorld::Deserialize(bytes, lives, state)) {
+        if (!LivingWorld::Deserialize(bytes, lives, state, version)) {
             logger::warn("LivingWorld: the co-save record is damaged; starting with an empty record");
             return;
         }
@@ -589,6 +590,13 @@ namespace IntelEngine {
             resolve(life.parkedAt);
             resolve(life.place);
             resolve(life.companion);
+            resolve(life.keepsake);
+            resolve(life.keepsakeFrom);
+            for (std::uint8_t k = 0; k < life.pastCount; ++k) {
+                resolve(life.past[k].place);
+                resolve(life.past[k].companion);
+                resolve(life.past[k].find);
+            }
             return false;
         });
         resolve(state.lastActor);
@@ -615,6 +623,7 @@ namespace IntelEngine {
         ++m_scanEpoch;   // who serves the player is asked afresh (Track)
         std::scoped_lock lock(m_mutex);
         m_lives.clear();
+        m_forcedReturn.clear();
         m_state = LivingWorld::DirectorState{};
         m_lastRoadSeamDay = -1.0e6f;
         m_lastLocation = nullptr;

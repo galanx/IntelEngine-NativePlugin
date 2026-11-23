@@ -1,9 +1,10 @@
 import withSections from './Section';
 import React, { useState } from 'react';
 import GameTime from './GameTime';
+import { t } from '../i18n';
 
-// label: the setting's name as on SkyrimNet's plugin settings page ("Story type: ..."); type: what the Director
-// and the log call it.
+// label: the setting's name as on SkyrimNet's plugin settings page ("Story type: ..."), shown translated; type: what
+// the log calls it, English in every language (the Director shows its own translated names).
 const STORY_TYPES = [
   { key: 'seek_player', label: "Someone comes to see you", type: 'Seek Player', icon: '\u{1F50D}' },
   { key: 'informant', label: "Someone brings a rumor", type: 'Informant', icon: '\u{1F4E2}' },
@@ -24,7 +25,7 @@ function StoryTab({ story, quest, social, npcSocialLog, calendar, sendAction }) 
   if (!story) {
     return (
       <div className="p-3">
-        <div className="empty-state">Story engine data not available. Open the dashboard in-game to see live data.</div>
+        <div className="empty-state">{t('Story engine data not available. Open the dashboard in-game to see live data.')}</div>
       </div>
     );
   }
@@ -34,9 +35,9 @@ function StoryTab({ story, quest, social, npcSocialLog, calendar, sendAction }) 
       {/* Story Engine Status */}
       <section>
         <div className="flex items-center justify-between mb-2">
-          <h2 className="section-header">Story Engine</h2>
+          <h2 className="section-header">{t('Story Engine')}</h2>
           <span className={`text-xs font-medium ${story.enabled ? 'text-emerald-400' : 'text-red-400'}`}>
-            {story.enabled ? 'Active' : 'Disabled'}
+            {t(story.enabled ? 'Active' : 'Disabled')}
           </span>
         </div>
 
@@ -46,11 +47,11 @@ function StoryTab({ story, quest, social, npcSocialLog, calendar, sendAction }) 
               <div className="flex items-center gap-2">
                 <span className="text-sm">{TYPE_ICON_MAP[story.activeType] || '\u{1F4CC}'}</span>
                 <span className="text-sm text-gray-200 font-medium">
-                  {story.activeNPC || 'Unknown NPC'}
+                  {story.activeNPC || t('Unknown NPC')}
                 </span>
               </div>
               <span className="text-[10px] text-blue-400">
-                {story.activeType && story.activeType.replace(/_/g, ' ')}
+                {story.activeType && t(story.activeType.replace(/_/g, ' '))}
               </span>
             </div>
             {story.activeNarration && (
@@ -63,10 +64,10 @@ function StoryTab({ story, quest, social, npcSocialLog, calendar, sendAction }) 
 
         {!story.isActive && (
           <div className="slot-card rounded px-3 py-2 mb-2 opacity-60">
-            <div className="text-xs text-gray-500">No active story dispatch</div>
+            <div className="text-xs text-gray-500">{t('No active story dispatch')}</div>
             {story.nextCheckIn != null && story.nextCheckIn > 0 && (
               <div className="text-xs text-gray-500 mt-0.5">
-                Next look by the clock in {story.nextCheckIn.toFixed(1)} hours (arriving somewhere or waking up can bring one sooner)
+                {t('Next look by the clock in {hours} hours (arriving somewhere or waking up can bring one sooner)', { hours: story.nextCheckIn.toFixed(1) })}
               </div>
             )}
           </div>
@@ -75,15 +76,15 @@ function StoryTab({ story, quest, social, npcSocialLog, calendar, sendAction }) 
 
       {/* Story Type Toggles */}
       <section>
-        <h2 className="section-header mb-2">Story types</h2>
-        <p className="text-[10px] text-gray-400 mb-1">What the dungeon master may start by itself. A type switched off is not in a story of the town either: no ambush or shadow inside one, and with &quot;Someone has work for you&quot; off none begins. Director dispatch can use any type. What NPCs do among themselves is under Settings, NPC Behavior.</p>
+        <h2 className="section-header mb-2">{t('Story types')}</h2>
+        <p className="text-[10px] text-gray-400 mb-1">{t('What the dungeon master may start by itself. A type switched off is not in a story of the town either: no ambush or shadow inside one, and with "Someone has work for you" off none begins. Director dispatch can use any type. What NPCs do among themselves is under Settings, NPC Behavior.')}</p>
         <div className="grid grid-cols-1 gap-1">
           {STORY_TYPES.filter(type => !type.key.startsWith('npc_')).map(type => {
             const enabled = story.types ? story.types[type.key] : true;
             return (
               <button
                 key={type.key}
-                title={`The Director and the log call this type "${type.type}".`}
+                title={t('The Director and the log call this type "{type}".', { type: type.type })}
                 onClick={() => sendAction('toggleStoryType', { type: type.key, enabled: !enabled })}
                 className={`flex items-center gap-2 px-3 py-1.5 rounded text-left transition-colors ${
                   enabled
@@ -92,9 +93,9 @@ function StoryTab({ story, quest, social, npcSocialLog, calendar, sendAction }) 
                 }`}
               >
                 <span className="text-sm w-5 text-center">{type.icon}</span>
-                <span className="text-xs flex-1">{type.label}</span>
+                <span className="text-xs flex-1">{t(type.label)}</span>
                 <span className={`text-xs ${enabled ? 'text-emerald-400' : 'text-gray-600'}`}>
-                  {enabled ? 'ON' : 'OFF'}
+                  {t(enabled ? 'ON' : 'OFF')}
                 </span>
               </button>
             );
@@ -105,41 +106,41 @@ function StoryTab({ story, quest, social, npcSocialLog, calendar, sendAction }) 
       {/* Active Quest */}
       {quest && quest.active && (
         <section>
-          <h2 className="section-header mb-2">The Dungeon Master&apos;s Quest</h2>
-          <p className="text-[10px] text-gray-400 mb-1">A faction&apos;s quest written by the dungeon master. Stories of the town, bounties, keepsakes and ventures are on the World page.</p>
+          <h2 className="section-header mb-2">{t("The Dungeon Master's Quest")}</h2>
+          <p className="text-[10px] text-gray-400 mb-1">{t("A faction's quest written by the dungeon master. Stories of the town, bounties, keepsakes and ventures are on the World page.")}</p>
           <div className="slot-card rounded px-3 py-2 border-l-2 border-amber-400">
             <div className="flex items-center justify-between mb-1">
               <span className="text-sm text-gray-200 font-medium">
-                {quest.subType ? quest.subType.replace(/_/g, ' ') : 'Quest'}
+                {t(quest.subType ? quest.subType.replace(/_/g, ' ') : 'Quest')}
               </span>
-              <span className="text-xs text-amber-400">In Progress</span>
+              <span className="text-xs text-amber-400">{t('In Progress')}</span>
             </div>
             {quest.giver && (
-              <div className="text-xs text-gray-400">Quest giver: {quest.giver}</div>
+              <div className="text-xs text-gray-400">{t('Quest giver: {name}', { name: quest.giver })}</div>
             )}
             {quest.location && (
-              <div className="text-xs text-gray-400">Location: {quest.location}</div>
+              <div className="text-xs text-gray-400">{t('Location: {place}', { place: quest.location })}</div>
             )}
             {quest.enemyType && (
               <div className="text-xs text-gray-400">
-                Enemies: {quest.enemyType} ({quest.enemiesSpawned ? 'spawned' : 'pending'})
+                {t('Enemies: {enemies} ({state})', { enemies: t(quest.enemyType), state: t(quest.enemiesSpawned ? 'spawned' : 'pending') })}
               </div>
             )}
             {quest.victimName && (
               <div className="text-xs text-gray-400">
-                Victim: {quest.victimName} ({quest.victimFreed ? 'freed' : 'captive'})
+                {t('Victim: {name} ({state})', { name: quest.victimName, state: t(quest.victimFreed ? 'freed' : 'captive') })}
               </div>
             )}
             {quest.itemName && (
               <div className="text-xs text-gray-400">
-                Item: {quest.itemName}
+                {t('Item: {item}', { item: quest.itemName })}
               </div>
             )}
             <button
               className="mt-2 px-3 py-1 text-xs rounded bg-red-900/40 hover:bg-red-800/60 text-red-300 border border-red-700/30 transition-colors"
               onClick={() => sendAction('cancelQuest')}
             >
-              Cancel Quest
+              {t('Cancel Quest')}
             </button>
           </div>
         </section>
@@ -149,9 +150,9 @@ function StoryTab({ story, quest, social, npcSocialLog, calendar, sendAction }) 
       {social && (
         <section>
           <div className="flex items-center justify-between mb-2">
-            <h2 className="section-header">NPC Social</h2>
+            <h2 className="section-header">{t('NPC Social')}</h2>
             <span className={`text-xs ${social.enabled ? 'text-emerald-400' : 'text-gray-600'}`}>
-              {social.enabled ? 'Active' : 'Disabled'}
+              {t(social.enabled ? 'Active' : 'Disabled')}
             </span>
           </div>
           {social.isActive ? (
@@ -162,7 +163,7 @@ function StoryTab({ story, quest, social, npcSocialLog, calendar, sendAction }) 
                   {social.traveler} &rarr; {social.target}
                 </span>
                 <span className="text-[10px] text-gray-500 ml-auto">
-                  {social.type && social.type.replace(/_/g, ' ')}
+                  {social.type && t(social.type.replace(/_/g, ' '))}
                 </span>
               </div>
               {social.narration && (
@@ -173,7 +174,7 @@ function StoryTab({ story, quest, social, npcSocialLog, calendar, sendAction }) 
             </div>
           ) : (
             <div className="slot-card rounded px-3 py-1.5 opacity-60">
-              <div className="text-xs text-gray-500">No active NPC interactions</div>
+              <div className="text-xs text-gray-500">{t('No active NPC interactions')}</div>
             </div>
           )}
         </section>
@@ -182,7 +183,7 @@ function StoryTab({ story, quest, social, npcSocialLog, calendar, sendAction }) 
       {/* Recent NPC Activity */}
       {npcSocialLog && npcSocialLog.length > 0 && (
         <section>
-          <h2 className="section-header mb-2">Recent NPC Activity</h2>
+          <h2 className="section-header mb-2">{t('Recent NPC Activity')}</h2>
           <div className="space-y-1.5">
             {npcSocialLog.map((entry, i) => (
               <div key={i} className="slot-card rounded px-3 py-2">
@@ -199,7 +200,7 @@ function StoryTab({ story, quest, social, npcSocialLog, calendar, sendAction }) 
                     </span>
                   )}
                   <span className="text-[10px] text-gray-500 ml-auto">
-                    {entry.type === 'npc_gossip' ? 'gossip' : 'interaction'}
+                    {t(entry.type === 'npc_gossip' ? 'gossip' : 'interaction')}
                   </span>
                 </div>
                 <div className="text-xs text-gray-400 leading-relaxed pl-6">
@@ -212,7 +213,7 @@ function StoryTab({ story, quest, social, npcSocialLog, calendar, sendAction }) 
                       className="text-[10px] text-blue-400 hover:text-blue-300"
                       onClick={() => setExpandedLog(expandedLog === i ? null : i)}
                     >
-                      {expandedLog === i ? 'hide details' : 'show details'}
+                      {t(expandedLog === i ? 'hide details' : 'show details')}
                     </button>
                     {expandedLog === i && (
                       <div className="text-[11px] text-gray-300 mt-1 p-2 rounded bg-black/30 leading-relaxed">

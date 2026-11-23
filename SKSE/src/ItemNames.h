@@ -9,9 +9,12 @@
 // such tags left out; a vaguer word ("Mead") may stand for an item whose name ends in it as whole words ("Nord Mead"),
 // never for part of a word, so "Ale" can never become "Vase" or "Pale Ale".
 //
-// Nothing here knows a word of any language: names are read as UTF-8, a letter of any alphabet is a letter (upper and
-// lower case are the same for Latin, Greek and Cyrillic), and punctuation and symbols (stars, guillemets, CJK brackets) separate words.
-// Text that is not valid UTF-8 is compared byte for byte.
+// Nothing here knows a word of any language: names are read as UTF-8, a letter of any alphabet is a letter (compared
+// as its plain letter, LetterFold.h: upper and lower case are the same and so is a letter with and without its marks,
+// "Suesswein" with a sharp s and with two), and punctuation and symbols (stars, guillemets, CJK brackets) separate words.
+// Text that is not valid UTF-8 is compared byte for byte (GameText.h makes the game's names UTF-8 before they come here).
+
+#include "LetterFold.h"
 
 #include <algorithm>
 #include <cstdint>
@@ -135,10 +138,13 @@ namespace IntelEngine::ItemNames {
         inline std::vector<std::string> Split(std::string_view text) {
             std::vector<std::string> words;
             std::string word;
+            char32_t plain[2];
             for (const auto& c : Chars(text)) {
+                const int letters = c.cp >= 0xFFFD0000u ? 1 : LetterFold::Fold(c.cp, plain);
+                if (letters == 0) continue;   // a mark standing by itself after its letter
                 if (Letter(c.cp)) {
                     if (c.cp >= 0xFFFD0000u) word += c.bytes;
-                    else Put(word, Lower(c.cp));
+                    else for (int k = 0; k < letters; ++k) Put(word, plain[k]);
                 } else if (Joiner(c.cp)) {
                     continue;
                 } else if (!word.empty()) {

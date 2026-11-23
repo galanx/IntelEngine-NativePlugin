@@ -24,6 +24,11 @@
 //   none   none     <forms>            "outside", "upstairs") and the words for "none".
 //   free   *        <forms>            little words that are no part of a name beside it (articles, prepositions)
 //   label  <English, with {1} {2}>  <the same in this language>     what the player reads
+//   meta   codepage 1250               the Windows code page old plugins of this language were saved in (GameText.h);
+//                                      left out: told by the language's code
+//   phrase / part / word / owner / leave / bed / room / name   <key>  <forms>
+//                                      more words of place, read by PlaceWords.h (which says what each is); English
+//                                      has them built in, in this same form
 //
 // Which packs are in force is decided once a game (LanguageBridge): the pack of the language the game is in, for
 // what the player reads; that pack and the packs of the languages people speak, for what the model writes. English
@@ -73,7 +78,17 @@ namespace IntelEngine::Language {
         std::vector<Word> time, place, none;
         std::vector<std::u32string> free;
         std::vector<Label> labels;
+        int codepage = 0;                 // meta codepage; 0: not said
+        // The other sections of place words (PlaceWords.h), each in the order of its rows: section name and words.
+        std::vector<std::pair<std::string, std::vector<Word>>> more;
         std::size_t rows = 0, bad = 0;
+
+        const std::vector<Word>* More(std::string_view section) const {
+            for (const auto& entry : more) {
+                if (entry.first == section) return &entry.second;
+            }
+            return nullptr;
+        }
 
         bool Is(std::string_view what) const {   // by file name, code or English name, lower case
             if (what.empty()) return false;
@@ -108,14 +123,24 @@ namespace IntelEngine::Language {
             }
             return out;
         }
+        // The letters of a word as NameForms compares them: plain letters (LetterFold.h), so that a pack's little
+        // word written with its accent is the word NameForms reads.
         inline std::u32string U32(std::string_view s) {
             std::u32string out;
             char32_t c = 0;
+            char32_t plain[2];
             for (std::size_t i = 0; i < s.size();) {
                 i += NameForms::Decode(s, i, c);
-                out.push_back(c);
+                const int n = LetterFold::Fold(c, plain);
+                for (int k = 0; k < n; ++k) out.push_back(plain[k]);
             }
             return out;
+        }
+        inline bool PlaceSection(std::string_view section) {
+            for (const std::string_view known : {"phrase", "part", "word", "owner", "leave", "bed", "room", "name"}) {
+                if (section == known) return true;
+            }
+            return false;
         }
     }
 
@@ -163,7 +188,36 @@ namespace IntelEngine::Language {
             else if (k == "name") pack.name = value;
             else if (k == "game") pack.game = detail::AsciiLower(value);
             else if (k == "script") pack.script = detail::AsciiLower(value);
+            else if (k == "codepage") {
+                int page = 0;
+                for (const char c : value) {
+                    if (c < '0' || c > '9' || page > 99999) return false;
+                    page = page * 10 + (c - '0');
+                }
+                pack.codepage = page;
+            }
             else return false;
+            return true;
+        }
+        if (detail::PlaceSection(section)) {
+            if (key.empty()) return false;
+            std::vector<Word>* list = nullptr;
+            for (auto& entry : pack.more) {
+                if (entry.first == section) list = &entry.second;
+            }
+            if (!list) {
+                pack.more.emplace_back(section, std::vector<Word>{});
+                list = &pack.more.back().second;
+            }
+            for (const auto& raw : detail::Bars(value)) {
+                Word w;
+                w.form = fold ? fold(raw) : raw;
+                w.key = detail::AsciiLower(key);
+                const auto letters = detail::U32(w.form);
+                w.letters = letters.size();
+                w.unspaced = !letters.empty() && NameForms::Unspaced(letters.front());
+                if (w.letters > 0) list->push_back(std::move(w));
+            }
             return true;
         }
         if (section == "time" || section == "place" || section == "none") {
@@ -250,9 +304,11 @@ namespace IntelEngine::Language {
         std::string english;   // the text with every known form in English, one space between words
         std::string left;      // what no list knew, one space between its words
         std::string keys;      // the English of the known forms alone, in their order
+        std::vector<const Word*> hits;   // the known forms themselves, in their order
     };
     inline Read Reading(std::string_view folded, const std::vector<const std::vector<Word>*>& lists) {
         std::string out, left, keys;
+        std::vector<const Word*> hits;
         out.reserve(folded.size() + 16);
         std::size_t i = 0;
         while (i < folded.size()) {
@@ -272,6 +328,7 @@ namespace IntelEngine::Language {
                 left += ' ';
                 if (!keys.empty()) keys += ' ';
                 keys += hit->key;
+                hits.push_back(hit);
                 i += hit->form.size();
                 continue;
             }
@@ -298,7 +355,7 @@ namespace IntelEngine::Language {
             }
             return t;
         };
-        return {tidy(out), tidy(left), keys};
+        return {tidy(out), tidy(left), keys, std::move(hits)};
     }
     inline std::string ToEnglish(std::string_view folded, const std::vector<const std::vector<Word>*>& lists) {
         return Reading(folded, lists).english;

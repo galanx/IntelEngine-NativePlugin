@@ -1,5 +1,6 @@
 import withSections from './Section';
 import { useCallback } from 'react';
+import { t } from '../i18n';
 
 const PKG_ICONS = {
   'Travel (Walk)': '\u{1F6B6}',
@@ -20,10 +21,10 @@ function PackagesTab({ packages, sendAction, removingIds, onMarkRemoving }) {
     <div>
       <section>
         <div className="flex items-center justify-between mb-2">
-          <h2 className="section-header">IE packages</h2>
-          <span className="text-xs text-gray-500">{packages.length} NPC{packages.length !== 1 ? 's' : ''}</span>
+          <h2 className="section-header">{t('IE packages')}</h2>
+          <span className="text-xs text-gray-500">{t('{n} NPCs', { n: packages.length })}</span>
         </div>
-        {packages.length === 0 && <div className="empty-state">No NPCs currently running IntelEngine packages.</div>}
+        {packages.length === 0 && <div className="empty-state">{t('No NPCs currently running IntelEngine packages.')}</div>}
         <div className="space-y-1.5">
           {packages.map((entry, i) => {
             const isRemoving = removingIds.has(entry.formId);
@@ -32,7 +33,7 @@ function PackagesTab({ packages, sendAction, removingIds, onMarkRemoving }) {
                 <span className="text-sm">{PKG_ICONS[entry.pkgType] || '\u{1F4E6}'}</span>
                 <div className="flex-1 min-w-0">
                   <div className="text-sm text-gray-200 font-medium truncate">{entry.name}</div>
-                  <div className="text-xs text-gray-500">{entry.pkgType || 'Unknown'}</div>
+                  <div className="text-xs text-gray-500">{t(entry.pkgType || 'Unknown')}</div>
                 </div>
                 <button
                   onClick={() => handleRemove(entry.formId)}
@@ -43,7 +44,7 @@ function PackagesTab({ packages, sendAction, removingIds, onMarkRemoving }) {
                       : 'bg-red-500/20 text-red-400 hover:bg-red-500/30'
                   }`}
                 >
-                  {isRemoving ? 'Removing\u2026' : 'Remove'}
+                  {t(isRemoving ? 'Removing\u2026' : 'Remove')}
                 </button>
               </div>
             );

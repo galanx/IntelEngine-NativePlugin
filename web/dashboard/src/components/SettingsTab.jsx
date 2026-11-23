@@ -1,59 +1,61 @@
 import { useState, useCallback, useRef } from 'react';
 import Select from './Select';
 import { twoColumns } from './Section';
+import { t, tk, tx } from '../i18n';
 
 // Names of settings and of their options are those of SkyrimNet's plugin settings page (SettingsBridge.cpp and
 // manifest.yaml); SKSE/tests/RunSettingNamesCheck.py compares them. A unit that page carries in brackets stands
-// beside the value here.
-const NPC_POLICIES = ['Allow all NPCs', 'Block civilians only', 'Allow followers only', 'Block all NPCs'];
+// beside the value here. The names stay English in this file (the check reads them here); the rows translate what
+// they show (t, ../i18n).
+const NPC_POLICIES = [tk('Allow all NPCs'), tk('Block civilians only'), tk('Allow followers only'), tk('Block all NPCs')];
 // 4.0 living world: the choices as on SkyrimNet's settings page.
-const LW_LEVELS = ['Classic', 'Rumors', 'Lives'];
+const LW_LEVELS = [tk('Classic'), tk('Rumors'), tk('Lives')];
 const LW_LEVEL_HINTS = [
-  'As before 4.0.',
-  'The world moves on while you are away and you hear about it, but followers you left wait where you left them.',
-  'Followers you left behind live lives of their own (work at an inn, an adventure, a trip) and you can come upon them later; people close to you miss you while you are away.',
+  tk('As before 4.0.'),
+  tk('The world moves on while you are away and you hear about it, but followers you left wait where you left them.'),
+  tk('Followers you left behind live lives of their own (work at an inn, an adventure, a trip) and you can come upon them later; people close to you miss you while you are away.'),
 ];
-const LW_INTERRUPTIONS = ['Never', 'If urgent', 'Realistic'];
+const LW_INTERRUPTIONS = [tk('Never'), tk('If urgent'), tk('Realistic')];
 const LW_INTERRUPTION_HINTS = [
-  'Nobody turns up during a fight, a conversation, a scene or a menu.',
-  'Only something urgent may interrupt a fight, a conversation, a scene or a menu.',
-  'Now and then someone turns up at a bad moment, as in real life.',
+  tk('Nobody turns up during a fight, a conversation, a scene or a menu.'),
+  tk('Only something urgent may interrupt a fight, a conversation, a scene or a menu.'),
+  tk('Now and then someone turns up at a bad moment, as in real life.'),
 ];
-const LW_QUEST_NPCS = ['Never', 'If important', 'Freely'];
+const LW_QUEST_NPCS = [tk('Never'), tk('If important'), tk('Freely')];
 const LW_QUEST_NPC_HINTS = [
-  'NPCs who take part in a running quest stay where the quest needs them.',
-  'They may travel or move for an important story. The target of an objective you have open never moves.',
-  'They may travel or move for any story. The target of an objective you have open never moves.',
+  tk('NPCs who take part in a running quest stay where the quest needs them.'),
+  tk('They may travel or move for an important story. The target of an objective you have open never moves.'),
+  tk('They may travel or move for any story. The target of an objective you have open never moves.'),
 ];
-const LW_PACING = ['Calm', 'Normal', 'Lively'];
+const LW_PACING = [tk('Calm'), tk('Normal'), tk('Lively')];
 const LW_PACING_HINTS = [
-  'About one notable moment every two game days.',
-  'About one notable moment every game day.',
-  'About two notable moments every game day.',
+  tk('About one notable moment every two game days.'),
+  tk('About one notable moment every game day.'),
+  tk('About two notable moments every game day.'),
 ];
 const DANGER_HINTS = [
-  'No filtering: anyone may be sent to you out in the wilds. Above Classic nobody is sent into a dungeon after you whatever this says (they wait until you are out), and nobody is ever sent to another plane.',
-  'Farmers, merchants and other civilians are not sent out into the wilds after you; warriors and mages may be. Above Classic nobody is sent into a dungeon after you whatever this says (they wait until you are out), and nobody is ever sent to another plane.',
-  'Only people who can be followers are sent out into the wilds after you. Above Classic nobody is sent into a dungeon after you whatever this says (they wait until you are out), and nobody is ever sent to another plane.',
-  'Nobody is sent to you anywhere but in a settlement.',
+  tk('No filtering: anyone may be sent to you out in the wilds. Above Classic nobody is sent into a dungeon after you whatever this says (they wait until you are out), and nobody is ever sent to another plane.'),
+  tk('Farmers, merchants and other civilians are not sent out into the wilds after you; warriors and mages may be. Above Classic nobody is sent into a dungeon after you whatever this says (they wait until you are out), and nobody is ever sent to another plane.'),
+  tk('Only people who can be followers are sent out into the wilds after you. Above Classic nobody is sent into a dungeon after you whatever this says (they wait until you are out), and nobody is ever sent to another plane.'),
+  tk('Nobody is sent to you anywhere but in a settlement.'),
 ];
 const HOME_HINTS = [
-  'No filtering. All NPC types can visit you at home.',
-  'Civilians won\'t bother you at home. Warriors and mages can still visit.',
-  'Only NPCs who can be followers visit you at home.',
-  'Nobody visits you at home.',
+  tk('No filtering. All NPC types can visit you at home.'),
+  tk('Civilians won\'t bother you at home. Warriors and mages can still visit.'),
+  tk('Only NPCs who can be followers visit you at home.'),
+  tk('Nobody visits you at home.'),
 ];
 
-const HOLD_POLICIES = ['No restriction', 'Same hold (civilians)', 'Same hold (except followers)', 'Same hold (everyone)',
-  'Same town (civilians)', 'Same town (except followers)', 'Same town (everyone)'];
+const HOLD_POLICIES = [tk('No restriction'), tk('Same hold (civilians)'), tk('Same hold (except followers)'), tk('Same hold (everyone)'),
+  tk('Same town (civilians)'), tk('Same town (except followers)'), tk('Same town (everyone)')];
 const HOLD_HINTS = [
-  'No restriction from this setting. Above Classic the director still keeps people of other holds at home unless they are close to you and the matter presses.',
-  'Civilians must be in the same hold as you. Warriors and followers can cross holds.',
-  'Everyone except followers must be in the same hold.',
-  'All NPCs must be in the same hold as you.',
-  'Civilians must be in the same town/city. Warriors can cross within the hold. Followers go anywhere.',
-  'Everyone except followers must be in the same town/city.',
-  'All NPCs must be in the same town/city as you.',
+  tk('No restriction from this setting. Above Classic the director still keeps people of other holds at home unless they are close to you and the matter presses.'),
+  tk('Civilians must be in the same hold as you. Warriors and followers can cross holds.'),
+  tk('Everyone except followers must be in the same hold.'),
+  tk('All NPCs must be in the same hold as you.'),
+  tk('Civilians must be in the same town/city. Warriors can cross within the hold. Followers go anywhere.'),
+  tk('Everyone except followers must be in the same town/city.'),
+  tk('All NPCs must be in the same town/city as you.'),
 ];
 const HOLD_TYPES = [
   // def: the game's default for that type (index into HOLD_POLICIES); they differ.
@@ -66,11 +68,11 @@ const HOLD_TYPES = [
   { key: 'holdPolicyQuest', label: 'Someone has work for you', def: 0 },
 ];
 
-const CONFIRM_MODES = ['Disabled', 'Followers only', 'Everyone'];
+const CONFIRM_MODES = [tk('Disabled'), tk('Followers only'), tk('Everyone')];
 const CONFIRM_HINTS = [
-  'No confirmation prompt. Action executes immediately.',
-  'Prompt only when active followers perform this action.',
-  'Prompt for all NPCs performing this action.',
+  tk('No confirmation prompt. Action executes immediately.'),
+  tk('Prompt only when active followers perform this action.'),
+  tk('Prompt for all NPCs performing this action.'),
 ];
 const CONFIRM_ACTIONS = [
   { key: 'confirmGoToLocation', label: 'Go somewhere' },
@@ -120,7 +122,7 @@ function SettingsTab({ config, storyTypes, onSettingChange, pluginConfig, onPlug
   if (!config) {
     return (
       <div className="p-3">
-        <div className="empty-state">Settings not available. Open the dashboard in-game to see live data.</div>
+        <div className="empty-state">{t('Settings not available. Open the dashboard in-game to see live data.')}</div>
       </div>
     );
   }
@@ -242,7 +244,7 @@ function SettingsTab({ config, storyTypes, onSettingChange, pluginConfig, onPlug
           onChange={v => onSettingChange('playerHomePolicy', v)}
         />
         <div className="border-t border-white/5 mt-2 pt-2">
-          <span className="text-[10px] text-gray-500 uppercase tracking-wider block mb-1">NPCs among themselves</span>
+          <span className="text-[10px] text-gray-500 uppercase tracking-wider block mb-1">{t('NPCs among themselves')}</span>
           <ToggleRow
             label="NPCs visit and talk to each other"
             value={config.npcTickEnabled}
@@ -283,13 +285,13 @@ function SettingsTab({ config, storyTypes, onSettingChange, pluginConfig, onPlug
       {/* Hold Restrictions */}
       <Accordion title="Hold Restrictions" isOpen={openSections.holdRestrictions} onToggle={() => toggle('holdRestrictions')}>
         <p className="text-[9px] text-gray-600 mb-2">
-          How far each kind of story may reach for its NPC. The defaults differ and are shown with each kind.
+          {t('How far each kind of story may reach for its NPC. The defaults differ and are shown with each kind.')}
         </p>
         {HOLD_TYPES.map(type => (
           <PolicyRow
             key={type.key}
             label={type.label}
-            note={`default: ${HOLD_POLICIES[type.def]}`}
+            note={t('default: {choice}', { choice: t(HOLD_POLICIES[type.def]) })}
             value={config[type.key] ?? type.def}
             options={HOLD_POLICIES}
             hints={HOLD_HINTS}
@@ -350,18 +352,18 @@ function SettingsTab({ config, storyTypes, onSettingChange, pluginConfig, onPlug
 
       {/* Action Confirmation Prompts */}
       <Accordion title="Ask before starting" isOpen={openSections.confirmations} onToggle={() => toggle('confirmations')}>
-        <p className="text-[10px] text-gray-500 mb-2">Ask you before an NPC starts this task: never (Disabled), only for your followers, or for everyone.</p>
+        <p className="text-[10px] text-gray-500 mb-2">{t('Ask you before an NPC starts this task: never (Disabled), only for your followers, or for everyone.')}</p>
         {CONFIRM_ACTIONS.map(({ key, label }) => {
           const val = parseInt(config[key]) || 0;
           return (
             <div key={key} className="flex items-center justify-between py-1 group">
-              <span className="text-xs text-gray-300">{label}</span>
+              <span className="text-xs text-gray-300">{t(label)}</span>
               <button
                 className="text-xs px-2 py-0.5 rounded bg-white/5 hover:bg-white/10 text-gray-300 min-w-[100px] text-center"
-                title={CONFIRM_HINTS[val]}
+                title={t(CONFIRM_HINTS[val])}
                 onClick={() => onSettingChange(key, (val + 1) % 3)}
               >
-                {CONFIRM_MODES[val]}
+                {t(CONFIRM_MODES[val])}
               </button>
             </div>
           );
@@ -371,7 +373,7 @@ function SettingsTab({ config, storyTypes, onSettingChange, pluginConfig, onPlug
       {/* Actions followers can do. Stored as "skip for followers"; shown the other way round, because a list of
           switches that are off under "Skip ..." read as "switched off for my followers". */}
       <Accordion title="What followers can be asked to do" isOpen={openSections.skipFollowers} onToggle={() => toggle('skipFollowers')}>
-        <p className="text-[10px] text-gray-500 mb-2">All on by default. Switch one off to keep your active followers out of that action (it is refused without a prompt).</p>
+        <p className="text-[10px] text-gray-500 mb-2">{t('All on by default. Switch one off to keep your active followers out of that action (it is refused without a prompt).')}</p>
         {SKIP_FOLLOWER_ACTIONS.map(({ key, label }) => (
           <ToggleRow
             key={key}
@@ -384,7 +386,7 @@ function SettingsTab({ config, storyTypes, onSettingChange, pluginConfig, onPlug
 
       {/* Auto Dynamic Bio Updates */}
       <Accordion title="Auto Dynamic Bio" isOpen={openSections.autoBio} onToggle={() => toggle('autoBio')}>
-        <p className="text-[10px] text-gray-500 mb-2">Automatically update NPC dynamic bios after X dialogue lines (per-NPC tracking)</p>
+        <p className="text-[10px] text-gray-500 mb-2">{t('Automatically update NPC dynamic bios after X dialogue lines (per-NPC tracking)')}</p>
         <ToggleRow
           label="Refresh an NPC's profile after much talk"
           value={config.autoBioEnabled}
@@ -411,9 +413,9 @@ function SettingsTab({ config, storyTypes, onSettingChange, pluginConfig, onPlug
         <ToggleRow label="Fight a faction's enemies" value={config.questFactionCombat} onChange={v => onSettingChange('questFactionCombat', v)}
           hint="Clear out hostile faction soldiers at a location. Rewards faction standing." />
         <ToggleRow label="Rescue for a faction" value={config.questFactionRescue} onChange={v => onSettingChange('questFactionRescue', v)}
-          hint="Rescue a captive from hostile faction soldiers. Rewards faction standing." />
+          hint="Rescue a captive from hostile faction soldiers. At Classic it rewards faction standing; above Classic it becomes a story of the town about someone held, with no faction standing." />
         <ToggleRow label="Join a faction's battle" value={config.questFactionBattle} onChange={v => onSettingChange('questFactionBattle', v)}
-          hint="A friendly faction invites you to join an upcoming battle. Requires high standing (40+)." />
+          hint="A faction you hold a rank with calls you to its line when its armies gather: a journal entry, the place marked. Off: nobody calls you, and no faction asks you to a battle." />
         {/* No "Allow NPC Death (Rescue)" switch: nothing reads the setting, a rescue's victim is always kept alive. */}
         <SliderRow
           label="Quest expires after"
@@ -421,7 +423,7 @@ function SettingsTab({ config, storyTypes, onSettingChange, pluginConfig, onPlug
           min={1} max={30} step={1}
           unit="days"
           onCommit={v => onSettingChange('questTimeoutDays', v)}
-          hint="Days before an unfinished quest auto-expires."
+          hint="A quest of the dungeon master's own that you were offered and did not finish ends after this many days. A story of the town says in its offer how long it waits."
         />
       </Accordion>
 
@@ -435,7 +437,7 @@ function SettingsTab({ config, storyTypes, onSettingChange, pluginConfig, onPlug
               onChange={v => onPluginConfigChange('politics.enabled', v)}
               hint="Factions autonomously trade, negotiate, scheme, and go to war."
             />
-            <p className="text-xs text-gray-400">Political Engine detected: {pluginConfig['politics.pe_detected'] ? 'Yes' : 'No'}</p>
+            <p className="text-xs text-gray-400">{t('Political Engine detected: {answer}', { answer: t(pluginConfig['politics.pe_detected'] ? 'Yes' : 'No') })}</p>
             {/* Off unless switched on: a value the game has not sent yet reads as off. Greyed out without the mod. */}
             <ToggleRow label="Political Engine integration (experimental)" value={pluginConfig['politics.pe_integration'] === true || pluginConfig['politics.pe_integration'] === 'true'}
               onChange={v => onPluginConfigChange('politics.pe_integration', v)}
@@ -469,7 +471,7 @@ function SettingsTab({ config, storyTypes, onSettingChange, pluginConfig, onPlug
             />
           </>
         ) : (
-          <span className="text-[10px] text-gray-600">Plugin config not available.</span>
+          <span className="text-[10px] text-gray-600">{t('Plugin config not available.')}</span>
         )}
       </Accordion>
 
@@ -487,7 +489,7 @@ function SettingsTab({ config, storyTypes, onSettingChange, pluginConfig, onPlug
       {pluginConfig && onPluginConfigChange && (
         <>
           <div className="border-t border-white/10 pt-2 mt-2">
-            <span className="text-[10px] text-gray-600 uppercase tracking-wider">Plugin Configuration</span>
+            <span className="text-[10px] text-gray-600 uppercase tracking-wider">{t('Plugin Configuration')}</span>
           </div>
 
           <Accordion title="Blocklists & Whitelists" isOpen={openSections.blocklists} onToggle={() => toggle('blocklists')}>
@@ -510,7 +512,7 @@ function SettingsTab({ config, storyTypes, onSettingChange, pluginConfig, onPlug
               onCommit={v => onPluginConfigChange('story.npc_blocklist', v)}
             />
             <div className="mt-2 pt-2 border-t border-white/5">
-              <p className="text-[10px] text-gray-500 mb-1">Whitelists (empty = all allowed)</p>
+              <p className="text-[10px] text-gray-500 mb-1">{t('Whitelists (empty = all allowed)')}</p>
             </div>
             <TextInputRow
               label="Faction Whitelist"
@@ -533,7 +535,7 @@ function SettingsTab({ config, storyTypes, onSettingChange, pluginConfig, onPlug
           </Accordion>
 
           <Accordion title="Language" isOpen={openSections.language} onToggle={() => toggle('language')}>
-            <p className="text-[10px] text-gray-600 mb-2">Now: {pluginConfig['language.now'] || 'not known yet'}</p>
+            <p className="text-[10px] text-gray-600 mb-2">{t('Now: {line}', { line: pluginConfig['language.now'] || t('not known yet') })}</p>
             <TextInputRow
               label="Language of journal and messages"
               hint="auto, or a language pack by name (russian, german, japanese, korean, chinese, french, spanish, italian, polish), or english"
@@ -549,7 +551,7 @@ function SettingsTab({ config, storyTypes, onSettingChange, pluginConfig, onPlug
           </Accordion>
 
           <Accordion title="LLM Overrides" isOpen={openSections.llm} onToggle={() => toggle('llm')}>
-            <p className="text-[10px] text-gray-600 mb-2">Leave empty to use base SkyrimNet config</p>
+            <p className="text-[10px] text-gray-600 mb-2">{t('Leave empty to use base SkyrimNet config')}</p>
             <TextInputRow
               label="API Endpoint"
               hint="e.g. http://localhost:5000/v1"
@@ -621,7 +623,7 @@ function Accordion({ title, isOpen, onToggle, children }) {
         onClick={onToggle}
         className="w-full flex items-center justify-between px-3 py-1.5 bg-white/[0.02] hover:bg-white/[0.04] transition-colors"
       >
-        <span className="text-xs font-medium text-gray-300">{title}</span>
+        <span className="text-xs font-medium text-gray-300">{t(title)}</span>
         <span className={`text-[10px] text-gray-500 transition-transform ${isOpen ? 'rotate-180' : ''}`}>▼</span>
       </button>
       {isOpen && (
@@ -639,7 +641,7 @@ function ToggleRow({ label, value, onChange, hint, disabled = false }) {
   return (
     <div className={`py-1 ${disabled ? 'opacity-40' : ''}`}>
       <div className="flex items-center justify-between">
-        <span className="text-xs text-gray-300">{label}</span>
+        <span className="text-xs text-gray-300">{t(label)}</span>
         <button
           onClick={() => { if (!disabled) onChange(!value); }}
           disabled={disabled}
@@ -653,7 +655,7 @@ function ToggleRow({ label, value, onChange, hint, disabled = false }) {
           }`} />
         </button>
       </div>
-      {hint && <span className="text-[9px] text-gray-600 leading-tight block mt-0.5">{hint}</span>}
+      {hint && <span className="text-[9px] text-gray-600 leading-tight block mt-0.5">{t(hint)}</span>}
     </div>
   );
 }
@@ -683,8 +685,8 @@ function SliderRow({ label, value, min, max, step, unit, onCommit, hint }) {
   return (
     <div className="py-1">
       <div className="flex items-center justify-between mb-1">
-        <span className="text-xs text-gray-300">{label}</span>
-        <span className="text-xs text-gray-400">{displayVal}{unit ? ` ${unit}` : ''}</span>
+        <span className="text-xs text-gray-300">{t(label)}</span>
+        <span className="text-xs text-gray-400">{displayVal}{unit ? ` ${t(unit)}` : ''}</span>
       </div>
       <input
         type="range"
@@ -695,17 +697,18 @@ function SliderRow({ label, value, min, max, step, unit, onCommit, hint }) {
         onKeyUp={handleCommit}
         className="w-full h-1 rounded-full appearance-none bg-gray-700 slider"
       />
-      {hint && <span className="text-[9px] text-gray-600 leading-tight block mt-0.5">{hint}</span>}
+      {hint && <span className="text-[9px] text-gray-600 leading-tight block mt-0.5">{t(hint)}</span>}
     </div>
   );
 }
 
+// `note` comes translated; the label, the choices and their hints are English and translated here.
 function PolicyRow({ label, note, value, options, hints, onChange, wrap = false }) {
   return (
     <div className="py-1">
       {label && (
         <span className="text-xs text-gray-300 block mb-1">
-          {label}{note && <span className="text-[10px] text-gray-600"> · {note}</span>}
+          {t(label)}{note && <span className="text-[10px] text-gray-600"> · {note}</span>}
         </span>
       )}
       <div className={wrap ? 'flex flex-wrap gap-1' : 'flex gap-1'}>
@@ -719,11 +722,11 @@ function PolicyRow({ label, note, value, options, hints, onChange, wrap = false 
                 : 'bg-white/5 text-gray-500 border border-white/5 hover:text-gray-300'
             }`}
           >
-            {opt}
+            {t(opt)}
           </button>
         ))}
       </div>
-      {hints && hints[value] && <span className="text-[9px] text-gray-600 leading-tight block mt-0.5">{hints[value]}</span>}
+      {hints && hints[value] && <span className="text-[9px] text-gray-600 leading-tight block mt-0.5">{t(hints[value])}</span>}
     </div>
   );
 }
@@ -737,7 +740,7 @@ function TextInputRow({ label, value, onCommit, hint, secret }) {
 
   return (
     <div className="py-1">
-      <span className="text-xs text-gray-300 block mb-1">{label}</span>
+      <span className="text-xs text-gray-300 block mb-1">{t(label)}</span>
       <input
         type={secret ? 'password' : 'text'}
         value={display}
@@ -750,7 +753,7 @@ function TextInputRow({ label, value, onCommit, hint, secret }) {
           if (e.key === 'Enter') e.target.blur();
           if (e.key === 'Escape') { setLocalVal(null); e.target.blur(); }
         }}
-        placeholder={hint || ''}
+        placeholder={hint ? t(hint) : ''}
         className="w-full px-2 py-1 text-xs bg-white/5 border border-white/10 rounded text-gray-300 placeholder-gray-600 focus:border-blue-500/50 focus:outline-none"
       />
     </div>
@@ -765,8 +768,8 @@ function NumberInputRow({ label, value, min, max, step, unit, onCommit, hint }) 
   return (
     <div className="py-1">
       <div className="flex items-center justify-between mb-1">
-        <span className="text-xs text-gray-300">{label}</span>
-        {hint && <span className="text-[10px] text-gray-600">{hint}</span>}
+        <span className="text-xs text-gray-300">{t(label)}</span>
+        {hint && <span className="text-[10px] text-gray-600">{t(hint)}</span>}
       </div>
       <div className="flex items-center gap-2">
         <input
@@ -787,26 +790,26 @@ function NumberInputRow({ label, value, min, max, step, unit, onCommit, hint }) 
           }}
           className="w-20 px-2 py-1 text-xs bg-white/5 border border-white/10 rounded text-gray-300 focus:border-blue-500/50 focus:outline-none"
         />
-        {unit && <span className="text-xs text-gray-500">{unit}</span>}
+        {unit && <span className="text-xs text-gray-500">{t(unit)}</span>}
       </div>
     </div>
   );
 }
 
 function HotkeyRow({ value, modifiers, onChangeKey, onChangeMods }) {
-  const keyLabel = VK_NAMES[String(value)] || `VK ${value}`;
+  const keyLabel = VK_NAMES[String(value)] ? t(VK_NAMES[String(value)]) : t('VK {n}', { n: value });
   const modBits = modifiers || 0;
 
   return (
     <div className="py-1 space-y-2">
       <div className="flex items-center justify-between">
-        <span className="text-xs text-gray-300">Dashboard Hotkey</span>
+        {tx(<span className="text-xs text-gray-300">Dashboard Hotkey</span>)}
         <Select aria-label="Dashboard hotkey" containerClassName="w-24"
           value={value}
           onChange={e => { if (e.target.value !== '') onChangeKey(parseInt(e.target.value)); }}
           className="px-2 py-1 text-xs bg-white/5 border border-white/10 rounded text-gray-300 focus:border-blue-500/50 focus:outline-none"
         >
-          <option value={-1}>Disabled</option>
+          <option value={-1}>{t('Disabled')}</option>
           {[0,1,2,3,4,5,6,7,8,9].map(n => (
             <option key={`k${n}`} value={48 + n}>{n}</option>
           ))}
@@ -816,7 +819,7 @@ function HotkeyRow({ value, modifiers, onChangeKey, onChangeMods }) {
         </Select>
       </div>
       <div className="flex items-center justify-between">
-        <span className="text-xs text-gray-300">Dashboard Modifiers</span>
+        {tx(<span className="text-xs text-gray-300">Dashboard Modifiers</span>)}
         <div className="flex gap-1">
           {MOD_FLAGS.map(m => (
             <button
@@ -828,14 +831,14 @@ function HotkeyRow({ value, modifiers, onChangeKey, onChangeMods }) {
                   : 'bg-white/5 text-gray-500 border border-white/5'
               }`}
             >
-              {m.label}
+              {t(m.label)}
             </button>
           ))}
         </div>
       </div>
       <div className="text-[10px] text-gray-600">
-        Current: {MOD_FLAGS.filter(m => modBits & m.value).map(m => m.label).join('+')}
-        {MOD_FLAGS.some(m => modBits & m.value) ? '+' : ''}{keyLabel}
+        {t('Current: {keys}', { keys: MOD_FLAGS.filter(m => modBits & m.value).map(m => t(m.label)).join('+')
+          + (MOD_FLAGS.some(m => modBits & m.value) ? '+' : '') + keyLabel })}
       </div>
     </div>
   );

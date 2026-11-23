@@ -1,11 +1,12 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { t, tk } from '../i18n';
 
 // The faction editor: factions.yaml without a text editor. Everything it offers comes from the user's own load order
 // (the DLL's FactionEditor::Catalog): the game's and the mods' factions, the leveled lists soldiers can be raised from,
 // the people the game knows by name. Saving writes the file (the old one is kept beside it) and reads it in again.
 
-const TYPE_LABELS = { military: 'Military', guild: 'Guild', political: 'Political' };
-const STYLE_LABELS = { '': 'None', brawl: 'Brawls', sabotage: 'Sabotage', assassination: 'Assassination', proxy: 'Through others' };
+const TYPE_LABELS = { military: tk('Military'), guild: tk('Guild'), political: tk('Political') };
+const STYLE_LABELS = { '': tk('None'), brawl: tk('Brawls'), sabotage: tk('Sabotage'), assassination: tk('Assassination'), proxy: tk('Through others') };
 const input = 'w-full bg-black/30 border border-white/10 rounded px-2 py-1 text-xs text-gray-200 placeholder-gray-600 focus:outline-none focus:border-white/30';
 const chip = 'inline-flex items-center gap-1 rounded bg-white/10 px-1.5 py-0.5 text-[11px] text-gray-200';
 const pill = on => `rounded px-2 py-1 text-[11px] border ${on ? 'border-amber-400/60 bg-amber-400/10 text-amber-200' : 'border-white/10 text-gray-400 hover:text-gray-200'}`;
@@ -21,9 +22,10 @@ const idFromName = name => { const words = name.replace(/[^A-Za-z0-9 ]/g, ' ').s
 let kept = null;
 export const hasUnsavedFactions = () => !!kept;
 
+// label and hint: English, shown translated.
 function Field({ label, hint, children }) {
-  return (<div className="mb-2"><div className="text-[11px] text-gray-300 mb-0.5">{label}</div>{children}
-    {hint && <div className="text-[10px] text-gray-500 leading-tight mt-0.5">{hint}</div>}</div>);
+  return (<div className="mb-2"><div className="text-[11px] text-gray-300 mb-0.5">{t(label)}</div>{children}
+    {hint && <div className="text-[10px] text-gray-500 leading-tight mt-0.5">{t(hint)}</div>}</div>);
 }
 
 // A text field that offers what the load order has: type any part of a name, an id or a plugin's name.
@@ -60,7 +62,7 @@ function Suggest({ value, onChange, options, placeholder, onPick, clearOnPick })
 function Chips({ values, onChange, options, placeholder }) {
   return (<div>
     {values.length > 0 && (<div className="flex flex-wrap gap-1 mb-1">{values.map(v => (<span key={v} className={chip}>{v}
-      <button type="button" className="text-gray-400 hover:text-red-400" title="Remove" onClick={() => onChange(values.filter(x => x !== v))}>{'×'}</button></span>))}</div>)}
+      <button type="button" className="text-gray-400 hover:text-red-400" title={t('Remove')} onClick={() => onChange(values.filter(x => x !== v))}>{'×'}</button></span>))}</div>)}
     <Suggest value="" options={options} placeholder={placeholder} clearOnPick onChange={() => {}} onPick={v => { if (v && !values.includes(v)) onChange([...values, v]); }} />
   </div>);
 }
@@ -93,7 +95,7 @@ export default function FactionEditor({ sendAction, knownNpcs = [] }) {
   useEffect(() => { if (factions) kept = dirty ? { factions, selected } : null; }, [factions, selected, dirty]);
 
   const npcOptions = useMemo(() => knownNpcs.map(name => ({ id: name })), [knownNpcs]);
-  if (!factions || !catalog) return <div className="text-xs text-gray-500 py-2">Reading your load order{'…'}</div>;
+  if (!factions || !catalog) return <div className="text-xs text-gray-500 py-2">{t('Reading your load order…')}</div>;
 
   const current = factions[selected];
   const change = patch => { setFactions(list => list.map((f, i) => i === selected ? { ...f, ...patch } : f)); setDirty(true); setStatus(null); };
@@ -112,12 +114,12 @@ export default function FactionEditor({ sendAction, knownNpcs = [] }) {
 
   return (<div className="faction-editor">
     <div className="flex items-center gap-2 mb-2">
-      <button type="button" className={pill(dirty)} disabled={!dirty || busy} onClick={save}>{busy ? 'Working…' : 'Save'}</button>
-      <button type="button" className={pill(false)} disabled={!dirty || busy} onClick={discard}>Discard changes</button>
-      <span className="text-[10px] text-gray-500">{dirty ? 'Not saved yet. Your changes are kept while you look at other pages.' : 'Saved factions are in use at once. The old file is kept as factions.yaml.bak.'}</span>
+      <button type="button" className={pill(dirty)} disabled={!dirty || busy} onClick={save}>{t(busy ? 'Working…' : 'Save')}</button>
+      <button type="button" className={pill(false)} disabled={!dirty || busy} onClick={discard}>{t('Discard changes')}</button>
+      <span className="text-[10px] text-gray-500">{t(dirty ? 'Not saved yet. Your changes are kept while you look at other pages.' : 'Saved factions are in use at once. The old file is kept as factions.yaml.bak.')}</span>
     </div>
-    {status && !status.ok && <div className="text-[11px] text-red-400 mb-2">Not saved: {status.error}</div>}
-    {status && status.ok && <div className="text-[11px] text-green-400 mb-2">Saved.</div>}
+    {status && !status.ok && <div className="text-[11px] text-red-400 mb-2">{t('Not saved: {error}', { error: status.error })}</div>}
+    {status && status.ok && <div className="text-[11px] text-green-400 mb-2">{t('Saved.')}</div>}
     {status && status.warnings.map((w, i) => <div key={i} className="text-[11px] text-yellow-400 mb-1">{w}</div>)}
 
     <div className="flex gap-2">
@@ -125,35 +127,35 @@ export default function FactionEditor({ sendAction, knownNpcs = [] }) {
         {/* Buttons, so that the keyboard and the pad can choose one too (they were plain boxes: mouse only). */}
         {factions.map((f, i) => (<button type="button" key={i} onClick={() => setSelected(i)} aria-pressed={i === selected}
           className={`slot-card rounded px-2 py-1 cursor-pointer block w-full text-left ${i === selected ? 'border-amber-400/50' : ''}`}>
-          <div className="text-xs text-gray-200 truncate">{f.name || 'New faction'}{f.isNew ? <span className="text-amber-300"> {'·'} new</span> : null}</div>
-          <div className="text-[10px] text-gray-500 truncate">{TYPE_LABELS[f.type] || f.type} {'·'} {f.hold}</div>
+          <div className="text-xs text-gray-200 truncate">{f.name || t('New faction')}{f.isNew ? <span className="text-amber-300">{' · '}{t('new')}</span> : null}</div>
+          <div className="text-[10px] text-gray-500 truncate">{TYPE_LABELS[f.type] ? t(TYPE_LABELS[f.type]) : f.type} {'·'} {f.hold}</div>
         </button>))}
-        <button type="button" className={pill(false) + ' w-full'} onClick={add}>+ Add a faction</button>
+        <button type="button" className={pill(false) + ' w-full'} onClick={add}>{t('+ Add a faction')}</button>
       </div>
 
       {current && (<div className="flex-1 min-w-0 grid grid-cols-1 lg:grid-cols-2 gap-x-4 content-start">
         <Field label="Name">
-          <input className={input} value={current.name} placeholder="The Silver Hand" onChange={e => rename(e.target.value)} />
+          <input className={input} value={current.name} placeholder={t('The Silver Hand')} onChange={e => rename(e.target.value)} />
         </Field>
         <Field label="Id" hint={current.isNew ? 'What the file and other factions call it. Made from the name; change it only if you need to.' : 'Fixed once saved: relations and history are kept under it.'}>
           <input className={input} value={current.id} disabled={!current.isNew} spellCheck={false}
             onChange={e => change({ id: e.target.value.replace(/[^A-Za-z0-9_]/g, ''), idTouched: true })} />
         </Field>
         <Field label="Kind">
-          <div className="flex gap-1">{(catalog.types || []).map(t => <button type="button" key={t} className={pill(current.type === t)} onClick={() => change({ type: t })}>{TYPE_LABELS[t] || t}</button>)}</div>
+          <div className="flex gap-1">{(catalog.types || []).map(kind => <button type="button" key={kind} className={pill(current.type === kind)} onClick={() => change({ type: kind })}>{TYPE_LABELS[kind] ? t(TYPE_LABELS[kind]) : kind}</button>)}</div>
         </Field>
         <Field label="Seat" hint="The city it is at home in.">
           <div className="flex flex-wrap gap-1">{(catalog.holds || []).map(h => <button type="button" key={h} className={pill(current.hold === h)} onClick={() => change({ hold: h })}>{h}</button>)}</div>
         </Field>
-        <Field label="Faction of the game" hint={gameFaction ? `${gameFaction.name || gameFaction.id} (${gameFaction.plugin}). Its members count as this faction's people.`
+        <Field label="Faction of the game" hint={gameFaction ? t("{name} ({plugin}). Its members count as this faction's people.", { name: gameFaction.name || gameFaction.id, plugin: gameFaction.plugin })
             : 'Type part of a name or a mod: every faction of your load order is offered. Its members count as this faction’s people. May stay empty.'}>
-          <Suggest value={current.skyrim_faction_id} options={catalog.gameFactions || []} placeholder="Search your load order…" onChange={v => change({ skyrim_faction_id: v })} />
+          <Suggest value={current.skyrim_faction_id} options={catalog.gameFactions || []} placeholder={t('Search your load order…')} onChange={v => change({ skyrim_faction_id: v })} />
         </Field>
         <Field label="Leaders" hint="People of the game, by name. A faction whose leaders are all dead is treated as gone.">
-          <Chips values={current.leader_names} options={npcOptions} placeholder="Add a leader…" onChange={v => change({ leader_names: v })} />
+          <Chips values={current.leader_names} options={npcOptions} placeholder={t('Add a leader…')} onChange={v => change({ leader_names: v })} />
         </Field>
         <Field label="Soldiers" hint="The list its soldiers are raised from in a battle: every leveled list of people in your load order is offered. Empty: its first ally's soldiers.">
-          <Suggest value={current.soldier_template} options={catalog.templates || []} placeholder="Search your load order…" onChange={v => change({ soldier_template: v })} />
+          <Suggest value={current.soldier_template} options={catalog.templates || []} placeholder={t('Search your load order…')} onChange={v => change({ soldier_template: v })} />
         </Field>
         <div className="flex gap-2">
           <div className="flex-1"><Field label="Army strength" hint="0 to 500, as the dungeon master weighs it.">
@@ -162,17 +164,17 @@ export default function FactionEditor({ sendAction, knownNpcs = [] }) {
             <input className={input} type="number" min="-100" max="0" value={current.war_threshold} onChange={e => change({ war_threshold: Number(e.target.value) || 0 })} /></Field></div>
         </div>
         <Field label="How it fights when it is not at war">
-          <div className="flex flex-wrap gap-1">{(catalog.styles || []).map(s => <button type="button" key={s} className={pill((current.conflict_style || '') === s)} onClick={() => change({ conflict_style: s })}>{STYLE_LABELS[s] ?? s}</button>)}</div>
+          <div className="flex flex-wrap gap-1">{(catalog.styles || []).map(s => <button type="button" key={s} className={pill((current.conflict_style || '') === s)} onClick={() => change({ conflict_style: s })}>{STYLE_LABELS[s] !== undefined ? t(STYLE_LABELS[s]) : s}</button>)}</div>
         </Field>
         {others.length > 0 && (<>
           <Field label="Rivals"><div className="flex flex-wrap gap-1">{others.map(o => <button type="button" key={o.id} className={pill(current.rivals.includes(o.id))} onClick={() => toggle('rivals', o.id)}>{o.name || o.id}</button>)}</div></Field>
           <Field label="Allies"><div className="flex flex-wrap gap-1">{others.map(o => <button type="button" key={o.id} className={pill(current.allies.includes(o.id))} onClick={() => toggle('allies', o.id)}>{o.name || o.id}</button>)}</div></Field>
         </>)}
         <Field label="Free once these quests of the game are finished" hint={'Quest editor ids (C06, TG09…). Until then it goes to no war and nobody of it is harmed. Left alone, the game’s own guilds wait for their own questlines; add a line here to say otherwise for this faction.'}>
-          <Chips values={current.free_after || []} options={[]} placeholder="Add a quest id and press Enter…" onChange={v => change({ free_after: v })} />
-          {current.free_after && <button type="button" className="text-[10px] text-gray-500 hover:text-gray-300 mt-0.5" onClick={() => { const { free_after, ...rest } = current; setFactions(list => list.map((f, i) => i === selected ? rest : f)); setDirty(true); }}>Use the game's own rule again</button>}
+          <Chips values={current.free_after || []} options={[]} placeholder={t('Add a quest id and press Enter…')} onChange={v => change({ free_after: v })} />
+          {current.free_after && <button type="button" className="text-[10px] text-gray-500 hover:text-gray-300 mt-0.5" onClick={() => { const { free_after, ...rest } = current; setFactions(list => list.map((f, i) => i === selected ? rest : f)); setDirty(true); }}>{t("Use the game's own rule again")}</button>}
         </Field>
-        <div><button type="button" className="text-[11px] text-gray-500 hover:text-red-400 mt-1" onClick={remove}>Remove this faction</button></div>
+        <div><button type="button" className="text-[11px] text-gray-500 hover:text-red-400 mt-1" onClick={remove}>{t('Remove this faction')}</button></div>
       </div>)}
     </div>
   </div>);

@@ -1,6 +1,7 @@
 // IntelEngine: what stands between the player and someone, read from the game (HeartBridge.h, Hearts.h).
 
 #include "HeartBridge.h"
+#include "GameText.h"
 #include "BondBridge.h"
 #include "Safe.h"
 
@@ -178,7 +179,7 @@ namespace IntelEngine::HeartBridge {
         auto* base = actor ? actor->GetActorBase() : nullptr;
         if (!actor || !base || !player || actor == player) return who;
         who.childlike = Childlike(actor);
-        const char* name = actor->GetDisplayFullName();
+        const char* name = GameText::In(actor->GetDisplayFullName());
         who.person = base->IsUnique() && name && *name && !actor->IsDead();
         who.kin = KinOfPlayer(base, player->GetActorBase());
         std::scoped_lock lock(g_mutex);
@@ -273,7 +274,7 @@ namespace IntelEngine::HeartBridge {
     std::string WordsFor(RE::Actor* actor) {
         if (!actor || !Hearts::MayHaveAHeartStory(WhoOf(actor))) return {};
         auto* player = RE::PlayerCharacter::GetSingleton();
-        const char* name = player ? player->GetDisplayFullName() : nullptr;
+        const char* name = player ? GameText::In(player->GetDisplayFullName()) : nullptr;
         return Hearts::Words(HeartOf(actor), name && *name ? name : "the traveller");
     }
 

@@ -1,6 +1,7 @@
 // IntelEngine: how somebody stands with the player, read from their memories of the player (BondBridge.h, Bonds.h).
 
 #include "BondBridge.h"
+#include "GameText.h"
 
 #include "AsyncDispatch.h"
 #include "FrameCost.h"
@@ -35,7 +36,7 @@ namespace IntelEngine {
 
         std::string PlayerName() {
             auto* player = RE::PlayerCharacter::GetSingleton();
-            const char* name = player ? player->GetDisplayFullName() : nullptr;
+            const char* name = player ? GameText::In(player->GetDisplayFullName()) : nullptr;
             return name && *name ? name : "the traveller";
         }
 
@@ -46,7 +47,7 @@ namespace IntelEngine {
             if (!actor || actor == player || actor->IsDead() || actor->IsDeleted()) return false;
             auto* base = actor->GetActorBase();
             if (!base || !base->IsUnique()) return false;
-            const char* name = actor->GetDisplayFullName();
+            const char* name = GameText::In(actor->GetDisplayFullName());
             if (!name || !*name) return false;
             return !HeartBridge::Childlike(actor);
         }
@@ -160,7 +161,7 @@ namespace IntelEngine {
             after = it->second;
         }
         if (handedNow) {
-            const char* raw = who->GetDisplayFullName();
+            const char* raw = GameText::In(who->GetDisplayFullName());
             logger::info("Bonds: {} is SkyrimNet Relationships' to speak for from now (its tier {}{}); what was read here before ({}) no longer "
                          "stands in for it",
                          raw && *raw ? raw : "someone", theirs.tier, theirs.ill ? std::format(", ill will {}", theirs.ill) : std::string(), Bonds::Word(after));
@@ -238,7 +239,7 @@ namespace IntelEngine {
             if (view.theirs && copy.handed) continue;                         // a relationship mod speaks for them alone
             if (view.standing < Bonds::Acquaintance && view.sour == Bonds::NotSour) continue;   // read, and still a stranger
             Row row;
-            const char* name = actor->GetDisplayFullName();
+            const char* name = GameText::In(actor->GetDisplayFullName());
             row.name = name && *name ? name : "someone";
             row.standing = view.standing;
             row.sour = view.sour;
@@ -349,7 +350,7 @@ namespace IntelEngine {
         if (m_busy.exchange(true)) return false;
         m_lastRead = RealSeconds();
         const std::uint32_t id = who->GetFormID();
-        const char* raw = who->GetDisplayFullName();
+        const char* raw = GameText::In(who->GetDisplayFullName());
         const std::string name = raw ? raw : "";
         const std::string player = PlayerName();
         const float now = NowDays();
@@ -400,7 +401,7 @@ namespace IntelEngine {
                     });
                 if (!queued) done({}, {}, {}, 0.0f, "the model could not be asked");
             };
-            if (!SkyrimNetAPI::SendCustomDecisionToLLM) return byChat();
+            if (!SkyrimNetAPI::SendCustomDecisionToLLM || SkyrimNetAPI::OwnModelSet()) return byChat();   // the player's own model reads it
             const bool queued = SkyrimNetAPI::SendCustomDecisionToLLM("intel_bond", context.c_str(), 4,
                 [done, byChat, heartAsked](const char*, const char* resultJson, int success) {
                     const auto json = nlohmann::json::parse(resultJson ? resultJson : "", nullptr, false);
@@ -455,7 +456,7 @@ namespace IntelEngine {
         }
         m_busy.store(false);
         auto* form = RE::TESForm::LookupByID<RE::Actor>(actor);
-        const char* raw = form ? form->GetDisplayFullName() : nullptr;
+        const char* raw = form ? GameText::In(form->GetDisplayFullName()) : nullptr;
         const std::string name = raw && *raw ? raw : "someone";
         if (read == Bonds::Reading::Taken) {
             logger::info("Bonds: {} stands to the player as {} (was {}; {} memories{} read, {} times together; the reader said {} / {} / {}, sure {:.2f})",

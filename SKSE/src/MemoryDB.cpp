@@ -7,6 +7,7 @@
  */
 
 #include "MemoryDB.h"
+#include "GameText.h"
 #include "SkyrimNetAPI.h"
 #include "Settings.h"
 #include "StringUtils.h"
@@ -912,7 +913,7 @@ namespace IntelEngine {
             std::string playerName = "Player";
             auto* player = RE::PlayerCharacter::GetSingleton();
             if (player) {
-                auto* name = player->GetDisplayFullName();
+                auto* name = GameText::In(player->GetDisplayFullName());
                 if (name && name[0]) playerName = name;
             }
 
