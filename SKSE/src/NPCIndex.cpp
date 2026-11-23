@@ -27,6 +27,7 @@
 #include "ProcessUtils.h"
 #include "Settings.h"
 #include "SkyrimNetAPI.h"
+#include "SocialGroups.h"
 
 // SkyrimNetAPI.h pulls in Windows.h whose min/max macros conflict with std::min/std::max
 #ifdef max
@@ -1033,6 +1034,46 @@ namespace IntelEngine {
 
     RE::Actor* NPCIndex::ResolveStoryCandidate(const std::string& name, const std::string& partnerName, RE::Actor* anchor) {
         std::shared_lock lock(m_mutex);
+        // The social engine's answer names two people of one group of its request: they are looked for together, in
+        // that group. A name alone does not say who on a load order with several of that name (a mod's copy of Sven
+        // in a back room, three "Imperial Soldier" in a camp), and the tie-break below asks who is nearest the player,
+        // which is nobody when the scene is somewhere the player is not: every pair the model chose at Riverwood's
+        // inn was dropped as "no-match" after the model had been paid for it (2026-11-23, StoryCandidateResolution.h).
+        if (!partnerName.empty()) {
+            // The last request's people, then those of the one before (its answer may come after the next request
+            // went out). The second of a pair is looked for where the first one was offered.
+            const bool earlierHolds = m_npcPoolGeneration == SlotTracker::GetSingleton()->loadGeneration.load(std::memory_order_relaxed);
+            for (const bool earlier : {false, true}) {
+                if (earlier && !earlierHolds) break;
+                const auto& pool = earlier ? m_npcEarlierPool : m_npcCandidatePool;
+                const auto& groups = earlier ? m_npcEarlierGroups : m_npcCandidateGroups;
+                if (pool.empty()) continue;
+                std::uint32_t id = 0;
+                const char* how = "";
+                bool told = false;
+                if (anchor) {
+                    if (!groups.count(anchor->GetFormID())) continue;
+                    id = ResolveStoryPartner(name, anchor->GetFormID(), pool, groups);
+                } else {
+                    const auto pair = ResolveStoryPair(name, partnerName, pool, groups);
+                    id = pair.first;
+                    how = pair.how;
+                    told = pair.told;
+                }
+                auto* found = id ? RE::TESForm::LookupByID<RE::Actor>(id) : nullptr;
+                if (found && !found->IsDeleted() && found->GetFormID() == id) {
+                    if (told) {
+                        logger::info("ResolveStoryCandidate('{}') -> {:08X}: several of that name were offered, the one in the "
+                                     "group of '{}' is meant", name, id, partnerName);
+                    }
+                    if (earlier) logger::info("ResolveStoryCandidate('{}') -> {:08X}: of the request before the last", name, id);
+                    return found;
+                }
+                if (!anchor && !earlier && std::string_view(how) != "no-match") {
+                    logger::info("ResolveStoryCandidate('{}' with '{}') -> no pair among those offered ({})", name, partnerName, how);
+                }
+            }
+        }
         // ponytail: latest-tick pools cannot isolate overlapping requests;
         // upgrade to request-bound resolution via the Papyrus contract.
         StoryCandidateRejection rejection;
@@ -2146,11 +2187,51 @@ namespace IntelEngine {
         return true;
     }
 
-    bool NPCIndex::ConsiderForNPCTick(RE::Actor* actor, RE::Actor* player, float storyCooldownHours, NPCTickActorSnapshot& a) {
+    namespace {
+        // A back room: an interior with no door to anywhere and no place of the world it belongs to. Mods keep their
+        // stock there (a museum's thirty figures named "Planter", a test cell of soldiers, copies of townsfolk for a
+        // scene); nobody walks in, and the people in it are no company for a scene. Both signs must fail, so that a
+        // real house a mod gave no location, or one whose door is not to be seen while it is not loaded, stays.
+        bool BackRoom(RE::TESObjectCELL* cell, std::unordered_map<RE::FormID, bool>& rooms) {
+            if (!cell || !cell->IsInteriorCell()) return false;
+            const auto [known, fresh] = rooms.try_emplace(cell->GetFormID(), false);
+            if (!fresh) return known->second;
+            if (cell->GetLocation()) return false;
+            bool door = false;
+            cell->ForEachReference([&](RE::TESObjectREFR* ref) -> RE::BSContainer::ForEachResult {
+                if (!ref || ref->IsDeleted()) return RE::BSContainer::ForEachResult::kContinue;
+                if (ref->extraList.GetByType<RE::ExtraTeleport>()) {
+                    door = true;
+                    return RE::BSContainer::ForEachResult::kStop;
+                }
+                return RE::BSContainer::ForEachResult::kContinue;
+            });
+            known->second = !door;
+            return !door;
+        }
+
+        // Everyone the game has in its lists, as it keeps them: the handles are copied as they are. Asking each for
+        // its actor and the actor for a handle of its own took 1.1 to 1.2 ms of one frame on a list of 9,800 actors
+        // (2026-11-23), every time either snapshot began; the slices that follow ask each handle for its actor anyway.
+        void GatherLoaded(std::vector<RE::ActorHandle>& loaded) {
+            auto* lists = RE::ProcessLists::GetSingleton();
+            if (!lists) return;
+            loaded.reserve(loaded.size() + lists->highActorHandles.size() + lists->middleHighActorHandles.size() +
+                           lists->middleLowActorHandles.size() + lists->lowActorHandles.size());
+            for (const auto* tier : {&lists->highActorHandles, &lists->middleHighActorHandles, &lists->middleLowActorHandles,
+                                     &lists->lowActorHandles}) {
+                for (const auto& handle : *tier) loaded.push_back(handle);
+            }
+        }
+    }
+
+    bool NPCIndex::ConsiderForNPCTick(RE::Actor* actor, RE::Actor* player, float storyCooldownHours, NPCTickActorSnapshot& a,
+                                      std::unordered_map<RE::FormID, bool>& rooms) {
         if (!actor || actor == player) return false;
         auto* cell = actor->GetParentCell();
         if (!cell) return false;
         if (actor->IsDead() || actor->IsDisabled() || actor->IsDynamicForm()) return false;  // fix97: no spawned actors
+        if (BackRoom(cell, rooms)) return false;
         if (actor->IsInCombat()) return false;
         if (actor->IsHostileToActor(player)) return false;
         auto* tracker = SlotTracker::GetSingleton();
@@ -2191,6 +2272,7 @@ namespace IntelEngine {
         a.isFemale     = false;
         if (auto* base = actor->GetActorBase()) {
             if (base->GetSex() == RE::SEX::kFemale) a.isFemale = true;
+            a.unique = base->IsUnique();
         }
         return true;
     }
@@ -2201,9 +2283,10 @@ namespace IntelEngine {
         if (!BeginNPCTickSnapshot(snap)) return snap;
         auto* player = RE::PlayerCharacter::GetSingleton();
         const float storyCooldownHours = GetStoryCooldownHours();
+        std::unordered_map<RE::FormID, bool> rooms;
         ProcessUtils::ForEachLoadedActor([&](RE::Actor* actor) {
             NPCTickActorSnapshot a;
-            if (ConsiderForNPCTick(actor, player, storyCooldownHours, a)) snap.candidates.push_back(std::move(a));
+            if (ConsiderForNPCTick(actor, player, storyCooldownHours, a, rooms)) snap.candidates.push_back(std::move(a));
             return false;
         });
         return snap;
@@ -2213,6 +2296,7 @@ namespace IntelEngine {
         struct Scan {
             NPCTickSnapshot snap;
             std::vector<RE::ActorHandle> loaded;
+            std::unordered_map<RE::FormID, bool> rooms;     // the cells looked at: a back room or not (BackRoom)
             std::size_t next = 0;
             float storyCooldownHours = 0.f;
             double totalMs = 0.0;
@@ -2233,11 +2317,7 @@ namespace IntelEngine {
             return;
         }
         scan->storyCooldownHours = GetStoryCooldownHours();
-        auto* player = RE::PlayerCharacter::GetSingleton();
-        ProcessUtils::ForEachLoadedActor([&](RE::Actor* actor) {
-            if (actor && actor != player) scan->loaded.push_back(actor->GetHandle());
-            return false;
-        });
+        GatherLoaded(scan->loaded);
         scan->Count(started);
         auto step = [scan]() -> bool {
             const auto sliceStarted = std::chrono::steady_clock::now();
@@ -2250,7 +2330,7 @@ namespace IntelEngine {
                 }
                 const auto held = scan->loaded[scan->next++].get();
                 NPCTickActorSnapshot a;
-                if (self->ConsiderForNPCTick(held.get(), player, scan->storyCooldownHours, a)) {
+                if (self->ConsiderForNPCTick(held.get(), player, scan->storyCooldownHours, a, scan->rooms)) {
                     scan->snap.candidates.push_back(std::move(a));
                 }
             }
@@ -2272,7 +2352,18 @@ namespace IntelEngine {
 
     bool NPCIndex::PublishNPCTickResult(NPCTickResult& result) {
         std::unique_lock poolLock(m_mutex);
-        return result.Publish(SlotTracker::GetSingleton()->loadGeneration, m_npcCandidatePool);
+        const auto& generation = SlotTracker::GetSingleton()->loadGeneration;
+        if (result.loadGeneration != generation.load(std::memory_order_relaxed)) return false;
+        // Those of the request before stay answerable for one more request (never across a load).
+        if (m_npcPoolGeneration == result.loadGeneration && !m_npcCandidatePool.empty()) {
+            m_npcEarlierPool = std::move(m_npcCandidatePool);
+            m_npcEarlierGroups = std::move(m_npcCandidateGroups);
+        } else if (m_npcPoolGeneration != result.loadGeneration) {
+            m_npcEarlierPool.clear();
+            m_npcEarlierGroups.clear();
+        }
+        m_npcPoolGeneration = result.loadGeneration;
+        return result.Publish(generation, m_npcCandidatePool, m_npcCandidateGroups);
     }
 
     NPCTickResult NPCIndex::BuildNPCInteractionContextFromSnapshot(const NPCTickSnapshot& snap) {
@@ -2289,21 +2380,12 @@ namespace IntelEngine {
             socialScoreLookup[StringUtils::ToLowerStd(name)] = score;
         }
 
-        // Group by location.
+        // The places offered, anywhere in the loaded world (SocialGroups.h): one entry for people of one name, two
+        // people at least and one of them somebody, a crowd counted no further than four.
         struct GroupedActor {
             const NPCTickActorSnapshot* actor;
             float socialScore;
         };
-        std::unordered_map<std::string, std::vector<GroupedActor>> locationGroups;
-        for (const auto& a : snap.candidates) {
-            float socialScore = 0.f;
-            auto it = socialScoreLookup.find(a.nameLower);
-            if (it != socialScoreLookup.end()) socialScore = it->second;
-            std::string locKey = StringUtils::ToLowerStd(a.location);
-            locationGroups[locKey].push_back({&a, socialScore});
-        }
-
-        // Score and filter: only locations with 2+ NPCs form candidate groups.
         struct ScoredGroup {
             std::string locationDisplay;
             std::vector<GroupedActor> npcs;
@@ -2311,44 +2393,41 @@ namespace IntelEngine {
             bool playerNearby;
         };
         std::vector<ScoredGroup> groups;
-
-        static thread_local std::mt19937 rng(std::random_device{}());
-        std::uniform_real_distribution<float> noiseDist(0.0f, 1.0f);
-
-        for (auto& [locKey, npcs] : locationGroups) {
-            if (npcs.size() < 2) continue;
-
-            float groupScore = static_cast<float>(npcs.size());
-            for (const auto& n : npcs) groupScore += n.socialScore * 0.3f;
-            groupScore += noiseDist(rng);
-
-            bool nearPlayer = false;
-            for (const auto& n : npcs) {
-                if (n.actor->cellFormId == snap.playerCellFormId) {
-                    nearPlayer = true;
-                    break;
-                }
+        {
+            std::vector<SocialGroups::Person> people;
+            people.reserve(snap.candidates.size());
+            for (const auto& a : snap.candidates) {
+                SocialGroups::Person p;
+                p.id = a.formId;
+                p.nameLower = a.nameLower;
+                p.placeLower = StringUtils::ToLowerStd(a.location);
+                p.unique = a.unique;
+                p.withPlayer = a.cellFormId == snap.playerCellFormId;
+                if (auto it = socialScoreLookup.find(a.nameLower); it != socialScoreLookup.end()) p.social = it->second;
+                people.push_back(std::move(p));
             }
-            if (nearPlayer) groupScore += 2.0f;
-
-            groups.push_back({npcs[0].actor->location, std::move(npcs), groupScore, nearPlayer});
+            static thread_local std::mt19937 rng(std::random_device{}());
+            std::uniform_real_distribution<float> noiseDist(0.0f, 1.0f);
+            const auto chosen = SocialGroups::Build(people, static_cast<std::size_t>(std::max(snap.maxPairs, 1)),
+                                                    [&]() { return noiseDist(rng); });
+            for (const auto& g : chosen) {
+                ScoredGroup group{snap.candidates[g.people.front()].location, {}, g.score, g.playerNearby};
+                for (const auto i : g.people) group.npcs.push_back({&snap.candidates[i], people[i].social});
+                groups.push_back(std::move(group));
+            }
         }
 
         if (groups.empty()) {
-            logger::debug("[NPCTick] No location groups with 2+ NPCs");
+            logger::info("[NPCTick] nowhere two people for a scene among {} looked at: nothing is asked", snap.candidates.size());
             return result;
         }
 
-        std::sort(groups.begin(), groups.end(),
-                  [](const ScoredGroup& a, const ScoredGroup& b) { return a.groupScore > b.groupScore; });
-        if (static_cast<int>(groups.size()) > snap.maxPairs) {
-            groups.resize(snap.maxPairs);
-        }
-
-        // Keep the pool private to this result until main-thread generation validation.
-        for (const auto& group : groups) {
-            for (const auto& n : group.npcs) {
+        // Keep the pool private to this result until main-thread generation validation. With each person goes the
+        // group they are offered in: the answer names two of one group.
+        for (std::size_t g = 0; g < groups.size(); ++g) {
+            for (const auto& n : groups[g].npcs) {
                 result.candidates.emplace(n.actor->nameLower, n.actor->formId);
+                result.groups.emplace(n.actor->formId, static_cast<std::uint32_t>(g));
             }
         }
 
@@ -2424,7 +2503,14 @@ namespace IntelEngine {
             md += "\n\n";
         }
 
-        logger::info("[NPCTick] async context: {} groups, {} chars", groups.size(), md.size());
+        {
+            std::string offered;
+            for (const auto& group : groups) {
+                offered += std::format("{}{} ({}{})", offered.empty() ? "" : ", ", group.locationDisplay, group.npcs.size(),
+                                       group.playerNearby ? ", the player there" : "");
+            }
+            logger::info("[NPCTick] async context: {} groups, {} chars; offered: {}", groups.size(), md.size(), offered);
+        }
         result.context = MemoryDB::EscapeJsonString(md);
         return result;
     }
@@ -2774,11 +2860,7 @@ namespace IntelEngine {
 
     // Everyone loaded now (a frame of its own when spread); StepStoryDMScan checks them a slice at a time.
     static void GatherStoryDMScan(std::vector<RE::ActorHandle>& loaded) {
-        auto* player = RE::PlayerCharacter::GetSingleton();
-        ProcessUtils::ForEachLoadedActor([&](RE::Actor* actor) {
-            if (actor && actor != player) loaded.push_back(actor->GetHandle());
-            return false;
-        });
+        GatherLoaded(loaded);     // the player among them: the slices pass the player by
     }
 
     NPCIndex::StoryDMTickSnapshot NPCIndex::BuildStoryDMTickSnapshot(int maxCandidates, float absenceDays,

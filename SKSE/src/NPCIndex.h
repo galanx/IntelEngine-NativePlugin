@@ -466,6 +466,7 @@ namespace IntelEngine {
             std::string bio;          // pre-fetched
             bool        isFemale      = false;
             bool        isFollower    = false;
+            bool        unique        = false;   // the game's own mark of a one-of-a-kind person
         };
 
         /** Tick-level snapshot for the NPC interaction tick (NPC DM). */
@@ -682,7 +683,9 @@ namespace IntelEngine {
         // The NPC tick's snapshot: the player's part (false: no player or cell), and one loaded person (true: they
         // may take part in a scene, filled into out).
         bool BeginNPCTickSnapshot(NPCTickSnapshot& snap);
-        bool ConsiderForNPCTick(RE::Actor* actor, RE::Actor* player, float storyCooldownHours, NPCTickActorSnapshot& out);
+        // rooms: what is already known of the cells looked at this snapshot (true: a back room nobody can walk into).
+        bool ConsiderForNPCTick(RE::Actor* actor, RE::Actor* player, float storyCooldownHours, NPCTickActorSnapshot& out,
+                                std::unordered_map<RE::FormID, bool>& rooms);
         // The next slice of a spread snapshot, handed to the game's thread a frame later.
         static void NextStoryDMSlice(std::shared_ptr<StoryDMScan> scan);
 
@@ -718,6 +721,14 @@ namespace IntelEngine {
         // Each tick replaces only its own pool.
         StoryCandidatePool m_dmCandidatePool;
         StoryCandidatePool m_npcCandidatePool;
+        // Which group of the social engine's request each of its people was offered in: a name several carry is told
+        // apart by the group the answer's other person is in (StoryCandidateResolution.h, ResolveStoryPair).
+        StoryCandidateGroups m_npcCandidateGroups;
+        // The request before the last, of the same loaded game: its answer may still be on its way when the next
+        // request goes out (the player waited or slept meanwhile), and an answer already paid for is not thrown away.
+        StoryCandidatePool m_npcEarlierPool;
+        StoryCandidateGroups m_npcEarlierGroups;
+        std::uint32_t m_npcPoolGeneration = 0;
 
         // Story cooldown mirror: FormID -> game time when last picked
         // Volatile (empty on load), self-heals after first tick

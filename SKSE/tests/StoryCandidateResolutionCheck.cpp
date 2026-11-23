@@ -77,5 +77,53 @@ int main() {
                 diagnostic.branch == expected, "wrong rejection diagnostic");
     }
     std::cout << "PASS: repeated reference identities, zero-ID rejection and rejection branches\n";
+
+    // ---- The social engine's answer: two of one group (2026-11-23, a list of some 1,500 plugins).
+    // Three people named Sven and two named Delphine are in the game: the real ones in Riverwood's inn (group 0), a
+    // mod's copies in a back room (group 1), another mod's Sven in its own town (group 3). The model chose
+    // "Delphine" and "Sven" of the inn, fourteen times, and the old rule answered "nobody" each time.
+    {
+        const StoryCandidatePool offered{{"sven", 0x00013491},     {"delphine", 0x00013485}, {"feier", 0xFE0AA809},
+                                         {"jinx", 0xFEDA9803},     {"sven", 0x241A1166},     {"delphine", 0x2419A8F4},
+                                         {"planter", 0x24000001},  {"marise aravel", 0x000136C0},
+                                         {"nivenor", 0x000136C1},  {"sven", 0x6C122399},     {"reich guard", 0x6C000010}};
+        const StoryCandidateGroups groupOf{{0x00013491, 0}, {0x00013485, 0}, {0xFE0AA809, 0}, {0xFEDA9803, 0},
+                                           {0x241A1166, 1}, {0x2419A8F4, 1}, {0x24000001, 1},
+                                           {0x000136C0, 2}, {0x000136C1, 2}, {0x6C122399, 3}, {0x6C000010, 3}};
+        Require(ResolveStoryCandidateFormID("delphine", {}, offered) == 0, "the old rule: a name two carry is nobody (what was seen)");
+        auto pair = ResolveStoryPair("delphine", "Sven", offered, groupOf);
+        Require(pair && pair.first == 0x00013485 && pair.second == 0x00013491 && pair.told && std::string_view(pair.how) == "same-group",
+                "Delphine and Sven of the inn, the first group that holds both");
+        pair = ResolveStoryPair("Sven", "FeiEr", offered, groupOf);
+        Require(pair && pair.first == 0x00013491 && pair.second == 0xFE0AA809, "the Sven who stands with FeiEr");
+        pair = ResolveStoryPair("Sven", "Reich Guard", offered, groupOf);
+        Require(pair && pair.first == 0x6C122399 && pair.second == 0x6C000010, "the other town's Sven with his own guard");
+        pair = ResolveStoryPair("Sven", "Planter", offered, groupOf);
+        Require(pair && pair.first == 0x241A1166, "the group decides, whichever it is");
+        pair = ResolveStoryPair("Marise Aravel", "Nivenor", offered, groupOf);
+        Require(pair && pair.first == 0x000136C0 && pair.second == 0x000136C1 && !pair.told, "one of a name each: as before");
+        pair = ResolveStoryPair("Marise Aravel", "Jinx", offered, groupOf);
+        Require(pair && std::string_view(pair.how) == "by-name", "two of different groups, each the only one of their name: taken, as before");
+        pair = ResolveStoryPair("Sven", "Nivenor", offered, groupOf);
+        Require(!pair && std::string_view(pair.how) == "ambiguous", "no group holds both and three are called Sven: nobody");
+        pair = ResolveStoryPair("Sven", "Sven", offered, groupOf);
+        Require(!pair, "nobody meets themselves, and no group has two of the name");
+        pair = ResolveStoryPair("Hulda", "Sven", offered, groupOf);
+        Require(!pair && std::string_view(pair.how) == "no-match", "a name nobody offered carries");
+        pair = ResolveStoryPair("Jinx", "Jinx", offered, groupOf);
+        Require(!pair && std::string_view(pair.how) == "same-person", "one person named twice");
+        Require(ResolveStoryPartner("Sven", 0x00013485, offered, groupOf) == 0x00013491, "the second one: of the first one's group");
+        Require(ResolveStoryPartner("delphine", 0x241A1166, offered, groupOf) == 0x2419A8F4, "... whichever group that is");
+        Require(ResolveStoryPartner("Nivenor", 0x00013485, offered, groupOf) == 0x000136C1, "... else the only one of the name");
+        Require(ResolveStoryPartner("Sven", 0x000136C0, offered, groupOf) == 0, "... and nobody when several carry it elsewhere");
+        Require(ResolveStoryPartner("Jinx", 0xFEDA9803, offered, groupOf) == 0, "never the first one again");
+        // A name with its role in brackets, and a name with an ending (Albanian speech in an English game).
+        const StoryCandidatePool roles{{"brend [imperial soldier]", 1}, {"maering [imperial soldier]", 2}, {"brend [guard]", 3}};
+        pair = ResolveStoryPair("Brend", "Maering", roles, {{1, 0}, {2, 0}, {3, 1}});
+        Require(pair && pair.first == 1 && pair.second == 2, "the role left out: still the one of the group");
+        pair = ResolveStoryPair("Svenit", "Delphin\xC3\xABn", offered, groupOf);     // Delphinen, with a diaeresis on the e
+        Require(pair && pair.first == 0x00013491 && pair.second == 0x00013485, "a name in another form finds the same people");
+        std::cout << "PASS: the social engine's pair is found in the group it was offered in\n";
+    }
     std::cout << "PASS: exact, suffix-dropped Avresa/Maering, case/whitespace, ambiguous, duplicate, unknown and out-of-set rejection\n";
 }
