@@ -36,12 +36,25 @@ vcpkg_cmake_config_fixup(PACKAGE_NAME CommonLibSSE CONFIG_PATH lib/cmake/CommonL
 # add_commonlibsse_plugin() lives here; the package config includes it.
 file(INSTALL "${SOURCE_PATH}/cmake/CommonLibSSE.cmake" DESTINATION "${CURRENT_PACKAGES_DIR}/share/CommonLibSSE")
 file(INSTALL "${OPENVR_PATH}/lib/win64/openvr_api.lib" DESTINATION "${CURRENT_PACKAGES_DIR}/lib")
+# CommonLib's headers include <openvr.h>; the source build had extern/openvr/headers on the include path.
+file(GLOB _openvr_headers "${OPENVR_PATH}/headers/*.h")
+file(INSTALL ${_openvr_headers} DESTINATION "${CURRENT_PACKAGES_DIR}/include")
 
 # The exported targets carry the build tree's absolute openvr_api.lib path; point it into the package instead,
 # so a package restored from the binary cache works in any worktree.
 file(READ "${CURRENT_PACKAGES_DIR}/share/CommonLibSSE/CommonLibSSE-targets.cmake" _targets)
 string(REGEX REPLACE ":[A-Za-z]:[^;\"<>]*/openvr_api\\.lib" [[:${_IMPORT_PREFIX}/lib/openvr_api.lib]] _targets "${_targets}")
 file(WRITE "${CURRENT_PACKAGES_DIR}/share/CommonLibSSE/CommonLibSSE-targets.cmake" "${_targets}")
+
+# Upstream's config includes the targets before finding their dependencies and never finds DirectXTK, so
+# consumers fail with "Microsoft::DirectXTK not found". Find every link dependency first.
+file(WRITE "${CURRENT_PACKAGES_DIR}/share/CommonLibSSE/CommonLibSSEConfig.cmake" [[
+include(CMakeFindDependencyMacro)
+find_dependency(spdlog CONFIG)
+find_dependency(directxtk CONFIG)
+include("${CMAKE_CURRENT_LIST_DIR}/CommonLibSSE-targets.cmake")
+include("${CMAKE_CURRENT_LIST_DIR}/CommonLibSSE.cmake")
+]])
 
 file(REMOVE_RECURSE "${CURRENT_PACKAGES_DIR}/debug/include" "${CURRENT_PACKAGES_DIR}/debug/share")
 vcpkg_install_copyright(FILE_LIST "${SOURCE_PATH}/LICENSE")

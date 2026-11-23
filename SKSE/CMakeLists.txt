@@ -24,99 +24,43 @@ endif()
 # Dependencies
 # =============================================================================
 
-include(FetchContent)
+# CommonLib comes from the overlay port in vcpkg-ports/commonlibsse-ng. vcpkg builds it once per machine and
+# restores it from the binary cache in every worktree, instead of compiling it inside each build directory.
+find_package(CommonLibSSE CONFIG REQUIRED)
 
-set(
-    INTELENGINE_COMMONLIBSSE_SOURCE_DIR
-    ""
-    CACHE PATH
-    "Optional clean checkout of the pinned MinLL/CommonLibVR revision"
-)
-
-set(BUILD_TESTS OFF CACHE BOOL "Build CommonLibSSE tests" FORCE)
-set(ENABLE_SKYRIM_SE ON CACHE BOOL "Build Skyrim SE support" FORCE)
-set(ENABLE_SKYRIM_AE ON CACHE BOOL "Build Skyrim AE support" FORCE)
-set(ENABLE_SKYRIM_VR ON CACHE BOOL "Build Skyrim VR support" FORCE)
-set(COMMONLIB_PREBUILT OFF CACHE BOOL "Use prebuilt CommonLib" FORCE)
-set(COMMONLIB_PREBUILT_DIR "" CACHE PATH "Prebuilt CommonLib directory" FORCE)
-set(_intelengine_commonlibsse_revision "550cc4fb9114649dcf526d1f3d73d710c5d7003b")
-
-if(INTELENGINE_COMMONLIBSSE_SOURCE_DIR)
-    add_subdirectory(
-        "${INTELENGINE_COMMONLIBSSE_SOURCE_DIR}"
-        "${CMAKE_CURRENT_BINARY_DIR}/commonlibsse-ng"
-    )
-else()
-    FetchContent_Declare(
-        CommonLibSSE
-        GIT_REPOSITORY https://github.com/MinLL/CommonLibVR.git
-        GIT_TAG ${_intelengine_commonlibsse_revision}
-        GIT_SUBMODULES extern/openvr
-    )
-    FetchContent_MakeAvailable(CommonLibSSE)
+# Provenance: the installed package must come from this repository's port, at its pinned revision, MIT-licensed.
+set(_commonlib_port "${CMAKE_CURRENT_SOURCE_DIR}/vcpkg-ports/commonlibsse-ng/portfile.cmake")
+set(_commonlib_share "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/share/commonlibsse-ng")
+file(STRINGS "${_commonlib_port}" _commonlib_ref_line REGEX "^[ \t]*REF [0-9a-f]+[ \t]*$" LIMIT_COUNT 1)
+string(REGEX REPLACE "^[ \t]*REF ([0-9a-f]+)[ \t]*$" "\\1" _commonlib_revision "${_commonlib_ref_line}")
+string(LENGTH "${_commonlib_revision}" _commonlib_revision_length)
+if(NOT _commonlib_revision_length EQUAL 40)
+    message(FATAL_ERROR "The CommonLib port must pin a full commit SHA as REF; got '${_commonlib_revision}'")
 endif()
-
-get_target_property(_intelengine_commonlibsse_source_dir CommonLibSSE SOURCE_DIR)
-
-find_package(Git REQUIRED)
-execute_process(
-    COMMAND "${GIT_EXECUTABLE}" -C "${_intelengine_commonlibsse_source_dir}" rev-parse HEAD
-    RESULT_VARIABLE _commonlib_revision_result
-    OUTPUT_VARIABLE _commonlib_revision
-    OUTPUT_STRIP_TRAILING_WHITESPACE
-)
-if(NOT _commonlib_revision_result EQUAL 0 OR
-   NOT _commonlib_revision STREQUAL _intelengine_commonlibsse_revision)
-    message(FATAL_ERROR "CommonLib must resolve to MinLL/CommonLibVR ${_intelengine_commonlibsse_revision}; got '${_commonlib_revision}'")
+file(SHA256 "${_commonlib_port}" _commonlib_port_sha)
+file(STRINGS "${_commonlib_share}/vcpkg_abi_info.txt" _commonlib_abi_port REGEX "^portfile.cmake ")
+if(NOT _commonlib_abi_port STREQUAL "portfile.cmake ${_commonlib_port_sha}")
+    message(FATAL_ERROR "The installed CommonLib was not built from vcpkg-ports/commonlibsse-ng (installed: '${_commonlib_abi_port}')")
 endif()
-execute_process(
-    COMMAND "${GIT_EXECUTABLE}" -C "${_intelengine_commonlibsse_source_dir}" status --porcelain --untracked-files=all
-    RESULT_VARIABLE _commonlib_status_result
-    OUTPUT_VARIABLE _commonlib_status
-    OUTPUT_STRIP_TRAILING_WHITESPACE
-)
-if(NOT _commonlib_status_result EQUAL 0 OR NOT _commonlib_status STREQUAL "")
-    message(FATAL_ERROR "The pinned CommonLib checkout must be clean: ${_commonlib_status}")
-endif()
-file(STRINGS "${_intelengine_commonlibsse_source_dir}/LICENSE" _commonlib_license LIMIT_COUNT 1)
+file(STRINGS "${_commonlib_share}/copyright" _commonlib_license LIMIT_COUNT 1)
 if(NOT _commonlib_license STREQUAL "MIT License")
-    message(FATAL_ERROR "The pinned CommonLib checkout must retain its MIT license")
+    message(FATAL_ERROR "The pinned CommonLib must retain its MIT license")
 endif()
-get_target_property(_commonlib_imported CommonLibSSE IMPORTED)
-if(_commonlib_imported)
-    message(FATAL_ERROR "IntelEngine requires source-built CommonLib, not a prebuilt library")
+get_target_property(_commonlib_definitions CommonLibSSE::CommonLibSSE INTERFACE_COMPILE_DEFINITIONS)
+if(NOT _commonlib_definitions MATCHES "ENABLE_SKYRIM_VR=1")
+    # A flat-only build would need the TESObjectREFR::Unk_8C header correction, which a prebuilt library cannot take.
+    message(FATAL_ERROR "IntelEngine requires CommonLib built with ENABLE_SKYRIM_VR")
 endif()
-message(STATUS "CommonLib provenance: MinLL/CommonLibVR ${_commonlib_revision}, MIT, source-built")
+message(STATUS "CommonLib provenance: FatelessAI/CommonLibVR ${_commonlib_revision}, MIT, vcpkg port")
 
-# Cross-VR uses non-virtual runtime wrappers (getter slots 0x97 flat / 0x98 VR).
-# Only flat-only builds need the extra Unk_8C virtual removed. Keep the
-# fingerprint guard in every mode; both targets must use the same header view.
-file(READ "${_intelengine_commonlibsse_source_dir}/include/RE/T/TESObjectREFR.h" _commonlib_refr_header)
+# Cross-VR uses non-virtual runtime wrappers (getter slots 0x97 flat / 0x98 VR). Keep the fingerprint guard:
+# a changed header means the ABI assumptions in this plugin must be re-audited.
+file(READ "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/include/RE/T/TESObjectREFR.h" _commonlib_refr_header)
 string(REPLACE "\r\n" "\n" _commonlib_refr_header "${_commonlib_refr_header}")
 string(SHA256 _commonlib_refr_sha "${_commonlib_refr_header}")
 if(NOT _commonlib_refr_sha STREQUAL "98a8a1cb24f51b893b4343c4c552e363d9bc90ee7a611c05f7719c2479bec2b6")
     message(FATAL_ERROR "The audited CommonLib TESObjectREFR header changed; re-evaluate the non-VR ABI correction")
 endif()
-if(NOT ENABLE_SKYRIM_VR)
-    set(_commonlib_abi_include "${CMAKE_CURRENT_BINARY_DIR}/commonlib-abi/include")
-    string(REGEX REPLACE
-        "\n[ \t]*SKYRIM_REL_VR_VIRTUAL void[ \t]+Unk_8C\\(void\\);[^\n]*"
-        ""
-        _commonlib_refr_fixed
-        "${_commonlib_refr_header}"
-    )
-    if(_commonlib_refr_fixed STREQUAL _commonlib_refr_header)
-        message(FATAL_ERROR "The CommonLib non-VR ABI correction did not remove the extra virtual slot")
-    endif()
-    file(MAKE_DIRECTORY "${_commonlib_abi_include}/RE/T")
-    file(GENERATE OUTPUT "${_commonlib_abi_include}/RE/T/TESObjectREFR.h" CONTENT "${_commonlib_refr_fixed}")
-    target_include_directories(CommonLibSSE BEFORE PUBLIC "$<BUILD_INTERFACE:${_commonlib_abi_include}>")
-    message(STATUS "CommonLib ABI correction: omit VR-only TESObjectREFR::Unk_8C from SE/AE vtables")
-else()
-    message(STATUS "CommonLib ABI: pinned cross-VR runtime wrappers; no flat-only header override")
-endif()
-
-include("${_intelengine_commonlibsse_source_dir}/cmake/CommonLibSSE.cmake")
 
 find_package(fmt CONFIG REQUIRED)
 find_package(rapidfuzz CONFIG REQUIRED)
