@@ -1,6 +1,8 @@
 # Pinned CommonLib for IntelEngine. Built once per machine and restored from the vcpkg binary cache in every
 # worktree. SKSE/CMakeLists.txt reads the REF below as the single source of truth for the pin.
 vcpkg_check_linkage(ONLY_STATIC_LIBRARY)
+# IntelEngine builds Release only; the debug CommonLib would be another 1.5 GB in every build directory.
+set(VCPKG_BUILD_TYPE release)
 
 vcpkg_from_github(
     OUT_SOURCE_PATH SOURCE_PATH

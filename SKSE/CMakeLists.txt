@@ -1,5 +1,9 @@
 cmake_minimum_required(VERSION 3.21)
 
+# vcpkg's manifest install runs inside project(). Drop its package staging copies after installing: CommonLib
+# alone would otherwise sit twice in every build directory (1.3 GB each).
+set(VCPKG_INSTALL_OPTIONS "--clean-packages-after-build" CACHE STRING "Extra vcpkg install options")
+
 # =============================================================================
 # Project Configuration
 # =============================================================================
