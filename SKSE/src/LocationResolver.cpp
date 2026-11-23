@@ -140,9 +140,31 @@ namespace IntelEngine {
         // hundred times over; and the time the files take is logged, since this runs again whenever the index is
         // rebuilt.)
         std::error_code dirError;
+        // The game's language (Skyrim.ini, sLanguage), lower-case: "english", "german", "russian".
+        std::string gameLanguage;
+        if (auto* ini = RE::INISettingCollection::GetSingleton()) {
+            if (auto* setting = ini->GetSetting("sLanguage:General"); setting && setting->GetType() == RE::Setting::Type::kString) {
+                if (const char* word = setting->GetString()) gameLanguage = word;
+            }
+        }
+        for (auto& c : gameLanguage) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
         try {
             for (const auto& file : std::filesystem::directory_iterator("Data/SKSE/Plugins/IntelEngine/placenames", dirError)) {
                 if (file.path().extension() != ".tsv") continue;
+                // The game's own names in each language it ships come with IntelEngine (german.tsv, russian.tsv ...),
+                // for the places a mod of the load order renamed in English: a German game with an English-only patch
+                // calls Whiterun "Whiterun", and "Weißlauf" was found nowhere (it went to the Underforge, "Tiefenschmiede
+                // von Weißlauf", 2026-11-23). Only the table of the game's language is read, with English and any
+                // table of another name (a profile's own, such as gheg.tsv): another language's names would only
+                // widen the near misses.
+                {
+                    std::string stem = file.path().stem().string();
+                    for (auto& c : stem) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+                    static constexpr std::string_view kGameLanguages[] = {"german", "french", "italian", "spanish", "polish",
+                                                                          "russian", "japanese", "chinese"};
+                    const bool ofAGameLanguage = std::find(std::begin(kGameLanguages), std::end(kGameLanguages), stem) != std::end(kGameLanguages);
+                    if (ofAGameLanguage && stem != gameLanguage) continue;
+                }
                 const auto began = std::chrono::steady_clock::now();
                 std::ifstream in(file.path(), std::ios::binary);
                 std::uint32_t rows = 0, found = 0, added = 0;

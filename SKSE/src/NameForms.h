@@ -140,6 +140,25 @@ namespace IntelEngine::NameForms {
     //    Vetrenogo), and what was said may go on for at most three letters behind the common part (Whiterun:
     //    Whiterunit, Vaitran: Vaitranom), two behind a name-word of three ("Jon": "Jonit", never "Jonas").
     //  - Never across an apostrophe: "Edan" is not "Edan's" (the creature "Edan's Shadow" answered for people).
+    // A letter an ending may replace at the end of a name-word: a vowel (y and w count, as in Welsh and in
+    // transliterations), and in Cyrillic the vowels, й and the soft and hard signs. Marks are gone by the time a word
+    // is read (LetterFold), so ë, á, ę are e, a, e here; a few are listed anyway for text that kept them.
+    inline bool Replaceable(char32_t c) {
+        switch (c) {
+            case U'a': case U'e': case U'i': case U'o': case U'u': case U'y': case U'w':
+            case U'à': case U'á': case U'â': case U'ä': case U'è': case U'é': case U'ê':
+            case U'ë': case U'ì': case U'í': case U'î': case U'ï': case U'ò': case U'ó':
+            case U'ô': case U'ö': case U'ù': case U'ú': case U'û': case U'ü': case U'ý':
+            case U'ą': case U'ę':
+            case U'а': case U'е': case U'ё': case U'и': case U'й': case U'о': case U'у':
+            case U'ы': case U'э': case U'ю': case U'я': case U'ь': case U'ъ':
+            case U'і': case U'ї': case U'є':
+                return true;
+            default:
+                return false;
+        }
+    }
+
     inline int SameWord(std::u32string_view name, std::u32string_view said) {
         if (name.empty() || said.empty()) return -1;
         if (name == said) return 0;
@@ -156,6 +175,10 @@ namespace IntelEngine::NameForms {
         if (nameTail > mayLose || saidTail > mayAdd) return -1;
         for (std::size_t i = p; i < ln; ++i) {
             if (Apostrophe(name[i])) return -1;
+            // What an ending replaces is a vowel (a soft or short sign in Cyrillic): Lidiya: Lidii, Isolda: Isoldën,
+            // Vetrenyi: Vetrenogo. A consonant is never replaced: "Назим" (Nazeem, in a game where his record kept its
+            // English name) was taken for "Назир" (Nazir of the Dark Brotherhood), 2026-11-23.
+            if (!Replaceable(name[i])) return -1;
         }
         for (std::size_t i = p; i < ls; ++i) {
             if (Apostrophe(said[i])) return -1;
@@ -197,6 +220,16 @@ namespace IntelEngine::NameForms {
             said.text.size() - name.text.size() <= 3 && said.text.compare(0, name.text.size(), name.text) == 0) {
             v.stand = Forms;
             v.cost = static_cast<int>(said.text.size() - name.text.size());
+            return v;
+        }
+        // ...or the name without the word of its kind at its end, as people say it, when a language pack names that
+        // word: 沉睡巨人 for 沉睡巨人客棧, as "Sleeping Giant" is said for "Sleeping Giant Inn" (Chinese writes the two as
+        // one; a Japanese name keeps them apart, 宿屋「スリーピング・ジャイアント」, and goes word by word below).
+        if (Unspaced(name.text.front()) && free && said.text.size() >= 2 && name.text.size() > said.text.size() &&
+            name.text.compare(0, said.text.size(), said.text) == 0 &&
+            free(std::u32string_view(name.text).substr(said.text.size()))) {
+            v.stand = Forms;
+            v.cost = static_cast<int>(name.text.size() - said.text.size());
             return v;
         }
         // Word by word. Each word said goes with the name-word it fits best; a name-word is taken once.

@@ -49,6 +49,10 @@ int main() {
         Require(Is("йон сын битвы", "к йону", PartForms) && Is("лидия ветреный пик", "лидии", PartForms), "a first name, declined, is part of the name");
         Require(Is("гарцующая кобыла", "в гарцующей кобыле", Forms), "an adjective and a noun, both in another case");
         Require(Is("ветреный пик", "ветреного пика", Forms), "a long word may lose its last two letters");
+        Require(V("назир", "назим").stand == No && V("назир", "назира").stand == Forms,
+                "an ending replaces a vowel, never a consonant: Назим is not Назир (Назира is)");
+        Require(V("erik", "eris").stand == No && Is("isolda", "isolden", Forms) && Is("lumbardh", "lumbardhi", Forms),
+                "the same in Latin letters: Eris is not Erik; Isolda: Isoldën, Lumbardh: Lumbardhi");
         Require(V("лидия", "лидия").stand == Same && V("лидия", "лидии").cost == 2, "the same word costs nothing, an ending costs its letters");
 
         // ---- German: article and ending
@@ -79,6 +83,17 @@ int main() {
         // ---- Chinese: no endings; the name as it is, or with a word of place behind
         Require(Is("白漫城", "白漫城", Same) && Is("白漫城", "白漫城里", Forms) && Is("白漫城", "白河镇", No), "白漫城, 白漫城里; another town is another town");
         Require(Is("龙", "龙霄宫", No), "a name of one letter stands only for itself");
+
+        // ---- The word of its kind left out ("Sleeping Giant" for "Sleeping Giant Inn"), where a language pack names it
+        //      (2026-11-23, played in a Japanese game: the model wrote スリーピング・ジャイアント and found no road)
+        {
+            const FreeWord inns = [](std::u32string_view w) { return w == U"宿屋" || w == U"客棧"; };
+            Require(V("宿屋「スリーピング・ジャイアント」", "スリーピング・ジャイアント", inns).stand == Forms,
+                    "Japanese: the inn's name without 宿屋");
+            Require(V("沉睡巨人客棧", "沉睡巨人", inns).stand == Forms && V("沉睡巨人客棧", "沉睡", inns).stand == No,
+                    "Chinese: 沉睡巨人 for 沉睡巨人客棧, but not half of it");
+            Require(V("沉睡巨人客棧", "沉睡巨人", {}).stand == No, "... only where a language pack names the word");
+        }
 
         // ---- never one name for another (the reports NameMatch was written for, and their kin)
         Require(Is("gollgarth", "garth", No) && Is("kaitsun the bold", "tsun", No) && Is("edan's shadow", "edan", No), "Garth, Tsun, Edan");
