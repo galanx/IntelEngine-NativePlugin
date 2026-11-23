@@ -48,7 +48,13 @@ file(WRITE "${CURRENT_PACKAGES_DIR}/share/CommonLibSSE/CommonLibSSE-targets.cmak
 
 # Upstream's config includes the targets before finding their dependencies and never finds DirectXTK, so
 # consumers fail with "Microsoft::DirectXTK not found". Find every link dependency first.
-file(WRITE "${CURRENT_PACKAGES_DIR}/share/CommonLibSSE/CommonLibSSEConfig.cmake" [[
+# It also records the MSVC that built the library: a static library from a newer MSVC does not link with an
+# older toolset, and consumers check this at configure time instead of failing at link time.
+vcpkg_cmake_get_vars(_cmake_vars_file)
+include("${_cmake_vars_file}")
+file(WRITE "${CURRENT_PACKAGES_DIR}/share/CommonLibSSE/CommonLibSSEConfig.cmake"
+    "set(CommonLibSSE_MSVC_VERSION \"${VCPKG_DETECTED_CMAKE_CXX_COMPILER_VERSION}\")\n")
+file(APPEND "${CURRENT_PACKAGES_DIR}/share/CommonLibSSE/CommonLibSSEConfig.cmake" [[
 include(CMakeFindDependencyMacro)
 find_dependency(spdlog CONFIG)
 find_dependency(directxtk CONFIG)

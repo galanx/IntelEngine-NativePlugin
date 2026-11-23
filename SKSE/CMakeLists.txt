@@ -27,6 +27,14 @@ endif()
 # CommonLib comes from the overlay port in vcpkg-ports/commonlibsse-ng. vcpkg builds it once per machine and
 # restores it from the binary cache in every worktree, instead of compiling it inside each build directory.
 find_package(CommonLibSSE CONFIG REQUIRED)
+# vcpkg builds with the newest Visual Studio unless VCPKG_VISUAL_STUDIO_PATH says otherwise (BuildDLL.ps1 sets it).
+# A static CommonLib from a newer MSVC fails to link here with unresolved __std_* symbols; say so now instead.
+if(CommonLibSSE_MSVC_VERSION VERSION_GREATER CMAKE_CXX_COMPILER_VERSION)
+    message(FATAL_ERROR
+        "The installed CommonLib was built by a newer MSVC (${CommonLibSSE_MSVC_VERSION}) than this build uses "
+        "(${CMAKE_CXX_COMPILER_VERSION}). Configure through SKSE/BuildDLL.ps1, or set VCPKG_VISUAL_STUDIO_PATH to "
+        "this Visual Studio and delete the build directory's vcpkg_installed.")
+endif()
 
 # Provenance: the installed package must come from this repository's port, at its pinned revision, MIT-licensed.
 set(_commonlib_port "${CMAKE_CURRENT_SOURCE_DIR}/vcpkg-ports/commonlibsse-ng/portfile.cmake")
