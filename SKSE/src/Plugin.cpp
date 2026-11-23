@@ -550,6 +550,7 @@ namespace IntelEngine {
                         task->AddTask([]() {
                             ArcBridge::GetSingleton()->WarmUp();
                             BattleManager::GetSingleton()->WarmUp();
+                            NPCIndex::GetSingleton()->WarmUpSocial();
                         });
                         AsyncDispatch::Submit([] { NPCIndex::ReadStoryFilters(); });
                     }
@@ -568,6 +569,7 @@ namespace IntelEngine {
                     warm->AddTask([] {
                         ArcBridge::GetSingleton()->WarmUp();
                         BattleManager::GetSingleton()->WarmUp();      // a session's first battle: its lookups by name
+                        NPCIndex::GetSingleton()->WarmUpSocial();     // the social engine's first look: back rooms, first calls
                     });
                 }
                 LanguageBridge::GetSingleton()->Decide();   // the settings may differ from when the data was loaded

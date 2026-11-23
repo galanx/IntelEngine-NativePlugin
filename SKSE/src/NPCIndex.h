@@ -489,6 +489,11 @@ namespace IntelEngine {
          */
         NPCTickSnapshot BuildNPCTickSnapshot(int maxPairs);
 
+        /** What the social engine's first look of a session would do for the first time in the middle of play, done
+         *  while a save comes in (the game's thread): which of the loaded people's rooms are back rooms, and the first
+         *  calls of the per-person checks. The first look took 1.2 ms of one frame on a list of 9,800 actors. */
+        void WarmUpSocial();
+
         /** The same snapshot spread over frames, at most about half a millisecond of each: all in one frame it took
          *  about 2 ms on a small load order, every NPC tick. Call on the game's thread; done runs there with the
          *  finished snapshot, and not at all when a save was loaded in between. */
@@ -683,9 +688,9 @@ namespace IntelEngine {
         // The NPC tick's snapshot: the player's part (false: no player or cell), and one loaded person (true: they
         // may take part in a scene, filled into out).
         bool BeginNPCTickSnapshot(NPCTickSnapshot& snap);
-        // rooms: what is already known of the cells looked at this snapshot (true: a back room nobody can walk into).
-        bool ConsiderForNPCTick(RE::Actor* actor, RE::Actor* player, float storyCooldownHours, NPCTickActorSnapshot& out,
-                                std::unordered_map<RE::FormID, bool>& rooms);
+        bool ConsiderForNPCTick(RE::Actor* actor, RE::Actor* player, float storyCooldownHours, NPCTickActorSnapshot& out);
+        // An interior with no place of the world that BackRoom has not walked through yet (its first look is the costly one).
+        bool RoomUnseen(RE::TESObjectCELL* cell) const;
         // The next slice of a spread snapshot, handed to the game's thread a frame later.
         static void NextStoryDMSlice(std::shared_ptr<StoryDMScan> scan);
 
@@ -729,6 +734,9 @@ namespace IntelEngine {
         StoryCandidatePool m_npcEarlierPool;
         StoryCandidateGroups m_npcEarlierGroups;
         std::uint32_t m_npcPoolGeneration = 0;
+        // The interiors already looked at: a back room nobody can walk into, or not (the game's thread only; a room
+        // gains no door while the game runs, so it is looked at once a session, most of them while a save comes in).
+        std::unordered_map<RE::FormID, bool> m_backRooms;
 
         // Story cooldown mirror: FormID -> game time when last picked
         // Volatile (empty on load), self-heals after first tick

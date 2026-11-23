@@ -2210,9 +2210,17 @@ namespace IntelEngine {
             return !door;
         }
 
+        // What a slice of a snapshot spread over frames may spend before it ends. It runs over by its last person, and
+        // one person can take 0.17 ms: with 0.35, three scans of sixteen had a frame of 0.48 to 0.50 ms on a list of
+        // 9,800 actors (2026-11-23). Half a millisecond of a frame is the limit.
+        constexpr double kSliceMs = 0.30;
+        // A slice that has spent more than this ends before a room nobody has looked at yet (see BackRoom).
+        constexpr double kRoomAloneMs = 0.05;
+
         // Everyone the game has in its lists, as it keeps them: the handles are copied as they are. Asking each for
         // its actor and the actor for a handle of its own took 1.1 to 1.2 ms of one frame on a list of 9,800 actors
         // (2026-11-23), every time either snapshot began; the slices that follow ask each handle for its actor anyway.
+
         void GatherLoaded(std::vector<RE::ActorHandle>& loaded) {
             auto* lists = RE::ProcessLists::GetSingleton();
             if (!lists) return;
@@ -2225,13 +2233,59 @@ namespace IntelEngine {
         }
     }
 
-    bool NPCIndex::ConsiderForNPCTick(RE::Actor* actor, RE::Actor* player, float storyCooldownHours, NPCTickActorSnapshot& a,
-                                      std::unordered_map<RE::FormID, bool>& rooms) {
+    void NPCIndex::WarmUpSocial() {
+        const auto started = std::chrono::steady_clock::now();
+        std::vector<RE::ActorHandle> loaded;
+        GatherLoaded(loaded);
+        auto* player = RE::PlayerCharacter::GetSingleton();
+        const float storyCooldownHours = GetStoryCooldownHours();
+        const std::size_t known = m_backRooms.size();
+        int rooms = 0, tried = 0;
+        std::unordered_map<RE::FormID, std::pair<std::string, int>> fullest;     // for the log: which rooms, how many in each
+        for (const auto& handle : loaded) {
+            const auto held = handle.get();
+            auto* actor = held.get();
+            auto* cell = actor ? actor->GetParentCell() : nullptr;
+            if (!cell) continue;
+            if (BackRoom(cell, m_backRooms)) {
+                ++rooms;
+                auto& entry = fullest[cell->GetFormID()];
+                if (entry.second++ == 0) {
+                    const char* name = GameText::In(cell->GetName());
+                    const char* editor = cell->GetFormEditorID();
+                    entry.first = name && name[0] ? name : editor && editor[0] ? editor : std::format("{:08X}", cell->GetFormID());
+                }
+            }
+            // The checks made of each person, for a few of them: whatever they look up for the first time.
+            if (tried < 8 && player && actor != player) {
+                NPCTickActorSnapshot a;
+                if (ConsiderForNPCTick(actor, player, storyCooldownHours, a)) ++tried;
+            }
+        }
+        const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
+        std::vector<std::pair<std::string, int>> byCount;
+        for (auto& entry : fullest) byCount.push_back(std::move(entry.second));
+        std::sort(byCount.begin(), byCount.end(), [](const auto& a, const auto& b) { return a.second != b.second ? a.second > b.second : a.first < b.first; });
+        std::string named;
+        for (std::size_t i = 0; i < byCount.size() && i < 12; ++i) {
+            named += std::format("{}{} ({})", named.empty() ? "" : ", ", byCount[i].first, byCount[i].second);
+        }
+        logger::info("Social engine: the rooms of {} loaded people looked at while the save came in ({} rooms new; {:.2f} ms). "
+                     "{} people stand in {} back rooms nobody can walk into (no door, no place of the world) and take no part "
+                     "in scenes{}{}", loaded.size(), m_backRooms.size() - known, ms, rooms, byCount.size(),
+                     named.empty() ? "" : ": ", named);
+    }
+
+    bool NPCIndex::RoomUnseen(RE::TESObjectCELL* cell) const {
+        return cell && cell->IsInteriorCell() && !m_backRooms.contains(cell->GetFormID()) && !cell->GetLocation();
+    }
+
+    bool NPCIndex::ConsiderForNPCTick(RE::Actor* actor, RE::Actor* player, float storyCooldownHours, NPCTickActorSnapshot& a) {
         if (!actor || actor == player) return false;
         auto* cell = actor->GetParentCell();
         if (!cell) return false;
         if (actor->IsDead() || actor->IsDisabled() || actor->IsDynamicForm()) return false;  // fix97: no spawned actors
-        if (BackRoom(cell, rooms)) return false;
+        if (BackRoom(cell, m_backRooms)) return false;
         if (actor->IsInCombat()) return false;
         if (actor->IsHostileToActor(player)) return false;
         auto* tracker = SlotTracker::GetSingleton();
@@ -2283,10 +2337,9 @@ namespace IntelEngine {
         if (!BeginNPCTickSnapshot(snap)) return snap;
         auto* player = RE::PlayerCharacter::GetSingleton();
         const float storyCooldownHours = GetStoryCooldownHours();
-        std::unordered_map<RE::FormID, bool> rooms;
         ProcessUtils::ForEachLoadedActor([&](RE::Actor* actor) {
             NPCTickActorSnapshot a;
-            if (ConsiderForNPCTick(actor, player, storyCooldownHours, a, rooms)) snap.candidates.push_back(std::move(a));
+            if (ConsiderForNPCTick(actor, player, storyCooldownHours, a)) snap.candidates.push_back(std::move(a));
             return false;
         });
         return snap;
@@ -2296,17 +2349,21 @@ namespace IntelEngine {
         struct Scan {
             NPCTickSnapshot snap;
             std::vector<RE::ActorHandle> loaded;
-            std::unordered_map<RE::FormID, bool> rooms;     // the cells looked at: a back room or not (BackRoom)
             std::size_t next = 0;
             float storyCooldownHours = 0.f;
             double totalMs = 0.0;
             double worstMs = 0.0;
             int frames = 0;
+            std::string perFrame;       // each frame's share, so that a slow one can be told from the rest
+            double slowestMs = 0.0;     // the one person who took longest, for a frame that went over
+            RE::FormID slowestId = 0;
+            bool slowestNewRoom = false;
             void Count(std::chrono::steady_clock::time_point since) {
                 const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - since).count();
                 totalMs += ms;
                 worstMs = std::max(worstMs, ms);
                 ++frames;
+                perFrame += std::format("{}{:.2f}", perFrame.empty() ? "" : " ", ms);
             }
         };
         auto scan = std::make_shared<Scan>();
@@ -2324,23 +2381,51 @@ namespace IntelEngine {
             auto* self = NPCIndex::GetSingleton();
             auto* player = RE::PlayerCharacter::GetSingleton();
             while (scan->next < scan->loaded.size()) {
-                if (std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - sliceStarted).count() >= 0.5) {
+                // A slice ends once kSliceMs are spent, so it runs over by its last person: with 0.5 every frame of the
+                // snapshot took 0.50 to 0.66 ms on a list of 9,800 actors (2026-11-23). Half a millisecond is the limit.
+                const auto before = std::chrono::steady_clock::now();
+                const double spent = std::chrono::duration<double, std::milli>(before - sliceStarted).count();
+                if (spent >= kSliceMs) {
                     scan->Count(sliceStarted);
                     return false;
                 }
-                const auto held = scan->loaded[scan->next++].get();
+                const auto held = scan->loaded[scan->next].get();
+                auto* actor = held.get();
+                // A room nobody looked at yet is walked through once, however much stands in it: that goes at the start
+                // of a frame, never on top of one already spent.
+                const bool newRoom = actor && self->RoomUnseen(actor->GetParentCell());
+                if (newRoom && spent > kRoomAloneMs) {
+                    scan->Count(sliceStarted);
+                    return false;
+                }
+                ++scan->next;
                 NPCTickActorSnapshot a;
-                if (self->ConsiderForNPCTick(held.get(), player, scan->storyCooldownHours, a, scan->rooms)) {
+                if (self->ConsiderForNPCTick(actor, player, scan->storyCooldownHours, a)) {
                     scan->snap.candidates.push_back(std::move(a));
+                }
+                const double took = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - before).count();
+                if (took > scan->slowestMs) {
+                    scan->slowestMs = took;
+                    scan->slowestId = actor ? actor->GetFormID() : 0;
+                    scan->slowestNewRoom = newRoom;
                 }
             }
             scan->Count(sliceStarted);
             return true;
         };
         auto finish = [scan, done = std::move(done)]() {
+            std::string slowest;
+            if (scan->worstMs > 0.5) {
+                auto* who = scan->slowestId ? RE::TESForm::LookupByID<RE::Actor>(scan->slowestId) : nullptr;
+                const char* name = who ? GameText::In(who->GetDisplayFullName()) : nullptr;
+                slowest = std::format("; the one who took longest: {} ({:08X}), {:.2f} ms{}", name && name[0] ? name : "nobody by name",
+                                      scan->slowestId, scan->slowestMs,
+                                      scan->slowestNewRoom ? ", in a room looked at for the first time" : "");
+            }
             logger::info("[NPCTick] snapshot: {} of {} people over {} frames, {:.2f} ms of the game's thread in all, at "
-                         "most {:.2f} ms of one frame",
-                         scan->snap.candidates.size(), scan->loaded.size(), scan->frames, scan->totalMs, scan->worstMs);
+                         "most {:.2f} ms of one frame ({}){}",
+                         scan->snap.candidates.size(), scan->loaded.size(), scan->frames, scan->totalMs, scan->worstMs,
+                         scan->perFrame, slowest);
             done(std::move(scan->snap));
         };
         RunAcrossFrames(scan->snap.loadGeneration, std::move(step), std::move(finish));
@@ -2918,7 +3003,7 @@ namespace IntelEngine {
                     return;
                 }
                 if (scan->next < scan->loaded.size()) {
-                    self->StepStoryDMScan(*scan, 0.5);
+                    self->StepStoryDMScan(*scan, kSliceMs);
                     scan->Count(started);
                     NextStoryDMSlice(scan);
                     return;
