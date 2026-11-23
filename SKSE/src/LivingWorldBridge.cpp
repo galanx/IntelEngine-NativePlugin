@@ -6,6 +6,7 @@
 #include "BattleManager.h"
 #include "DialogueTracker.h"
 #include "NPCIndex.h"
+#include "PlayerCellEventSource.h"
 
 #include <algorithm>
 #include <array>
@@ -146,7 +147,11 @@ namespace IntelEngine {
             // The cell event covers every way the player gets somewhere (doors, fast travel, carriages, coc); the
             // location event alone did not arrive for coc in the first test. Both lead to OnPlayerLocation, which
             // only acts when the location really changed.
-            if (auto* player = RE::PlayerCharacter::GetSingleton()) player->AsBGSActorCellEventSource()->AddEventSink(this);
+            if (auto* player = RE::PlayerCharacter::GetSingleton()) {
+                const auto version = REL::Module::get().version();
+                const auto offset = PlayerCellEventSourceOffset(REL::Module::IsVR(), version.major(), version.minor(), version.patch());
+                REL::RelocateMember<RE::BSTEventSource<RE::BGSActorCellEvent>>(player, offset).AddEventSink(this);
+            }
             m_registered = true;
             logger::info("LivingWorld: listening for arrivals and waking up");
         }

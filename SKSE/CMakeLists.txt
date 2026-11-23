@@ -225,6 +225,9 @@ target_include_directories(TalesCheck PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(TalesCheck PRIVATE nlohmann_json::nlohmann_json)
 add_executable(LivingWorldCheck EXCLUDE_FROM_ALL tests/LivingWorldCheck.cpp)
 target_include_directories(LivingWorldCheck PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+# Where the player's cell-change event source sits on each game version (PlayerCellEventSource.h).
+add_executable(PlayerCellEventSourceCheck EXCLUDE_FROM_ALL tests/PlayerCellEventSourceCheck.cpp)
+target_include_directories(PlayerCellEventSourceCheck PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 # What passed while apart, told: reunions, adventures' endings, keepsakes, the talk of the day (LivingWorld.h, Rumors.h).
 add_executable(LivesToldCheck EXCLUDE_FROM_ALL tests/LivesToldCheck.cpp)
 target_include_directories(LivesToldCheck PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
