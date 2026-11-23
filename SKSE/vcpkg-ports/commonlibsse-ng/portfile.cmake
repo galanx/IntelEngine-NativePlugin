@@ -31,6 +31,7 @@ vcpkg_cmake_configure(
         -DENABLE_SKYRIM_SE=ON
         -DENABLE_SKYRIM_AE=ON
         -DENABLE_SKYRIM_VR=ON
+        "-DCMAKE_PROJECT_INCLUDE=${CMAKE_CURRENT_LIST_DIR}/intelengine-flags.cmake"
 )
 vcpkg_cmake_install()
 vcpkg_cmake_config_fixup(PACKAGE_NAME CommonLibSSE CONFIG_PATH lib/cmake/CommonLibSSE)
