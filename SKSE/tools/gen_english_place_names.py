@@ -140,7 +140,13 @@ def main():
         strings_path = os.path.join(args.strings, os.path.splitext(os.path.basename(path))[0] + f"_{args.language}.strings")
         if os.path.exists(strings_path):
             lines.append(f"#   {sha256(strings_path)}  {os.path.basename(strings_path)}")
-    for (_, local_id), (master, kind, text) in sorted(entries.items()):
+    # Last form first: where several share a name (two locations called Whiterun, 016772 and 018A56), the DLL's index
+    # of the game's own names ends on the last of them in load order, and the first row of a file wins. So a name read
+    # from a file means the same place as the game's own name (seen in game 2026-11-23: "Weißlauf" from the German
+    # table took the other record). english.tsv predates this and is sorted the old way; it is only read for names a
+    # game has in another language, where it is consulted the same as any other table.
+    position = {os.path.basename(p).lower(): i for i, p in enumerate(args.masters)}
+    for (_, local_id), (master, kind, text) in sorted(entries.items(), key=lambda e: (position.get(e[0][0], 0), e[0][1]), reverse=True):
         lines.append(f"{master}\t{local_id:06X}\t{kind}\t{text}")
     with open(args.out, "w", encoding="utf-8", newline="\n") as f:
         f.write("\n".join(lines) + "\n")
