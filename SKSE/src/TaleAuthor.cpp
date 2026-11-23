@@ -2041,7 +2041,7 @@ namespace IntelEngine {
                 });
             if (!queued) answer("none");
         };
-        if (!SkyrimNetAPI::SendCustomDecisionToLLM || SkyrimNetAPI::OwnModelSet()) return byChat();   // the player's own model reads it
+        if (!SkyrimNetAPI::SendCustomDecisionToLLM) return byChat();
         const bool queued = SkyrimNetAPI::SendCustomDecisionToLLM("intel_tale_turn", context.c_str(), 0,
             [answer, byChat](const char*, const char* resultJson, int success) {
                 const auto json = nlohmann::json::parse(resultJson ? resultJson : "", nullptr, false);
