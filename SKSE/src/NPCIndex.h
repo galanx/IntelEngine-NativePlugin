@@ -466,6 +466,7 @@ namespace IntelEngine {
             std::string bio;          // pre-fetched
             bool        isFemale      = false;
             bool        isFollower    = false;
+            bool        unique        = false;   // the game's own mark of a one-of-a-kind person
         };
 
         /** Tick-level snapshot for the NPC interaction tick (NPC DM). */
@@ -487,6 +488,11 @@ namespace IntelEngine {
          * pre-resolves location/archetype/bio, returns a value-only snapshot.
          */
         NPCTickSnapshot BuildNPCTickSnapshot(int maxPairs);
+
+        /** What the social engine's first look of a session would do for the first time in the middle of play, done
+         *  while a save comes in (the game's thread): which of the loaded people's rooms are back rooms, and the first
+         *  calls of the per-person checks. The first look took 1.2 ms of one frame on a list of 9,800 actors. */
+        void WarmUpSocial();
 
         /** The same snapshot spread over frames, at most about half a millisecond of each: all in one frame it took
          *  about 2 ms on a small load order, every NPC tick. Call on the game's thread; done runs there with the
@@ -683,6 +689,8 @@ namespace IntelEngine {
         // may take part in a scene, filled into out).
         bool BeginNPCTickSnapshot(NPCTickSnapshot& snap);
         bool ConsiderForNPCTick(RE::Actor* actor, RE::Actor* player, float storyCooldownHours, NPCTickActorSnapshot& out);
+        // An interior with no place of the world that BackRoom has not walked through yet (its first look is the costly one).
+        bool RoomUnseen(RE::TESObjectCELL* cell) const;
         // The next slice of a spread snapshot, handed to the game's thread a frame later.
         static void NextStoryDMSlice(std::shared_ptr<StoryDMScan> scan);
 
@@ -718,6 +726,17 @@ namespace IntelEngine {
         // Each tick replaces only its own pool.
         StoryCandidatePool m_dmCandidatePool;
         StoryCandidatePool m_npcCandidatePool;
+        // Which group of the social engine's request each of its people was offered in: a name several carry is told
+        // apart by the group the answer's other person is in (StoryCandidateResolution.h, ResolveStoryPair).
+        StoryCandidateGroups m_npcCandidateGroups;
+        // The request before the last, of the same loaded game: its answer may still be on its way when the next
+        // request goes out (the player waited or slept meanwhile), and an answer already paid for is not thrown away.
+        StoryCandidatePool m_npcEarlierPool;
+        StoryCandidateGroups m_npcEarlierGroups;
+        std::uint32_t m_npcPoolGeneration = 0;
+        // The interiors already looked at: a back room nobody can walk into, or not (the game's thread only; a room
+        // gains no door while the game runs, so it is looked at once a session, most of them while a save comes in).
+        std::unordered_map<RE::FormID, bool> m_backRooms;
 
         // Story cooldown mirror: FormID -> game time when last picked
         // Volatile (empty on load), self-heals after first tick
