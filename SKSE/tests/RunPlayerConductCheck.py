@@ -15,6 +15,7 @@ with tempfile.TemporaryDirectory(prefix='conduct-check-') as directory:
 #include <cstdint>
 #include <string>
 #include <vector>
+#include "GameText.h"
 namespace RE {
 using FormID = std::uint32_t;
 struct Actor {
@@ -48,6 +49,7 @@ template<class... T> void error(T&&...) {}
     methods = []
     for signature in ('int FactionPolitics::ProcessPlayerConduct(',
                       'std::optional<FactionConfig> FactionPolitics::GetFaction(',
+                      'std::string FactionPolitics::CanonicalId(',
                       'std::string FactionPolitics::GetFactionIdByName('):
         start = source.index('    ' + signature)
         end = source.index('\n    }', start) + len('\n    }')
@@ -75,6 +77,7 @@ int main() {
  p->factions_ = {target, rival, ally};
  p->factionIndex_ = {{target.id, 0}, {rival.id, 1}, {ally.id, 2}};
  p->nameToId_ = {{"the thalmor", target.id}};
+ p->idByLower_ = {{"thalmorfaction", target.id}, {"rival", rival.id}, {"ally", ally.id}};
  RE::Actor reporter;
  auto call = [&](const std::string& faction, const std::string& sentiment, int count, const std::string& notice) {
    RE::notifications.clear();
@@ -102,6 +105,13 @@ int main() {
  require(db->GetPlayerStanding(target.id) == 5 && db->GetPlayerStanding(rival.id) == -5);
  call("Missing", "positive", 0, "Conduct report failed: unknown faction 'Missing'.");
  require(db->GetPlayerStanding(target.id) == 5);
+ // An id is one id whatever the case of its letters (CollegeOfWinterholdFaction for CollegeofWinterholdFaction), and
+ // the sentiment is read as the model writes it ("Positive", "strongly positive").
+ call("thalmorFACTION", "Positive", 1, "Reported to the Thalmor: 1 standings changed.");
+ require(db->GetPlayerStanding(target.id) == 10 && db->GetPlayerStanding("thalmorFACTION") == 0);
+ call(target.id, "Strongly Negative", 1, "Reported to the Thalmor: 1 standings changed.");
+ require(db->GetPlayerStanding(target.id) == 0);
+ require(p->CanonicalId("RIVAL") == rival.id && p->CanonicalId("nobody").empty());
  db->Shutdown();
  std::cout << "PASS: production conduct ID/name lookup, same-faction handling, four sentiments, primary/rival/ally changes and notifications\\n";
 }

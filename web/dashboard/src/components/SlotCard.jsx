@@ -1,13 +1,14 @@
 import React from 'react';
 import GameTime from './GameTime';
+import { t, tk } from '../i18n';
 
 const STATE_LABELS = {
-  0: 'Empty',
-  1: 'Traveling',
-  2: 'At Destination',
-  3: 'Returning',
-  5: 'Searching',
-  8: 'At Target',
+  0: tk('Empty'),
+  1: tk('Traveling'),
+  2: tk('At Destination'),
+  3: tk('Returning'),
+  5: tk('Searching'),
+  8: tk('At Target'),
 };
 
 const STATE_COLORS = {
@@ -38,13 +39,13 @@ const TASK_TYPE_ICONS = {
 };
 
 function SlotCard({ slot, calendar, onCancel, packageType }) {
-  const stateLabel = STATE_LABELS[slot.state] || `State ${slot.state}`;
+  const stateLabel = STATE_LABELS[slot.state] ? t(STATE_LABELS[slot.state]) : t('State {n}', { n: slot.state });
   const stateColor = STATE_COLORS[slot.state] || 'text-gray-400';
   const dotColor = DOT_COLORS[slot.state] || 'bg-gray-400';
   const icon = TASK_TYPE_ICONS[slot.taskType] || '\u{1F4CB}';
-  const taskLabel = slot.taskType
+  const taskLabel = t(slot.taskType
     ? slot.taskType.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
-    : 'Unknown';
+    : 'Unknown');
 
   return (
     <div className="slot-card rounded px-3 py-2">
@@ -56,7 +57,7 @@ function SlotCard({ slot, calendar, onCancel, packageType }) {
         </div>
         <div className="flex items-center gap-2">
           <span className="text-xs text-gray-600 font-mono">#{slot.index + 1}</span>
-          <button onClick={onCancel} className="btn-cancel" title="Cancel task">
+          <button onClick={onCancel} className="btn-cancel" title={t('Cancel task')}>
             &#x2715;
           </button>
         </div>
@@ -67,13 +68,13 @@ function SlotCard({ slot, calendar, onCancel, packageType }) {
         <span className="text-sm">{icon}</span>
         <div className="flex-1 min-w-0">
           <div className="text-sm text-gray-200 font-medium truncate">
-            {slot.agentName || 'Unknown NPC'}
+            {slot.agentName || t('Unknown NPC')}
           </div>
           <div className="text-xs text-gray-400 truncate">
             {taskLabel}{slot.targetName ? ` \u2192 ${slot.targetName}` : ''}
           </div>
           {slot.origin && <div className="text-[10px] text-gray-500 mt-0.5">{slot.origin}</div>}
-          {packageType && <div className="text-xs text-gray-500">{packageType}</div>}
+          {packageType && <div className="text-xs text-gray-500">{t(packageType)}</div>}
           <GameTime time={slot.startTime} calendar={calendar} />
           {slot.reason && <div className="text-xs text-gray-400 mt-1 italic">{slot.reason}</div>}
         </div>

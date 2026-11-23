@@ -92,8 +92,30 @@ int main() try {
         Require(battle.hasGameTime == (battle.locationName == "dated-zero") && battle.gameTime == 0.f,
                 "battle read must distinguish missing timestamp from genuine zero");
     }
+    // Nobody wins the game's own civil war in the simulation: a war of the two sides may end, but while the game has
+    // not decided it no victor is written down. Once the game has, the winner it named stands.
+    {
+        FactionConfig empire, sons;
+        empire.id = "ImperialFaction";
+        empire.skyrimFactionId = "CWImperialFaction";
+        sons.id = "StormcloakFaction";
+        sons.skyrimFactionId = "CWSonsFaction";
+        politics->factions_ = {empire, sons};
+        politics->factionIndex_ = {{empire.id, 0}, {sons.id, 1}};
+        politics->idByLower_ = {{"imperialfaction", empire.id}, {"stormcloakfaction", sons.id}};
+        Require(db->StartWar(empire.id, sons.id, 10.f) >= 0, "start the civil war in the simulation");
+        politics->vanillaWar_ = 0;   // undecided
+        Require(politics->EndWar(empire.id, sons.id, sons.id, 11.f), "a campaign may end");
+        auto last = db->GetMostRecentWar(empire.id, sons.id);
+        Require(last && last->endTime > 0.f && last->victor.empty(), "no victor while the game's war is undecided");
+        Require(db->StartWar(empire.id, sons.id, 12.f) >= 0, "start it again");
+        politics->vanillaWar_ = 2;   // the game: the Empire won
+        Require(politics->EndWar(empire.id, sons.id, empire.id, 13.f), "ended with the game's winner");
+        last = db->GetMostRecentWar(empire.id, sons.id);
+        Require(last && last->victor == empire.id, "the winner the game named is written down");
+    }
     db->Shutdown();
-    std::cout << "PASS: battle/peace persistence, rejected self pairs, legacy filtering and missing/zero timestamps\n";
+    std::cout << "PASS: battle/peace persistence, rejected self pairs, legacy filtering, missing/zero timestamps, no victor of the game's own war\n";
 }
 catch (const std::exception& error) {
     std::cerr << "FAIL: " << error.what() << '\n';

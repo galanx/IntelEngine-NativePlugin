@@ -1,5 +1,6 @@
 import withSections from './Section';
 import { useCallback } from 'react';
+import { t } from '../i18n';
 
 const CATEGORY_ORDER = ['intel_travel', 'intel_communication', 'intel_scheduling'];
 function grouped(actions) {
@@ -19,7 +20,7 @@ function ActionsTab({ actions, sendAction }) {
   if (!actions || actions.length === 0) {
     return (
       <div className="p-3">
-        <div className="empty-state">No actions loaded.</div>
+        <div className="empty-state">{t('No actions loaded.')}</div>
       </div>
     );
   }
@@ -28,13 +29,13 @@ function ActionsTab({ actions, sendAction }) {
     <div className="ie-page ie-page-wide p-3 space-y-3">
       <section>
       <div className="flex items-center justify-between mb-1">
-        <h2 className="section-header">IntelEngine Actions</h2>
-        <span className="text-xs text-gray-500">{intelActions.length} actions</span>
+        <h2 className="section-header">{t('IntelEngine Actions')}</h2>
+        <span className="text-xs text-gray-500">{t('{n} actions', { n: intelActions.length })}</span>
       </div>
 
       <div className="px-2 py-1.5 rounded bg-amber-500/10 border border-amber-500/20">
         <p className="text-[10px] text-amber-400/80 leading-relaxed">
-          These toggles only control which actions the AI can choose; Director Action Execution always works. Toggles rewrite the action YAML files. Changes apply after Reload configs in the SkyrimNet web UI, or on next game launch.
+          {t('These toggles only control which actions the AI can choose; Director Action Execution always works. Toggles rewrite the action YAML files. Changes apply after Reload configs in the SkyrimNet web UI, or on next game launch.')}
         </p>
       </div>
 
@@ -50,13 +51,13 @@ function ActionsTab({ actions, sendAction }) {
             }`}
           >
             <div className="flex-1 min-w-0">
-              <div className="text-xs font-medium truncate">{action.name}{action.isCategory && ' (category)'}</div>
+              <div className="text-xs font-medium truncate">{action.name}{action.isCategory && t(' (category)')}</div>
               {action.description && (
                 <div className="text-[10px] text-gray-500 truncate mt-0.5">{action.description.split('{{ npc.name }}').join('the NPC')}</div>
               )}
             </div>
             <span className={`text-xs shrink-0 ${action.enabled && !disabledCategories.has(action.category) ? 'text-emerald-400' : 'text-gray-600'}`}>
-              {!action.isCategory && disabledCategories.has(action.category) ? 'OFF (category)' : action.enabled ? 'ON' : 'OFF'}
+              {t(!action.isCategory && disabledCategories.has(action.category) ? 'OFF (category)' : action.enabled ? 'ON' : 'OFF')}
             </span>
           </button>
         ))}
@@ -66,8 +67,8 @@ function ActionsTab({ actions, sendAction }) {
       {otherActions.length > 0 && (
         <section>
           <div className="flex items-center justify-between mt-4 mb-1">
-            <h2 className="section-header text-gray-500">Other Mod Actions</h2>
-            <span className="text-xs text-gray-600">{otherActions.length} actions</span>
+            <h2 className="section-header text-gray-500">{t('Other Mod Actions')}</h2>
+            <span className="text-xs text-gray-600">{t('{n} actions', { n: otherActions.length })}</span>
           </div>
           <div className="space-y-1.5">
             {grouped(otherActions).map(action => (
@@ -81,13 +82,13 @@ function ActionsTab({ actions, sendAction }) {
                 }`}
               >
                 <div className="flex-1 min-w-0">
-                  <div className="text-xs font-medium truncate">{action.name}{action.isCategory && ' (category)'}</div>
+                  <div className="text-xs font-medium truncate">{action.name}{action.isCategory && t(' (category)')}</div>
                   {action.description && (
                     <div className="text-[10px] text-gray-500 truncate mt-0.5">{action.description.split('{{ npc.name }}').join('the NPC')}</div>
                   )}
                 </div>
                 <span className={`text-xs shrink-0 ${action.enabled && !disabledCategories.has(action.category) ? 'text-emerald-400' : 'text-gray-600'}`}>
-                  {!action.isCategory && disabledCategories.has(action.category) ? 'OFF (category)' : action.enabled ? 'ON' : 'OFF'}
+                  {t(!action.isCategory && disabledCategories.has(action.category) ? 'OFF (category)' : action.enabled ? 'ON' : 'OFF')}
                 </span>
               </button>
             ))}

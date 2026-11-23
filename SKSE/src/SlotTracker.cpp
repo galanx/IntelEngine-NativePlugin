@@ -6,7 +6,9 @@
  */
 
 #include "SlotTracker.h"
+#include "GameText.h"
 #include "SkyrimNetAPI.h"
+#include "StringUtils.h"
 #include <chrono>
 #include <nlohmann/json.hpp>
 
@@ -61,7 +63,7 @@ namespace IntelEngine {
         }
 
         logger::debug("SlotTracker: Updated slot {} -> agent={}, state={}, type={}, target={}",
-                     slot, agent ? agent->GetDisplayFullName() : "null", state, taskType, targetName);
+                     slot, agent ? GameText::In(agent->GetDisplayFullName()) : "null", state, taskType, targetName);
     }
 
     void SlotTracker::ClearSlot(int slot) {
@@ -115,7 +117,7 @@ namespace IntelEngine {
         // Also store in a separate map for post-clear lookups
         m_cooldowns[actor->GetFormID()] = expiry;
 
-        logger::debug("SlotTracker: Cooldown set for {} -> {}s", actor->GetDisplayFullName(), durationSeconds);
+        logger::debug("SlotTracker: Cooldown set for {} -> {}s", GameText::In(actor->GetDisplayFullName()), durationSeconds);
     }
 
     bool SlotTracker::HasActiveTask(RE::Actor* actor) const {
@@ -206,7 +208,7 @@ namespace IntelEngine {
             if (s.startTime >= 0.0f) slot["startTime"] = s.startTime;
             slot["reason"] = s.reason;
             slot["agentName"] = (s.agent && s.state != 0)
-                ? s.agent->GetDisplayFullName() : "";
+                ? GameText::In(s.agent->GetDisplayFullName()) : "";
             slot["agentFormId"] = (s.agent && s.state != 0)
                 ? static_cast<int>(s.agent->GetFormID()) : 0;
 
@@ -225,7 +227,7 @@ namespace IntelEngine {
             slots.push_back(slot);
         }
 
-        return slots.dump();
+        return slots.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
     }
 
     void SlotTracker::ClearAll() {
@@ -262,7 +264,8 @@ namespace IntelEngine {
         logger::info("SlotTracker: All slots cleared ({} busy states released)", busyFormIds.size());
     }
 
-    std::string SlotTracker::BuildBusyReason(const std::string& taskType, const std::string& targetName) {
+    std::string SlotTracker::BuildBusyReason(const std::string& rawType, const std::string& targetName) {
+        const std::string taskType = StringUtils::ToLowerStd(rawType);  // pooled spelling may be "Travel"
         if (taskType == "travel") return "traveling to " + targetName;
         if (taskType == "fetch_npc") return "fetching " + targetName;
         if (taskType == "deliver_message") return "delivering a message to " + targetName;
@@ -398,7 +401,7 @@ namespace IntelEngine {
             recovered++;
 
             logger::info("SlotTracker::Load: Recovered slot {} -> {} ({}), state={}, target={}",
-                        i, actor->GetDisplayFullName(), r.taskType, r.state, r.targetName);
+                        i, GameText::In(actor->GetDisplayFullName()), r.taskType, r.state, r.targetName);
         }
 
         m_hasCoSaveData.store(true, std::memory_order_release);

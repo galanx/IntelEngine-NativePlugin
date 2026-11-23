@@ -7,21 +7,21 @@
  */
 
 #include "Plugin.h"
+#include "Utf8Fold.h"
 
 #include <string>
 #include <vector>
+#include "NameForms.h"
+
 #include <algorithm>
 
 namespace IntelEngine::StringUtils {
 
     /**
-     * Convert string to lowercase.
+     * Convert string to lowercase (Unicode-aware for valid UTF-8; byte length never changes).
      */
     inline std::string ToLowerStd(const std::string& text) {
-        std::string result = text;
-        std::transform(result.begin(), result.end(), result.begin(),
-                       [](unsigned char c) { return std::tolower(c); });
-        return result;
+        return FoldUtf8(text);
     }
 
     inline RE::BSFixedString ToLower(const std::string& text) {
@@ -83,41 +83,10 @@ namespace IntelEngine::StringUtils {
 
     /**
      * Calculate Levenshtein edit distance between two strings.
-     * Used for fuzzy matching - lower distance = more similar.
+     * Used for fuzzy matching - lower distance = more similar. Counts characters, not bytes.
      */
     inline int LevenshteinDistance(const std::string& a, const std::string& b) {
-        const size_t m = a.length();
-        const size_t n = b.length();
-
-        if (m == 0) return static_cast<int>(n);
-        if (n == 0) return static_cast<int>(m);
-
-        // Use two rows instead of full matrix for memory efficiency
-        std::vector<int> prev(n + 1);
-        std::vector<int> curr(n + 1);
-
-        // Initialize first row
-        for (size_t j = 0; j <= n; ++j) {
-            prev[j] = static_cast<int>(j);
-        }
-
-        // Fill matrix
-        for (size_t i = 1; i <= m; ++i) {
-            curr[0] = static_cast<int>(i);
-
-            for (size_t j = 1; j <= n; ++j) {
-                int cost = (std::tolower(a[i - 1]) == std::tolower(b[j - 1])) ? 0 : 1;
-                curr[j] = (std::min)({
-                    prev[j] + 1,       // deletion
-                    curr[j - 1] + 1,   // insertion
-                    prev[j - 1] + cost // substitution
-                });
-            }
-
-            std::swap(prev, curr);
-        }
-
-        return prev[n];
+        return Utf8Levenshtein(a, b);
     }
 
     /**
@@ -229,7 +198,7 @@ namespace IntelEngine::StringUtils {
                                   const std::vector<std::string>& candidates,
                                   int maxDistance) {
         FuzzyResult result;
-        auto searchLen = searchTerm.length();
+        const auto searchLen = NameForms::Letters(searchTerm);   // letters, as the distance below counts them
         for (const auto& name : candidates) {
             int dist = LevenshteinDistance(searchTerm, name);
             if (dist == 0) {
@@ -240,7 +209,7 @@ namespace IntelEngine::StringUtils {
             }
             // Reject matches where every character is effectively wrong —
             // prevents "inn" -> "aho" (distance 3, both length 3)
-            auto minLen = (std::min)(searchLen, name.length());
+            auto minLen = (std::min)(searchLen, NameForms::Letters(name));
             if (dist >= static_cast<int>(minLen)) continue;
 
             if (dist < result.distance) {

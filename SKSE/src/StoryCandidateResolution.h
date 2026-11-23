@@ -1,5 +1,9 @@
 #pragma once
 
+#include "GameText.h"
+#include "NameForms.h"
+#include "Utf8Fold.h"
+
 #include <cctype>
 #include <cstdint>
 #include <cmath>
@@ -8,6 +12,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <vector>
 
 namespace IntelEngine {
 
@@ -30,11 +35,13 @@ inline std::string NormalizeStoryCandidateName(std::string_view name) {
             space = !result.empty();
         } else {
             if (space) result += ' ';
-            result += static_cast<char>(std::tolower(c));
+            result += static_cast<char>(c);
             space = false;
         }
     }
-    return result;
+    // Lower case for every script: the pools' keys are folded this way (NPCIndex), and a Cyrillic name lowered byte
+    // by byte kept its capital and matched nobody.
+    return FoldUtf8(GameText::In(result));
 }
 
 struct StoryCandidateRejection {
@@ -53,8 +60,7 @@ inline std::uint32_t ResolveStoryCandidateFormID(std::string_view name,
         if (rejection) rejection->branch = "empty-pools";
         return 0;
     }
-    std::string lower(name);
-    for (char& c : lower) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    const std::string lower = FoldUtf8(GameText::In(std::string(name)));
     for (const bool exact : {true, false}) {
         const auto normalized = exact ? std::string{} : NormalizeStoryCandidateName(name);
         if (rejection) rejection->exact = exact;
@@ -87,6 +93,19 @@ inline std::uint32_t ResolveStoryCandidateFormID(std::string_view name,
             }
         }
         if (found) return match;
+    }
+    // The name in another form (NameForms.h: a case ending, an article, a particle): the one name of the pools it
+    // stands for, those the dungeon master was shown first; then as that name, by the rules above.
+    for (const auto* pool : {&dm, &npc}) {
+        std::vector<std::string> keys;
+        keys.reserve(pool->size());
+        for (const auto& entry : *pool) {
+            if (std::find(keys.begin(), keys.end(), entry.first) == keys.end()) keys.push_back(entry.first);
+        }
+        const auto forms = NameForms::Find(lower, keys, NameForms::PartForms);
+        if (forms && keys[static_cast<std::size_t>(forms.index)] != lower) {
+            return ResolveStoryCandidateFormID(keys[static_cast<std::size_t>(forms.index)], dm, npc, rejection, distance);
+        }
     }
     return 0;
 }

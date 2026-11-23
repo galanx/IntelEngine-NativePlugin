@@ -125,14 +125,43 @@ namespace IntelEngine::SkyrimNetAPI {
      *  Non-empty searchQuery enables semantic search. Returns "[]" on error or if SkyrimNet older than v9. */
     inline std::string (*GetWorldKnowledgeForActor)(uint32_t formId, int maxResults, const char* searchQuery) = nullptr;
 
+    // ---- Memories and world knowledge, writing (4.0 living world) ----
+
+    /** Store a memory of the actor's own (embedded for recall). memoryType: EXPERIENCE, RELATIONSHIP, KNOWLEDGE,
+     *  LOCATION, SKILL, TRAUMA or JOY. Returns its id, 0 on error or while SkyrimNet refuses writes (no save's
+     *  database open, the timeline check after a load still pending). */
+    inline int (*AddMemory)(uint32_t formId, const char* content, float importance, const char* memoryType,
+        const char* emotion, const char* location, const char* tagsJSON, const char* relatedActorsJSON) = nullptr;
+
+    /** Add a world knowledge entry (v7+): retrieved for NPCs whose Inja condition holds; with alwaysInject false
+     *  only when the conversation is about it. Returns its id, 0 on error. */
+    inline int (*AddWorldKnowledge)(const char* content, const char* conditionExpr, bool alwaysInject, float importance,
+        const char* displayName) = nullptr;
+
+    /** Remove a world knowledge entry by id (v7+). */
+    inline bool (*RemoveWorldKnowledge)(int memoryId) = nullptr;
+
+    // ---- Named places (v13) ----
+
+    /** Every named place ("" = all sources) as a JSON array of {id, key, name, source, space, ownerLocation, x, y,
+     *  z, radius}; space is the runtime FormID of the interior cell, or of the worldspace outdoors. */
+    inline std::string (*ListPlaces)(const char* sourceFilter) = nullptr;
+
 
     inline bool (*SendCustomPromptToLLM)(const char*, const char*, const char*,
         std::function<void(const char*, int)>) = nullptr;
+
+    /** A typed question to SkyrimNet's decision model (template under prompts/decisions/). The callback gets
+     *  (answer, resultJson, success) once, on SkyrimNet's thread pool; error "no_decisions_route" when the player has no
+     *  decision provider (then nothing was sent). In SkyrimNet 1.1.1 and later; nullptr before. */
+    inline bool (*SendCustomDecisionToLLM)(const char* templateName, const char* contextJson, int maxProbabilities,
+        std::function<void(const char*, const char*, int)>) = nullptr;
 
     /** Version of SkyrimNet's AI-package contract (ListPackage, HoldPackages, UnregisterPackageEx and the
      *  SkyrimNet_OnPackage* ModEvents on the Papyrus side). Resolved by name whatever GetVersion returns;
      *  nullptr on a SkyrimNet that predates it, and then those Papyrus natives must not be called. */
     inline uint32_t (*GetPackageApiVersion)() = nullptr;
+
 
     /**
      * Initialize the SkyrimNet API by loading function pointers from the DLL.
@@ -234,8 +263,18 @@ namespace IntelEngine::SkyrimNetAPI {
             GetProcAddress(hDLL, "PublicGetWorldKnowledge"));
         GetWorldKnowledgeForActor = reinterpret_cast<std::string(*)(uint32_t, int, const char*)>(
             GetProcAddress(hDLL, "PublicGetWorldKnowledgeForActor"));
+        AddMemory = reinterpret_cast<decltype(AddMemory)>(GetProcAddress(hDLL, "PublicAddMemory"));
+        AddWorldKnowledge = reinterpret_cast<decltype(AddWorldKnowledge)>(GetProcAddress(hDLL, "PublicAddWorldKnowledge"));
+        RemoveWorldKnowledge = reinterpret_cast<decltype(RemoveWorldKnowledge)>(GetProcAddress(hDLL, "PublicRemoveWorldKnowledge"));
+        ListPlaces = reinterpret_cast<decltype(ListPlaces)>(GetProcAddress(hDLL, "PublicListPlaces"));
+        logger::info("SkyrimNet named places: {}", ListPlaces != nullptr);
+        logger::info("SkyrimNet write API: AddMemory={}, AddWorldKnowledge={}, RemoveWorldKnowledge={}", AddMemory != nullptr,
+                     AddWorldKnowledge != nullptr, RemoveWorldKnowledge != nullptr);
         SendCustomPromptToLLM = reinterpret_cast<decltype(SendCustomPromptToLLM)>(
             GetProcAddress(hDLL, "PublicSendCustomPromptToLLM"));
+        SendCustomDecisionToLLM = reinterpret_cast<decltype(SendCustomDecisionToLLM)>(
+            GetProcAddress(hDLL, "PublicSendCustomDecisionToLLM"));
+        logger::info("SkyrimNet decisions API: {}", SendCustomDecisionToLLM != nullptr);
         GetPackageApiVersion = reinterpret_cast<uint32_t(*)()>(
             GetProcAddress(hDLL, "PublicGetPackageApiVersion"));
         logger::info("SkyrimNet package API: {}", GetPackageApiVersion ? GetPackageApiVersion() : 0u);
@@ -243,14 +282,14 @@ namespace IntelEngine::SkyrimNetAPI {
         // Bio template API
         logger::info("SkyrimNet Data API: Memories={}, Events={}, Dialogue={}, Ready={}, "
                      "ActorEngagement={}, RelatedActors={}, PlayerContext={}, EventPairs={}, "
-                     "EventCallback={}, BioTemplate={}, WorldKnowledge={}",
+                     "EventCallback={}, BioTemplate={}, WorldKnowledge={}, ListPlaces={}",
                      GetMemoriesForActor != nullptr, GetRecentEvents != nullptr,
                      GetRecentDialogue != nullptr,
                      IsMemorySystemReady != nullptr, GetActorEngagement != nullptr,
                      GetRelatedActors != nullptr, GetPlayerContext != nullptr,
                      GetEventPairCounts != nullptr,
                      RegisterEventCallback != nullptr, GetBioTemplateName != nullptr,
-                     GetWorldKnowledgeForActor != nullptr);
+                     GetWorldKnowledgeForActor != nullptr, ListPlaces != nullptr);
 
         return true;
     }

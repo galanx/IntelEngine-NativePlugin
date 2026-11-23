@@ -78,6 +78,12 @@ namespace IntelEngine {
         RE::BGSLocation* ResolveLocation(const std::string& locationName);
 
         /**
+         * The location of exactly this name (any case, its marks or not, the game's own names and those of the
+         * place-name files: English on a translated install), or nullptr. No fuzzy search: cheap enough for a frame.
+         */
+        RE::BGSLocation* ExactLocation(const std::string& locationName) const;
+
+        /**
          * Find a door in loaded cells that leads to the target location.
          * If found, NPC can walk to this door and use it.
          * If not found (target not in loaded cells), returns nullptr
@@ -199,6 +205,8 @@ namespace IntelEngine {
          * Used by Papyrus to store the cell ID for later re-locking.
          */
         RE::FormID GetLastResolvedHomeCellId() const { return m_lastResolvedHomeCellId; }
+        /** A destination resolved elsewhere (a SkyrimNet place) is no one's home: no door gets unlocked for it. */
+        void ClearLastResolvedHome() { m_lastResolvedHomeCellId = 0; }
 
         /**
          * Get cached LocTypePlayerHouse keyword.
@@ -238,6 +246,10 @@ namespace IntelEngine {
          * @return Boss anchor ref, or nullptr if dungeon not indexed
          */
         RE::TESObjectREFR* GetDungeonBossAnchor(RE::BGSLocation* loc);
+        /** Every dungeon of the index: its location and its boss room anchor (4.0 quests pick their places here). */
+        std::vector<std::pair<RE::FormID, RE::FormID>> DungeonAnchors() const;
+        /** (actor base, the interior cell of the bed they own) for every NPC with a home (story arcs' townsfolk). */
+        std::vector<std::pair<RE::FormID, RE::FormID>> HomeCells() const;
         RE::TESObjectREFR* GetDungeonBossAnchor(const std::string& locationName);
 
     private:
@@ -278,8 +290,15 @@ namespace IntelEngine {
         // Debug: Log all doors in actor's cell with direction signals
         void LogAllDoors(RE::Actor* actor);
 
+        // Resolve a SkyrimNet Named Place by exact name to the nearest reference at its position.
+        // nullptr when SkyrimNet has no ListPlaces, nothing matches, or no reference is in range.
+        RE::TESObjectREFR* ResolveNamedPlace(RE::Actor* actor, const std::string& destination);
+
         // Detect semantic intent from any destination string
         SemanticIntent DetectSemanticIntent(const std::string& destination);
+        /** The whole destination is the name of a place in the game (a cell or a location, with or without a leading
+         *  "the "), so no word inside it is a semantic hint. */
+        bool IsExactPlaceName(const std::string& destination);
 
         // Resolve via parent BGSLocation (for "outside" fallback)
         RE::TESObjectREFR* ResolveViaParentLocation(RE::Actor* actor);
@@ -299,25 +318,9 @@ namespace IntelEngine {
         // All indexed names (for fuzzy search)
         std::vector<std::string> m_allCellNames;
         std::vector<std::string> m_allLocationNames;
+        std::unordered_map<std::string, RE::FormID> m_locationPlain;   // a location's name in plain letters (NameForms::Key)
 
-        // Semantic terms set
-        std::unordered_set<std::string> m_semanticTerms = {
-            "upstairs", "up", "above",
-            "downstairs", "down", "below",
-            "outside", "out", "exterior",
-            "inside", "in", "interior",
-            "the back", "back room", "back",
-            "cellar", "basement", "below stairs",
-            "my room", "bedroom", "the bedroom", "my bed", "bed", "room",
-            "kitchen", "the kitchen",
-            "the bar", "counter", "bar counter",
-            "near the fire", "fireplace", "hearth",
-            "stairs", "stairwell", "staircase",
-            "home", "my home", "my house", "my place",
-            "your home", "your house", "your place",
-            "the river", "river", "lake", "stream", "water", "swim", "wash",
-            "bath", "bathe", "the bath", "hot spring"
-        };
+        // (The words of place were a set here; they are data now: PlaceWords.h.)
 
         // NPC home index: ActorBase FormID -> home cell FormID
         // Built at startup from bed ownership (actor + faction).

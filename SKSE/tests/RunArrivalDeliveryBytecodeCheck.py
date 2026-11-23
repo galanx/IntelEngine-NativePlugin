@@ -110,6 +110,8 @@ class VM:
         self.properties.update({f"AgentAlias{i:02d}": aliases[i] for i in range(5)})
         self.properties.update({f"TargetAlias{i:02d}": ReferenceAlias() for i in range(5)})
         self.properties.update({"NPCTickIntervalHours": 1.5, "MONITOR_INTERVAL": 5.0, "IDLE_POLL_INTERVAL": 30.0})
+        self.properties.update({"LivingWorldLevel": 2})   # the default level of the living world ("Lives")
+        self.properties.update({"LivingWorldSkippedTime": False})   # "Skipped time counts toward the pace": off by default
         # Core's own bookkeeping variables (3.8): pending tick, last sweep, open popup request.
         self.properties.update({"_tickDueRealTime": 0.0, "_lastSweepGameTime": 0.0, "_mlRequest": ""})
         # 3.8.2: when the quest's one game-time timer is due (RequestGameTimeTick).
@@ -120,7 +122,7 @@ class VM:
         # Held by talk, and an NPC's own cancel: Core's constants.
         self.properties.update({"TALK_HOLD_SECONDS": 12.0, "CANCEL_ASKED_SECONDS": 45.0, "CANCEL_EARSHOT_DISTANCE": 2500.0})
         # Core constants other scripts do arithmetic with (a property read of another script is not executed here).
-        self.properties.update({"SPEECH_GRACE_SECONDS": 7.0, "UPDATE_INTERVAL": 3.0})
+        self.properties.update({"SPEECH_GRACE_SECONDS": 7.0, "UPDATE_INTERVAL": 3.0, "FAILURES_KEPT": 4})
         # Constants added with the 3.8 stuck and immersion fixes, with their script values (a property that is
         # not listed reads as None here, and the new code compares and adds with them).
         self.properties.update({"WALK_HOME_MAX_HOURS": 3.0, "PROMPT_SECONDS_TASK": 20.0,
@@ -189,10 +191,42 @@ class VM:
         if method in ("StringListCount", "FloatListCount"): return len(self.storage.get(pair, []))
         if method in ("StringListRemoveAt", "FloatListRemoveAt"): self.storage.get(pair, []).pop(args[2]); return None
         if method in ("StringListToArray", "FloatListToArray"): return list(self.storage.get(pair, []))
+        # The failures told to an NPC, kept per message (Core.TellFailure).
+        if method == "StringListFind":
+            values = self.storage.get(pair, [])
+            return values.index(args[2]) if args[2] in values else -1
+        if method in ("StringListGet", "FloatListGet"): return self.storage.get(pair, [])[args[2]]
+        if method in ("StringListSet", "FloatListSet"): self.storage.setdefault(pair, [])[args[2]] = args[3]; return None
+        if method in ("StringListClear", "FloatListClear"): self.storage.pop(pair, None); return None
         raise ValueError("unsupported StorageUtil native " + method)
 
     def external(self, method, args, script):
         if method == "IsDashboardOpen": return False
+        # The language natives (LanguageBridge), as they answer in an English game with no pack in force.
+        if method == "L": return args[0]                      # what the player reads: no pack, so as it came
+        if method in ("PlaceInEnglish", "CommaList"): return args[0]
+        if method == "TextLanguage": return ""
+        if method == "LoadStamp": return 1                   # one load of one session
+        if method == "IsNoneWord": return args[0].strip().lower() in ("", "none")
+        if method in ("TextMentionsName", "ReplaceWholeWord"):
+            # whole words, whatever the case, as NameForms does it for a name written as it is
+            text, what = args[0], args[1]
+            low, needle = text.lower(), what.lower()
+            hits, at = [], low.find(needle) if needle else -1
+            while at >= 0:
+                end = at + len(needle)
+                left = at == 0 or not low[at - 1].isalnum()     # an apostrophe ends a word here: "Sinmir's" names Sinmir
+                right = end >= len(low) or not low[end].isalnum()
+                if left and right and (not hits or at >= hits[-1][1]):
+                    hits.append((at, end))
+                at = low.find(needle, at + 1)
+            if method == "TextMentionsName":
+                return bool(hits)
+            out, copied = "", 0
+            for at, end in hits:
+                out += text[copied:at] + args[2]
+                copied = end
+            return out + text[copied:]
         if method == "GetLength": return len(args[0])
         if method == "Find": return args[0].find(args[1], args[2] if len(args) > 2 else 0)
         if method == "GetNthChar": return args[0][args[1]]
@@ -225,12 +259,15 @@ class VM:
         if method == "StringEscapeJson":
             return json.dumps(args[0], ensure_ascii=False)[1:-1]
         if method == "IsPlayerInBlockedLocation": return False
+        if method == "BattleFieldBusy": return False     # no armies in the field in these fixtures
         if method == "IsPlayerInWhitelistedLocation": return True
         if method in ("HasStringValue", "HasIntValue", "HasFloatValue", "GetStringValue", "GetIntValue",
                       "GetFloatValue", "GetFormValue", "SetStringValue", "SetIntValue", "SetFloatValue",
                       "SetFormValue", "UnsetStringValue", "UnsetIntValue", "UnsetFloatValue",
                       "UnsetFormValue", "StringListAdd", "FloatListAdd", "StringListCount", "FloatListCount",
-                      "StringListRemoveAt", "FloatListRemoveAt", "StringListToArray", "FloatListToArray"):
+                      "StringListRemoveAt", "FloatListRemoveAt", "StringListToArray", "FloatListToArray",
+                      "StringListFind", "StringListGet", "FloatListGet", "StringListSet", "FloatListSet",
+                      "StringListClear", "FloatListClear"):
             if method == "SetStringValue" and self.reenter_story:
                 self.reenter_story = False
                 self.invoke("IntelEngine_StoryEngine", "OnStoryNPCArrived")
@@ -240,6 +277,10 @@ class VM:
         if method == "ForceRefTo": args[0].actor = args[1]; return None
         if method == "Clear": args[0].actor = None; return None
         if method == "GetDisplayName": return args[0].name
+        # 3.8.3: EscortTarget compares the target's name with the player's own, display name and base name; the modeled
+        # actor stands in for its base.
+        if method == "GetActorBase": return args[0]
+        if method == "GetName": return args[0].name
         if method == "GetParentCell": return args[0].cell
         if method == "IsPlayerInDangerousLocation": return False
         if method == "CheckHoldRestriction": return True
@@ -343,6 +384,43 @@ class VM:
         if method in ("ListPackage", "UnregisterPackageEx"):
             self.effects.append((method, tuple(args)))
             return 1
+        # 4.0 living world: the story engine listens for seams, and the director (Classic-like here) lets the
+        # clock tick through; the pacing itself is checked by LivingWorldCheck.
+        if method == "RegisterForModEvent":
+            self.effects.append((method, tuple(args)))
+            return None
+        if method == "LivingWorldMayDeliver": return True
+        # 4.0: above Classic the story clock is the director's own (Core.GetStoryClockHours); the modeled game is at
+        # "Lives" (LivingWorldLevel 2 below), no faction is after the player, and the player is where people may come.
+        if method == "LivingWorldClockHours": return 3.0
+        if method == "FactionPatrolDue": return ""
+        if method == "PlaceBarsArrival": return 0
+        # 4.0: nobody in the modeled game takes part in a running quest.
+        if method == "LivingWorldMayMove": return True
+        if method == "QuestInvolves": return False
+        # 4.0 storylines: the modeled game has no storyline quest (GetQuest finds nothing), so no hook runs.
+        if method == "GetQuest": return None
+        if method in ("SetLivingWorldSettings", "LivingWorldMomentDispatched"):
+            self.effects.append((method, tuple(args)))
+            return None
+        # 4.0 tales: someone coming to the player walks unless they have truly been looking for the player (the
+        # modeled visitors have not), and the modeled player stays where the visitor is (nobody is left behind, so
+        # no visit is called off until the two next meet).
+        if method == "ArcHurries": return False
+        if method == "ArcReachOf": return 0
+        # Nobody a story is about stands beside the modeled player (no visitor holds back for company).
+        if method == "ArcCompany": return None
+        # Nobody else is talking with the modeled player when a visitor arrives, and no other story has moved
+        # within the hour (no visitor waits their turn or lets it be: WaitsTheirTurn).
+        if method == "ArcTalkWithAnother": return False
+        if method == "ArcQuietNow": return True
+        # 4.0: nobody modeled here is in a scene or the target of an objective the player has open (such a person
+        # takes no task: Core.IsUnsuitableTaskAgent), nor one of the game's drivers and ferrymen.
+        if method == "LivingWorldQuestHolds": return False
+        # 4.0: a follower sent on a task loses what makes them follow by name (SkyrimNet's FollowPlayer package,
+        # SeverActions' casual follow) instead of every mod's package overrides. The modeled actors have neither.
+        if method == "HasPackage": return 0
+        if method == "StopCasualFollow": return False
         raise ValueError(f"unmodeled external call {script}.{method}({args!r})")
 
     def run(self, script, name, code, env):
@@ -1531,7 +1609,9 @@ def run_game_time_tick_checks(files, history, others):
             require(not direct, f"{script}.{name} still sets or clears the game-time timer itself")
     asked = sum(1 for functions in scripts.values() for _params, code, _locals in functions.values()
                 for op, args in code if op == "callmethod" and args[0][1] == "RequestGameTimeTick")
-    require(asked >= 6, f"expected the schedule, the story engine and the battle script to ask Core for the timer, found {asked} calls")
+    # (The battle script asked twice until 4.0: a battle that was announced waited for its hour and was then fought
+    # wherever the player stood. A battle gathers at a place now, and nothing of it waits on this timer.)
+    require(asked >= 4, f"expected the schedule and the story engine to ask Core for the timer, found {asked} calls")
     print("actual PEX RequestGameTimeTick: a later request leaves a sooner timer alone, a sooner one moves it, it is set again once due has passed; only Core registers")
 
 
@@ -1644,6 +1724,110 @@ def run_linger_teammate_checks(files, history):
     vm.invoke("IntelEngine_StoryEngine", "CheckStoryLingerCleanup")
     require(actors == [], "distant linger was not released")
     print("actual PEX linger/proximity: pause-safe timeout; 0.5s accumulation; teammate and distance releases passed")
+
+    # 4.0: a visitor whose business with the player is settled (their offer was answered: StoryEngine.VisitOver)
+    # leaves once the talk between the two is over, by what was actually said, and walks back where they came from
+    # instead of standing beside the player for the rest of the visit ("When declining Faendal's quest, he doesn't
+    # walk away", 2026-11-19).
+    class LeaveVM(LingerVM):
+        pending = True
+        since_spoke = 1.0
+        since_player = 1.0
+        came_from = None
+        from_distance = 2500.0
+        home = None
+
+        def external(self, method, args, script):
+            if method == "IsNPCSpeechPending": return self.pending
+            if method == "GetSecondsSinceNPCSpoke": return self.since_spoke
+            if method == "GetSecondsSincePlayerSpoke": return self.since_player
+            if method == "GetDistance" and args and args[0] is not None and args[0] is self.came_from:
+                return self.from_distance
+            if method == "ResolveAnyDestination":
+                self.effects.append((method, tuple(args)))
+                return self.home
+            if method == "GetEditorLocationRef": return None
+            if method == "IsInCombat": return False
+            if method == "FormListFind":
+                held = self.storage.get((args[0], args[1]), [])
+                return held.index(args[2]) if args[2] in held else -1
+            if method == "FormListAdd":
+                self.storage.setdefault((args[0], args[1]), []).append(args[2])
+                self.effects.append((method, tuple(args)))
+                return None
+            if method == "GetLinkedRef": return self.linked
+            return super().external(method, args, script)
+
+    def make_leaver(from_distance=2500.0):
+        vm = LeaveVM(files, history)
+        npc = vm.agent
+        actors = [npc]
+        vm.properties["SlotStates"] = [0, 0, 0, 0, 0]
+        vm.properties.update({"IsActive": False, "ActiveStoryNPC": None, "ActiveStoryType": ""})
+        vm.storage[(vm.player, "Intel_StoryLingerActors")] = actors
+        vm.now = 40.0
+        vm.storage[(npc, "Intel_StoryLingerStart")] = vm.now
+        vm.storage[(npc, "Intel_StoryLingerElapsed")] = 35.0
+        vm.properties.update({"LINGER_RELEASE_DISTANCE": 1500.0, "ENCOUNTER_RESUME_DISTANCE": 1500.0,
+                              "IntelEngine_TravelTarget": "travel-link", "SandboxNearPlayerPackage": object(),
+                              "TravelPackage_Walk": "walk-package", "PRIORITY_TRAVEL": 100})
+        vm.properties["LINGER_TIMEOUT_SECONDS"] = vm.invoke("IntelEngine_StoryEngine", "LINGER_TIMEOUT_SECONDS")
+        vm.properties["LEAVE_AFTER_TALK_SECONDS"] = vm.invoke("IntelEngine_StoryEngine", "LEAVE_AFTER_TALK_SECONDS")
+        vm.came_from = Actor("Where they came from", "player-cell")
+        vm.from_distance = from_distance
+        vm.storage[(npc, "Intel_PlaceMarker")] = vm.came_from
+        vm.storage[(npc, "Intel_CameFrom")] = 1
+        return vm, npc, actors
+
+    def walked(vm):
+        return [e for e in vm.effects if e[0] == "AddPackageOverride" and e[1][1] == "walk-package"]
+
+    vm, npc, actors = make_leaver()
+    vm.pending, vm.since_spoke, vm.since_player = False, 30.0, 30.0
+    vm.invoke("IntelEngine_StoryEngine", "CheckStoryLingerCleanup")
+    require(actors == [npc] and not walked(vm), "a visitor whose business is not settled left after 35 seconds")
+    vm.invoke("IntelEngine_StoryEngine", "VisitOver", (npc,))
+    require(vm.storage.get((npc, "Intel_StoryLeaves")) == 1, "VisitOver did not mark a lingering visitor as leaving")
+    vm.pending = True
+    vm.now += 3.0
+    vm.invoke("IntelEngine_StoryEngine", "CheckStoryLingerCleanup")
+    require(actors == [npc], "the visitor left while a line of theirs was still on its way")
+    vm.pending, vm.since_spoke, vm.since_player = False, 2.0, 30.0
+    vm.now += 3.0
+    vm.invoke("IntelEngine_StoryEngine", "CheckStoryLingerCleanup")
+    require(actors == [npc], "the visitor left two seconds after their last word")
+    vm.since_spoke, vm.since_player = 20.0, 5.0
+    vm.now += 3.0
+    vm.invoke("IntelEngine_StoryEngine", "CheckStoryLingerCleanup")
+    require(actors == [npc], "the visitor left five seconds after the player spoke (an answer was still to come)")
+    vm.since_spoke, vm.since_player = 20.0, 20.0
+    vm.now += 3.0
+    vm.effects.clear()
+    vm.invoke("IntelEngine_StoryEngine", "CheckStoryLingerCleanup")
+    require(actors == [] and (npc, "Intel_StoryLeaves") not in vm.storage, "the visitor did not leave once the talk was over")
+    require(("RemovePackageOverride", (npc, vm.properties.get("SandboxNearPlayerPackage"))) in vm.effects,
+            "the leaving visitor kept the sandbox beside the player")
+    require(len(walked(vm)) == 1 and vm.linked is vm.came_from,
+            f"the leaving visitor was not sent back where they came from (linked={vm.linked!r}, effects={walked(vm)!r})")
+    require(vm.storage.get((npc, "Intel_WalkHomeRef")) is vm.came_from
+            and npc in vm.storage.get((vm.properties.get("self"), "Intel_WalkHomeActors"), [npc]),
+            "the walk back is not tracked, so its package would never be taken off again")
+
+    # Where they came from is right beside the player, and no home is known: nothing to walk to, their day goes on.
+    vm, npc, actors = make_leaver(from_distance=300.0)
+    vm.invoke("IntelEngine_StoryEngine", "VisitOver", (npc,))
+    vm.pending, vm.since_spoke, vm.since_player = False, 20.0, 20.0
+    vm.now += 3.0
+    vm.invoke("IntelEngine_StoryEngine", "CheckStoryLingerCleanup")
+    require(actors == [] and not walked(vm) and vm.linked is None,
+            "a visitor who belongs right here was sent walking")
+
+    # Not held by a visit any more when their business is settled: they are sent back at once.
+    vm, npc, actors = make_leaver()
+    actors.clear()
+    vm.invoke("IntelEngine_StoryEngine", "VisitOver", (npc,))
+    require(len(walked(vm)) == 1 and vm.linked is vm.came_from, "a visitor no longer held was not sent back")
+    print("actual PEX visit over: stays while anyone speaks, then walks back where they came from; nowhere to go = stays put")
 
 
 def run_social_range_checks(files, history):

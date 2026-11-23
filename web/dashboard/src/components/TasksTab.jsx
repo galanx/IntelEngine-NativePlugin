@@ -3,6 +3,15 @@ import React from 'react';
 import SlotCard from './SlotCard';
 import GameTime from './GameTime';
 import PackagesTab from './PackagesTab';
+import { t } from '../i18n';
+
+// How a scheduled task stands, as the scripts say it (IntelEngine_Schedule.psc, GetScheduleStatus), in the page's words.
+function statusWords(status) {
+  const hours = /^in ~(\d+)h$/.exec(status), onTheWay = /^en route, ~(\d+)h$/.exec(status);
+  if (hours) return t('in ~{n}h', { n: hours[1] });
+  if (onTheWay) return t('en route, ~{n}h', { n: onTheWay[1] });
+  return t(status);
+}
 
 const SCHED_TASK_ICONS = {
   travel: '\u{1F5FA}',
@@ -13,7 +22,6 @@ const SCHED_TASK_ICONS = {
 function TasksTab({ tasks, scheduled, calendar, sendAction, packages, removingIds, onMarkRemoving }) {
   const activeTasks = tasks.filter(s => s.state !== 0);
   const emptyTasks = tasks.filter(s => s.state === 0 && s.cooldownRemaining <= 0);
-  const cooldownTasks = tasks.filter(s => s.state === 0 && s.cooldownRemaining > 0);
 
   const activeScheduled = scheduled.filter(s => s.agent);
   const otherPackages = packages.filter(entry => !activeTasks.some(slot => (slot.agentFormId >>> 0) === entry.formId));
@@ -23,11 +31,11 @@ function TasksTab({ tasks, scheduled, calendar, sendAction, packages, removingId
       {/* Active Tasks */}
       <section>
         <div className="flex items-center justify-between mb-2">
-          <h2 className="section-header">Active Tasks</h2>
+          <h2 className="section-header">{t('Active Tasks')}</h2>
           <span className="text-xs text-gray-500">{activeTasks.length}/5</span>
         </div>
         {activeTasks.length === 0 ? (
-          <div className="empty-state">No active tasks</div>
+          <div className="empty-state">{t('No active tasks')}</div>
         ) : (
           <div className="space-y-1.5">
             {activeTasks.map(slot => (
@@ -44,35 +52,14 @@ function TasksTab({ tasks, scheduled, calendar, sendAction, packages, removingId
       </section>
       <PackagesTab packages={otherPackages} sendAction={sendAction} removingIds={removingIds} onMarkRemoving={onMarkRemoving} />
 
-      {/* Cooldowns */}
-      {cooldownTasks.length > 0 && (
-        <section>
-          <h2 className="section-header mb-2">On Cooldown</h2>
-          <div className="space-y-1">
-            {cooldownTasks.map(slot => (
-              <div key={slot.index} className="slot-card rounded px-3 py-1.5 opacity-60">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs text-gray-400">
-                    Slot {slot.index + 1} &mdash; {slot.agentName || 'Unknown'}
-                  </span>
-                  <span className="text-xs text-gray-500">
-                    {Math.ceil(slot.cooldownRemaining)}s
-                  </span>
-                </div>
-              </div>
-            ))}
-          </div>
-        </section>
-      )}
-
       {/* Scheduled Tasks */}
       <section>
         <div className="flex items-center justify-between mb-2">
-          <h2 className="section-header">Scheduled</h2>
+          <h2 className="section-header">{t('Scheduled')}</h2>
           <span className="text-xs text-gray-500">{activeScheduled.length}/10</span>
         </div>
         {activeScheduled.length === 0 ? (
-          <div className="empty-state">No scheduled tasks</div>
+          <div className="empty-state">{t('No scheduled tasks')}</div>
         ) : (
           <div className="space-y-1.5">
             {activeScheduled.map((sched, i) => (
@@ -92,24 +79,24 @@ function TasksTab({ tasks, scheduled, calendar, sendAction, packages, removingId
                       sched.schedState === 2 ? 'text-emerald-400' :
                       'text-blue-400'
                     }`}>
-                      {sched.schedState === 1 ? 'Dispatched' :
-                       sched.schedState === 2 ? 'Meeting' : 'Pending'}
+                      {t(sched.schedState === 1 ? 'Dispatched' :
+                       sched.schedState === 2 ? 'Meeting' : 'Pending')}
                     </span>
                     <button
                       onClick={() => sendAction('cancelSchedule', { slot: Number.isInteger(sched.slot) ? sched.slot : i })}
                       className="btn-cancel"
-                      title="Cancel scheduled task"
+                      title={t('Cancel scheduled task')}
                     >
                       &#x2715;
                     </button>
                   </div>
                 </div>
                 <div className="text-xs text-gray-400 truncate">
-                  {sched.taskType && sched.taskType.replace(/_/g, ' ')}
+                  {sched.taskType && t(sched.taskType.replace(/_/g, ' '))}
                   {sched.destination ? ` \u2192 ${sched.destination}` : ''}
                   {sched.targetName ? ` (${sched.targetName})` : ''}
                 </div>
-                <div className="text-[10px] text-gray-500 mt-0.5">{sched.origin || 'Schedule'}</div>
+                <div className="text-[10px] text-gray-500 mt-0.5">{sched.origin || t('Schedule')}</div>
                 <GameTime time={sched.startTime} calendar={calendar} />
                 {sched.reason && <div className="text-xs text-gray-400 mt-1 italic">{sched.reason}</div>}
                 {(sched.timeDesc || sched.schedStatus) && (
@@ -121,7 +108,7 @@ function TasksTab({ tasks, scheduled, calendar, sendAction, packages, removingId
                         sched.schedStatus.includes('soon') ? 'text-yellow-400' :
                         'text-gray-400'
                       }`}>
-                        {sched.schedStatus}
+                        {statusWords(sched.schedStatus)}
                       </span>
                     )}
                   </div>

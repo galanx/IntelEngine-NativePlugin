@@ -13,6 +13,8 @@
 #include "Plugin.h"
 #include "PoliticalDB.h"
 
+#include <set>
+#include "Ranks.h"
 #include <nlohmann/json.hpp>
 #include <mutex>
 #include <optional>
@@ -21,6 +23,10 @@
 #include <vector>
 #include <unordered_map>
 #include <unordered_set>
+
+namespace SKSE {
+    class SerializationInterface;
+}
 
 namespace IntelEngine {
 
@@ -55,6 +61,11 @@ namespace IntelEngine {
         std::string prisonLocation;  // Cell EditorID for prisoner holding (Phase 4)
         float prisonMarker[3] = {};  // [x, y, z] position within prison cell (Phase 4)
         int peSide = -1;            // optional Political Engine side (0-3); -1 = derive from skyrimFactionId
+        // The quests of the game that must be finished before this faction is free to go to war or be harmed
+        // ("free_after" in factions.yaml; "A|B": either). Not given: the game's own for its skyrim_faction_id
+        // (VanillaWar::QuestlineOf). Given and empty: never bound.
+        std::vector<std::string> freeAfter;
+        bool freeAfterSet = false;
     };
 
     /** Political Engine side of an organization: its pe_side if set, else its engine-faction default (-1 = none). */
@@ -77,6 +88,11 @@ namespace IntelEngine {
         }
         return out;
     }
+
+    // Co-save record of the leaders the game has shown to be dead for good.
+    constexpr std::uint32_t kFallenLeadersRecord = 'IEFL';
+    // Co-save record of a political event held back to be seen (FactionPolitics::HeldEvent).
+    constexpr std::uint32_t kHeldEventRecord = 'IEHE';
 
     struct DefaultRelation {
         std::string factionA;
@@ -109,6 +125,12 @@ namespace IntelEngine {
 
         /** Get a faction config by ID. Returns nullopt if not found. */
         std::optional<FactionConfig> GetFaction(const std::string& factionId) const;
+
+        /** Where the user's faction file is (for the faction editor). */
+        std::string ConfigPath() const { return GetConfigPath(); }
+        /** The faction file was written anew (the faction editor): read it in again, with what start-up does after
+         *  reading it (default relations for new pairs, scores, the state file). Any thread. */
+        bool ReloadConfig();
 
         /** Get all loaded factions (returns copy — safe across threads). */
         std::vector<FactionConfig> GetAllFactions() const {
@@ -149,7 +171,7 @@ namespace IntelEngine {
         int RecordPoliticalEvent(const std::string& factionA, const std::string& factionB,
                                  const std::string& eventType, const std::string& description,
                                  int delta, float gameTime, const std::string& locationName = "",
-                                 const nlohmann::json& position = nullptr);
+                                 const nlohmann::json& position = nullptr, const std::string& newsFrom = "");
         std::string GetFactionsJson();
 
         // =================================================================
@@ -240,6 +262,9 @@ namespace IntelEngine {
             std::string playerHold;
             std::vector<PoliticsLeaderSnapshot> leaders;
             nlohmann::json vanillaSides = nlohmann::json::array();
+            std::uint8_t civilWar = 0;   // VanillaWar::State: the game's own civil war as the game keeps it
+            int playerSide = 0;          // 0 none, 1 the Empire, 2 the Stormcloaks
+            std::unordered_map<std::string, std::string> bound;   // faction id -> the story of the game that still binds it
         };
 
         /**
@@ -318,6 +343,80 @@ namespace IntelEngine {
                                             const std::string& factionB,
                                             const std::string& eventType);
 
+        /** What is seen is not told before it has happened. An event that is to be shown near the player (an attempt
+         *  on a leader's life, a skirmish) is held back here, unrecorded, until the script says how it went. */
+        struct HeldEvent {
+            bool set = false;
+            std::string factionA, factionB, eventType, description;
+            int delta = 0;
+            float gameTime = 0.f;
+        };
+        /** It could not be shown after all: it is recorded and told as it was written (it happened where nobody of
+         *  this tale was). */
+        void ManifestationFailed();
+        /** It was shown and has recorded itself (a skirmish does, like a battle): nothing more to record. */
+        void ManifestationDone();
+        /** How an attempt on a leader's life ended, as it was seen: "foiled" (the player killed the assassin before
+         *  the blow), "saved" (after it), "failed" (somebody else did), "killed" (the leader is dead), "slain_by_player"
+         *  (by the player's own hand), "escaped". Records it, tells it, moves the player's standing.
+         *  Returns JSON: {notification, thanks, reward, targetFact, witnessFact} */
+        std::string AssassinationOutcome(const std::string& targetFaction, const std::string& attackerFaction,
+                                         const std::string& leaderName, const std::string& outcome, const std::string& place,
+                                         const std::string& playerName, const std::string& hold);
+        /** Nothing is held back any more (a game is loaded). */
+        void ForgetHeldEvent();
+
+        // ---- the fallen
+        // A leader the game has shown to be dead for good is remembered as that, with the save. Whether a leader
+        // lives was asked of the game each time, and of a body the game no longer keeps (its cell reset, the corpse
+        // cleaned away) the answer is "nobody of that name": taken for alive. A faction that had lost its last
+        // leader came back to the table when the bodies were gone.
+        bool IsFallen(const std::string& factionId, const std::string& leaderName) const;
+        /** Returns true when this is news. shownName: what the game calls them (told in the game's language). */
+        bool MarkFallen(const std::string& factionId, const std::string& leaderName, const std::string& shownName);
+        /** Tells of the leaders found dead since the last time. Returns how many. */
+        int AnnounceFallen(float gameTime);
+        /** Has this faction lost every one of its leaders? It does nothing any more, and nothing is done to it. */
+        bool IsDisbanded(const std::string& factionId);
+        void Save(SKSE::SerializationInterface* intfc) const;
+        void Load(SKSE::SerializationInterface* intfc, std::uint32_t version, std::uint32_t length);
+        void ForgetFallen();
+        /** A save with no record of the fallen (made before 4.0 kept them, a 3.8 save): every leader already dead in it
+         *  is remembered as dead without a word (4.0 told each of them as fresh news, all at once, on the first look
+         *  after the upgrade). Once a game is loaded, on the game's thread; does nothing when the record was there. */
+        void NoteTheDeadQuietly();
+        /** What is held back to be seen (HeldEvent) goes with the save, so that a load in the middle of the showing
+         *  still tells it (Battle.OnGameReload: ManifestationFailed). 4.0 kept it in memory only and lost it. */
+        void SaveHeld(SKSE::SerializationInterface* intfc);
+        void LoadHeld(SKSE::SerializationInterface* intfc, std::uint32_t version, std::uint32_t length);
+
+        // ---- the ladder (Ranks.h): what the player has done for a faction, and the rank that earns them with it
+        Ranks::Record PlayerRecord(const std::string& factionId) const;
+        /** The rank the faction honours now (none while it takes the player for an enemy). */
+        int PlayerRank(const std::string& factionId);
+        /** What that rank is called with this faction ("Veteran", "Trusted Hand"); empty for no rank. */
+        std::string RankTitle(const std::string& factionId, int rank) const;
+        /** Something done for a faction. Returns the new rank when this lifted the player to it, else 0. */
+        int EarnRenown(const std::string& factionId, Ranks::Deed deed, int times = 1);
+        /** How the faction's own speak of the player: "a Veteran of the Imperial Legion: fought in 4 of their
+         *  battles (3 won)". Empty when there is nothing to say. */
+        std::string PlayerKnownAs(const std::string& factionId);
+        /** For the author of a town's story: the times these people live in, a few lines: who is at war with whom,
+         *  and how the factions take the player (a rank earned, a faction that holds them for an enemy or thinks well
+         *  of them). Empty with politics off or nothing to say. Reads the political database: off the game's thread. */
+        std::string TimesForTales(const std::string& player);
+        /** Everything about the ladder, for the dashboard: [{faction, name, rank, title, renown, next, ...}] */
+        nlohmann::json RanksJson();
+        void SaveRanks(SKSE::SerializationInterface* intfc) const;
+        void LoadRanks(SKSE::SerializationInterface* intfc, std::uint32_t version, std::uint32_t length);
+        void ForgetRanks();
+
+        /** Time passes between two factions that leave each other alone: old wounds close (a score below where the
+         *  two usually stand climbs back to it), warmth nobody tends fades (one above it sinks back, never below
+         *  nought). Once a game day, and only where nothing has happened between the two for three days and they are
+         *  not at war. Without it a score that had reached -100 or +100 stayed there for good. Returns how many moved. */
+        int DriftRelations(float gameTime);
+
         /** Confirm manifestation cooldown after Papyrus verified actors spawned.
          *  Called by Papyrus only when at least one actor was successfully created. */
         void ConfirmManifestationCooldown();
@@ -370,9 +469,24 @@ namespace IntelEngine {
 
         /** fix 94: may this pair ever be at war? (war_allowed in factions.yaml; PE_ realms never). Takes configMutex_. */
         bool WarPossible(const FactionConfig& a, const FactionConfig& b) const;
+        /** WarPossible for a caller that already holds configMutex_. */
+        bool WarPossibleLocked(const FactionConfig& a, const FactionConfig& b) const;
 
         /** fix 94: declare the lowest-scored eligible Critical pair (Rule 3) in code. Returns war id or -1. */
         int EnforceWarRule(const PoliticsTickSnapshot& snap);
+        /** Main thread, each political tick before the war rule: the simulation is held to the game's own civil war
+         *  (VanillaWar.h): no war between the Empire and the Stormcloaks goes on under the truce or after the game
+         *  decided it, the Empire and the Thalmor stay short of war while the Concordat binds them, and the Empire and
+         *  the Stormcloaks never drift into friendship. */
+        void HoldToTheGamesWar(const PoliticsTickSnapshot& snap);
+        /** The id of a faction as factions.yaml writes it, whatever case it was asked for in ("CollegeOfWinterholdFaction"
+         *  for "CollegeofWinterholdFaction"); empty when there is no such faction. */
+        std::string CanonicalId(const std::string& anyCase) const;
+        /** The game's own civil war as last read (VanillaWar::State). Any thread. */
+        std::uint8_t CivilWarState() const { return vanillaWar_.load(); }
+        /** The story of the game that still binds a faction (the quest's name), empty when it is free. Any thread. */
+        std::string BoundBy(const std::string& factionId) const;
+        int CivilWarPlayerSide() const { return vanillaAllegiance_.load(); }
 
         /** Process one war tick for all active wars.
          *  Applies morale decay, checks surrender conditions.
@@ -402,7 +516,7 @@ namespace IntelEngine {
                                   const std::string& location, const std::string& result,
                                   const std::string& narrative, int attackerLosses, int defenderLosses,
                                   const std::string& victor,
-                                  const nlohmann::json* physicalPosition = nullptr);
+                                  const nlohmann::json* physicalPosition = nullptr, const std::string& newsFrom = "");
 
         // =================================================================
         // Player Standing Mechanics
@@ -460,6 +574,8 @@ namespace IntelEngine {
 
         /** Serialize a FactionConfig to JSON (shared by context/dashboard/state file builders). */
         static nlohmann::json FactionToJson(const FactionConfig& f);
+        // The leaders and the hold as the game shows them (a translated game), added beside the configured names.
+        static void ShownAsInGame(nlohmann::json& fj, const FactionConfig& f);
 
         /** Build faction id→name lookup map (acquires configMutex_ internally). */
         std::unordered_map<std::string, std::string> BuildIdToNameMap() const;
@@ -488,6 +604,15 @@ namespace IntelEngine {
         std::atomic<bool> peIntegration_{false};
         std::atomic<bool> peReactionsMoveRelations_{true};
         std::mutex peMutex_;
+        std::mutex heldMutex_;
+        HeldEvent held_;
+        mutable std::mutex fallenMutex_;
+        std::set<std::string> fallen_;                                      // "faction|leader's name as configured"
+        std::vector<std::pair<std::string, std::string>> fallenToTell_;     // faction, name as the game shows it
+        std::atomic<bool> fallenQuiet_{false};   // a game loaded without a record of the fallen: the dead found now are not news
+        std::atomic<float> lastDriftTime_{0.0f};
+        mutable std::mutex ranksMutex_;
+        Ranks::Book ranks_;
         nlohmann::json pendingPE_ = nlohmann::json::object(), eligiblePE_ = nlohmann::json::object();
         std::string peLoadId_;
 
@@ -506,6 +631,14 @@ namespace IntelEngine {
         // Prevents repeated boosting if the player later loses standing through gameplay.
         // Cleared on Initialize() (new game / load).
         std::unordered_set<std::string> vanillaSynced_;
+        std::unordered_map<std::string, std::string> idByLower_;   // lowercase id -> id as written (ids are asked for in any case)
+        std::atomic<std::uint8_t> vanillaWar_{0};                  // VanillaWar::State, read on the game's thread each tick
+        std::atomic<int> vanillaAllegiance_{0};
+        mutable std::mutex boundMutex_;
+        std::unordered_map<std::string, std::string> boundBy_;   // read on the game's thread each tick (BuildPoliticsTickSnapshot)
+        /** What happened in the world's politics becomes talk (RumorBridge): how far it travels follows its kind. */
+        void News(const std::string& factionA, const std::string& eventType, const std::string& text, int eventId,
+                  const std::string& from = "");
     };
 
 }  // namespace IntelEngine

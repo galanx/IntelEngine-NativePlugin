@@ -8,6 +8,7 @@
 #include "Plugin.h"
 #include "Papyrus.h"
 #include "NPCIndex.h"
+#include "LanguageBridge.h"
 #include "BattleManager.h"
 #include "ItemIndex.h"
 #include "LocationResolver.h"
@@ -21,6 +22,12 @@
 #include "SkyrimNetAPI.h"
 #include "DialogueTracker.h"
 #include "SpeechTracker.h"
+#include "LivingWorldBridge.h"
+#include "BondBridge.h"
+#include "StorylineBridge.h"
+#include "QuestBridge.h"
+#include "ArcBridge.h"
+#include "RumorBridge.h"
 #include "QuestStateTracker.h"
 #include "StringUtils.h"
 #include "AsyncDispatch.h"
@@ -96,6 +103,18 @@ namespace IntelEngine {
 
         // Persist slot tracker state (task recovery without StorageUtil on load)
         SlotTracker::GetSingleton()->Save(a_intfc);
+
+        // 4.0 living world: the record of known NPCs and the director's pacing
+        LivingWorldBridge::GetSingleton()->Save(a_intfc);
+        StorylineBridge::GetSingleton()->Save(a_intfc);
+        QuestBridge::GetSingleton()->Save(a_intfc);
+        ArcBridge::GetSingleton()->Save(a_intfc);
+        RumorBridge::GetSingleton()->Save(a_intfc);
+        BattleManager::GetSingleton()->Save(a_intfc);
+        FactionPolitics::GetSingleton()->Save(a_intfc);
+        FactionPolitics::GetSingleton()->SaveHeld(a_intfc);
+        FactionPolitics::GetSingleton()->SaveRanks(a_intfc);
+        BondBridge::GetSingleton()->Save(a_intfc);
     }
 
     void LoadCallback(SKSE::SerializationInterface* a_intfc) {
@@ -120,12 +139,32 @@ namespace IntelEngine {
                 }
             } else if (type == 'IETK') {
                 SlotTracker::GetSingleton()->Load(a_intfc);
+            } else if (type == LivingWorld::kRecordType) {
+                LivingWorldBridge::GetSingleton()->Load(a_intfc, version, length);
+            } else if (type == Storylines::kRecordType) {
+                StorylineBridge::GetSingleton()->Load(a_intfc, version, length);
+            } else if (type == Quests::kRecordType) {
+                QuestBridge::GetSingleton()->Load(a_intfc, version, length);
+            } else if (type == Arcs::kRecordType) {
+                ArcBridge::GetSingleton()->Load(a_intfc, version, length);
+            } else if (type == kRumorRecordType) {
+                RumorBridge::GetSingleton()->Load(a_intfc, version, length);
+            } else if (type == kPendingBattleRecord) {
+                BattleManager::GetSingleton()->Load(a_intfc, version, length);
+            } else if (type == kFallenLeadersRecord) {
+                FactionPolitics::GetSingleton()->Load(a_intfc, version, length);
+            } else if (type == kHeldEventRecord) {
+                FactionPolitics::GetSingleton()->LoadHeld(a_intfc, version, length);
+            } else if (type == Ranks::kRecordType) {
+                FactionPolitics::GetSingleton()->LoadRanks(a_intfc, version, length);
+            } else if (type == Bonds::kRecordType) {
+                BondBridge::GetSingleton()->Load(a_intfc, version, length);
             }
         }
     }
 
     void RevertCallback(SKSE::SerializationInterface*) {
-        intelEngineStoryLoadRecovered.store(false);
+        intelEngineStoryLoadRecovered.store(false); IntelEngineNewLoad();
         PoliticalEngineBridge::GetSingleton()->MarkDirty(true);
         PoliticalDB::GetSingleton()->BeginLoad();
         g_currentSaveID.clear();
@@ -140,6 +179,16 @@ namespace IntelEngine {
         // Previously this was in kPostLoadGame, but that ran AFTER LoadCallback
         // and wiped the co-save data we just loaded.
         tracker->ClearAll();
+        LivingWorldBridge::GetSingleton()->Revert();
+        StorylineBridge::GetSingleton()->Revert();
+        QuestBridge::GetSingleton()->Revert();
+        ArcBridge::GetSingleton()->Revert();
+        RumorBridge::GetSingleton()->Revert();
+        BattleManager::GetSingleton()->Revert();
+        FactionPolitics::GetSingleton()->ForgetHeldEvent();
+        FactionPolitics::GetSingleton()->ForgetFallen();
+        FactionPolitics::GetSingleton()->ForgetRanks();
+        BondBridge::GetSingleton()->Revert();
         ProximityMonitor::GetSingleton()->DisarmAll();
         logger::info("RevertCallback: Save ID and SlotTracker cleared (gen={})",
             tracker->loadGeneration.load(std::memory_order_relaxed));
@@ -346,7 +395,7 @@ namespace IntelEngine {
     void MessageHandler(SKSE::MessagingInterface::Message* a_msg) {
         switch (a_msg->type) {
             case SKSE::MessagingInterface::kPreLoadGame:
-                intelEngineStoryLoadRecovered.store(false);
+                intelEngineStoryLoadRecovered.store(false); IntelEngineNewLoad();
                 SpeechTracker::GetSingleton()->Reset();
                 PoliticalDB::GetSingleton()->BeginLoad();
                 break;
@@ -358,8 +407,97 @@ namespace IntelEngine {
                 MemoryDB::GetSingleton()->InitializeAPI();
                 DialogueTracker::GetSingleton()->Initialize();
                 SpeechTracker::GetSingleton()->Register();
+                LivingWorldBridge::GetSingleton()->Register();
+                LivingWorldBridge::GetSingleton()->CatalogPlaces();   // at the main menu, not in a frame of play
+                Papyrus::BuildItemBook();                             // the same
                 PoliticalEngineBridge::GetSingleton()->onLoaded = [] { Papyrus::PollAndSyncPE(); };
                 PoliticalEngineBridge::GetSingleton()->Initialize();
+
+                // 4.0: what an NPC asked of the player, for their bio (prompt submodule 0202_intel_storylines)
+                if (SkyrimNetAPI::RegisterDecorator) {
+                    const bool registered = SkyrimNetAPI::RegisterDecorator(
+                        "get_intelengine_storylines",
+                        "Returns what this NPC asked of the player through IntelEngine and how it went.",
+                        [](RE::Actor* actor) -> std::string { return StorylineBridge::GetSingleton()->DescribeFor(actor); });
+                    logger::info("{} SkyrimNet decorator: get_intelengine_storylines", registered ? "Registered" : "Failed to register");
+                    // Whether this NPC has a request of the player open: the storyline actions' eligibility (is_empty).
+                    const bool openRegistered = SkyrimNetAPI::RegisterDecorator(
+                        "get_intelengine_open_storyline",
+                        "Returns the id of the request this NPC has open with the player, empty when none.",
+                        [](RE::Actor* actor) -> std::string {
+                            const auto id = actor ? StorylineBridge::GetSingleton()->OpenIdFor(actor->GetFormID()) : 0;
+                            return id ? std::to_string(id) : std::string();
+                        });
+                    logger::info("{} SkyrimNet decorator: get_intelengine_open_storyline", openRegistered ? "Registered" : "Failed to register");
+                    // Whether this NPC is the one a request is about and may answer it through the player now: the
+                    // SendWordBack action's eligibility (is_not_empty).
+                    const bool aboutRegistered = SkyrimNetAPI::RegisterDecorator(
+                        "get_intelengine_storyline_about",
+                        "Returns the id of a request about this NPC they may answer through the player now, empty when none.",
+                        [](RE::Actor* actor) -> std::string { return StorylineBridge::GetSingleton()->AnswerPending(actor); });
+                    logger::info("{} SkyrimNet decorator: get_intelengine_storyline_about", aboutRegistered ? "Registered" : "Failed to register");
+                    // 4.0 quests: whether a former follower met on the way to a venture may ask the player along now
+                    // (the InviteAlong action's eligibility, is_not_empty).
+                    const bool inviteRegistered = SkyrimNetAPI::RegisterDecorator(
+                        "get_intelengine_venture_invite",
+                        "Returns the id of the venture this NPC may ask the player along on now, empty when none.",
+                        [](RE::Actor* actor) -> std::string { return QuestBridge::GetSingleton()->InviteFor(actor); });
+                    logger::info("{} SkyrimNet decorator: get_intelengine_venture_invite", inviteRegistered ? "Registered" : "Failed to register");
+                    // Whether a venture's meeting with the player is going on for this NPC (planned, not yet taken on):
+                    // the travel action is not offered to them meanwhile, the meeting moves them. Mid-meeting, Jenassa's
+                    // own model sent her into Embershard on a trip of her own and the venture was lost (2026-11-18).
+                    const bool meetingRegistered = SkyrimNetAPI::RegisterDecorator(
+                        "get_intelengine_in_venture",
+                        "Returns the id of the venture meeting this NPC is in with the player now, empty when none.",
+                        [](RE::Actor* actor) -> std::string {
+                            const auto id = actor ? QuestBridge::GetSingleton()->VentureOf(actor->GetFormID()) : 0u;
+                            return id ? std::to_string(id) : std::string();
+                        });
+                    logger::info("{} SkyrimNet decorator: get_intelengine_in_venture", meetingRegistered ? "Registered" : "Failed to register");
+                    // The story arc this NPC has a part in (planned or open), empty when none: their own request is not
+                    // offered meanwhile. Arrived to ask for help with her stolen circlet, Ysolda's model also chose
+                    // AskPlayerForHelp, and a second request for the same circlet opened (2026-11-18). (Their trips are
+                    // offered again since 2026-11-23: the player may send them; a trip of their own idea is refused by
+                    // Travel.GoToLocation until the story is over.)
+                    const bool arcRegistered = SkyrimNetAPI::RegisterDecorator(
+                        "get_intelengine_arc",
+                        "Returns the id of the story arc this NPC has a part in now, empty when none.",
+                        [](RE::Actor* actor) -> std::string {
+                            const auto id = actor ? ArcBridge::GetSingleton()->ArcOf(actor->GetFormID()) : 0u;
+                            return id ? std::to_string(id) : std::string();
+                        });
+                    logger::info("{} SkyrimNet decorator: get_intelengine_arc", arcRegistered ? "Registered" : "Failed to register");
+                    // A former follower's own life since the player left them (prompt submodule 0203_intel_life).
+                    const bool lifeRegistered = SkyrimNetAPI::RegisterDecorator(
+                        "get_intelengine_life",
+                        "Returns what this NPC has done with their life since the player left them, first person; empty when nothing.",
+                        [](RE::Actor* actor) -> std::string { return LivingWorldBridge::GetSingleton()->OwnLifeLine(actor); });
+                    logger::info("{} SkyrimNet decorator: get_intelengine_life", lifeRegistered ? "Registered" : "Failed to register");
+                    // The hold an NPC is in: who hears a rumor of a former follower (world-knowledge conditions).
+                    const bool holdRegistered = SkyrimNetAPI::RegisterDecorator(
+                        "get_intelengine_hold",
+                        "Returns the name of the hold this NPC is in, empty when none.",
+                        [](RE::Actor* actor) -> std::string { return LivingWorldBridge::HoldName(actor); });
+                    logger::info("{} SkyrimNet decorator: get_intelengine_hold", holdRegistered ? "Registered" : "Failed to register");
+                    // The talk of the day: what this NPC has heard and could pass on (prompt submodule 0204_intel_rumors).
+                    const bool rumorsRegistered = SkyrimNetAPI::RegisterDecorator(
+                        "get_intelengine_rumors",
+                        "Returns what this NPC has heard lately and could pass on (rumors going round their hold); empty when nothing.",
+                        [](RE::Actor* actor) -> std::string { return RumorBridge::GetSingleton()->Lines(actor); });
+                    logger::info("{} SkyrimNet decorator: get_intelengine_rumors", rumorsRegistered ? "Registered" : "Failed to register");
+                    // A soldier of a battle: what they know of where they stand (prompt submodule 0205_intel_battle), and
+                    // whether the player may still join their line by saying so (action JoinBattle).
+                    const bool battleRegistered = SkyrimNetAPI::RegisterDecorator(
+                        "get_intelengine_battle",
+                        "Returns what this NPC knows of the battle they are drawn up or fighting in right now; empty for everyone who is not a soldier of one.",
+                        [](RE::Actor* actor) -> std::string { return BattleManager::GetSingleton()->SoldierBrief(actor); });
+                    const bool battleSideRegistered = SkyrimNetAPI::RegisterDecorator(
+                        "get_intelengine_battle_side",
+                        "Returns the name of the army this NPC stands in when the player may still join its line by saying so; empty otherwise.",
+                        [](RE::Actor* actor) -> std::string { return BattleManager::GetSingleton()->SideOpenTo(actor); });
+                    logger::info("{} SkyrimNet decorators: get_intelengine_battle, get_intelengine_battle_side",
+                                 battleRegistered && battleSideRegistered ? "Registered" : "Failed to register");
+                }
 
                 // Register quest decorator with SkyrimNet (soft dependency — skipped if API unavailable)
                 if (SkyrimNetAPI::RegisterDecorator) {
@@ -379,9 +517,13 @@ namespace IntelEngine {
 
                 DashboardConfig::GetSingleton()->Load();
                 DashboardUIManager::GetSingleton()->Initialize();
+                LanguageBridge::GetSingleton()->Load();     // before the indexes: the place index tells it the names' script
                 NPCIndex::GetSingleton()->BuildIndex();
                 LocationResolver::GetSingleton()->BuildLocationIndex();
                 ItemIndex::GetSingleton()->BuildIndex();
+                QuestBridge::GetSingleton()->Catalogue();   // after the dungeon index; at the main menu
+                ArcBridge::GetSingleton()->Catalogue();     // after the NPC index and the homes
+                ArcBridge::GetSingleton()->Listen();
                 FactionPolitics::GetSingleton()->LoadSettings();
                 break;
 
@@ -392,6 +534,7 @@ namespace IntelEngine {
                 PoliticalEngineBridge::GetSingleton()->MarkDirty(true);
                 SlotTracker::GetSingleton()->ClearAll();
                 ProximityMonitor::GetSingleton()->DisarmAll();
+                LivingWorldBridge::GetSingleton()->OnGameLoaded(true);
                 NPCIndex::GetSingleton()->RefreshIndex();
                 MemoryDB::GetSingleton()->ClearCaches();
                 // Initialize per-save political DB (new save ID generated)
@@ -401,7 +544,14 @@ namespace IntelEngine {
                 {
                     auto* task = SKSE::GetTaskInterface();
                     if (task) {
+                        task->AddTask([]() { FactionPolitics::GetSingleton()->NoteTheDeadQuietly(); });   // a new game: nobody yet
                         task->AddTask([]() { DispatchMaintenanceCall(true); });
+                        // A new game has its first story request too: the same first lookups, made now.
+                        task->AddTask([]() {
+                            ArcBridge::GetSingleton()->WarmUp();
+                            BattleManager::GetSingleton()->WarmUp();
+                        });
+                        AsyncDispatch::Submit([] { NPCIndex::ReadStoryFilters(); });
                     }
                 }
                 break;
@@ -410,6 +560,25 @@ namespace IntelEngine {
                 // Game loaded — SlotTracker already populated from co-save (LoadCallback).
                 // ClearAll moved to RevertCallback to avoid wiping co-save data.
                 logger::info("Game loaded - refreshing indexes, clearing MemoryDB caches");
+                // What a session's first story request used to read in the middle of play: the user's lists on the worker
+                // (after that nothing reads them inside a frame), the first lookups on the game's thread while the save
+                // comes in.
+                AsyncDispatch::Submit([] { NPCIndex::ReadStoryFilters(); });
+                if (auto* warm = SKSE::GetTaskInterface()) {
+                    warm->AddTask([] {
+                        ArcBridge::GetSingleton()->WarmUp();
+                        BattleManager::GetSingleton()->WarmUp();      // a session's first battle: its lookups by name
+                    });
+                }
+                LanguageBridge::GetSingleton()->Decide();   // the settings may differ from when the data was loaded
+                LivingWorldBridge::GetSingleton()->OnGameLoaded(false);
+                // Journal titles are not in the save: the quests' records give them back.
+                if (auto* titles = SKSE::GetTaskInterface()) {
+                    titles->AddTask([] {
+                        QuestBridge::GetSingleton()->ApplyTitles();
+                        ArcBridge::GetSingleton()->ApplyTitles();
+                    });
+                }
                 PoliticalEngineBridge::GetSingleton()->MarkDirty(true);
                 AsyncDispatch::Submit([] { Papyrus::PollAndSyncPE(); });  // no-op unless PE data is already ready; PE's own "loaded" event covers the other order
                 NPCIndex::GetSingleton()->RefreshIndex();
@@ -420,6 +589,11 @@ namespace IntelEngine {
                     InitializePoliticalDB();
                     FactionPolitics::GetSingleton()->Initialize();
                 }
+                // A save of 3.8 keeps no record of the fallen: its dead are remembered without being told as news (the
+                // game's thread, once the indexes above are fresh; nothing when the record was there).
+                if (auto* quiet = SKSE::GetTaskInterface()) {
+                    quiet->AddTask([] { FactionPolitics::GetSingleton()->NoteTheDeadQuietly(); });
+                }
                 // Re-sync SkyrimNet busy state from co-save-loaded SlotTracker
                 // (LoadCallback fires before SkyrimNet is ready, so we sync here)
                 {
@@ -427,7 +601,12 @@ namespace IntelEngine {
                     if (tracker->HasCoSaveData() && SkyrimNetAPI::SetActorBusy) {
                         for (int i = 0; i < MAX_SLOTS; ++i) {
                             auto slot = tracker->GetSlotDataCopy(i);
-                            if (slot.state != 0 && slot.agentFormID) {
+                            // The same measure as while the game runs (SlotTracker): on the way (1) or coming back
+                            // (3) is busy; arrived and waiting (2, 5, 8) is not. Every slot used to be marked busy
+                            // here, so after a load someone waiting somewhere offered no task actions at all ("the
+                            // deliver-message action simply does not show up").
+                            const bool idle = slot.state == 0 || slot.state == 2 || slot.state == 5 || slot.state == 8;
+                            if (!idle && slot.agentFormID) {
                                 auto reason = SlotTracker::BuildBusyReason(slot.taskType, slot.targetName);
                                 SkyrimNetAPI::SetActorBusy(slot.agentFormID, reason.c_str());
                             }
@@ -513,12 +692,19 @@ SKSEPluginLoad(const SKSE::LoadInterface* skse) {
 
         // NOTE: spdlog uses fopen() which expects ANSI, not UTF-8. Use path->string() here
         // (ANSI) so fopen can open the file. PathToUtf8 would produce UTF-8 that fopen misinterprets.
+        // Logging must never cost the game a frame. Every line used to be written and flushed to disk at once, on
+        // whatever thread logged it, the game's own included: a director round alone logs some forty lines. Lines
+        // now go into a queue that spdlog's own thread writes out; a full queue drops the oldest rather than make the
+        // game wait. Warnings and errors are flushed straight away, the rest within a second.
+        spdlog::init_thread_pool(8192, 1);
         auto sink = std::make_shared<spdlog::sinks::basic_file_sink_mt>(path->string(), true);
-        auto log = std::make_shared<spdlog::logger>("global log", std::move(sink));
+        auto log = std::make_shared<spdlog::async_logger>("global log", std::move(sink), spdlog::thread_pool(),
+                                                          spdlog::async_overflow_policy::overrun_oldest);
         log->set_level(spdlog::level::info);
-        log->flush_on(spdlog::level::info);
+        log->flush_on(spdlog::level::warn);
         spdlog::set_default_logger(std::move(log));
         spdlog::set_pattern("[%Y-%m-%d %H:%M:%S.%e] [%l] %v");
+        spdlog::flush_every(std::chrono::seconds(1));
     } catch (const std::exception& e) {
         // spdlog failed - write diagnostic file since logging isn't available
         try {
