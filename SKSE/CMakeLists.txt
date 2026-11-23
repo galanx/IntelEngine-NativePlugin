@@ -59,7 +59,8 @@ if(NOT _commonlib_license STREQUAL "MIT License")
     message(FATAL_ERROR "The pinned CommonLib must retain its MIT license")
 endif()
 get_target_property(_commonlib_definitions CommonLibSSE::CommonLibSSE INTERFACE_COMPILE_DEFINITIONS)
-if(NOT _commonlib_definitions MATCHES "ENABLE_SKYRIM_VR=1")
+# Exported as $<$<BOOL:ON>:ENABLE_SKYRIM_VR=1>; a VR-off build exports the same text with BOOL:OFF.
+if(NOT _commonlib_definitions MATCHES "(^|;)(ENABLE_SKYRIM_VR=1|\\$<\\$<BOOL:ON>:ENABLE_SKYRIM_VR=1>)(;|$)")
     # A flat-only build would need the TESObjectREFR::Unk_8C header correction, which a prebuilt library cannot take.
     message(FATAL_ERROR "IntelEngine requires CommonLib built with ENABLE_SKYRIM_VR")
 endif()
