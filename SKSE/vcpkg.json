@@ -5,6 +5,7 @@
   "description": "Intelligent NPC Task Execution for SkyrimNet",
   "license": "Apache-2.0",
   "dependencies": [
+    "commonlibsse-ng",
     {
       "name": "directxmath",
       "version>=": "2025-04-03"
