@@ -167,13 +167,19 @@ namespace IntelEngine {
             return out;
         }
 
+        // The player's journal entries. VR keeps them in its own runtime block (CommonLibVR's flat accessor points at other
+        // memory there): read through the flat one, the first entry's objective was garbage and a VR save crashed on load.
+        const RE::BSTArray<RE::BGSInstancedQuestObjective>& JournalObjectives(RE::PlayerCharacter* player) {
+            return REL::Module::IsVR() ? player->GetVRPlayerRuntimeData().objectives : player->GetPlayerRuntimeData().objectives;
+        }
+
         // True when the player has begun this quest of the game: one of its objectives has been in their journal.
         // (A quest that merely runs says nothing: the game starts many of its quests with the world, long before
         // the player hears of them: "A Lovely Letter" and "The Golden Claw" both run from the first day.)
         bool Begun(const RE::TESQuest* quest) {
             auto* player = RE::PlayerCharacter::GetSingleton();
             if (!player || !quest) return false;
-            for (auto& instance : player->GetPlayerRuntimeData().objectives) {
+            for (auto& instance : JournalObjectives(player)) {
                 if (instance.Objective && instance.Objective->ownerQuest == quest) return true;
             }
             return false;
@@ -185,7 +191,7 @@ namespace IntelEngine {
             auto* player = RE::PlayerCharacter::GetSingleton();
             if (!player) return out;
             std::vector<RE::TESQuest*> seen;
-            for (auto& instance : player->GetPlayerRuntimeData().objectives) {
+            for (auto& instance : JournalObjectives(player)) {
                 auto* objective = instance.Objective;
                 auto* quest = objective ? objective->ownerQuest : nullptr;
                 if (!quest || std::find(seen.begin(), seen.end(), quest) != seen.end()) continue;
@@ -351,7 +357,7 @@ namespace IntelEngine {
             std::unordered_set<RE::FormID> out;
             auto* player = RE::PlayerCharacter::GetSingleton();
             if (!player) return out;
-            for (auto& instance : player->GetPlayerRuntimeData().objectives) {
+            for (auto& instance : JournalObjectives(player)) {
                 auto* objective = instance.Objective;
                 auto* quest = objective ? objective->ownerQuest : nullptr;
                 if (!quest || instance.InstanceState != RE::QUEST_OBJECTIVE_STATE::kDisplayed || !objective->targets) continue;
