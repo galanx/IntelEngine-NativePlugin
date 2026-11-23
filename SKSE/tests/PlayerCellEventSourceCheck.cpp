@@ -14,5 +14,5 @@ int main() {
     require(PlayerCellEventSourceOffset(false, 1, 6, 1170) == 0x2D8);
     require(PlayerCellEventSourceOffset(false, 1, 7, 99) == 0x2E0);
     require(PlayerCellEventSourceOffset(false, 1, 7, 104) == 0x2E0);
-    require(PlayerCellEventSourceOffset(true, 1, 4, 15) == 0x2D8);
+    require(PlayerCellEventSourceOffset(true, 1, 4, 15) == 0x2E8);
 }
