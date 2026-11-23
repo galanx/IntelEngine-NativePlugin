@@ -5,6 +5,7 @@
  */
 
 #include "Papyrus.h"
+#include "GameText.h"
 #include "FormIDString.h"
 #include "FactionLeaderNameMatch.h"
 #include "FactionPairValidation.h"
@@ -54,6 +55,7 @@
 #include "FactionPolitics.h"
 #include "FactionEditor.h"
 #include "Patrols.h"
+#include "FactionQuests.h"
 #include "PoliticalDB.h"
 #include "BattleManager.h"
 #include "ProcessUtils.h"
@@ -194,6 +196,9 @@ namespace IntelEngine::Papyrus {
     RE::BSFixedString FactionPatrolDue(RE::StaticFunctionTag*);
     void FactionPatrolSent(RE::StaticFunctionTag*);
     void FactionPatrolTest(RE::StaticFunctionTag*, bool);
+    RE::BSFixedString FactionQuestDue(RE::StaticFunctionTag*, std::int32_t);
+    void FactionQuestSent(RE::StaticFunctionTag*);
+    void FactionQuestTest(RE::StaticFunctionTag*, bool);
     RE::BSFixedString PrivateMomentNow(RE::StaticFunctionTag*);
     float LivingWorldClockHours(RE::StaticFunctionTag*);
     std::int32_t PlaceBarsArrival(RE::StaticFunctionTag*, RE::Actor*, RE::TESObjectREFR*);
@@ -657,6 +662,9 @@ namespace IntelEngine::Papyrus {
         a_vm->RegisterFunction("FactionPatrolDue", SCRIPT_NAME, FactionPatrolDue); ++count;
         a_vm->RegisterFunction("FactionPatrolSent", SCRIPT_NAME, FactionPatrolSent); ++count;
         a_vm->RegisterFunction("FactionPatrolTest", SCRIPT_NAME, FactionPatrolTest); ++count;
+        a_vm->RegisterFunction("FactionQuestDue", SCRIPT_NAME, FactionQuestDue); ++count;
+        a_vm->RegisterFunction("FactionQuestSent", SCRIPT_NAME, FactionQuestSent); ++count;
+        a_vm->RegisterFunction("FactionQuestTest", SCRIPT_NAME, FactionQuestTest); ++count;
         a_vm->RegisterFunction("PrivateMomentNow", SCRIPT_NAME, PrivateMomentNow); ++count;
         a_vm->RegisterFunction("LivingWorldClockHours", SCRIPT_NAME, LivingWorldClockHours); ++count;
         a_vm->RegisterFunction("PlaceBarsArrival", SCRIPT_NAME, PlaceBarsArrival); ++count;
@@ -937,14 +945,14 @@ namespace IntelEngine::Papyrus {
         // Walk up to parent location (e.g., The Resting Pilgrim -> Helgen)
         auto* parent = loc->parentLoc;
         if (parent) {
-            auto name = parent->GetFullName();
+            auto name = GameText::In(parent->GetFullName());
             if (name && strlen(name) > 0) {
                 return name;
             }
         }
 
         // No parent, return the location's own name
-        auto name = loc->GetFullName();
+        auto name = GameText::In(loc->GetFullName());
         return (name && strlen(name) > 0) ? name : "";
     }
 
@@ -1171,7 +1179,7 @@ namespace IntelEngine::Papyrus {
             return nullptr;
         }
 
-        std::string searchTerm = StringUtils::ToLowerStd(itemName.c_str());
+        std::string searchTerm = StringUtils::ToLowerStd(GameText::In(itemName.c_str()));
         auto inventory = akActor->GetInventory();
 
         RE::TESForm* bestMatch = nullptr;
@@ -1181,7 +1189,7 @@ namespace IntelEngine::Papyrus {
         for (const auto& [item, data] : inventory) {
             if (!item || data.first <= 0) continue;
 
-            const char* name = item->GetName();
+            const char* name = GameText::In(item->GetName());
             if (!name || strlen(name) == 0) continue;
 
             std::string lowerName = StringUtils::ToLowerStd(name);
@@ -1210,7 +1218,7 @@ namespace IntelEngine::Papyrus {
         }
 
         if (bestMatch) {
-            logger::debug("FindItemInInventory('{}') -> Found: {}", itemName.c_str(), bestMatch->GetName());
+            logger::debug("FindItemInInventory('{}') -> Found: {}", itemName.c_str(), GameText::In(bestMatch->GetName()));
         }
 
         return bestMatch;
@@ -1229,7 +1237,7 @@ namespace IntelEngine::Papyrus {
             return nullptr;
         }
 
-        std::string searchTerm = StringUtils::ToLowerStd(itemName.c_str());
+        std::string searchTerm = StringUtils::ToLowerStd(GameText::In(itemName.c_str()));
         RE::NiPoint3 actorPos = akActor->GetPosition();
 
         RE::TESObjectREFR* bestMatch = nullptr;
@@ -1269,7 +1277,7 @@ namespace IntelEngine::Papyrus {
             }
 
             // Check name match
-            const char* name = baseObj->GetName();
+            const char* name = GameText::In(baseObj->GetName());
             if (!name || strlen(name) == 0) {
                 return RE::BSContainer::ForEachResult::kContinue;
             }
@@ -1305,7 +1313,7 @@ namespace IntelEngine::Papyrus {
 
         if (bestMatch) {
             logger::debug("FindNearbyItemByName('{}', {}) -> Found: {} at distance {}",
-                         itemName.c_str(), radius, bestMatch->GetBaseObject()->GetName(), bestDistance);
+                         itemName.c_str(), radius, GameText::In(bestMatch->GetBaseObject()->GetName()), bestDistance);
         }
 
         return bestMatch;
@@ -1482,7 +1490,7 @@ namespace IntelEngine::Papyrus {
 
     // Does a sentence speak of this name, in whatever form its language puts it (NameForms.h)?
     bool TextMentionsName(RE::StaticFunctionTag*, RE::BSFixedString text, RE::BSFixedString name) {
-        return NameForms::Mentions(FoldUtf8(text.c_str() ? text.c_str() : ""), FoldUtf8(name.c_str() ? name.c_str() : ""),
+        return NameForms::Mentions(FoldUtf8(GameText::In(std::string(text.c_str() ? text.c_str() : ""))), FoldUtf8(GameText::In(std::string(name.c_str() ? name.c_str() : ""))),
                                    LanguageBridge::GetSingleton()->Free());
     }
 
@@ -1621,7 +1629,7 @@ namespace IntelEngine::Papyrus {
         OffScreenTracker::GetSingleton()->InitSlot(
             slot, estimatedArrivalGameTime, pos.x, pos.y);
         logger::debug("[diag:offscreen] {} slot={} init XY=({},{}) loaded={}",
-            actor->GetName(), slot, pos.x, pos.y, actor->Is3DLoaded());
+            GameText::In(actor->GetName()), slot, pos.x, pos.y, actor->Is3DLoaded());
     }
 
     int CheckOffScreenProgress(RE::StaticFunctionTag*, int slot,
@@ -1638,9 +1646,9 @@ namespace IntelEngine::Papyrus {
             auto* package = actor->GetCurrentPackage();
             const auto playerPos = player ? player->GetPosition() : RE::NiPoint3{};
             logger::debug("[diag:offscreen] {} ref={:08X} slot={} xyz=({},{},{}) cell={}({:08X}) space={}({:08X}) loaded={} package={:08X} playerXY=({},{}) {} movement={} stationaryTicks={} return={}",
-                actor->GetName(), actor->GetFormID(), slot, pos.x, pos.y, pos.z,
-                cell ? cell->GetName() : "none", cell ? cell->GetFormID() : 0,
-                cell && cell->IsInteriorCell() ? "interior" : world ? world->GetName() : "none", world ? world->GetFormID() : 0,
+                GameText::In(actor->GetName()), actor->GetFormID(), slot, pos.x, pos.y, pos.z,
+                cell ? GameText::In(cell->GetName()) : "none", cell ? cell->GetFormID() : 0,
+                cell && cell->IsInteriorCell() ? "interior" : world ? GameText::In(world->GetName()) : "none", world ? world->GetFormID() : 0,
                 actor->Is3DLoaded(), package ? package->GetFormID() : 0, playerPos.x, playerPos.y, DescribeDistance(nullptr, actor, player).c_str(), movement, ticks, status);
         }
         return status;
@@ -1810,7 +1818,7 @@ namespace IntelEngine::Papyrus {
         bool available = !hasTask && !onCooldown;
 
         logger::info("IsActorAvailable({}): hasTask={}, onCooldown={}, available={}",
-                    akActor->GetDisplayFullName(), hasTask, onCooldown, available);
+                    GameText::In(akActor->GetDisplayFullName()), hasTask, onCooldown, available);
 
         return available;
     }
@@ -1826,7 +1834,7 @@ namespace IntelEngine::Papyrus {
         }
         bool hasPackages = count > 0;
         logger::info("HasBaseAIPackages({}): {} base AI package(s), formID={:08X}",
-                    akActor->GetDisplayFullName(), count, akActor->GetFormID());
+                    GameText::In(akActor->GetDisplayFullName()), count, akActor->GetFormID());
         return hasPackages;
     }
 
@@ -1843,12 +1851,12 @@ namespace IntelEngine::Papyrus {
                 type != RE::PACKAGE_TYPE::kWander &&
                 type != RE::PACKAGE_TYPE::kDoNothing) {
                 logger::info("HasNonSandboxAI({}): TRUE — found package type {}",
-                            akActor->GetDisplayFullName(), static_cast<int>(type));
+                            GameText::In(akActor->GetDisplayFullName()), static_cast<int>(type));
                 return true;
             }
         }
         logger::info("HasNonSandboxAI({}): FALSE — all packages are sandbox/wander",
-                    akActor->GetDisplayFullName());
+                    GameText::In(akActor->GetDisplayFullName()));
         return false;
     }
 
@@ -1858,7 +1866,7 @@ namespace IntelEngine::Papyrus {
         auto* editorLoc = akActor->GetEditorLocation();
         if (!editorLoc) {
             logger::info("GetEditorLocationRef({}): no editor location",
-                        akActor->GetDisplayFullName());
+                        GameText::In(akActor->GetDisplayFullName()));
             return nullptr;
         }
 
@@ -1868,8 +1876,8 @@ namespace IntelEngine::Papyrus {
             auto* marker = markerPtr.get();
             if (marker) {
                 logger::info("GetEditorLocationRef({}): found marker at location '{}'",
-                            akActor->GetDisplayFullName(),
-                            editorLoc->GetFullName() ? editorLoc->GetFullName() : "unnamed");
+                            GameText::In(akActor->GetDisplayFullName()),
+                            GameText::In(editorLoc->GetFullName()) ? GameText::In(editorLoc->GetFullName()) : "unnamed");
                 return marker;
             }
         }
@@ -1881,15 +1889,15 @@ namespace IntelEngine::Papyrus {
                 auto* parentMarker = parentPtr.get();
                 if (parentMarker) {
                     logger::info("GetEditorLocationRef({}): found marker at parent location '{}'",
-                                akActor->GetDisplayFullName(),
-                                editorLoc->parentLoc->GetFullName() ? editorLoc->parentLoc->GetFullName() : "unnamed");
+                                GameText::In(akActor->GetDisplayFullName()),
+                                GameText::In(editorLoc->parentLoc->GetFullName()) ? GameText::In(editorLoc->parentLoc->GetFullName()) : "unnamed");
                     return parentMarker;
                 }
             }
         }
 
         logger::info("GetEditorLocationRef({}): no usable world marker found",
-                    akActor->GetDisplayFullName());
+                    GameText::In(akActor->GetDisplayFullName()));
         return nullptr;
     }
 
@@ -1900,7 +1908,7 @@ namespace IntelEngine::Papyrus {
     RE::Actor* GetRandomStoryCandidate(RE::StaticFunctionTag*) {
         auto* candidate = NPCIndex::GetSingleton()->GetRandomStoryCandidate();
         if (candidate) {
-            logger::info("GetRandomStoryCandidate: Selected '{}'", candidate->GetDisplayFullName());
+            logger::info("GetRandomStoryCandidate: Selected '{}'", GameText::In(candidate->GetDisplayFullName()));
         } else {
             logger::debug("GetRandomStoryCandidate: No eligible candidates found");
         }
@@ -1968,7 +1976,7 @@ namespace IntelEngine::Papyrus {
             if (destLoc && analyzer->IsLocationDangerous(destLoc)) {
                 found = true;
                 logger::info("[IntelEngine] HasNearbyDungeonEntrance: door to dangerous interior '{}'",
-                            destCell->GetName());
+                            GameText::In(destCell->GetName()));
             }
 
             return found ? RE::BSContainer::ForEachResult::kStop
@@ -2070,7 +2078,7 @@ namespace IntelEngine::Papyrus {
         // so an NPC who only has memories about third parties would false-positive without this filter.
         auto* player = RE::PlayerCharacter::GetSingleton();
         if (player) {
-            std::string playerName = player->GetDisplayFullName();
+            std::string playerName = GameText::In(player->GetDisplayFullName());
             if (!playerName.empty()) {
                 auto memories = memDB->GetFormattedMemories(formId, 5);
                 if (!memories.empty()) {
@@ -2289,13 +2297,13 @@ namespace IntelEngine::Papyrus {
             default: pfx = "actor";  break;
         }
 
-        std::string name = actor->GetDisplayFullName();
+        std::string name = GameText::In(actor->GetDisplayFullName());
         logger::info("[IntelEngine] BuildActorContextJson: slot={}, actor='{}'", slot, name);
 
         // Race
         std::string race;
         if (auto* raceForm = actor->GetRace()) {
-            const char* raceName = raceForm->GetFullName();
+            const char* raceName = GameText::In(raceForm->GetFullName());
             if (raceName && raceName[0] != '\0') {
                 race = raceName;
             }
@@ -2629,7 +2637,7 @@ namespace IntelEngine::Papyrus {
             for (auto* form : forms) {
                 if (stop) return;
                 if (!form) continue;
-                const char* name = form->GetName();
+                const char* name = GameText::In(form->GetName());
                 if (name && *name && fn(form, name)) stop = true;
             }
         };
@@ -2685,18 +2693,18 @@ namespace IntelEngine::Papyrus {
         if (!itemName.c_str() || !*itemName.c_str()) return nullptr;
         BuildItemBook();   // at the main menu already; only if that was missed
         if (!g_itemBook.built) return nullptr;
-        const std::string said = itemName.c_str();
+        const std::string said = GameText::In(itemName.c_str());   // a name a script read from the game is the game's bytes
         if (auto it = g_itemBook.exact.find(StringUtils::ToLowerStd(said)); it != g_itemBook.exact.end()) {
             return g_itemBook.forms[it->second];
         }
         if (const auto i = g_itemBook.names.FindSame(said); i >= 0) {
             auto* found = g_itemBook.forms[static_cast<std::size_t>(i)];
-            logger::info("ResolveItemByName: '{}' is called '{}' here", said, found->GetName());
+            logger::info("ResolveItemByName: '{}' is called '{}' here", said, GameText::In(found->GetName()));
             return found;
         }
         if (const auto i = g_itemBook.names.FindLoose(said); i >= 0) {
             auto* found = g_itemBook.forms[static_cast<std::size_t>(i)];
-            logger::info("ResolveItemByName: no item is called '{}'; taking '{}'", said, found->GetName());
+            logger::info("ResolveItemByName: no item is called '{}'; taking '{}'", said, GameText::In(found->GetName()));
             return found;
         }
         return nullptr;
@@ -2709,14 +2717,14 @@ namespace IntelEngine::Papyrus {
     RE::TESForm* FindItemNamedExactly(RE::StaticFunctionTag*, RE::Actor* actor, RE::BSFixedString itemName) {
         if (!actor || !itemName.c_str() || !*itemName.c_str()) return nullptr;
         BuildItemBook();
-        const std::string said = itemName.c_str();
+        const std::string said = GameText::In(itemName.c_str());   // a name a script read from the game is the game's bytes
         const auto wanted = StringUtils::ToLowerStd(said);
         std::unordered_set<RE::FormID> sameForms;
         for (const auto index : g_itemBook.names.SameAll(said)) sameForms.insert(g_itemBook.forms[index]->GetFormID());
         RE::TESForm* same = nullptr;
         for (const auto& [item, data] : actor->GetInventory()) {
             if (!item || data.first <= 0) continue;
-            const char* name = item->GetName();
+            const char* name = GameText::In(item->GetName());
             if (!name || !*name) continue;
             if (StringUtils::ToLowerStd(name) == wanted) return item;
             if (same) continue;
@@ -2875,11 +2883,34 @@ namespace IntelEngine::Papyrus {
 
     void LivingWorldSceneBusy(RE::StaticFunctionTag*, bool busy) { LivingWorldBridge::SetSceneBusy(busy); }
 
-    // Held by the game right now, whatever the settings say: a scene they are part of, or a quest of the player's whose
-    // shown objective points at them. (Neloth was walked off by a travel task in the middle of his own quest.)
+    // Held by the game right now, whatever the settings say: a scene of a real quest they are part of, or a quest of
+    // the player's whose shown objective points at them. (Neloth was walked off by a travel task in the middle of his
+    // own quest.) A scene of the background holds nobody: the bard's songs (BardSongs), two people chatting at an inn,
+    // a market's calls: a quest with no type that shows nothing in the journal. 4.0 counted every scene, so a bard
+    // between two songs and anybody in an idle chat refused every task (the bard's release in Core.AllocateSlot came
+    // too late to help), where 3.8 refused carriage drivers only.
+    namespace {
+        bool SceneHolds(const RE::BGSScene* scene) {
+            auto* quest = scene ? scene->parentQuest : nullptr;
+            if (!quest) return false;
+            const char* id = quest->GetFormEditorID();
+            if (id && _stricmp(id, "BardSongs") == 0) return false;
+            if (quest->GetType() != RE::QUEST_DATA::Type::kNone) return true;
+            for (auto* objective : quest->objectives) {
+                if (!objective) continue;
+                const auto state = objective->state.get();
+                if (state == RE::QUEST_OBJECTIVE_STATE::kDisplayed || state == RE::QUEST_OBJECTIVE_STATE::kCompletedDisplayed ||
+                    state == RE::QUEST_OBJECTIVE_STATE::kFailedDisplayed) {
+                    return true;
+                }
+            }
+            return false;
+        }
+    }
+
     bool LivingWorldQuestHolds(RE::StaticFunctionTag*, RE::Actor* npc) {
         if (!npc) return false;
-        if (npc->GetCurrentScene()) return true;
+        if (const auto* scene = npc->GetCurrentScene(); scene && SceneHolds(scene)) return true;
         return LivingWorldBridge::QuestTie(npc, false) == 2;
     }
 
@@ -3038,7 +3069,7 @@ namespace IntelEngine::Papyrus {
         auto dialogue = memDB->GetRecentDialogueForActor(formId, 1);
         if (!dialogue.empty()) {
             logger::info("GetPlayerInteractionCount: {} (0x{:X}) tier=2 (has dialogue)",
-                actor->GetName(), formId);
+                GameText::In(actor->GetName()), formId);
             return 2;
         }
 
@@ -3046,7 +3077,7 @@ namespace IntelEngine::Papyrus {
         auto memories = memDB->GetFormattedMemories(formId, 1);
         if (!memories.empty()) {
             logger::info("GetPlayerInteractionCount: {} (0x{:X}) tier=2 (has memories)",
-                actor->GetName(), formId);
+                GameText::In(actor->GetName()), formId);
             return 2;
         }
 
@@ -3055,13 +3086,13 @@ namespace IntelEngine::Papyrus {
         for (const auto& rel : related) {
             if (rel.formId == 0x14) {  // player FormID
                 logger::info("GetPlayerInteractionCount: {} (0x{:X}) tier=1 (shared events, no dialogue)",
-                    actor->GetName(), formId);
+                    GameText::In(actor->GetName()), formId);
                 return 1;
             }
         }
 
         logger::info("GetPlayerInteractionCount: {} (0x{:X}) tier=0 (true stranger)",
-            actor->GetName(), formId);
+            GameText::In(actor->GetName()), formId);
         return 0;
     }
 
@@ -3649,7 +3680,7 @@ namespace IntelEngine::Papyrus {
     void TestNPCSearch(RE::StaticFunctionTag*, RE::BSFixedString searchTerm) {
         auto* npc = NPCIndex::GetSingleton()->FindByName(searchTerm.c_str());
         if (npc) {
-            logger::info("TestNPCSearch('{}') -> Found: {}", searchTerm.c_str(), npc->GetDisplayFullName());
+            logger::info("TestNPCSearch('{}') -> Found: {}", searchTerm.c_str(), GameText::In(npc->GetDisplayFullName()));
         } else {
             auto suggestion = NPCIndex::GetSingleton()->GetSuggestion(searchTerm.c_str());
             logger::info("TestNPCSearch('{}') -> Not found. Suggestion: {}", searchTerm.c_str(), suggestion.c_str());
@@ -3679,12 +3710,12 @@ namespace IntelEngine::Papyrus {
         if (ref) {
             auto destName = CellAnalyzer::GetSingleton()->GetDoorDestinationName(ref);
             logger::info("TestSemanticResolve('{}', '{}') -> Found: {}",
-                         akNPC->GetDisplayFullName(),
+                         GameText::In(akNPC->GetDisplayFullName()),
                          term.c_str(),
                          destName.c_str());
         } else {
             logger::info("TestSemanticResolve('{}', '{}') -> Cannot resolve",
-                         akNPC->GetDisplayFullName(),
+                         GameText::In(akNPC->GetDisplayFullName()),
                          term.c_str());
         }
     }
@@ -3894,7 +3925,7 @@ namespace IntelEngine::Papyrus {
                 logger::info("[IntelEngine] LookupLeveledActor: '{}' not found exactly, using {} prefix matches",
                             editorID, matches.size());
                 for (auto* m : matches) {
-                    logger::info("  - {} (FormID {:08X})", m->GetName(), m->GetFormID());
+                    logger::info("  - {} (FormID {:08X})", GameText::In(m->GetName()), m->GetFormID());
                 }
                 s_prefixMatchCache[key] = matches;
                 return matches[s_rng() % matches.size()];
@@ -3997,7 +4028,7 @@ namespace IntelEngine::Papyrus {
                 }
             }
             logger::info("[IntelEngine] SpawnQuestEnemies: {} faction '{}' soldiers spawned at {}",
-                        result.size(), factionId, location->GetName());
+                        result.size(), factionId, GameText::In(location->GetName()));
             return result;
         }
 
@@ -4052,12 +4083,12 @@ namespace IntelEngine::Papyrus {
                 }
                 auto pos = spawned->GetPosition();
                 logger::info("[IntelEngine] SpawnQuestEnemies: spawned '{}' at ({:.0f}, {:.0f})",
-                            baseToSpawn->GetName(), pos.x, pos.y);
+                            GameText::In(baseToSpawn->GetName()), pos.x, pos.y);
             }
         }
 
         logger::info("[IntelEngine] SpawnQuestEnemies: {} {} spawned at {}",
-                    result.size(), type, location->GetName());
+                    result.size(), type, GameText::In(location->GetName()));
         return result;
     }
 
@@ -4137,11 +4168,11 @@ namespace IntelEngine::Papyrus {
             // Use AddObjectToContainer to add the item
             container->AddObjectToContainer(itemObj, nullptr, 1, nullptr);
             logger::info("[IntelEngine] SpawnQuestChest: added '{}' (FormID {:08X}) to chest",
-                        itemObj->GetName(), itemObj->GetFormID());
+                        GameText::In(itemObj->GetName()), itemObj->GetFormID());
         }
 
         logger::info("[IntelEngine] SpawnQuestChest: chest spawned at {} with '{}'",
-                    location->GetName(), nameStr);
+                    GameText::In(location->GetName()), nameStr);
         return chestRef;
     }
 
@@ -4253,7 +4284,7 @@ namespace IntelEngine::Papyrus {
         auto* actor = spawned->As<RE::Actor>();
         if (actor) {
             logger::info("[IntelEngine] SpawnQuestBoss: spawned '{}' boss at ({:.0f}, {:.0f})",
-                        bossBase->GetName(), bossPos.x, bossPos.y);
+                        GameText::In(bossBase->GetName()), bossPos.x, bossPos.y);
         }
         return actor;
     }
@@ -4284,7 +4315,7 @@ namespace IntelEngine::Papyrus {
 
             auto editorId = baseObj->GetFormEditorID();
             std::string editorIdStr = editorId ? StringUtils::ToLowerStd(editorId) : "";
-            auto refName = ref->GetName();
+            auto refName = GameText::In(ref->GetName());
             std::string nameStr = refName ? StringUtils::ToLowerStd(refName) : "";
 
             auto formType = baseObj->GetFormType();
@@ -4318,7 +4349,7 @@ namespace IntelEngine::Papyrus {
             // Coffins/Sarcophagi — Static or Furniture
             if (!coffin && (formType == RE::FormType::Static || formType == RE::FormType::Furniture)) {
                 if (StringUtils::ContainsAny(editorIdStr, {"coffin", "sarcophag"}) ||
-                    StringUtils::ContainsAny(nameStr, {"coffin", "sarcophag"})) {
+                    LanguageBridge::GetSingleton()->NameSays(nameStr, "coffin")) {
                     coffin = ref;
                     logger::info("[IntelEngine] FindDeeperSpawnPoint: coffin '{}'", editorIdStr);
                 }
@@ -4327,7 +4358,7 @@ namespace IntelEngine::Papyrus {
             // Shrines/Altars — Activator or Static
             if (!shrine && (formType == RE::FormType::Activator || formType == RE::FormType::Static)) {
                 if (StringUtils::ContainsAny(editorIdStr, {"shrine", "altar"}) ||
-                    StringUtils::ContainsAny(nameStr, {"shrine", "altar"})) {
+                    LanguageBridge::GetSingleton()->NameSays(nameStr, "shrine")) {
                     shrine = ref;
                     logger::info("[IntelEngine] FindDeeperSpawnPoint: shrine/altar '{}'", editorIdStr);
                 }
@@ -4368,7 +4399,7 @@ namespace IntelEngine::Papyrus {
         }
 
         logger::info("[IntelEngine] FindDeeperSpawnPoint: no landmarks or deeper doors in '{}'",
-                    cell->GetName());
+                    GameText::In(cell->GetName()));
         return nullptr;
     }
 
@@ -4415,21 +4446,21 @@ namespace IntelEngine::Papyrus {
 
             if (!shackle && StringUtils::ContainsAny(editorIdStr, {"shackle", "manacle"})) {
                 shackle = ref;
-                logger::info("[IntelEngine] {}: shackle '{}' in '{}'", tag, editorIdStr, cell->GetName());
+                logger::info("[IntelEngine] {}: shackle '{}' in '{}'", tag, editorIdStr, GameText::In(cell->GetName()));
             }
             if (!cage && StringUtils::ContainsAny(editorIdStr, {"cage", "gibbet"})) {
                 cage = ref;
-                logger::info("[IntelEngine] {}: cage '{}' in '{}'", tag, editorIdStr, cell->GetName());
+                logger::info("[IntelEngine] {}: cage '{}' in '{}'", tag, editorIdStr, GameText::In(cell->GetName()));
             }
             if (!stocks && StringUtils::ContainsAny(editorIdStr, {"stock", "pillory"})) {
                 if (editorIdStr.find("livestock") == std::string::npos) {
                     stocks = ref;
-                    logger::info("[IntelEngine] {}: stocks '{}' in '{}'", tag, editorIdStr, cell->GetName());
+                    logger::info("[IntelEngine] {}: stocks '{}' in '{}'", tag, editorIdStr, GameText::In(cell->GetName()));
                 }
             }
             if (!prison && StringUtils::ContainsAny(editorIdStr, {"prison", "captive", "torture"})) {
                 prison = ref;
-                logger::info("[IntelEngine] {}: prison furniture '{}' in '{}'", tag, editorIdStr, cell->GetName());
+                logger::info("[IntelEngine] {}: prison furniture '{}' in '{}'", tag, editorIdStr, GameText::In(cell->GetName()));
             }
 
             if (shackle) return RE::BSContainer::ForEachResult::kStop;
@@ -4464,7 +4495,7 @@ namespace IntelEngine::Papyrus {
 
             auto editorId = baseObj->GetFormEditorID();
             std::string editorIdStr = editorId ? StringUtils::ToLowerStd(editorId) : "";
-            auto refName = ref->GetName();
+            auto refName = GameText::In(ref->GetName());
             std::string nameStr = refName ? StringUtils::ToLowerStd(refName) : "";
             auto formType = baseObj->GetFormType();
 
@@ -4487,13 +4518,13 @@ namespace IntelEngine::Papyrus {
             }
             if (!coffin && (formType == RE::FormType::Static || formType == RE::FormType::Furniture)) {
                 if (StringUtils::ContainsAny(editorIdStr, {"coffin", "sarcophag"}) ||
-                    StringUtils::ContainsAny(nameStr, {"coffin", "sarcophag"})) {
+                    LanguageBridge::GetSingleton()->NameSays(nameStr, "coffin")) {
                     coffin = ref;
                 }
             }
             if (!shrine && (formType == RE::FormType::Activator || formType == RE::FormType::Static)) {
                 if (StringUtils::ContainsAny(editorIdStr, {"shrine", "altar"}) ||
-                    StringUtils::ContainsAny(nameStr, {"shrine", "altar"})) {
+                    LanguageBridge::GetSingleton()->NameSays(nameStr, "shrine")) {
                     shrine = ref;
                 }
             }
@@ -4517,7 +4548,7 @@ namespace IntelEngine::Papyrus {
         auto* result = ScanCellForPrisonerFurniture(cell);
         if (!result) {
             logger::info("[IntelEngine] FindPrisonerFurniture: no prisoner furniture in '{}'",
-                        cell->GetName());
+                        GameText::In(cell->GetName()));
         }
         return result;
     }
@@ -4534,10 +4565,10 @@ namespace IntelEngine::Papyrus {
         auto* result = ScanCellForUsablePrisonerFurniture(cell);
         if (result) {
             logger::info("[IntelEngine] FindUsablePrisonerFurniture: found usable furniture in '{}'",
-                        cell->GetName());
+                        GameText::In(cell->GetName()));
         } else {
             logger::info("[IntelEngine] FindUsablePrisonerFurniture: no usable furniture in '{}'",
-                        cell->GetName());
+                        GameText::In(cell->GetName()));
         }
         return result;
     }
@@ -4580,7 +4611,7 @@ namespace IntelEngine::Papyrus {
             result = ScanCellForPrisonerFurniture(adjCell);
             if (result) {
                 logger::info("[IntelEngine] FindRescueAnchor: prisoner furniture behind door in '{}'",
-                            adjCell->GetName());
+                            GameText::In(adjCell->GetName()));
                 return result;
             }
         }
@@ -4590,7 +4621,7 @@ namespace IntelEngine::Papyrus {
             result = ScanCellForLandmarks(adjCell);
             if (result) {
                 logger::info("[IntelEngine] FindRescueAnchor: landmark behind door in '{}'",
-                            adjCell->GetName());
+                            GameText::In(adjCell->GetName()));
                 return result;
             }
         }
@@ -4603,7 +4634,7 @@ namespace IntelEngine::Papyrus {
         }
 
         logger::info("[IntelEngine] FindRescueAnchor: nothing found in '{}' or adjacent cells",
-                    playerCell->GetName());
+                    GameText::In(playerCell->GetName()));
         return nullptr;
     }
 
@@ -4634,7 +4665,7 @@ namespace IntelEngine::Papyrus {
 
         if (aheadCells.empty()) {
             logger::info("[IntelEngine] ScanAheadForAnchor: no adjacent interior cells from '{}'",
-                        playerCell->GetName());
+                        GameText::In(playerCell->GetName()));
             return nullptr;
         }
 
@@ -4643,7 +4674,7 @@ namespace IntelEngine::Papyrus {
             auto* result = ScanCellForPrisonerFurniture(cell);
             if (result) {
                 logger::info("[IntelEngine] ScanAheadForAnchor: prisoner furniture in '{}'",
-                            cell->GetName());
+                            GameText::In(cell->GetName()));
                 return result;
             }
         }
@@ -4653,13 +4684,13 @@ namespace IntelEngine::Papyrus {
             auto* result = ScanCellForLandmarks(cell);
             if (result) {
                 logger::info("[IntelEngine] ScanAheadForAnchor: landmark in '{}'",
-                            cell->GetName());
+                            GameText::In(cell->GetName()));
                 return result;
             }
         }
 
         logger::info("[IntelEngine] ScanAheadForAnchor: nothing found ahead from '{}'",
-                    playerCell->GetName());
+                    GameText::In(playerCell->GetName()));
         return nullptr;
     }
 
@@ -4731,7 +4762,7 @@ namespace IntelEngine::Papyrus {
         container->InitInventoryIfRequired();
         container->AddObjectToContainer(itemObj, nullptr, 1, nullptr);
         logger::info("[IntelEngine] EnsureQuestItemInChest: added '{}' to chest {:08X} on cell load",
-                    itemObj->GetName(), container->GetFormID());
+                    GameText::In(itemObj->GetName()), container->GetFormID());
         return true;
     }
 
@@ -4847,7 +4878,7 @@ namespace IntelEngine::Papyrus {
                          world ? world->GetFormID() : 0, world && world->GetFormEditorID() ? world->GetFormEditorID() : "",
                          world && world->parentWorld ? world->parentWorld->GetFormID() : 0,
                          world ? static_cast<unsigned>(world->parentUseFlags.underlying()) : 0u,
-                         location && location->GetFullName() ? location->GetFullName() : "none",
+                         location && GameText::In(location->GetFullName()) ? GameText::In(location->GetFullName()) : "none",
                          LivingWorldBridge::PlaceBars() == Patrols::Barred::No ? "people may come" : Patrols::Word(LivingWorldBridge::PlaceBars()));
         }
         return Patrols::Word(LivingWorldBridge::PlaceBars());
@@ -4867,6 +4898,233 @@ namespace IntelEngine::Papyrus {
     void FactionPatrolTest(RE::StaticFunctionTag*, bool always) {
         g_patrolAlways.store(always);
         logger::info("Patrols: test: {}", always ? "every moment that may land is a patrol's" : "the roll and the rest count again");
+    }
+
+    // 4.0: a faction the player stands well with asks them for help now and then (FactionQuests.h says why this is
+    // decided in code). Asked by the story engine at a moment the director lets land, with the story-type switches of
+    // the settings (StoryEngine.PackToggleBitmask); the answer is what the 3.8 dungeon master wrote for a faction's
+    // quest ({"type":"quest","questSubType":"faction_combat",...}), handled as that was, or nothing.
+    namespace {
+        std::atomic<float> g_lastFactionQuestDay{-1.0f};   // this session's; not known after a load, and then not held against them
+        std::atomic<bool> g_factionQuestAlways{false};     // test hook: every roll comes up, no rest between two
+
+        RE::BGSLocation* HoldAbove(RE::BGSLocation* location) {
+            for (int depth = 0; location && depth < 12; location = location->parentLoc, ++depth) {
+                if (location->HasKeywordString("LocTypeHold")) return location;
+            }
+            return nullptr;
+        }
+
+        // "the Imperial Legion" of "Imperial Legion" or "The Imperial Legion"; capital first when it begins a sentence.
+        std::string TheFaction(const std::string& name, bool capital) {
+            std::string out = (name.rfind("The ", 0) == 0 || name.rfind("the ", 0) == 0) ? "the " + name.substr(4) : "the " + name;
+            if (capital) out[0] = 'T';
+            return out;
+        }
+
+        std::string LocationName(RE::BGSLocation* location) {
+            const char* name = location ? GameText::In(location->GetFullName()) : nullptr;
+            return name ? name : "";
+        }
+    }
+
+    RE::BSFixedString FactionQuestDue(RE::StaticFunctionTag*, std::int32_t toggles) {
+        static FrameStats stats;
+        FrameClock clock("Faction quests: does a faction ask the player", stats, FrameClock::Now(), 20);
+        auto* politics = FactionPolitics::GetSingleton();
+        auto* db = PoliticalDB::GetSingleton();
+        if (!politics->IsEnabled() || !db->IsReady()) return "";
+        // The settings' switches, as the dungeon master's were (bit 6 "quest", 11 to 13 the faction kinds).
+        FactionQuests::Climate climate;
+        const bool questOn = (toggles & (1 << 6)) != 0;
+        climate.combatOn = questOn && (toggles & (1 << 11)) != 0;
+        climate.rescueOn = questOn && (toggles & (1 << 12)) != 0;
+        climate.battleOn = questOn && (toggles & (1 << 13)) != 0;
+        if (!climate.combatOn && !climate.rescueOn && !climate.battleOn) return "";
+        // Not where nobody could have come with word (the Soul Cairn has no soldiers of the Legion), nor into a dungeon.
+        if (const auto barred = LivingWorldBridge::PlaceBars(); barred != Patrols::Barred::No) {
+            logger::info("Faction quests: nobody comes now: {}", Patrols::Word(barred));
+            return "";
+        }
+        // Never upon somebody who is with somebody or has settled somewhere (the test switch does not lift this).
+        if (const auto priv = LivingWorldBridge::PrivateMoment(); priv != Patrols::Private::No) {
+            logger::info("Faction quests: nobody comes now: {}", Patrols::Word(priv));
+            return "";
+        }
+
+        // Who asks: the faction that stands best with the player; against whom: its enemy at war with it, else the
+        // faction it stands worst with. Never one the game's own story still binds (it is that story's).
+        std::vector<std::pair<int, std::string>> friends;
+        for (const auto& s : db->GetAllPlayerStandings()) {
+            if (s.factionId.rfind("PE_", 0) == 0 || s.standing < FactionQuests::kFriendly) continue;   // another mod's realms field nobody of ours
+            friends.emplace_back(s.standing, s.factionId);
+        }
+        if (friends.empty()) return "";
+        std::stable_sort(friends.begin(), friends.end(), [](const auto& a, const auto& b) { return a.first > b.first; });
+        const auto fit = [&](const std::string& other, const std::string& ally) {
+            return !other.empty() && other != ally && other.rfind("PE_", 0) != 0 && politics->GetFaction(other).has_value() &&
+                   !politics->GetSoldierTemplate(other).empty() && politics->BoundBy(other).empty();
+        };
+        const auto wars = db->GetActiveWars();
+        const auto relations = db->GetAllRelations();
+        std::string ally, enemy;
+        int standing = 0;
+        bool atWar = false;
+        for (const auto& [st, id] : friends) {
+            if (!politics->BoundBy(id).empty() || !politics->GetFaction(id)) continue;
+            std::string foe;
+            bool war = false;
+            for (const auto& w : wars) {
+                const std::string other = w.factionA == id ? w.factionB : w.factionB == id ? w.factionA : std::string();
+                if (!fit(other, id)) continue;
+                foe = other;
+                war = true;
+                break;
+            }
+            if (foe.empty()) {
+                int worst = 0;
+                for (const auto& r : relations) {
+                    const std::string other = r.factionA == id ? r.factionB : r.factionB == id ? r.factionA : std::string();
+                    if (r.relationScore >= worst || !fit(other, id)) continue;
+                    worst = r.relationScore;
+                    foe = other;
+                }
+            }
+            if (foe.empty()) continue;
+            ally = id;
+            enemy = foe;
+            standing = st;
+            atWar = war;
+            break;
+        }
+        if (ally.empty()) {
+            logger::info("Faction quests: {} faction(s) stand well with the player, none has an enemy to send them against", friends.size());
+            return "";
+        }
+
+        auto* calendar = RE::Calendar::GetSingleton();
+        const float now = calendar ? calendar->GetCurrentGameTime() : 0.0f;
+        static thread_local std::mt19937 rng{std::random_device{}()};
+        const std::uint32_t roll = static_cast<std::uint32_t>(rng() % 10000u);
+        const bool test = g_factionQuestAlways.load();
+        if (!test && !FactionQuests::Due(standing, atWar, now, g_lastFactionQuestDay.load(), roll)) {
+            logger::info("Faction quests: {} (standing {}) has {} against {}: no quest at this moment (one in {:.0f} of them, and not within {:.0f} days of the last)",
+                         ally, standing, atWar ? "a war" : "a feud", enemy, 1.0f / FactionQuests::Chance(standing, atWar), FactionQuests::kRestDays);
+            return "";
+        }
+        if (politics->IsDisbanded(ally) || politics->IsDisbanded(enemy)) {
+            logger::info("Faction quests: {} or {} is no more: no quest", ally, enemy);
+            return "";
+        }
+
+        // Where: a fort or a camp in the enemy's land, else in the faction's own, else in the hold the player is in. A
+        // place a quest of the game or a story still needs, one where nobody fights (a temple, a palace) and the last
+        // places quests went to are left out.
+        auto* resolver = LocationResolver::GetSingleton();
+        const auto allyCfg = politics->GetFaction(ally);
+        const auto enemyCfg = politics->GetFaction(enemy);
+        RE::BGSLocation* allyHome = allyCfg && !allyCfg->hold.empty() ? resolver->ResolveLocation(allyCfg->hold) : nullptr;
+        RE::BGSLocation* enemyHome = enemyCfg && !enemyCfg->hold.empty() ? resolver->ResolveLocation(enemyCfg->hold) : nullptr;
+        auto* player = RE::PlayerCharacter::GetSingleton();
+        std::vector<RE::BGSLocation*> holds;
+        for (auto* hold : {HoldAbove(enemyHome), HoldAbove(allyHome), player ? HoldAbove(player->GetCurrentLocation()) : nullptr}) {
+            if (hold && std::find(holds.begin(), holds.end(), hold) == holds.end()) holds.push_back(hold);
+        }
+        const std::string recent = NPCIndex::GetSingleton()->GetRecentQuestLocationsString();
+        std::string fortName;
+        {
+            const auto anchors = resolver->DungeonAnchors();
+            for (auto* hold : holds) {
+                std::vector<std::string> forts;
+                for (const auto& [locationId, anchorId] : anchors) {
+                    auto* location = anchorId ? RE::TESForm::LookupByID<RE::BGSLocation>(locationId) : nullptr;
+                    if (!location || HoldAbove(location) != hold) continue;
+                    if (!location->HasKeywordString("LocTypeMilitaryFort") && !location->HasKeywordString("LocTypeMilitaryCamp") &&
+                        !location->HasKeywordString("LocTypeBanditCamp")) {
+                        continue;
+                    }
+                    const std::string name = LocationName(location);
+                    if (name.empty() || recent.find(name) != std::string::npos) continue;
+                    if (CellAnalyzer::GetSingleton()->IsLocationNonCombative(location)) continue;
+                    if (ArcBridge::GetSingleton()->GameNeedsPlace(locationId) || ArcBridge::GetSingleton()->PlaceInStory(locationId)) continue;
+                    forts.push_back(name);
+                }
+                if (!forts.empty()) {
+                    fortName = forts[roll % forts.size()];
+                    break;
+                }
+            }
+        }
+        const std::string homeName = !LocationName(allyHome).empty() ? LocationName(allyHome) : LocationName(enemyHome);
+        // Who is held, for a rescue: somebody of the faction's own town, out of the player's sight, by the measure a tale
+        // holds a captive to.
+        std::string victimName;
+        if (climate.rescueOn && !fortName.empty() && allyHome) {
+            if (const auto victim = ArcBridge::GetSingleton()->CaptiveOf(allyHome, roll); victim != 0) {
+                auto* who = RE::TESForm::LookupByID<RE::Actor>(victim);
+                const char* name = who ? GameText::In(who->GetDisplayFullName()) : nullptr;
+                if (name && *name) victimName = name;
+            }
+        }
+        auto* battles = BattleManager::GetSingleton();
+        climate.enemy = true;
+        climate.atWar = atWar;
+        climate.battleFree = atWar && !homeName.empty() && !battles->IsBattleActive() && !battles->HasPendingBattle(ally, enemy);
+        climate.fort = !fortName.empty();
+        climate.captive = !victimName.empty();
+        const auto kind = FactionQuests::Pick(climate, roll / 7u);
+        if (kind == FactionQuests::Kind::None) {
+            logger::info("Faction quests: {} would ask the player, but nothing fits now (a fort in reach: {}, somebody who may be held: {}, the field free: {})",
+                         ally, climate.fort ? "yes" : "no", climate.captive ? "yes" : "no", climate.battleFree ? "yes" : "no");
+            return "";
+        }
+
+        const std::string allyName = politics->GetFactionDisplayName(ally);
+        const std::string enemyName = politics->GetFactionDisplayName(enemy);
+        const char* rawPlayer = player ? GameText::In(player->GetDisplayFullName()) : nullptr;
+        const std::string playerName = rawPlayer && *rawPlayer ? rawPlayer : "the traveller";
+        nlohmann::json out;
+        out["should_act"] = true;
+        out["type"] = "quest";
+        out["npc"] = "";
+        out["sender"] = "";
+        out["questSubType"] = FactionQuests::SubType(kind);
+        out["alliedFaction"] = ally;
+        out["enemyType"] = "faction:" + enemy;
+        std::string plea, place;
+        if (kind == FactionQuests::Kind::Battle) {
+            place = homeName;
+            out["enemyFaction"] = enemy;
+            plea = TheFaction(allyName, true) + " gathers its strength near " + place + " against " + TheFaction(enemyName, false) +
+                   ", and calls on " + playerName + " to stand in its line.";
+        } else if (kind == FactionQuests::Kind::Rescue) {
+            place = fortName;
+            out["victimName"] = victimName;
+            plea = "Soldiers of " + TheFaction(enemyName, false) + " hold " + victimName + " of " + homeName + " captive at " + place + ". " +
+                   TheFaction(allyName, true) + " asks " + playerName + " to bring them home.";
+        } else {
+            place = fortName;
+            plea = "Soldiers of " + TheFaction(enemyName, false) + " have dug in at " + place + ". " + TheFaction(allyName, true) + " wants them driven out, and asks " +
+                   playerName + " for help.";
+        }
+        out["questLocation"] = place;
+        out["msgContent"] = plea;
+        out["narration"] = plea;
+        logger::info("Faction quests: {} (standing {}{}) asks the player: {} against {} at {}{}{}", ally, standing, atWar ? ", at war" : "",
+                     FactionQuests::SubType(kind), enemy, place, victimName.empty() ? "" : ", " + victimName + " held there",
+                     test ? "; asked for by a test" : "");
+        return out.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace).c_str();
+    }
+
+    void FactionQuestSent(RE::StaticFunctionTag*) {
+        auto* calendar = RE::Calendar::GetSingleton();
+        g_lastFactionQuestDay.store(calendar ? calendar->GetCurrentGameTime() : 0.0f);
+        logger::info("Faction quests: one went out; the next not within {:.0f} days", FactionQuests::kRestDays);
+    }
+
+    void FactionQuestTest(RE::StaticFunctionTag*, bool always) {
+        g_factionQuestAlways.store(always);
+        logger::info("Faction quests: test: {}", always ? "every moment that may land asks a faction first, no rest between two" : "the roll and the rest count again");
     }
 
     int AdjustPlayerFactionStanding(RE::StaticFunctionTag*, RE::BSFixedString factionId, int delta) {
@@ -4999,7 +5257,7 @@ namespace IntelEngine::Papyrus {
         out += ",\"bonds\":" + BondBridge::GetSingleton()->DashboardJson();
         // The player's name: the page says "you" where the engine's lines name them.
         auto* player = RE::PlayerCharacter::GetSingleton();
-        const char* playerName = player ? player->GetDisplayFullName() : nullptr;
+        const char* playerName = player ? GameText::In(player->GetDisplayFullName()) : nullptr;
         out += ",\"player\":" + nlohmann::json(std::string(playerName ? playerName : "")).dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
         out += "}";
         return RE::BSFixedString(out.c_str());
@@ -5051,7 +5309,7 @@ namespace IntelEngine::Papyrus {
 
             ProcessUtils::ForEachLoadedActor([&](RE::Actor* actor) -> bool {
                 if (!actor || actor->IsDead()) return false;
-                const char* displayName = actor->GetDisplayFullName();
+                const char* displayName = GameText::In(actor->GetDisplayFullName());
                 if (!displayName || !IsFactionLeaderNameMatch(displayName, leaderName)) return false;
 
                 const bool inPlayerCell = playerCell && actor->GetParentCell() == playerCell;
@@ -5073,7 +5331,7 @@ namespace IntelEngine::Papyrus {
             if (bestMatch) {
                 result.push_back(bestMatch);
                 logger::info("GetFactionLeaderActors: '{}' -> '{}' (FormID=0x{:08X}, sameCell={})",
-                    leaderName, bestMatch->GetDisplayFullName(), bestMatch->GetFormID(), bestInPlayerCell);
+                    leaderName, GameText::In(bestMatch->GetDisplayFullName()), bestMatch->GetFormID(), bestInPlayerCell);
             }
         }
         return result;
@@ -5171,7 +5429,7 @@ namespace IntelEngine::Papyrus {
         }
 
         logger::info("ExecuteAssassination: target={} ({}), attacker={}",
-            target->GetDisplayFullName(), targetFacId, attackerFacId);
+            GameText::In(target->GetDisplayFullName()), targetFacId, attackerFacId);
 
         // 2. Where the killer comes from. Never out of thin air in the player's view (they used to be made at the
         // nearest door whether the player was looking at it or not, and on top of the leader when there was no door).
@@ -5234,8 +5492,8 @@ namespace IntelEngine::Papyrus {
         s_assassinFormIds.clear();
         s_assassinFormIds.push_back(assassin->GetFormID());
         s_assassinTargetFormId = target->GetFormID();
-        s_assassinLeaderName = target->GetDisplayFullName();
-        logger::info("ExecuteAssassination: assassin={:08X}, target={}", assassin->GetFormID(), target->GetDisplayFullName());
+        s_assassinLeaderName = GameText::In(target->GetDisplayFullName());
+        logger::info("ExecuteAssassination: assassin={:08X}, target={}", assassin->GetFormID(), GameText::In(target->GetDisplayFullName()));
         return assassin;
     }
 
@@ -5247,7 +5505,7 @@ namespace IntelEngine::Papyrus {
                                            RE::BSFixedString leaderName, RE::BSFixedString outcome) {
         auto* player = RE::PlayerCharacter::GetSingleton();
         const std::string place = player ? std::string(GetActorParentLocationName(nullptr, player).c_str()) : std::string();
-        const std::string name = player ? player->GetDisplayFullName() : "a stranger";
+        const std::string name = player ? GameText::In(player->GetDisplayFullName()) : "a stranger";
         const std::string hold = player ? NPCIndex::GetNPCHoldName(player) : std::string();
         return RE::BSFixedString(FactionPolitics::GetSingleton()->AssassinationOutcome(
             targetFaction.c_str(), attackerFaction.c_str(), leaderName.c_str(), outcome.c_str(), place, name, hold).c_str());
@@ -5331,11 +5589,11 @@ namespace IntelEngine::Papyrus {
             attackCount++;
 
             logger::info("TriggerAssassinationAttack: soldier {:08X} attacking {}", fid,
-                target->GetDisplayFullName());
+                GameText::In(target->GetDisplayFullName()));
         }
 
         logger::info("TriggerAssassinationAttack: {} soldiers attacking {}", attackCount,
-            target->GetDisplayFullName());
+            GameText::In(target->GetDisplayFullName()));
 
         // Cleanup tracking
         s_assassinFormIds.clear();
@@ -5603,7 +5861,7 @@ namespace IntelEngine::Papyrus {
         best = bestGeneric ? bestGeneric : bestUnique;
         bestDist = bestGeneric ? bestGenericDist : bestUniqueDist;
         if (best) {
-            bestName = best->GetDisplayFullName();
+            bestName = GameText::In(best->GetDisplayFullName());
         }
 
         if (best) {
@@ -5673,7 +5931,7 @@ namespace IntelEngine::Papyrus {
 
         logger::info("[IntelEngine] SpawnBattleSoldiers: base FormID={:08X} type={} name='{}', template='{}', spawnAt='{}'",
                     base->GetFormID(), static_cast<int>(base->GetFormType()),
-                    base->GetName(), templateId, spawnAt->GetName());
+                    GameText::In(base->GetName()), templateId, GameText::In(spawnAt->GetName()));
 
         // PlaceObjectAtMe with a LeveledNPC base returns type 61 (REFR) instead of
         // type 62 (Actor), making the refs unusable in Papyrus. Resolve the leveled
@@ -6216,7 +6474,7 @@ namespace IntelEngine::Papyrus {
             if (a->IsDead() || a->IsPlayerRef() || a->IsDeleted()) continue;
 
             // Skip unnamed (generic spawns)
-            auto name = a->GetName();
+            auto name = GameText::In(a->GetName());
             if (!name || name[0] == '\0') continue;
 
             // Skip if too far

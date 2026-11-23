@@ -122,7 +122,7 @@ class VM:
         # Held by talk, and an NPC's own cancel: Core's constants.
         self.properties.update({"TALK_HOLD_SECONDS": 12.0, "CANCEL_ASKED_SECONDS": 45.0, "CANCEL_EARSHOT_DISTANCE": 2500.0})
         # Core constants other scripts do arithmetic with (a property read of another script is not executed here).
-        self.properties.update({"SPEECH_GRACE_SECONDS": 7.0, "UPDATE_INTERVAL": 3.0})
+        self.properties.update({"SPEECH_GRACE_SECONDS": 7.0, "UPDATE_INTERVAL": 3.0, "FAILURES_KEPT": 4})
         # Constants added with the 3.8 stuck and immersion fixes, with their script values (a property that is
         # not listed reads as None here, and the new code compares and adds with them).
         self.properties.update({"WALK_HOME_MAX_HOURS": 3.0, "PROMPT_SECONDS_TASK": 20.0,
@@ -191,6 +191,13 @@ class VM:
         if method in ("StringListCount", "FloatListCount"): return len(self.storage.get(pair, []))
         if method in ("StringListRemoveAt", "FloatListRemoveAt"): self.storage.get(pair, []).pop(args[2]); return None
         if method in ("StringListToArray", "FloatListToArray"): return list(self.storage.get(pair, []))
+        # The failures told to an NPC, kept per message (Core.TellFailure).
+        if method == "StringListFind":
+            values = self.storage.get(pair, [])
+            return values.index(args[2]) if args[2] in values else -1
+        if method in ("StringListGet", "FloatListGet"): return self.storage.get(pair, [])[args[2]]
+        if method in ("StringListSet", "FloatListSet"): self.storage.setdefault(pair, [])[args[2]] = args[3]; return None
+        if method in ("StringListClear", "FloatListClear"): self.storage.pop(pair, None); return None
         raise ValueError("unsupported StorageUtil native " + method)
 
     def external(self, method, args, script):
@@ -258,7 +265,9 @@ class VM:
                       "GetFloatValue", "GetFormValue", "SetStringValue", "SetIntValue", "SetFloatValue",
                       "SetFormValue", "UnsetStringValue", "UnsetIntValue", "UnsetFloatValue",
                       "UnsetFormValue", "StringListAdd", "FloatListAdd", "StringListCount", "FloatListCount",
-                      "StringListRemoveAt", "FloatListRemoveAt", "StringListToArray", "FloatListToArray"):
+                      "StringListRemoveAt", "FloatListRemoveAt", "StringListToArray", "FloatListToArray",
+                      "StringListFind", "StringListGet", "FloatListGet", "StringListSet", "FloatListSet",
+                      "StringListClear", "FloatListClear"):
             if method == "SetStringValue" and self.reenter_story:
                 self.reenter_story = False
                 self.invoke("IntelEngine_StoryEngine", "OnStoryNPCArrived")

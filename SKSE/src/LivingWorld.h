@@ -16,9 +16,12 @@
 //    acquaintance the player has not seen for a long time.
 
 #include <algorithm>
+#include <array>
+#include <cctype>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <functional>
 #include <optional>
 #include <span>
 #include <string>
@@ -68,9 +71,33 @@ namespace IntelEngine::LivingWorld {
         kWasFollower  = 1 << 9,  // has followed the player at some point
         kNeedsRelease = 1 << 10, // the package of their own life must come off (back with the player, a task, a story)
         kGreeted      = 1 << 11, // has greeted the player since the current step of their own life began
+        kReunionTold  = 1 << 12, // the reunion under way has been greeted (ReunionOpen): what passed was brought up
     };
 
     enum class Activity : std::uint8_t { Home = 0, WithPlayer, OnTask, Waiting, Working, Travelling, Adventuring, Visiting };
+
+    // How an adventure of their own ended: decided when they come back from it and made true at once (the find goes
+    // into their pack, the rest is their memory and what people say of them).
+    struct Outcome {
+        bool hurt = false;
+        std::uint8_t wound = 0;       // which of the wounds (WoundWords)
+        bool find = false;            // something of worth: the game side picks the item by `gem`
+        std::uint8_t gem = 0;
+        std::uint16_t gold = 0;
+        bool keepsake = false;        // the find was set aside for the player, to be put into the player's hand
+    };
+
+    // A step of their own life, kept for the day the player meets them again.
+    struct PastStep {
+        Activity activity = Activity::Home;
+        std::uint32_t place = 0;      // 0 = their own home
+        std::uint32_t companion = 0;
+        float at = 0.0f;              // game day it began
+        bool over = false;            // an adventure they came back from: `back` says how
+        Outcome back;
+        std::uint32_t find = 0;       // the item they brought back (a form), 0 = none
+    };
+    constexpr std::size_t kPastSteps = 4;
 
     struct Life {
         std::uint32_t actor = 0;
@@ -88,6 +115,13 @@ namespace IntelEngine::LivingWorld {
         std::int32_t rumor = 0;          // SkyrimNet world-knowledge entry of what people heard of them, 0 = none
         std::uint16_t steps = 0;         // steps of their own life since the player left them
         float stepAt = -1.0f;            // game days: when the current step began
+        // What passed while the two were apart, for the day they meet again (co-save version 3 on):
+        std::array<PastStep, kPastSteps> past{};  // the steps of their own life since the player left them, oldest first
+        std::uint8_t pastCount = 0;
+        float metAgainAt = -1.0f;        // game days: when the player came upon them again after days apart, -1 = never
+        float apartDays = 0.0f;          // how long the two had been apart by then
+        std::uint32_t keepsake = 0;      // an item in their pack kept for the player (a form), 0 = none
+        std::uint32_t keepsakeFrom = 0;  // the place they brought it back from
     };
 
     constexpr std::size_t kMaxLives = 64;
@@ -320,6 +354,391 @@ namespace IntelEngine::LivingWorld {
             case Activity::Home: return "parted from {player} at {parked} {ago}; lived their own life and is back home";
             default: return "";
         }
+    }
+
+    // ------------------------------------------------------------------ what passed while apart, told
+    //
+    // The owner, 2026-11-23, of the lives above: they "work, but show little unless you go looking". So a life is told
+    // three ways, each only once it is true: word of every step goes round the holds as talk of the day (TalkOf, the
+    // rumor ledger carries it); the first meeting after days apart is a reunion, where they bring up what passed
+    // (ReunionNarration, ReunionBlock); and an adventure that ended with a find may leave a keepsake for the player,
+    // put into the player's hand face to face (KeepsakeNarration). The words are here; the game side makes them true
+    // (LivingWorldLives.cpp) and decides when (the manners every visitor keeps).
+
+    constexpr float kReunionGapDays = 3.0f;      // apart this long, meeting again is a reunion
+    constexpr float kReunionWindowDays = 0.25f;  // once greeted, what passed is theirs to tell for six game hours
+    constexpr float kReunionPendingDays = 2.0f;  // a reunion not greeted yet (the player only passed by) waits this long
+    constexpr float kKeepsakeReach = 250.0f;     // a keepsake changes hands only this close (game units)
+    constexpr std::uint8_t kWoundCount = 3;
+
+    // Meeting again after days apart: a former follower the player left behind and has not been near for a while (the
+    // record's lastMet is from before this look). Followers at the player's side, and those on the player's errands,
+    // have no reunion to make.
+    inline bool BeginsReunion(const Life& life, float now, bool following) {
+        if (following || !Has(life, kWasFollower) || life.parkedSince < 0.0f || Has(life, kOnTask)) return false;
+        return now - life.lastMet >= kReunionGapDays;
+    }
+
+    // A reunion under way: begun when the player came near again; greeted or not yet (the player may have only passed
+    // by at a distance, which is no meeting: it waits for the next time they are close, a while).
+    inline bool ReunionOpen(const Life& life, float now) {
+        if (life.metAgainAt < 0.0f || now < life.metAgainAt) return false;
+        return now - life.metAgainAt <= (Has(life, kReunionTold) ? kReunionWindowDays : kReunionPendingDays);
+    }
+
+    // The reunion's greeting went out (or they were talking already, or the player took them along again): how long
+    // the two were apart is counted to now, and what passed stays theirs to tell for kReunionWindowDays from now.
+    inline void ReunionTold(Life& life, float now) {
+        if (life.metAgainAt < 0.0f) return;
+        if (now > life.metAgainAt) {
+            life.apartDays += now - life.metAgainAt;
+            life.metAgainAt = now;
+        }
+        life.flags |= kReunionTold;
+    }
+
+    // A step goes into what they will tell; the oldest goes when there are more than kPastSteps.
+    inline void Remember(Life& life, const PastStep& step) {
+        if (life.pastCount >= kPastSteps) {
+            std::rotate(life.past.begin(), life.past.begin() + 1, life.past.end());
+            life.past[kPastSteps - 1] = step;
+            return;
+        }
+        life.past[life.pastCount++] = step;
+    }
+
+    inline PastStep* LastStep(Life& life) { return life.pastCount ? &life.past[life.pastCount - 1] : nullptr; }
+
+    // A new parting begins a new story to tell.
+    inline void ForgetPast(Life& life) {
+        life.past = {};
+        life.pastCount = 0;
+    }
+
+    // How an adventure ends, by its seed: something found more often than not, hurt one time in three, and a find set
+    // aside for the player a little under half the time. `forced` (tests): -1 by chance, else bits 1 a find, 2 hurt,
+    // 4 the find kept for the player.
+    inline Outcome ComeBack(std::uint32_t seed, int forced = -1) {
+        Outcome o;
+        if (forced >= 0) {
+            o.find = (forced & 1) != 0;
+            o.hurt = (forced & 2) != 0;
+            o.keepsake = o.find && (forced & 4) != 0;
+        } else {
+            o.find = detail::Mix(seed, 11u) % 100u < 60u;
+            o.hurt = detail::Mix(seed, 13u) % 100u < 35u;
+            o.keepsake = o.find && detail::Mix(seed, 23u) % 100u < 45u;
+        }
+        o.wound = static_cast<std::uint8_t>(detail::Mix(seed, 29u) % kWoundCount);
+        o.gem = static_cast<std::uint8_t>(detail::Mix(seed, 19u) % 251u);
+        o.gold = o.find ? static_cast<std::uint16_t>(40u + detail::Mix(seed, 17u) % 160u) : std::uint16_t{0};
+        return o;
+    }
+
+    // A wound as the one who took it says it.
+    inline const char* WoundWords(std::uint8_t wound) {
+        switch (wound % kWoundCount) {
+            case 0: return "a deep cut along my forearm";
+            case 1: return "a few cracked ribs";
+            default: return "a wrenched knee that slowed me on the way back";
+        }
+    }
+
+    // How long, in words, without "ago": "a day", "5 days", "about 3 weeks", "about 2 months".
+    inline std::string Span(float days) {
+        if (!(days >= 1.0f)) return "less than a day";
+        const int whole = static_cast<int>(days);
+        if (whole < 2) return "a day";
+        if (whole < 14) return std::to_string(whole) + " days";
+        if (whole < 60) return "about " + std::to_string((whole + 3) / 7) + " weeks";
+        return "about " + std::to_string((whole + 15) / 30) + " months";
+    }
+
+    // The names the words need, from the game (or from a check): a place as said mid-sentence ("the Bannered Mare in
+    // Whiterun"), a person, an item; and the player and the one whose life it is. Empty when there is no such name.
+    struct Names {
+        std::function<std::string(std::uint32_t)> place;
+        std::function<std::string(std::uint32_t)> person;
+        std::function<std::string(std::uint32_t)> item;
+        std::string player;
+        std::string self;
+    };
+
+    namespace words {
+        inline std::string Place(const Names& n, std::uint32_t id) { return id && n.place ? n.place(id) : std::string(); }
+        inline std::string Person(const Names& n, std::uint32_t id) { return id && n.person ? n.person(id) : std::string(); }
+        inline std::string Item(const Names& n, std::uint32_t id) { return id && n.item ? n.item(id) : std::string(); }
+
+        // "a Ruby", "an Amethyst"; "something" when the name is not known.
+        inline std::string A(const std::string& thing) {
+            if (thing.empty()) return "something";
+            const char c = static_cast<char>(std::tolower(static_cast<unsigned char>(thing[0])));
+            const bool vowel = c == 'a' || c == 'e' || c == 'i' || c == 'o' || c == 'u';
+            return (vowel ? "an " : "a ") + thing;
+        }
+
+        // "a", "a and b", "a, b and c".
+        inline std::string List(const std::vector<std::string>& parts) {
+            std::string out;
+            for (std::size_t i = 0; i < parts.size(); ++i) {
+                if (i) out += i + 1 == parts.size() ? " and " : ", ";
+                out += parts[i];
+            }
+            return out;
+        }
+
+        // How they came back, in their own words: "with a Ruby and 120 gold to show for it, and with a few cracked ribs".
+        inline std::string BackMine(const PastStep& s, const Names& n) {
+            const auto& o = s.back;
+            const std::string thing = A(Item(n, s.find)) + (o.gold ? " and " + std::to_string(o.gold) + " gold" : std::string());
+            if (o.find && o.hurt) return "with " + thing + " to show for it, and with " + WoundWords(o.wound);
+            if (o.find) return "with " + thing + " to show for it";
+            if (o.hurt) return std::string("with nothing to show for it but ") + WoundWords(o.wound);
+            return "unhurt, though with little to show for it";
+        }
+
+        // The same as people saw it, who saw a bandage and a purse, not the wound or the sum.
+        inline std::string BackSeen(const PastStep& s, const Names& n) {
+            const auto& o = s.back;
+            const std::string thing = A(Item(n, s.find)) + " and a purse of gold";
+            if (o.find && o.hurt) return "bandaged and sore, but with " + thing + " to show for it";
+            if (o.find) return "with " + thing + " to show for it";
+            if (o.hurt) return "bandaged and sore, with little to show for it";
+            return "with little to show for it";
+        }
+
+        // When the two last saw each other: the reunion's start less the time apart.
+        inline float LastSeen(const Life& life) { return life.metAgainAt - life.apartDays; }
+
+        // Was that the parting itself (nothing between)?
+        inline bool SinceParting(const Life& life) {
+            return life.parkedSince >= 0.0f && std::fabs(LastSeen(life) - life.parkedSince) < 0.5f;
+        }
+    }
+
+    // One step of what passed, first person and past, for their prompt: "I found work at the Sleeping Giant Inn in
+    // Riverwood to earn my keep." Empty when a place has no name.
+    inline std::string PastLine(const PastStep& s, const Names& n) {
+        const std::string place = words::Place(n, s.place);
+        const std::string with = words::Person(n, s.companion);
+        switch (s.activity) {
+            case Activity::Working: return place.empty() ? std::string() : "I found work at " + place + " to earn my keep.";
+            case Activity::Adventuring: {
+                if (place.empty()) return {};
+                std::string line = "I went" + (with.empty() ? std::string() : " with " + with) + " to clear out " + place;
+                if (s.over) line += " and came back " + words::BackMine(s, n);
+                return line + ".";
+            }
+            case Activity::Travelling: return place.empty() ? std::string() : "I took to the road and travelled to " + place + ".";
+            case Activity::Home: return "I went back home for a while.";
+            default: return {};
+        }
+    }
+
+    // The same, third person and without its subject, for a narration: "took work at the Sleeping Giant Inn in Riverwood".
+    inline std::string PastClause(const PastStep& s, const Names& n) {
+        const std::string place = words::Place(n, s.place);
+        const std::string with = words::Person(n, s.companion);
+        switch (s.activity) {
+            case Activity::Working: return place.empty() ? std::string() : "took work at " + place;
+            case Activity::Adventuring: {
+                if (place.empty()) return {};
+                std::string clause = "went" + (with.empty() ? std::string() : " with " + with) + " to clear out " + place;
+                if (s.over) clause += " and came back " + words::BackSeen(s, n);
+                return clause;
+            }
+            case Activity::Travelling: return place.empty() ? std::string() : "travelled to " + place;
+            case Activity::Home: return "went back home for a while";
+            default: return {};
+        }
+    }
+
+    // The narration of the moment they catch sight of the player again (DirectNarration: the reply that follows is
+    // theirs, and whoever stands by hears what passed): how long it has been, and what they did in that time.
+    inline std::string ReunionNarration(const Life& life, const Names& n) {
+        if (n.self.empty() || n.player.empty()) return {};
+        const std::string parked = words::Place(n, life.parkedAt);
+        std::string line = n.self + " catches sight of " + n.player;
+        if (words::SinceParting(life)) {
+            line += " for the first time since the two parted ways" + (parked.empty() ? std::string() : " at " + parked) + ", " +
+                    Span(life.apartDays) + " ago";
+        } else {
+            line += " again, for the first time in " + Span(life.apartDays);
+        }
+        std::vector<std::string> clauses;
+        const float lastSeen = words::LastSeen(life);
+        for (std::size_t i = 0; i < life.pastCount; ++i) {
+            const auto& s = life.past[i];
+            if (s.at + 0.01f < lastSeen) continue;   // from before they last met: that was told then
+            if (auto clause = PastClause(s, n); !clause.empty()) clauses.push_back(std::move(clause));
+        }
+        if (!clauses.empty()) line += "; in that time " + n.self + " " + words::List(clauses);
+        return line + ".";
+    }
+
+    // A keepsake they still carry for the player, in their own words (it changes hands when the two stand together).
+    inline std::string KeepsakeLine(const Life& life, const Names& n) {
+        if (!life.keepsake || n.player.empty()) return {};
+        const std::string from = words::Place(n, life.keepsakeFrom);
+        return "I kept " + words::A(words::Item(n, life.keepsake)) + (from.empty() ? std::string() : " from " + from) + " for " + n.player +
+               ", and mean to put it in " + n.player + "'s hand myself.";
+    }
+
+    // Who may hand a keepsake over now: someone who has met the player again (greeted on this step of their own life,
+    // a reunion greeted and under way) or who walks with the player once more. Standing together, unhurried, is the
+    // game side's to see.
+    inline bool MayHandOver(const Life& life, float now) {
+        if (!life.keepsake || Has(life, kOnTask)) return false;
+        return Has(life, kWithPlayer) || Has(life, kGreeted) || (Has(life, kReunionTold) && ReunionOpen(life, now));
+    }
+
+    // Their prompt while the reunion lasts (first person, for SkyrimNet's bio): how long it has been, what they did,
+    // the keepsake they still carry for the player, and that they tell of it as old companions do.
+    inline std::string ReunionBlock(const Life& life, const Names& n) {
+        if (n.player.empty()) return {};
+        const std::string parked = words::Place(n, life.parkedAt);
+        std::string out = "## Meeting " + n.player + " again\nI had not seen " + n.player + " for " + Span(life.apartDays);
+        if (words::SinceParting(life) && !parked.empty()) out += ", not since we parted ways at " + parked;
+        out += ".";
+        std::vector<std::string> lines;
+        const float lastSeen = words::LastSeen(life);
+        for (std::size_t i = 0; i < life.pastCount; ++i) {
+            const auto& s = life.past[i];
+            if (s.at + 0.01f < lastSeen) continue;
+            if (auto line = PastLine(s, n); !line.empty()) lines.push_back(std::move(line));
+        }
+        if (lines.empty()) {
+            out += "\n";
+        } else {
+            out += " What I did in that time:\n";
+            for (const auto& line : lines) out += "- " + line + "\n";
+        }
+        if (auto kept = KeepsakeLine(life, n); !kept.empty()) out += kept + "\n";
+        out += "Seeing " + n.player + " again, I tell of it in my own words, the way old companions catch up, and want to hear how " + n.player +
+               " has fared.";
+        return out;
+    }
+
+    // The keepsake changing hands, as narrated.
+    inline std::string KeepsakeNarration(const Life& life, const Names& n) {
+        const std::string item = words::Item(n, life.keepsake);
+        if (n.self.empty() || n.player.empty() || item.empty()) return {};
+        const std::string from = words::Place(n, life.keepsakeFrom);
+        return n.self + " hands " + n.player + " the " + item + (from.empty() ? std::string() : " " + n.self + " brought back from " + from) +
+               " and kept for " + n.player + ".";
+    }
+
+    // ... and as the giver remembers it.
+    inline std::string KeepsakeMemory(const Life& life, const Names& n) {
+        const std::string item = words::Item(n, life.keepsake);
+        if (n.player.empty() || item.empty()) return {};
+        const std::string from = words::Place(n, life.keepsakeFrom);
+        return "I gave " + n.player + " the " + item + (from.empty() ? std::string() : " I had brought back from " + from) + " and kept for " + n.player + ".";
+    }
+
+    // What they remember of coming back from an adventure of their own (first person, past).
+    inline std::string ReturnMemory(const PastStep& adventure, const Names& n) {
+        const std::string place = words::Place(n, adventure.place);
+        if (place.empty()) return {};
+        const std::string with = words::Person(n, adventure.companion);
+        std::string line = "I came back from " + place + (with.empty() ? std::string() : ", where I had gone with " + with + ",") + " " +
+                           words::BackMine(adventure, n) + ".";
+        if (adventure.back.keepsake && adventure.find && !n.player.empty()) {
+            line += " I kept the " + words::Item(n, adventure.find) + " for " + n.player + ", to give when we meet again.";
+        }
+        return line;
+    }
+
+    // A step of their own life as the talk of the day has it (third person, hearsay of what people could see: where
+    // they work, that they set out armed, that they came back bandaged or with something to show): the text, how much
+    // there is to it (Rumors: 0.55 carries to a neighbouring hold, 0.75 to three) and where it begins (a location).
+    struct Told {
+        Activity activity = Activity::Home;   // the new step
+        std::uint32_t place = 0;              // its place (0 = home)
+        std::uint32_t companion = 0;
+        bool firstStep = false;
+        const PastStep* back = nullptr;       // the adventure they came back from with this step, or none
+        std::uint32_t origin = 0;             // where they set out from: their last place, else where they parted
+        std::uint32_t home = 0;               // their own home, by the game's record of where they belong
+    };
+
+    struct Talk {
+        std::string text;
+        float weight = 0.0f;
+        std::uint32_t where = 0;
+    };
+
+    inline Talk TalkOf(const Told& t, const Names& n) {
+        Talk talk;
+        if (n.self.empty()) return talk;
+        const std::string who = n.player.empty() ? n.self : n.self + ", who once travelled with " + n.player + ",";
+        const std::string place = words::Place(n, t.place);
+        const std::string home = words::Place(n, t.home);
+        if (t.back && t.back->place) {
+            const std::string from = words::Place(n, t.back->place);
+            if (!from.empty()) {
+                std::string tail;
+                std::uint32_t where = t.place;
+                switch (t.activity) {
+                    case Activity::Working:
+                        if (!place.empty()) tail = ", and has taken work at " + place + " since";
+                        break;
+                    case Activity::Travelling:
+                        if (!place.empty()) tail = ", and has since been seen on the road to " + place;
+                        break;
+                    case Activity::Home:
+                        tail = home.empty() ? std::string(", and has gone back home") : ", and has gone back to " + home;
+                        where = t.home;
+                        break;
+                    default:
+                        break;
+                }
+                talk.text = who + " came back from " + from + " " + words::BackSeen(*t.back, n) + tail + ".";
+                talk.weight = (t.back->back.find || t.back->back.hurt) ? 0.78f : 0.65f;
+                talk.where = where ? where : t.back->place;
+                return talk;
+            }
+        }
+        switch (t.activity) {
+            case Activity::Working:
+                if (place.empty()) break;
+                talk.text = who + " has been working at " + place + " for bed and board, folk say.";
+                talk.weight = 0.6f;
+                talk.where = t.place;
+                break;
+            case Activity::Adventuring: {
+                if (place.empty()) break;
+                const std::string origin = words::Place(n, t.origin);
+                const std::string with = words::Person(n, t.companion);
+                if (!origin.empty()) {
+                    talk.text = who + " set out from " + origin + (with.empty() ? " armed for a fight" : " with " + with + ", both armed for a fight,") +
+                                " and bound for " + place + ".";
+                    talk.where = t.origin;
+                } else {
+                    talk.text = who + " was seen on the road" + (with.empty() ? std::string() : " with " + with) + ", armed for a fight and bound for " +
+                                place + ".";
+                    talk.where = t.place;
+                }
+                talk.weight = 0.65f;
+                break;
+            }
+            case Activity::Travelling:
+                if (place.empty()) break;
+                talk.text = who + " was seen on the road to " + place + " with a traveller's pack.";
+                talk.weight = 0.55f;
+                talk.where = t.place;
+                break;
+            case Activity::Home:
+                if (home.empty() || !t.home) break;
+                talk.text = t.firstStep && !n.player.empty() ? n.self + ", who travelled with " + n.player + " for a time, has gone back to " + home + "."
+                                                             : who + " has left the road for a while and gone back to " + home + ".";
+                talk.weight = 0.55f;
+                talk.where = t.home;
+                break;
+            default:
+                break;
+        }
+        return talk;
     }
 
     // ------------------------------------------------------------------ the director
@@ -557,7 +976,9 @@ namespace IntelEngine::LivingWorld {
     // ------------------------------------------------------------------ save data (co-save record 'IELW')
 
     constexpr std::uint32_t kRecordType = 'IELW';
-    constexpr std::uint32_t kRecordVersion = 2;
+    // 3 (2026-11-23): what passed while apart (past steps, the reunion, a keepsake) follows the version 2 record whole,
+    // so a version 2 record still loads (with nothing of the kind).
+    constexpr std::uint32_t kRecordVersion = 3;
 
     namespace detail {
         template <class T>
@@ -574,7 +995,7 @@ namespace IntelEngine::LivingWorld {
         }
     }
 
-    inline std::vector<std::uint8_t> Serialize(std::span<const Life> lives, const DirectorState& state) {
+    inline std::vector<std::uint8_t> Serialize(std::span<const Life> lives, const DirectorState& state, std::uint32_t version = kRecordVersion) {
         std::vector<std::uint8_t> out;
         const auto count = static_cast<std::uint32_t>(std::min(lives.size(), kMaxLives));
         detail::Put(out, count);
@@ -603,11 +1024,39 @@ namespace IntelEngine::LivingWorld {
         detail::Put(out, state.picks);
         detail::Put(out, state.lastActor);
         detail::Put(out, state.lastKind);
+        if (version < 3) return out;
+        // Version 3: what passed while apart, for each life in the same order, behind a count of its own.
+        detail::Put(out, count);
+        for (std::uint32_t i = 0; i < count; ++i) {
+            const Life& l = lives[i];
+            detail::Put(out, l.metAgainAt);
+            detail::Put(out, l.apartDays);
+            detail::Put(out, l.keepsake);
+            detail::Put(out, l.keepsakeFrom);
+            const auto past = static_cast<std::uint8_t>(std::min<std::size_t>(l.pastCount, kPastSteps));
+            detail::Put(out, past);
+            for (std::uint8_t k = 0; k < past; ++k) {
+                const PastStep& s = l.past[k];
+                detail::Put(out, static_cast<std::uint8_t>(s.activity));
+                detail::Put(out, s.place);
+                detail::Put(out, s.companion);
+                detail::Put(out, s.at);
+                const std::uint8_t bits = static_cast<std::uint8_t>((s.over ? 1u : 0u) | (s.back.hurt ? 2u : 0u) | (s.back.find ? 4u : 0u) |
+                                                                    (s.back.keepsake ? 8u : 0u));
+                detail::Put(out, bits);
+                detail::Put(out, s.back.wound);
+                detail::Put(out, s.back.gem);
+                detail::Put(out, s.back.gold);
+                detail::Put(out, s.find);
+            }
+        }
         return out;
     }
 
     // All or nothing: on short or damaged data the outputs are left as they were and false comes back.
-    inline bool Deserialize(std::span<const std::uint8_t> in, std::vector<Life>& lives, DirectorState& state) {
+    inline bool Deserialize(std::span<const std::uint8_t> in, std::vector<Life>& lives, DirectorState& state,
+                            std::uint32_t version = kRecordVersion) {
+        if (version != 2 && version != 3) return false;
         std::size_t at = 0;
         std::uint32_t count = 0;
         if (!detail::Get(in, at, count) || count > kMaxLives) return false;
@@ -628,9 +1077,38 @@ namespace IntelEngine::LivingWorld {
         DirectorState d;
         if (!detail::Get(in, at, d.budget) || !detail::Get(in, at, d.budgetDay) || !detail::Get(in, at, d.lastMomentDay) ||
             !detail::Get(in, at, d.lastBigDay) || !detail::Get(in, at, d.picks) || !detail::Get(in, at, d.lastActor) ||
-            !detail::Get(in, at, d.lastKind) || at != in.size()) {
+            !detail::Get(in, at, d.lastKind)) {
             return false;
         }
+        if (version >= 3) {
+            std::uint32_t again = 0;
+            if (!detail::Get(in, at, again) || again != count) return false;
+            for (auto& l : read) {
+                std::uint8_t past = 0;
+                if (!detail::Get(in, at, l.metAgainAt) || !detail::Get(in, at, l.apartDays) || !detail::Get(in, at, l.keepsake) ||
+                    !detail::Get(in, at, l.keepsakeFrom) || !detail::Get(in, at, past) || past > kPastSteps ||
+                    !std::isfinite(l.metAgainAt) || !std::isfinite(l.apartDays)) {
+                    return false;
+                }
+                l.pastCount = past;
+                for (std::uint8_t k = 0; k < past; ++k) {
+                    PastStep& s = l.past[k];
+                    std::uint8_t activity = 0, bits = 0;
+                    if (!detail::Get(in, at, activity) || !detail::Get(in, at, s.place) || !detail::Get(in, at, s.companion) ||
+                        !detail::Get(in, at, s.at) || !detail::Get(in, at, bits) || !detail::Get(in, at, s.back.wound) ||
+                        !detail::Get(in, at, s.back.gem) || !detail::Get(in, at, s.back.gold) || !detail::Get(in, at, s.find)) {
+                        return false;
+                    }
+                    if (activity > static_cast<std::uint8_t>(Activity::Visiting) || !std::isfinite(s.at) || bits > 15u) return false;
+                    s.activity = static_cast<Activity>(activity);
+                    s.over = (bits & 1u) != 0;
+                    s.back.hurt = (bits & 2u) != 0;
+                    s.back.find = (bits & 4u) != 0;
+                    s.back.keepsake = (bits & 8u) != 0;
+                }
+            }
+        }
+        if (at != in.size()) return false;
         lives = std::move(read);
         state = d;
         return true;

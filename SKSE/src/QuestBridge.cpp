@@ -1,4 +1,5 @@
 #include "QuestBridge.h"
+#include "GameText.h"
 #include "LanguageBridge.h"
 #include "FrameCost.h"
 #include "RumorBridge.h"
@@ -86,17 +87,17 @@ namespace IntelEngine {
             auto* form = RE::TESForm::LookupByID(id);
             if (!form) return {};
             if (auto* ref = form->As<RE::TESObjectREFR>()) {
-                const char* name = ref->GetDisplayFullName();
+                const char* name = GameText::In(ref->GetDisplayFullName());
                 return name ? name : "";
             }
-            const char* name = form->GetName();
+            const char* name = GameText::In(form->GetName());
             return name ? name : "";
         }
 
         // A place's name in the middle of a sentence ("the Bannered Mare", "Bleak Falls Barrow").
         std::string PlaceName(RE::FormID location) {
             auto* loc = location ? RE::TESForm::LookupByID<RE::BGSLocation>(location) : nullptr;
-            const char* name = loc ? loc->GetFullName() : nullptr;
+            const char* name = loc ? GameText::In(loc->GetFullName()) : nullptr;
             if (!name || !*name) return "a place nearby";
             std::string text = name;
             if (text.starts_with("The ")) text[0] = 't';
@@ -105,7 +106,7 @@ namespace IntelEngine {
 
         std::string PlayerName() {
             auto* player = RE::PlayerCharacter::GetSingleton();
-            const char* name = player ? player->GetDisplayFullName() : nullptr;
+            const char* name = player ? GameText::In(player->GetDisplayFullName()) : nullptr;
             return name && *name ? name : "the traveller";
         }
 
@@ -206,7 +207,7 @@ namespace IntelEngine {
         for (const auto& [locationId, anchorId] : LocationResolver::GetSingleton()->DungeonAnchors()) {
             auto* location = RE::TESForm::LookupByID<RE::BGSLocation>(locationId);
             if (!location || !anchorId) continue;
-            const char* name = location->GetFullName();
+            const char* name = GameText::In(location->GetFullName());
             if (!name || !*name || location->HasKeywordString("LocTypePlayerHouse")) continue;
             if (CellAnalyzer::GetSingleton()->IsLocationNonCombative(location)) continue;
             Place p;
@@ -235,7 +236,7 @@ namespace IntelEngine {
                 if (!plain.empty() && !plain.contains(armor->GetFormID())) continue;
                 if (armor->GetFormFlags() & RE::TESObjectARMO::RecordFlags::kNonPlayable) continue;
                 if (armor->formEnchanting || armor->templateArmor) continue;
-                const char* name = armor->GetName();
+                const char* name = GameText::In(armor->GetName());
                 if (!name || !*name) continue;
                 if (armor->value < 25 || armor->value > 1500) continue;
                 auto* file = armor->GetFile(0);
@@ -258,7 +259,7 @@ namespace IntelEngine {
                 for (const auto& f : npc->factions) {
                     if (f.faction == potential && f.rank >= 0) member = true;
                 }
-                const char* name = npc->GetFullName();
+                const char* name = GameText::In(npc->GetFullName());
                 if (!member || !name || !*name) continue;
                 const auto refId = NPCIndex::GetSingleton()->FindFormIdByName(name);
                 auto* ref = refId ? RE::TESForm::LookupByID<RE::Actor>(refId) : nullptr;
@@ -295,24 +296,24 @@ namespace IntelEngine {
         auto* playerLoc = LocationOf(player);
         const auto playerPlace = playerLoc ? playerLoc->GetFormID() : 0;
         if (StorylineBridge::GetSingleton()->OpenIdFor(giverId) != 0) {
-            logger::info("Quests: no quest for {}: they have an errand open with the player", giver->GetDisplayFullName());
+            logger::info("Quests: no quest for {}: they have an errand open with the player", GameText::In(giver->GetDisplayFullName()));
             return 0;
         }
         std::scoped_lock lock(m_mutex);
         if (const auto why = m_book.Refusal(giverId); !why.empty()) {
-            logger::info("Quests: no quest for {}: {}", giver->GetDisplayFullName(), why);
+            logger::info("Quests: no quest for {}: {}", GameText::In(giver->GetDisplayFullName()), why);
             return 0;
         }
         for (const auto& q : m_book.all) {
             if (q.giver == giverId && q.phase == Q::Phase::Ended && q.ending != Q::Ending::Lapsed && now - q.since < kGiverRestDays) {
-                logger::info("Quests: no quest for {}: their last one ended {:.1f} days ago", giver->GetDisplayFullName(), now - q.since);
+                logger::info("Quests: no quest for {}: their last one ended {:.1f} days ago", GameText::In(giver->GetDisplayFullName()), now - q.since);
                 return 0;
             }
         }
         // An arc they asked about lately rests them too (Amren came with a bandit to kill right after the player refused
         // to look for his circlet, 2026-11-18). ArcBridge takes its own lock: QuestBridge's is held, never the other way.
         if (ArcBridge::GetSingleton()->AskedWithin(giverId, kGiverRestDays) || ArcBridge::GetSingleton()->Involves(giverId)) {
-            logger::info("Quests: no quest for {}: a story of theirs is on or just ended", giver->GetDisplayFullName());
+            logger::info("Quests: no quest for {}: a story of theirs is on or just ended", GameText::In(giver->GetDisplayFullName()));
             return 0;
         }
         std::vector<Q::PlaceOption> options;
@@ -340,7 +341,7 @@ namespace IntelEngine {
         const std::uint32_t seed = Q::detail::Mix(giverId, static_cast<std::uint32_t>(now * 24.0f));
         const auto* place = Q::PickPlace(options, m_book, playerPlace, seed);
         if (!place) {
-            logger::info("Quests: no quest for {}: no place to send the player", giver->GetDisplayFullName());
+            logger::info("Quests: no quest for {}: no place to send the player", GameText::In(giver->GetDisplayFullName()));
             return 0;
         }
         // The quest kinds of the settings hold for the engine's own quests: a bounty is the old "clear out enemies",
@@ -349,7 +350,7 @@ namespace IntelEngine {
         const auto tmpl = Q::PickTemplate(!m_keepsakes.empty() && !(off & ArcBridge::kSwitchFindItem), !(off & ArcBridge::kSwitchClearOut),
                                           m_book.lastTemplate, seed);
         if (tmpl == Q::Template::None) {
-            logger::info("Quests: no quest for {}: the kinds that fit are switched off in the settings", giver->GetDisplayFullName());
+            logger::info("Quests: no quest for {}: the kinds that fit are switched off in the settings", GameText::In(giver->GetDisplayFullName()));
             return 0;
         }
         Q::Quest q;
@@ -363,7 +364,7 @@ namespace IntelEngine {
         if (tmpl == Q::Template::Keepsake) {
             q.item = m_keepsakes[Q::detail::Mix(seed, 53u) % m_keepsakes.size()];
             const std::string itemName = ItemNames::Display(NameOf(q.item));
-            q.stamp = Q::ShortName(Safe::Name(giver->GetDisplayFullName())) + "'s " + itemName;
+            q.stamp = Q::ShortName(Safe::Name(GameText::In(giver->GetDisplayFullName()))) + "'s " + itemName;
         }
         if (tmpl == Q::Template::Bounty) {
             // Named now so the giver can say who; the sex is the foe's, known once placed (SetFoe may rename).
@@ -373,7 +374,7 @@ namespace IntelEngine {
         const auto id = m_book.Plan(q, now);
         if (id) {
             logger::info("Quests: #{} planned: {} for {} at {} ({}), truth {}, item '{}', {} gold", id, static_cast<int>(tmpl),
-                         giver->GetDisplayFullName(), PlaceName(q.place), place->inGiverHold ? "their hold" : "another hold",
+                         GameText::In(giver->GetDisplayFullName()), PlaceName(q.place), place->inGiverHold ? "their hold" : "another hold",
                          static_cast<int>(q.truth), q.stamp, q.gold);
         }
         return id;
@@ -383,7 +384,7 @@ namespace IntelEngine {
         if (!ally) return 0;
         const auto [place, with] = LivingWorldBridge::GetSingleton()->AdventuringAt(ally->GetFormID());
         if (!place) {
-            logger::info("Quests: no venture here for {}: not on an adventure of their own", ally->GetDisplayFullName());
+            logger::info("Quests: no venture here for {}: not on an adventure of their own", GameText::In(ally->GetDisplayFullName()));
             return 0;
         }
         return PlanVenture(ally, place, with);
@@ -397,13 +398,13 @@ namespace IntelEngine {
         }
         // Nobody is met on the road where there is no road to (another plane), nor set ahead of the player in a dungeon.
         if (const auto barred = LivingWorldBridge::PlaceBars(); barred != Patrols::Barred::No) {
-            logger::info("Quests: no venture for {} now: {}", ally->GetDisplayFullName(), Patrols::Word(barred));
+            logger::info("Quests: no venture for {} now: {}", GameText::In(ally->GetDisplayFullName()), Patrols::Word(barred));
             return 0;
         }
         const auto allyId = ally->GetFormID();
         auto* lives = LivingWorldBridge::GetSingleton();
         if (!lives->HasOwnLife(allyId)) {
-            logger::info("Quests: no venture for {}: not a former follower living a life of their own", ally->GetDisplayFullName());
+            logger::info("Quests: no venture for {}: not a former follower living a life of their own", GameText::In(ally->GetDisplayFullName()));
             return 0;
         }
         const float now = NowDays();
@@ -438,13 +439,13 @@ namespace IntelEngine {
         else playerAt = player->GetPosition();
         std::scoped_lock lock(m_mutex);
         if (const auto why = m_book.Refusal(allyId); !why.empty()) {
-            logger::info("Quests: no venture for {}: {}", ally->GetDisplayFullName(), why);
+            logger::info("Quests: no venture for {}: {}", GameText::In(ally->GetDisplayFullName()), why);
             return 0;
         }
         for (const auto& q : m_book.all) {
             if ((q.giver == allyId || q.ally == allyId) && q.phase == Q::Phase::Ended && q.ending != Q::Ending::Lapsed &&
                 now - q.since < kGiverRestDays) {
-                logger::info("Quests: no venture for {}: their last one ended {:.1f} days ago", ally->GetDisplayFullName(), now - q.since);
+                logger::info("Quests: no venture for {}: their last one ended {:.1f} days ago", GameText::In(ally->GetDisplayFullName()), now - q.since);
                 return 0;
             }
         }
@@ -465,7 +466,7 @@ namespace IntelEngine {
         const std::uint32_t seed = Q::detail::Mix(allyId, static_cast<std::uint32_t>(now * 24.0f) + 7u);
         const auto* place = Q::PickPlace(options, m_book, atPlace ? 0 : (playerLoc ? playerLoc->GetFormID() : 0), seed);
         if (!place) {
-            logger::info("Quests: no venture for {}: no place to set out for", ally->GetDisplayFullName());
+            logger::info("Quests: no venture for {}: no place to set out for", GameText::In(ally->GetDisplayFullName()));
             return 0;
         }
         Q::Quest q;
@@ -481,7 +482,7 @@ namespace IntelEngine {
         q.title = Fill(Q::DefaultTitle(Q::Template::Venture), q);
         const auto id = m_book.Plan(q, now);
         if (id) {
-            logger::info("Quests: #{} planned: a venture of {} to {}{}, truth {}, {} gold", id, ally->GetDisplayFullName(),
+            logger::info("Quests: #{} planned: a venture of {} to {}{}, truth {}, {} gold", id, GameText::In(ally->GetDisplayFullName()),
                          PlaceName(q.place), q.companion ? " with " + NameOf(q.companion) : std::string(), static_cast<int>(q.truth), q.gold);
         }
         return id;
@@ -909,7 +910,7 @@ namespace IntelEngine {
         }
         player->RemoveItem(found.object, 1, RE::ITEM_REMOVE_REASON::kStoreInContainer, found.extra, giver);
         q->handed = true;
-        logger::info("Quests: #{} '{}' handed to {}", id, q->stamp, giver->GetDisplayFullName());
+        logger::info("Quests: #{} '{}' handed to {}", id, q->stamp, GameText::In(giver->GetDisplayFullName()));
         return true;
     }
 
@@ -1065,7 +1066,7 @@ namespace IntelEngine {
                     auto* args = join ? RE::MakeFunctionArguments(static_cast<RE::Actor*>(npc))
                                       : RE::MakeFunctionArguments(static_cast<RE::Actor*>(npc), false, true);
                     if (vm->DispatchMethodCall1(object, join ? "RegisterFollower" : "UnregisterFollower", args, none)) {
-                        logger::info("Quests: {} {} through SeverActions", npc->GetDisplayFullName(), join ? "follows the player" : "goes their own way");
+                        logger::info("Quests: {} {} through SeverActions", GameText::In(npc->GetDisplayFullName()), join ? "follows the player" : "goes their own way");
                         return "SeverActions";
                     }
                 }
@@ -1075,10 +1076,10 @@ namespace IntelEngine {
         // SkyrimNet: the global functions behind its StartFollow and StopFollow actions.
         auto* args = RE::MakeFunctionArguments(static_cast<RE::Actor*>(npc), RE::BSFixedString(""), RE::BSFixedString(""));
         if (vm->DispatchStaticCall("SkyrimNetInternal", join ? "StartFollow_Execute" : "StopFollow_Execute", args, none)) {
-            logger::info("Quests: {} {} through SkyrimNet", npc->GetDisplayFullName(), join ? "follows the player" : "goes their own way");
+            logger::info("Quests: {} {} through SkyrimNet", GameText::In(npc->GetDisplayFullName()), join ? "follows the player" : "goes their own way");
             return "SkyrimNet";
         }
-        logger::warn("Quests: no follower system to make {} {}", npc->GetDisplayFullName(), join ? "follow" : "leave");
+        logger::warn("Quests: no follower system to make {} {}", GameText::In(npc->GetDisplayFullName()), join ? "follow" : "leave");
         return {};
     }
 
@@ -1101,7 +1102,7 @@ namespace IntelEngine {
         RE::BSTSmartPointer<RE::BSScript::IStackCallbackFunctor> none;
         auto* args = RE::MakeFunctionArguments(static_cast<RE::Actor*>(npc));
         if (!vm->DispatchMethodCall1(object, "StopFollowing", args, none)) return false;
-        logger::info("{}: SeverActions' casual follow of the player ended", npc->GetDisplayFullName());
+        logger::info("{}: SeverActions' casual follow of the player ended", GameText::In(npc->GetDisplayFullName()));
         return true;
     }
 
@@ -1173,7 +1174,7 @@ namespace IntelEngine {
         const auto text = Q::Rumor(q);
         auto* giverLoc = LocationOf(RE::TESForm::LookupByID<RE::Actor>(q.giver));
         auto* hold = HoldOf(giverLoc);
-        const char* holdName = hold ? hold->GetFullName() : nullptr;
+        const char* holdName = hold ? GameText::In(hold->GetFullName()) : nullptr;
         if (text.empty() || !holdName || !*holdName || !SkyrimNetAPI::AddWorldKnowledge) return;
         const std::string rumor = Fill(text, q);
         const std::string giverName = NameOf(q.giver);
@@ -1208,7 +1209,7 @@ namespace IntelEngine {
         const auto who = q.tmpl == Q::Template::Venture ? q.ally : q.giver;
         auto* giverLoc = LocationOf(RE::TESForm::LookupByID<RE::Actor>(who));
         auto* hold = HoldOf(giverLoc);
-        const std::string holdName = hold && hold->GetFullName() ? hold->GetFullName() : "";
+        const std::string holdName = hold && GameText::In(hold->GetFullName()) ? GameText::In(hold->GetFullName()) : "";
         const std::string giverName = NameOf(who);
         const std::string place = PlaceName(q.place);
         const auto id = q.id;

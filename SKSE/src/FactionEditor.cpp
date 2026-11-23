@@ -1,4 +1,5 @@
 #include "FactionEditor.h"
+#include "GameText.h"
 
 #include "FactionConfigLoader.h"
 #include "FactionEditorText.h"
@@ -105,7 +106,7 @@ namespace IntelEngine::FactionEditor {
             for (auto* faction : data->GetFormArray<RE::TESFaction>()) {
                 if (!faction) continue;
                 const auto id = editorId(faction);
-                const char* name = faction->GetFullName();
+                const char* name = GameText::In(faction->GetFullName());
                 if (id.empty() && (!name || !*name)) continue;   // nothing a person could tell it by
                 out["gameFactions"].push_back({{"id", RefOf(faction, id)}, {"name", name ? name : ""}, {"plugin", PluginOf(faction)}});
             }

@@ -1,4 +1,5 @@
 #include "PlaceTargets.h"
+#include "GameText.h"
 #include "Safe.h"
 
 #include "LocationResolver.h"
@@ -26,7 +27,7 @@ namespace IntelEngine::PlaceTargets {
 
         std::string LocationName(std::uint32_t id) {
             auto* location = id ? RE::TESForm::LookupByID<RE::BGSLocation>(id) : nullptr;
-            const char* name = location ? location->GetFullName() : nullptr;
+            const char* name = location ? GameText::In(location->GetFullName()) : nullptr;
             return name ? name : "";
         }
 
@@ -132,7 +133,7 @@ namespace IntelEngine::PlaceTargets {
         }
         target.offset = best->at - target.anchor->GetPosition();
         logger::info("PlaceTargets: '{}' for {} is the SkyrimNet place '{}' (by {:08X}, {:.0f} units off)", destination,
-                     npc->GetDisplayFullName(), best->name, target.anchor->GetFormID(), target.offset.Length());
+                     GameText::In(npc->GetDisplayFullName()), best->name, target.anchor->GetFormID(), target.offset.Length());
         return target;
     }
 }

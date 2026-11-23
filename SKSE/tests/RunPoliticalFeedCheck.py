@@ -28,6 +28,7 @@ with tempfile.TemporaryDirectory(prefix="political-feed-") as directory:
 #include <cstdint>
 #include <string>
 #include <vector>
+#include "GameText.h"
 namespace RE {
 using FormID = std::uint32_t;
 class TESFaction;

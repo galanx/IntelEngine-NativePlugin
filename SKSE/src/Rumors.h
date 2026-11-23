@@ -199,10 +199,12 @@ namespace IntelEngine::Rumors {
         }
 
         // The one a publican would bring up unasked, or null: something nobody has brought up to the player yet, that
-        // is still fresh and worth a word (trouble always is).
-        const Rumor* ToBringUp(std::uint8_t hold, std::uint32_t teller, float now) const {
+        // is still fresh and worth a word (trouble always is). Nothing about someone who stands within hearing
+        // (`present`): talk of a former follower is not told across the room they are working in.
+        const Rumor* ToBringUp(std::uint8_t hold, std::uint32_t teller, float now, std::span<const std::uint32_t> present = {}) const {
             for (const Rumor* r : ForHold(hold, teller, now, kMaxRumors)) {
                 if (r->told > 0) continue;
+                if (r->about && std::find(present.begin(), present.end(), r->about) != present.end()) continue;
                 if (r->kind != Kind::Trouble && (r->weight < 0.5f || now - r->born > 3.0f)) continue;
                 return r;
             }

@@ -1,6 +1,7 @@
 import withSections from './Section';
 import { Children, cloneElement, useState, useMemo, useCallback, useEffect, useRef } from 'react';
 import Select, { useDropdown, dropdownClass } from './Select';
+import { t, tk } from '../i18n';
 
 function resizeTextarea(event) {
   if (event.button !== 0) return;
@@ -17,18 +18,18 @@ function resizeTextarea(event) {
 function Field({ label, required, maybeRequired, hint, children, className = 'flex-1' }) {
   return (
     <div className={`flex ${className} min-w-0 flex-col gap-0.5`}>
-      <label className="text-[10px] text-gray-500">{label} {required ? <span className="text-red-400 ml-0.5">*</span>
-        : maybeRequired && <span className="text-yellow-400 ml-0.5" title="Needed for one of the sub-types">*</span>}</label>
+      <label className="text-[10px] text-gray-500">{t(label)} {required ? <span className="text-red-400 ml-0.5">*</span>
+        : maybeRequired && <span className="text-yellow-400 ml-0.5" title={t('Needed for one of the sub-types')}>*</span>}</label>
       {Children.map(children, child => ['input', 'textarea'].includes(child?.type) && child.props.type !== 'number' ? (
         <div className="director-text-field relative min-w-0">
-          {cloneElement(child, { 'aria-label': child.props['aria-label'] || label })}
-          {child.props.value && <button type="button" aria-label={`Clear ${label}`}
+          {cloneElement(child, { 'aria-label': child.props['aria-label'] || t(label) })}
+          {child.props.value && <button type="button" aria-label={t('Clear {label}', { label: t(label) })}
             onMouseDown={e => e.preventDefault()} onClick={() => child.props.onChange({ target: { value: '' } })}
             className={`absolute right-1 ${child.type === 'textarea' ? 'top-1' : 'top-1/2 -translate-y-1/2'} px-1 text-xs text-gray-500 hover:text-gray-200`}>×</button>}
-          {child.type === 'textarea' && <span className="director-resize-handle" aria-label={`Resize ${label}`} onPointerDown={resizeTextarea} />}
+          {child.type === 'textarea' && <span className="director-resize-handle" aria-label={t('Resize {label}', { label: t(label) })} onPointerDown={resizeTextarea} />}
         </div>
       ) : child)}
-      {hint && <span className="director-hint">{hint}</span>}
+      {hint && <span className="director-hint">{t(hint)}</span>}
     </div>
   );
 }
@@ -67,7 +68,7 @@ function FactionInput({ value, onChange: change, onInput, factions = [], options
       {text && (
         <button
           type="button"
-          aria-label={npc ? `Clear ${inputProps['aria-label'] || 'NPC'}` : 'Clear faction'}
+          aria-label={npc ? t('Clear {label}', { label: inputProps['aria-label'] || t('NPC') }) : t('Clear faction')}
           onMouseDown={e => e.preventDefault()}
           onClick={() => { onChange(''); setQuery(null); setShowAll(true); openDropdown(); }}
           className="absolute right-1 top-1/2 -translate-y-1/2 px-1 text-xs text-gray-500 hover:text-gray-200"
@@ -84,10 +85,10 @@ function FactionInput({ value, onChange: change, onInput, factions = [], options
               onClick={() => { onChange(f.id); setQuery(null); setOpen(false); }}
               className={`px-2 py-1 text-xs text-gray-300 hover:bg-white/10 cursor-pointer truncate ${active === index ? 'bg-white/10' : ''}`}
             >
-              {f.name} {(!npc || f.kind) && <span className="text-gray-600">({npc ? f.kind : f.id})</span>}
+              {f.name} {(!npc || f.kind) && <span className="text-gray-600">({npc ? t(f.kind) : f.id})</span>}
             </div>
           ))}
-          {!filtered.length && <div className="px-2 py-1 text-xs text-gray-500">{selectionOnly ? 'no nearby NPC matches' : 'No matches'}</div>}
+          {!filtered.length && <div className="px-2 py-1 text-xs text-gray-500">{t(selectionOnly ? 'no nearby NPC matches' : 'No matches')}</div>}
         </div>
       )}
     </div>
@@ -128,9 +129,10 @@ const POLITICAL_EVENT_TYPES = [
   { key: 'surrender', label: 'Surrender', delta: 8 },
 ];
 
-const MEET_TIMES = ['dawn', 'morning', 'afternoon', 'evening', 'sunset', 'night', 'midnight'];
-const ENEMY_TYPES = ['bandit', 'draugr', 'dragon'];
-const QUEST_SUB_TYPES = ['combat', 'rescue', 'find_item'];
+// Values the game reads as they are (and the model is offered); the page shows them translated.
+const MEET_TIMES = [tk('dawn'), tk('morning'), tk('afternoon'), tk('evening'), tk('sunset'), tk('night'), tk('midnight')];
+const ENEMY_TYPES = [tk('bandit'), tk('draugr'), tk('dragon')];
+const QUEST_SUB_TYPES = [tk('combat'), tk('rescue'), tk('find_item')];
 
 const SPEED_OPTIONS = [
   { value: '0', label: 'Walk' },
@@ -144,6 +146,7 @@ const WAIT_OPTIONS = [
 
 // Type-specific fields per story type
 // required: true = dispatch will fail without it, hint: shown below the field
+// The texts here are English: Generate sends them to the model as they are; the page shows them translated.
 const STORY_TYPE_FIELDS = {
   seek_player: { example: 'e.g. set out to repay an old debt', hint: 'Travels to find you for a personal reason.', narration: 'Why they sought the named character (past tense, under 120 characters); do not claim the character’s location.' },
   informant: { hint: 'Comes to tell you something they saw or heard.', fields: [
@@ -367,13 +370,13 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
       const request = pendingRef.current;
       if (!request) return;
       let result;
-      try { result = JSON.parse(json); } catch { pendingRef.current = null; setPending(null); setGenerateError('Invalid response; try again.'); return; }
+      try { result = JSON.parse(json); } catch { pendingRef.current = null; setPending(null); setGenerateError(tk('Invalid response; try again.')); return; }
       if (result.requestId !== request.id || result.form !== request.form) return;
       const audit = {ok:false,applied:[],rejected:{$response:result.error || 'Invalid result'}}; try {
       Object.assign(audit.rejected, result.rejected || {});
       pendingRef.current = null; setPending(null);
       if (!result.ok || !result.fields || typeof result.fields !== 'object' || Array.isArray(result.fields)) {
-        setGenerateError(String(result.error || 'Generation failed; try again.').slice(0,120)); return;
+        setGenerateError(String(result.error || tk('Generation failed; try again.')).slice(0,120)); return;
       }
       const { form, draft: old, schema, variants, options } = request;
       const typeKey = form === 'action' ? 'actionName' : form === 'story' ? 'storyType' : form === 'social' ? 'socialType' : 'eventType';
@@ -448,7 +451,7 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
     const pType = !story && !social && !action ? (polEventType || pick()) : polEventType;
     if (story && sType !== storyType) setStoryType(sType); if (social && soType !== socialType) setSocialType(soType); if (pType !== polEventType) setPolEventType(pType);
     let actionNpcName = nearby.find(n => n.id === actionNpc)?.name || '';
-    if (action && (actionQuery || (actionNpc && !actionNpcName))) { setGenerateError('Pick a nearby NPC or clear the Action NPC field.'); return; }
+    if (action && (actionQuery || (actionNpc && !actionNpcName))) { setGenerateError(tk('Pick a nearby NPC or clear the Action NPC field.')); return; }
     let actionName = selectedAction;
     if (action && !actionNpcName) { const choices = nearby.filter(n => n.name.toLowerCase() !== String(actionParams.targetName || '').trim().toLowerCase()); if (choices.length) { const npc = choices[Math.floor(Math.random() * choices.length)]; actionNpcName = npc.name; setActionNpc(npc.id); } }
     if (action && !actionName && enumTypes.length) { actionName = enumTypes[Math.floor(Math.random() * enumTypes.length)].key; setSelectedAction(actionName); }
@@ -598,25 +601,25 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
   const storyTypeValid = !!touched.storyType && DIRECTOR_STORY_TYPES.some(type => type.key === storyType);
   const socialTypeValid = !!touched.socialType && SOCIAL_TYPES.some(type => type.key === socialType);
   const polEventTypeValid = !!touched.eventType && POLITICAL_EVENT_TYPES.some(type => type.key === polEventType);
-  const storyRequired = [[storyType === 'informant' ? 'Informant NPC' : 'NPC', !!storyNpc.trim()], ['Story type', storyTypeValid], ...(storyType === 'informant' ? [] : [['Narration', !!storyNarration.trim()]]), ...variantRequired(currentFields, storyFields)];
-  const socialRequired = [['NPC 1', !!socialNpc1.trim()], ['NPC 2', !!socialNpc2.trim()], ['Social type', socialTypeValid], ['Narration', !!socialNarration.trim()], ...variantRequired(currentSocialFields, socialFields)];
+  const storyRequired = [[storyType === 'informant' ? tk('Informant NPC') : tk('NPC'), !!storyNpc.trim()], [tk('Story type'), storyTypeValid], ...(storyType === 'informant' ? [] : [[tk('Narration'), !!storyNarration.trim()]]), ...variantRequired(currentFields, storyFields)];
+  const socialRequired = [[tk('NPC 1'), !!socialNpc1.trim()], [tk('NPC 2'), !!socialNpc2.trim()], [tk('Social type'), socialTypeValid], [tk('Narration'), !!socialNarration.trim()], ...variantRequired(currentSocialFields, socialFields)];
   // A war_declaration for a pair war_allowed doesn't permit is refused in game; say so first. war_with comes from the DLL
   // (absent on an older DLL, then nothing is blocked).
   const polWarWith = factions.find(f => f.id === polFactionA.trim())?.war_with;
   const polWarBlocked = polEventType === 'war_declaration' && Array.isArray(polWarWith) && !!polFactionB.trim() && !polWarWith.includes(polFactionB.trim());
-  const politicalRequired = [['Faction A', !!polFactionA.trim()], ['Faction B', !!polFactionB.trim() && polFactionA.trim() !== polFactionB.trim()], ['Political event type', polEventTypeValid], ['Description', !!polDescription.trim()]];
-  const missingFields = fields => fields.some(([, valid]) => !valid) && <p className="text-[10px] text-gray-400">Fill required fields: {fields.filter(([, valid]) => !valid).map(([label]) => label).join(', ')}</p>;
+  const politicalRequired = [[tk('Faction A'), !!polFactionA.trim()], [tk('Faction B'), !!polFactionB.trim() && polFactionA.trim() !== polFactionB.trim()], [tk('Political event type'), polEventTypeValid], [tk('Description'), !!polDescription.trim()]];
+  const missingFields = fields => fields.some(([, valid]) => !valid) && <p className="text-[10px] text-gray-400">{t('Fill required fields: {fields}', { fields: fields.filter(([, valid]) => !valid).map(([label]) => t(label)).join(', ') })}</p>;
   const busyHeader = form => {
     const engine = form === 'story' ? story : form === 'social' ? social : null;
     if (!engine?.isActive) return null;
     const who = form === 'story' ? engine.activeNPC : `${engine.traveler} → ${engine.target}`;
     const type = (form === 'story' ? engine.activeType : engine.type) || '';
-    return <span className="text-amber-400 italic normal-case"> — busy: {who} ({type.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())})</span>;
+    return <span className="text-amber-400 italic normal-case">{' '}{t('— busy: {who} ({type})', { who, type: t(type.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())) })}</span>;
   };
-  const generateControls = form => { return <div className="flex items-center justify-between mb-2"><h2 className="section-header">{{story:'Story Dispatch',social:'NPC Social Dispatch',political:'Political Dispatch',action:'Action Execution'}[form]}{busyHeader(form)}</h2><div className="flex gap-2">
+  const generateControls = form => { return <div className="flex items-center justify-between mb-2"><h2 className="section-header">{t({story:tk('Story Dispatch'),social:tk('NPC Social Dispatch'),political:tk('Political Dispatch'),action:tk('Action Execution')}[form])}{busyHeader(form)}</h2><div className="flex gap-2">
     <button data-expand-section onClick={() => generate(form)} disabled={!!pending}
-      className="rounded px-2 py-1 text-xs text-gray-300 bg-white/10 disabled:opacity-40">{pending?.form === form ? 'Generating…' : 'Generate'}</button>
-    <button onClick={() => pending?.form === form ? stopGenerate() : clear(form)} className="rounded px-2 py-1 text-xs text-gray-400">{pending?.form === form ? 'Stop' : 'Clear'}</button>
+      className="rounded px-2 py-1 text-xs text-gray-300 bg-white/10 disabled:opacity-40">{t(pending?.form === form ? 'Generating…' : 'Generate')}</button>
+    <button onClick={() => pending?.form === form ? stopGenerate() : clear(form)} className="rounded px-2 py-1 text-xs text-gray-400">{t(pending?.form === form ? 'Stop' : 'Clear')}</button>
   </div></div>; };
 
   const handleStoryTypeChange = useCallback((type) => {
@@ -717,7 +720,7 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
     <div className="director-tab ie-page p-3 space-y-4">
       {/* Story Dispatch */}
       <section>
-        {generateControls('story')}{pending?.form === 'story' && <small className="text-gray-400">Generating…</small>}{generateError && !pending && <small className="text-red-400">{generateError}</small>}
+        {generateControls('story')}{pending?.form === 'story' && <small className="text-gray-400">{t('Generating…')}</small>}{generateError && !pending && <small className="text-red-400">{t(generateError)}</small>}
         <fieldset disabled={pending?.form === 'story'} className="space-y-2 border-0 p-0 m-0 min-w-0" inert={pending?.form === 'story' ? '' : undefined}>
           <div className="flex gap-2">
             <Field label={storyType === 'informant' ? 'Informant NPC' : 'NPC'} required hint="Exact display name.">
@@ -726,7 +729,7 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
               value={storyNpc}
               onInput={() => setTouched(t=>({...t,npcName:true}))}
               onChange={e => { setStoryNpc(e.target.value); setBusyConfirm(''); }}
-              placeholder="e.g. Saadia"
+              placeholder={t('e.g. Saadia')}
               className="flex-1 bg-white/5 border border-white/10 rounded px-2 py-1.5 text-xs text-gray-200 outline-none placeholder:text-gray-600"
             />
             </Field>
@@ -736,9 +739,9 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
               onChange={e => { setTouched(t => ({...t,storyType:true})); handleStoryTypeChange(e.target.value); }}
               className="bg-white/5 border border-white/10 rounded px-2 py-1.5 text-xs text-gray-200 outline-none"
             >
-              <option value="" className="text-gray-500">(auto)</option>
-              {DIRECTOR_STORY_TYPES.map(t => (
-                <option key={t.key} value={t.key}>{t.label}</option>
+              <option value="" className="text-gray-500">{t('(auto)')}</option>
+              {DIRECTOR_STORY_TYPES.map(type => (
+                <option key={type.key} value={type.key}>{t(type.label)}</option>
               ))}
             </Select>
             </Field>
@@ -748,7 +751,7 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
             value={storyNarration}
             onInput={() => setTouched(t=>({...t,narration:true}))}
             onChange={e => setStoryNarration(e.target.value)}
-            placeholder={storyGuidance?.example || 'e.g. set out to buy supplies'}
+            placeholder={t(storyGuidance?.example || 'e.g. set out to buy supplies')}
             rows={2}
             className="w-full bg-white/5 border border-white/10 rounded px-2 py-1.5 text-xs text-gray-200 outline-none placeholder:text-gray-600"
           />
@@ -765,23 +768,23 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
                   onChange={e => { setTouched(t=>({...t,[f.key]:true})); setStoryFields(prev => ({ ...prev, [f.key]: e.target.value })); }}
                   className="bg-white/5 border border-white/10 rounded px-2 py-1.5 text-xs text-gray-200 outline-none"
                 >
-                  <option value="" className={!touched[f.key] ? 'text-gray-500' : ''}>{touched[f.key] ? '—' : '(auto)'}</option>
+                  <option value="" className={!touched[f.key] ? 'text-gray-500' : ''}>{touched[f.key] ? '—' : t('(auto)')}</option>
                   {f.options.map(o => (
-                    <option key={o} value={o}>{o}</option>
+                    <option key={o} value={o}>{t(o)}</option>
                   ))}
                 </Select>
-              ) : ['subject','sender','victimName'].includes(f.key) ? <FactionInput options={storyType === 'informant' ? informantOptions : f.key === 'sender' && ['ambush','stalker'].includes(storyType) ? hirerOptions : npcOptions} aria-label={f.label} value={storyFields[f.key] || ''} onChange={e => { setTouched(t=>({...t,[f.key]:true})); setStoryFields(prev => ({...prev,[f.key]:e.target.value})); }} placeholder={f.placeholder} /> : (
+              ) : ['subject','sender','victimName'].includes(f.key) ? <FactionInput options={storyType === 'informant' ? informantOptions : f.key === 'sender' && ['ambush','stalker'].includes(storyType) ? hirerOptions : npcOptions} aria-label={t(f.label)} value={storyFields[f.key] || ''} onChange={e => { setTouched(t=>({...t,[f.key]:true})); setStoryFields(prev => ({...prev,[f.key]:e.target.value})); }} placeholder={t(f.placeholder)} /> : (
                 <input
                   type="text"
                   value={storyFields[f.key] || ''}
                   onInput={() => setTouched(t=>({...t,[f.key]:true}))}
                   onChange={e => setStoryFields(prev => ({ ...prev, [f.key]: e.target.value }))}
-                  placeholder={f.placeholder}
+                  placeholder={t(f.placeholder)}
                   className="bg-white/5 border border-white/10 rounded px-2 py-1.5 text-xs text-gray-200 outline-none placeholder:text-gray-600"
                 />
               )}
               {f.hint && (
-                <span className="director-hint">{f.hint}</span>
+                <span className="director-hint">{t(f.hint)}</span>
               )}
             </Field>
             </div>
@@ -793,7 +796,7 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
             disabled={storyRequired.some(([, valid]) => !valid)}
             className="w-full px-3 py-1.5 text-xs font-medium rounded transition-colors bg-blue-500/20 text-blue-400 hover:bg-blue-500/30 disabled:opacity-30 disabled:cursor-not-allowed"
           >
-            {story?.isActive && replacementConfirm.startsWith('["story"') ? 'Busy — confirm replacement' : busyConfirm.startsWith('sent:dispatchStory:') ? 'Sent' : story?.isActive ? 'Replace Story' : 'Dispatch Story'}
+            {t(story?.isActive && replacementConfirm.startsWith('["story"') ? 'Busy — confirm replacement' : busyConfirm.startsWith('sent:dispatchStory:') ? 'Sent' : story?.isActive ? 'Replace Story' : 'Dispatch Story')}
           </button>
           {missingFields(storyRequired)}
         </fieldset>
@@ -801,7 +804,7 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
 
       {/* NPC Social Dispatch */}
       <section>
-        {generateControls('social')}{pending?.form === 'social' && <small className="text-gray-400">Generating…</small>}{generateError && !pending && <small className="text-red-400">{generateError}</small>}
+        {generateControls('social')}{pending?.form === 'social' && <small className="text-gray-400">{t('Generating…')}</small>}{generateError && !pending && <small className="text-red-400">{t(generateError)}</small>}
         <fieldset disabled={pending?.form === 'social'} className="space-y-2 border-0 p-0 m-0 min-w-0" inert={pending?.form === 'social' ? '' : undefined}>
           <div className="flex gap-2">
             <Field label="NPC 1" required hint="The traveler/teller.">
@@ -810,7 +813,7 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
               value={socialNpc1}
               onInput={() => setTouched(t=>({...t,npc1Name:true}))}
               onChange={e => { setSocialNpc1(e.target.value); setBusyConfirm(''); }}
-              placeholder="e.g. Mikael"
+              placeholder={t('e.g. Mikael')}
               className="flex-1 bg-white/5 border border-white/10 rounded px-2 py-1.5 text-xs text-gray-200 outline-none placeholder:text-gray-600"
             />
             </Field>
@@ -820,7 +823,7 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
               value={socialNpc2}
               onInput={() => setTouched(t=>({...t,npc2Name:true}))}
               onChange={e => { setSocialNpc2(e.target.value); setBusyConfirm(''); }}
-              placeholder="e.g. Sven"
+              placeholder={t('e.g. Sven')}
               className="flex-1 bg-white/5 border border-white/10 rounded px-2 py-1.5 text-xs text-gray-200 outline-none placeholder:text-gray-600"
             />
             </Field>
@@ -830,9 +833,9 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
               onChange={e => { setTouched(t => ({...t,socialType:true})); handleSocialTypeChange(e.target.value); }}
               className="bg-white/5 border border-white/10 rounded px-2 py-1.5 text-xs text-gray-200 outline-none"
             >
-              <option value="" className="text-gray-500">(auto)</option>
-              {SOCIAL_TYPES.map(t => (
-                <option key={t.key} value={t.key}>{t.label}</option>
+              <option value="" className="text-gray-500">{t('(auto)')}</option>
+              {SOCIAL_TYPES.map(type => (
+                <option key={type.key} value={type.key}>{t(type.label)}</option>
               ))}
             </Select>
             </Field>
@@ -842,7 +845,7 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
               value={socialNarration}
               onInput={() => setTouched(t=>({...t,narration:true}))}
               onChange={e => setSocialNarration(e.target.value)}
-              placeholder="e.g. confronted him about the stolen shipment"
+              placeholder={t('e.g. confronted him about the stolen shipment')}
               rows={1}
               className="flex-1 bg-white/5 border border-white/10 rounded px-2 py-1.5 text-xs text-gray-200 outline-none placeholder:text-gray-600"
             />
@@ -850,15 +853,15 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
 
           {currentSocialFields.map(f => (
             <Field key={f.key} label={f.label} required={f.required}>
-              {f.key === 'subject' ? <FactionInput options={informantOptions} aria-label={f.label} value={socialFields[f.key] || ''} onChange={e => { setTouched(t=>({...t,[f.key]:true})); setSocialFields(prev => ({ ...prev, [f.key]: e.target.value })); }} placeholder={f.placeholder} /> : <input
+              {f.key === 'subject' ? <FactionInput options={informantOptions} aria-label={t(f.label)} value={socialFields[f.key] || ''} onChange={e => { setTouched(t=>({...t,[f.key]:true})); setSocialFields(prev => ({ ...prev, [f.key]: e.target.value })); }} placeholder={t(f.placeholder)} /> : <input
                 type="text"
                 value={socialFields[f.key] || ''}
                 onChange={e => { setTouched(t=>({...t,[f.key]:true})); setSocialFields(prev => ({ ...prev, [f.key]: e.target.value })); }}
-                placeholder={f.placeholder}
+                placeholder={t(f.placeholder)}
                 className="bg-white/5 border border-white/10 rounded px-2 py-1.5 text-xs text-gray-200 outline-none placeholder:text-gray-600"
               />}
               {f.hint && (
-                <span className="director-hint">{f.hint}</span>
+                <span className="director-hint">{t(f.hint)}</span>
               )}
             </Field>
           ))}
@@ -868,7 +871,7 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
             disabled={socialRequired.some(([, valid]) => !valid)}
             className="w-full px-3 py-1.5 text-xs font-medium rounded transition-colors bg-purple-500/20 text-purple-400 hover:bg-purple-500/30 disabled:opacity-30 disabled:cursor-not-allowed"
           >
-            {social?.isActive && replacementConfirm.startsWith('["social"') ? 'Busy — confirm replacement' : busyConfirm.startsWith('sent:dispatchNpcSocial:') ? 'Sent' : social?.isActive ? 'Replace Social' : 'Dispatch Social'}
+            {t(social?.isActive && replacementConfirm.startsWith('["social"') ? 'Busy — confirm replacement' : busyConfirm.startsWith('sent:dispatchNpcSocial:') ? 'Sent' : social?.isActive ? 'Replace Social' : 'Dispatch Social')}
           </button>
           {missingFields(socialRequired)}
         </fieldset>
@@ -876,7 +879,7 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
 
       {/* Political Dispatch */}
       <section>
-        {generateControls('political')}{pending?.form === 'political' && <small className="text-gray-400">Generating…</small>}{generateError && !pending && <small className="text-red-400">{generateError}</small>}
+        {generateControls('political')}{pending?.form === 'political' && <small className="text-gray-400">{t('Generating…')}</small>}{generateError && !pending && <small className="text-red-400">{t(generateError)}</small>}
         <fieldset disabled={pending?.form === 'political'} className="space-y-2 border-0 p-0 m-0 min-w-0" inert={pending?.form === 'political' ? '' : undefined}>
           <div className="flex gap-2">
             <Field label={polEventType === 'surrender' ? 'Surrendering faction' : 'Faction A'} required hint={polEventType === 'surrender' ? 'The side that gives up. Needs an active IE war with the victor.' : 'First side.'}>
@@ -884,7 +887,7 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
               value={polFactionA}
               onChange={value => { setTouched(t=>({...t,factionA:true})); setPolFactionA(value); }}
               factions={factions}
-              placeholder="e.g. StormcloakFaction"
+              placeholder={t('e.g. StormcloakFaction')}
             />
             </Field>
             <Field label={polEventType === 'surrender' ? 'Victor' : 'Faction B'} required hint={polEventType === 'surrender' ? 'The side that wins.' : 'Other side. Pick two different faction IDs.'}>
@@ -892,7 +895,7 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
               value={polFactionB}
               onChange={value => { setTouched(t=>({...t,factionB:true})); setPolFactionB(value); }}
               factions={factions}
-              placeholder="e.g. ThalmorFaction"
+              placeholder={t('e.g. ThalmorFaction')}
             />
             </Field>
           </div>
@@ -903,9 +906,9 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
               onChange={e => { setTouched(t => ({...t,eventType:true})); handlePolEventTypeChange(e.target.value); }}
               className="bg-white/5 border border-white/10 rounded px-2 py-1.5 text-xs text-gray-200 outline-none"
             >
-              <option value="" className="text-gray-500">(auto)</option>
-              {POLITICAL_EVENT_TYPES.map(t => (
-                <option key={t.key} value={t.key}>{t.label}</option>
+              <option value="" className="text-gray-500">{t('(auto)')}</option>
+              {POLITICAL_EVENT_TYPES.map(type => (
+                <option key={type.key} value={type.key}>{t(type.label)}</option>
               ))}
             </Select>
             </Field>
@@ -926,7 +929,7 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
             value={polDescription}
             onInput={() => setTouched(t=>({...t,description:true}))}
             onChange={e => setPolDescription(e.target.value)}
-            placeholder="e.g. Imperial spies intercepted dispatches near Windhelm"
+            placeholder={t('e.g. Imperial spies intercepted dispatches near Windhelm')}
             rows={2}
             className="w-full bg-white/5 border border-white/10 rounded px-2 py-1.5 text-xs text-gray-200 outline-none placeholder:text-gray-600"
           />
@@ -936,20 +939,20 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
             disabled={politicalRequired.some(([, valid]) => !valid) || polWarBlocked}
             className="w-full px-3 py-1.5 text-xs font-medium rounded transition-colors bg-amber-500/20 text-amber-400 hover:bg-amber-500/30 disabled:opacity-30 disabled:cursor-not-allowed"
           >
-            {busyConfirm.startsWith('sent:dispatchPolitics:') ? 'Sent' : 'Dispatch Political Event'}
+            {t(busyConfirm.startsWith('sent:dispatchPolitics:') ? 'Sent' : 'Dispatch Political Event')}
           </button>
           {missingFields(politicalRequired)}
-          {polWarBlocked && <p className="text-[10px] text-amber-400">These two can't go to war. Only pairs allowed by war_allowed in factions.yaml fight wars (by default, military factions only).</p>}
+          {polWarBlocked && <p className="text-[10px] text-amber-400">{t("These two can't go to war. Only pairs allowed by war_allowed in factions.yaml fight wars (by default, military factions only).")}</p>}
         </fieldset>
       </section>
 
       {/* Action Execution */}
       <section>
-        {generateControls('action')}{pending?.form === 'action' && <small className="text-gray-400">Generating…</small>}{generateError && !pending && <small className="text-red-400">{generateError}</small>}
+        {generateControls('action')}{pending?.form === 'action' && <small className="text-gray-400">{t('Generating…')}</small>}{generateError && !pending && <small className="text-red-400">{t(generateError)}</small>}
         <fieldset disabled={pending?.form === 'action'} className="space-y-2 border-0 p-0 m-0 min-w-0" inert={pending?.form === 'action' ? '' : undefined}>
           <div className="flex gap-2">
             <Field label="NPC (nearby only)" required hint="Nearby actor who performs the action.">
-            <FactionInput options={nearby} selectionOnly aria-label="Action NPC" placeholder="e.g. Guard 1"
+            <FactionInput options={nearby} selectionOnly aria-label={t('Action NPC')} placeholder={t('e.g. Guard 1')}
               value={actionNpc} query={actionQuery} setQuery={setActionQuery}
               onChange={e => { setActionNpc(e.target.value); setBusyConfirm(''); }}
               className="bg-white/5 border border-white/10 rounded px-2 py-1.5 text-xs text-gray-200 outline-none"
@@ -961,7 +964,7 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
               onChange={e => handleActionChange(e.target.value)}
               className="bg-white/5 border border-white/10 rounded px-2 py-1.5 text-xs text-gray-200 outline-none"
             >
-              <option value="">Select action...</option>
+              <option value="">{t('Select action...')}</option>
               {executableActions.map(a => (
                 <option key={a.name} value={a.name}>{a.name}</option>
               ))}
@@ -977,7 +980,7 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
                   value={actionParams[f.key] || ''}
                   onChange={value => setParam(f.key, value)}
                   factions={factions}
-                  placeholder="Select faction..."
+                  placeholder={t('Select faction...')}
                 />
               ) : f.type === 'select' ? (
                 <Select aria-label={f.label}
@@ -987,17 +990,17 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
                 >
                   <option value="">—</option>
                   {f.options.map(o => typeof o === 'string' ? (
-                    <option key={o} value={o}>{o}</option>
+                    <option key={o} value={o}>{t(o)}</option>
                   ) : (
-                    <option key={o.value} value={o.value}>{o.label}</option>
+                    <option key={o.value} value={o.value}>{t(o.label)}</option>
                   ))}
                 </Select>
-              ) : f.key === 'reason' ? null : f.key === 'targetName' ? <FactionInput options={npcOptions} aria-label={f.label} value={actionParams[f.key] || ''} onChange={e => setParam(f.key, e.target.value)} placeholder={f.placeholder} /> : (
+              ) : f.key === 'reason' ? null : f.key === 'targetName' ? <FactionInput options={npcOptions} aria-label={t(f.label)} value={actionParams[f.key] || ''} onChange={e => setParam(f.key, e.target.value)} placeholder={t(f.placeholder)} /> : (
                 <input
                   type="text"
                   value={actionParams[f.key] || ''}
                   onChange={e => setParam(f.key, e.target.value)}
-                  placeholder={f.placeholder}
+                  placeholder={t(f.placeholder)}
                   className="bg-white/5 border border-white/10 rounded px-2 py-1.5 text-xs text-gray-200 outline-none placeholder:text-gray-600"
                 />
               )}
@@ -1010,7 +1013,7 @@ function DirectorTab({ loadedNpcs, knownNpcs = [], tasks = [], actions, factions
             disabled={actionRequired.some(([, valid]) => !valid)}
             className="w-full px-3 py-1.5 text-xs font-medium rounded transition-colors bg-emerald-500/20 text-emerald-400 hover:bg-emerald-500/30 disabled:opacity-30 disabled:cursor-not-allowed"
           >
-            {busyConfirm.startsWith('sent:executeAction:') ? 'Sent' : actionBusy.length && busyConfirm === 'action' ? 'Busy — you sure?' : 'Execute Action'}
+            {t(busyConfirm.startsWith('sent:executeAction:') ? 'Sent' : actionBusy.length && busyConfirm === 'action' ? 'Busy — you sure?' : 'Execute Action')}
           </button>
           {missingFields(actionRequired)}
         </fieldset>

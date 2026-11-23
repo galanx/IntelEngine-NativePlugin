@@ -1,4 +1,5 @@
 #include "StorylineBridge.h"
+#include "GameText.h"
 #include "RumorBridge.h"
 
 #include "ItemNames.h"
@@ -19,16 +20,16 @@ namespace IntelEngine {
             auto* form = RE::TESForm::LookupByID(id);
             if (!form) return {};
             if (auto* ref = form->As<RE::TESObjectREFR>()) {
-                const char* name = ref->GetDisplayFullName();
+                const char* name = GameText::In(ref->GetDisplayFullName());
                 return name ? name : "";
             }
-            const char* name = form->GetName();
+            const char* name = GameText::In(form->GetName());
             return name ? name : "";
         }
 
         std::string PlayerName() {
             auto* player = RE::PlayerCharacter::GetSingleton();
-            const char* name = player ? player->GetDisplayFullName() : nullptr;
+            const char* name = player ? GameText::In(player->GetDisplayFullName()) : nullptr;
             return name && *name ? name : "the traveller";
         }
 

@@ -6,6 +6,7 @@
  */
 
 #include "ActionValidator.h"
+#include "GameText.h"
 #include "NPCIndex.h"
 #include "LocationResolver.h"
 #include "StringUtils.h"
@@ -141,7 +142,7 @@ namespace IntelEngine {
         bool found = false;
         for (const auto& [item, data] : inventory) {
             if (item) {
-                std::string itemFullName = StringUtils::ToLowerStd(item->GetName());
+                std::string itemFullName = StringUtils::ToLowerStd(GameText::In(item->GetName()));
                 if (itemFullName.find(lowerItem) != std::string::npos) {
                     found = true;
                     break;

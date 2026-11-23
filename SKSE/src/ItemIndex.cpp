@@ -6,6 +6,7 @@
  */
 
 #include "ItemIndex.h"
+#include "GameText.h"
 #include <algorithm>
 #include <random>
 
@@ -29,7 +30,7 @@ namespace IntelEngine {
     static bool IsPlayableWeapon(RE::TESObjectWEAP* weapon) {
         if (!weapon) return false;
         if (weapon->IsDeleted()) return false;
-        auto name = weapon->GetFullName();
+        auto name = GameText::In(weapon->GetFullName());
         if (!name || name[0] == '\0') return false;
         return true;
     }
@@ -37,7 +38,7 @@ namespace IntelEngine {
     static bool IsPlayableArmor(RE::TESObjectARMO* armor) {
         if (!armor) return false;
         if (armor->IsDeleted()) return false;
-        auto name = armor->GetFullName();
+        auto name = GameText::In(armor->GetFullName());
         if (!name || name[0] == '\0') return false;
         return true;
     }
@@ -64,7 +65,7 @@ namespace IntelEngine {
         for (auto* weapon : dh->GetFormArray<RE::TESObjectWEAP>()) {
             if (!IsPlayableWeapon(weapon)) continue;
 
-            auto name = weapon->GetFullName();
+            auto name = GameText::In(weapon->GetFullName());
             int goldValue = weapon->GetGoldValue();
             if (IsGenericItem(name, goldValue)) continue;
 
@@ -97,7 +98,7 @@ namespace IntelEngine {
         for (auto* armor : dh->GetFormArray<RE::TESObjectARMO>()) {
             if (!IsPlayableArmor(armor)) continue;
 
-            auto name = armor->GetFullName();
+            auto name = GameText::In(armor->GetFullName());
             int goldValue = armor->GetGoldValue();
             if (IsGenericItem(name, goldValue)) continue;
 
@@ -128,7 +129,7 @@ namespace IntelEngine {
         // Phase 3: Index misc items (gems, artifacts, quest items, etc.)
         for (auto* misc : dh->GetFormArray<RE::TESObjectMISC>()) {
             if (!misc || misc->IsDeleted()) continue;
-            auto name = misc->GetFullName();
+            auto name = GameText::In(misc->GetFullName());
             if (!name || name[0] == '\0') continue;
 
             int goldValue = misc->GetGoldValue();
@@ -163,7 +164,7 @@ namespace IntelEngine {
             if (!book || book->IsDeleted()) continue;
             if (!book->TeachesSpell()) continue;  // Only spell tomes, not regular books
 
-            auto name = book->GetFullName();
+            auto name = GameText::In(book->GetFullName());
             if (!name || name[0] == '\0') continue;
 
             int goldValue = book->GetGoldValue();
@@ -209,7 +210,7 @@ namespace IntelEngine {
 
         std::shared_lock lock(m_mutex);
 
-        std::string lowerSearch = StringUtils::ToLowerStd(searchTerm);
+        std::string lowerSearch = StringUtils::ToLowerStd(GameText::In(searchTerm));
 
         // 1. Exact match
         auto it = m_itemsByName.find(lowerSearch);
@@ -259,7 +260,7 @@ namespace IntelEngine {
 
         std::shared_lock lock(m_mutex);
 
-        std::string lowerSearch = StringUtils::ToLowerStd(name);
+        std::string lowerSearch = StringUtils::ToLowerStd(GameText::In(name));
 
         // Exact match check
         if (m_itemsByName.count(lowerSearch) > 0) return true;

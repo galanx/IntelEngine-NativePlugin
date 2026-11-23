@@ -15,6 +15,7 @@ with tempfile.TemporaryDirectory(prefix='conduct-check-') as directory:
 #include <cstdint>
 #include <string>
 #include <vector>
+#include "GameText.h"
 namespace RE {
 using FormID = std::uint32_t;
 struct Actor {

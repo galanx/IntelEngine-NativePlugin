@@ -91,6 +91,8 @@ namespace IntelEngine {
 
     // Co-save record of the leaders the game has shown to be dead for good.
     constexpr std::uint32_t kFallenLeadersRecord = 'IEFL';
+    // Co-save record of a political event held back to be seen (FactionPolitics::HeldEvent).
+    constexpr std::uint32_t kHeldEventRecord = 'IEHE';
 
     struct DefaultRelation {
         std::string factionA;
@@ -379,6 +381,14 @@ namespace IntelEngine {
         void Save(SKSE::SerializationInterface* intfc) const;
         void Load(SKSE::SerializationInterface* intfc, std::uint32_t version, std::uint32_t length);
         void ForgetFallen();
+        /** A save with no record of the fallen (made before 4.0 kept them, a 3.8 save): every leader already dead in it
+         *  is remembered as dead without a word (4.0 told each of them as fresh news, all at once, on the first look
+         *  after the upgrade). Once a game is loaded, on the game's thread; does nothing when the record was there. */
+        void NoteTheDeadQuietly();
+        /** What is held back to be seen (HeldEvent) goes with the save, so that a load in the middle of the showing
+         *  still tells it (Battle.OnGameReload: ManifestationFailed). 4.0 kept it in memory only and lost it. */
+        void SaveHeld(SKSE::SerializationInterface* intfc);
+        void LoadHeld(SKSE::SerializationInterface* intfc, std::uint32_t version, std::uint32_t length);
 
         // ---- the ladder (Ranks.h): what the player has done for a faction, and the rank that earns them with it
         Ranks::Record PlayerRecord(const std::string& factionId) const;
@@ -599,6 +609,7 @@ namespace IntelEngine {
         mutable std::mutex fallenMutex_;
         std::set<std::string> fallen_;                                      // "faction|leader's name as configured"
         std::vector<std::pair<std::string, std::string>> fallenToTell_;     // faction, name as the game shows it
+        std::atomic<bool> fallenQuiet_{false};   // a game loaded without a record of the fallen: the dead found now are not news
         std::atomic<float> lastDriftTime_{0.0f};
         mutable std::mutex ranksMutex_;
         Ranks::Book ranks_;

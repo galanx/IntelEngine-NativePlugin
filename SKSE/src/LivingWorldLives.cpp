@@ -1,10 +1,12 @@
 #include "LivingWorldBridge.h"
+#include "GameText.h"
 #include "BondBridge.h"
 #include "RumorBridge.h"
 #include "Safe.h"
 #include "QuestBridge.h"
 #include "ArcBridge.h"
 
+#include "DialogueTracker.h"
 #include "ProcessUtils.h"
 #include "SkyrimNetAPI.h"
 #include "SpeechTracker.h"
@@ -27,6 +29,11 @@
 // (a world-knowledge entry, found only when a conversation is about them, so it costs nothing otherwise). Rejoining
 // the player, an errand or a story takes the package of their own life off again. The scripts do the moving and the
 // packages (IntelEngine_Lives.psc); the record and every choice are here and in LivingWorld.h.
+//
+// And a life shows (2026-11-23): each step goes round the holds as talk of the day (the rumor ledger: a publican
+// elsewhere may bring it up); coming back from an adventure is decided then and made true (a find in their pack, a
+// wound in their memory, now and then a keepsake set aside for the player); the first meeting after days apart is a
+// reunion, where their greeting and their prompt carry what passed; and a keepsake changes hands face to face.
 
 namespace IntelEngine {
 
@@ -86,7 +93,7 @@ namespace IntelEngine {
 
         std::string LocationName(RE::FormID location) {
             auto* loc = location ? RE::TESForm::LookupByID<RE::BGSLocation>(location) : nullptr;
-            const char* name = loc ? loc->GetFullName() : nullptr;
+            const char* name = loc ? GameText::In(loc->GetFullName()) : nullptr;
             return name ? name : "";
         }
 
@@ -94,7 +101,7 @@ namespace IntelEngine {
         // Sleeping Giant Inn in Riverwood", "the Bannered Mare in Whiterun"), a dungeon or town as it is named.
         std::string PlaceName(RE::FormID location) {
             auto* loc = location ? RE::TESForm::LookupByID<RE::BGSLocation>(location) : nullptr;
-            const char* name = loc ? loc->GetFullName() : nullptr;
+            const char* name = loc ? GameText::In(loc->GetFullName()) : nullptr;
             if (!name || !*name) return "";
             std::string text = name;
             if (text.starts_with("The ")) {
@@ -103,7 +110,7 @@ namespace IntelEngine {
                 text = "the " + text;
             }
             if (loc->HasKeywordString("LocTypeInn") && loc->parentLoc) {
-                const char* town = loc->parentLoc->GetFullName();
+                const char* town = GameText::In(loc->parentLoc->GetFullName());
                 if (town && *town && !loc->parentLoc->HasKeywordString("LocTypeHold")) text += std::string(" in ") + town;
             }
             return text;
@@ -274,6 +281,95 @@ namespace IntelEngine {
         bool SkyrimNetWritable() {
             return SkyrimNetAPI::IsMemorySystemReady && SkyrimNetAPI::IsMemorySystemReady() && SkyrimNetAPI::AddMemory;
         }
+
+        // ---- what passed while apart, told (LivingWorld.h "what passed while apart, told")
+
+        // Greetings come one at a time: a handful of old companions in one town do not hail the player in a chorus.
+        constexpr auto kGreetGap = std::chrono::seconds(45);
+        // Somebody else said a line to the player this recently: the player is in talk with them, and whoever has
+        // something of their own waits their turn.
+        constexpr float kOthersTalkSeconds = 30.0f;
+
+        std::string PersonName(RE::FormID id) {
+            auto* actor = id ? RE::TESForm::LookupByID<RE::Actor>(id) : nullptr;
+            return actor ? std::string(Safe::Name(GameText::In(actor->GetDisplayFullName()))) : std::string();
+        }
+
+        std::string ItemName(RE::FormID id) {
+            auto* form = id ? RE::TESForm::LookupByID(id) : nullptr;
+            const char* name = form ? GameText::In(form->GetName()) : nullptr;
+            return name ? name : "";
+        }
+
+        std::string PlayerName() {
+            auto* player = RE::PlayerCharacter::GetSingleton();
+            return player ? std::string(Safe::Name(GameText::In(player->GetDisplayFullName()))) : std::string();
+        }
+
+        LivingWorld::Names NamesOf(RE::FormID self, const std::string& player) {
+            LivingWorld::Names n;
+            n.place = [](std::uint32_t id) { return PlaceName(id); };
+            n.person = [](std::uint32_t id) { return PersonName(id); };
+            n.item = [](std::uint32_t id) { return ItemName(id); };
+            n.player = player;
+            n.self = PersonName(self);
+            return n;
+        }
+
+        bool Asleep(RE::Actor* actor) {
+            auto* state = actor ? actor->AsActorState() : nullptr;
+            if (!state) return false;
+            using S = RE::SIT_SLEEP_STATE;
+            const auto now = state->GetSitSleepState();
+            return now == S::kWantToSleep || now == S::kWaitingForSleepAnim || now == S::kIsSleeping || now == S::kWantToWake;
+        }
+
+        // Saying something now, or a moment ago: whatever is said to them is part of that talk.
+        bool TalkingNow(RE::FormID who) {
+            auto* speech = SpeechTracker::GetSingleton();
+            const float spoke = speech->SecondsSinceSpeechEnded(who);
+            return speech->IsSpeechPending(who) || (spoke >= 0.0f && spoke <= 30.0f);
+        }
+
+        bool OthersHaveTheEar(RE::FormID who) {
+            const float other = DialogueTracker::GetSingleton()->SecondsSinceOtherSpokeToPlayer(who);
+            return other >= 0.0f && other < kOthersTalkSeconds;
+        }
+
+        // Where they belong by the game's own record (an inn for a hireling, a house, a town): "home".
+        RE::FormID HomeOf(RE::Actor* actor) {
+            auto* home = actor ? actor->GetEditorLocation() : nullptr;
+            return home ? home->GetFormID() : 0;
+        }
+
+        // What an adventure of their own may bring back: gems of the game's own records (Skyrim.esm 1.5.97, the same in
+        // every language and load order; the ones the tales use), those this game has.
+        RE::FormID SpoilsItem(std::uint8_t pick) {
+            static const std::vector<RE::FormID> gems = [] {
+                std::vector<RE::FormID> out;
+                for (const RE::FormID id : {0x00063B42u, 0x00063B45u, 0x00063B46u, 0x00063B44u, 0x00063B43u}) {
+                    if (RE::TESForm::LookupByID<RE::TESBoundObject>(id)) out.push_back(id);
+                }
+                return out;
+            }();
+            return gems.empty() ? 0 : gems[pick % gems.size()];
+        }
+
+        // Into their pack, on the game's own thread: what an adventure brought back is real (whoever trades with them or
+        // looks in their pack finds it), and only a keepsake ever leaves it for the player, by hand.
+        void Pack(RE::FormID who, RE::FormID item, std::uint16_t gold) {
+            if (!item && !gold) return;
+            auto* task = SKSE::GetTaskInterface();
+            if (!task) return;
+            task->AddTask([who, item, gold]() {
+                auto* actor = RE::TESForm::LookupByID<RE::Actor>(who);
+                if (!actor || actor->IsDead()) return;
+                if (auto* thing = item ? RE::TESForm::LookupByID<RE::TESBoundObject>(item) : nullptr) actor->AddObjectToContainer(thing, nullptr, 1, nullptr);
+                if (auto* coin = gold ? RE::TESForm::LookupByID<RE::TESBoundObject>(0x0000000F) : nullptr) {
+                    actor->AddObjectToContainer(coin, nullptr, static_cast<std::int32_t>(gold), nullptr);
+                }
+            });
+        }
     }
 
     // ---------------------------------------------------------------- the places a life can go
@@ -293,7 +389,7 @@ namespace IntelEngine {
             auto* location = cell->GetLocation();
             if (!location || seen.contains(location->GetFormID())) continue;
             if (!location->HasKeywordString("LocTypeInn") || location->HasKeywordString("LocTypePlayerHouse")) continue;
-            const char* name = location->GetFullName();
+            const char* name = GameText::In(location->GetFullName());
             if (!name || !*name) continue;
             const auto inside = FrontDoorInside(cell);
             if (!inside.door) continue;
@@ -309,7 +405,7 @@ namespace IntelEngine {
         for (auto* location : data->GetFormArray<RE::BGSLocation>()) {
             if (!location) continue;
             ++locations;
-            const char* name = location->GetFullName();
+            const char* name = GameText::In(location->GetFullName());
             if (!name || !*name || location->HasKeywordString("LocTypePlayerHouse")) continue;
             auto marker = std::as_const(location->worldLocMarker).get();
             if (!marker || !InMainWorld(marker.get())) continue;
@@ -442,7 +538,7 @@ namespace IntelEngine {
                 auto* race = actor->GetRace();
                 logger::info("LivingWorld: {} serves the player but has no life of their own here (dead {}, commanded {}, "
                              "child {}, person {})",
-                             actor->GetDisplayFullName(), actor->IsDead(), actor->IsCommandedActor(),
+                             GameText::In(actor->GetDisplayFullName()), actor->IsDead(), actor->IsCommandedActor(),
                              race && race->data.flags.any(RE::RACE_DATA::Flag::kChild), npcKeyword && actor->HasKeyword(npcKeyword));
             }
         }
@@ -451,12 +547,17 @@ namespace IntelEngine {
 
         // Asked before the lock: SkyrimNet's threads call this bridge's decorators while they hold locks of their own.
         const bool writable = SkyrimNetWritable();
+        // Manners for whoever greets the player or hands them something: never into a scene or the minutes after one,
+        // at a player with nothing on, or asleep (the private moments of Patrols.h that hold for someone already there).
+        const auto privacy = PrivateMoment();
+        const bool mannersHold = privacy == Patrols::Private::Scene || privacy == Patrols::Private::AfterScene ||
+                                 player->GetWornArmor(RE::BGSBipedObjectForm::BipedObjectSlot::kBody) == nullptr || Asleep(player);
         cost.Part(1);
         const float now = NowDays();
         std::string followers;
         for (auto* actor : serving) {
             if (!followers.empty()) followers += ", ";
-            followers += Safe::Name(actor->GetDisplayFullName());
+            followers += Safe::Name(GameText::In(actor->GetDisplayFullName()));
         }
         std::scoped_lock lock(m_mutex);
         cost.Part(2);
@@ -503,6 +604,19 @@ namespace IntelEngine {
                 life.flags = static_cast<std::uint16_t>(on ? (life.flags | flag) : (life.flags & ~flag));
             };
             const bool close = NearPlayer(actor, player, 6000.0f);
+            // Near again someone the player had not been near for days: a reunion begins (their greeting tells what
+            // passed, and their prompt holds it a while). Asked before lastMet moves on to now.
+            if (close && lives && !ties.errand && LivingWorld::BeginsReunion(life, now, teammate)) {
+                life.metAgainAt = now;
+                life.apartDays = now - life.lastMet;
+                life.flags &= ~LivingWorld::kReunionTold;
+                logger::info("LivingWorld: the player is near {} again after {:.1f} days apart ({} step(s) of their own life to tell{})",
+                             GameText::In(actor->GetDisplayFullName()), life.apartDays, life.pastCount, life.keepsake ? ", a keepsake kept" : "");
+            }
+            // Taken along again before the greeting: that is their meeting, and what passed is theirs to tell from now.
+            if (teammate && LivingWorld::ReunionOpen(life, now) && !LivingWorld::Has(life, LivingWorld::kReunionTold)) {
+                LivingWorld::ReunionTold(life, now);
+            }
             set(LivingWorld::kNearPlayer, close);
             if (close) life.lastMet = now;
             set(LivingWorld::kSeenRecently, now - life.lastMet < 0.25f);
@@ -519,7 +633,8 @@ namespace IntelEngine {
                     if (!(life.flags & LivingWorld::kWaitOrder) || life.parkedSince < 0.0f) {
                         life.parkedSince = now;
                         life.parkedAt = LocationOf(actor);
-                        logger::info("LivingWorld: {} waits for the player at '{}'", actor->GetDisplayFullName(), LocationName(life.parkedAt));
+                        LivingWorld::ForgetPast(life);
+                        logger::info("LivingWorld: {} waits for the player at '{}'", GameText::In(actor->GetDisplayFullName()), LocationName(life.parkedAt));
                     }
                     life.flags |= LivingWorld::kWaitOrder;
                 } else {
@@ -547,7 +662,8 @@ namespace IntelEngine {
                         life.parkedAt = LocationOf(actor);
                         life.steps = 0;
                         life.flags &= ~LivingWorld::kGreeted;
-                        logger::info("LivingWorld: the player left {} at '{}'", actor->GetDisplayFullName(), LocationName(life.parkedAt));
+                        LivingWorld::ForgetPast(life);   // a new parting: a new story to tell when they meet again
+                        logger::info("LivingWorld: the player left {} at '{}'", GameText::In(actor->GetDisplayFullName()), LocationName(life.parkedAt));
                     }
                     life.activity = Activity::Home;
                     life.nextChange = std::max(life.nextChange, now + 1.0f);
@@ -571,12 +687,12 @@ namespace IntelEngine {
             m_reconciled = true;
             Reconcile();
         }
-        PlanOne(now, settings, writable);
+        PlanOne(now, settings, writable, mannersHold);
     }
 
     // ---------------------------------------------------------------- choosing the next change
 
-    bool LivingWorldBridge::PlanOne(float now, const LivingWorld::Settings& settings, bool writable) {
+    bool LivingWorldBridge::PlanOne(float now, const LivingWorld::Settings& settings, bool writable, bool mannersHold) {
         auto* player = RE::PlayerCharacter::GetSingleton();
         // Endings first: someone back with the player must follow at once, not sandbox where their life was.
         for (const auto& life : m_lives) {
@@ -589,26 +705,79 @@ namespace IntelEngine {
         }
         if (settings.level != LivingWorld::WorldLevel::Lives) return false;
 
-        // The player comes upon someone living their own life: they notice, once per step of it.
-        if (!IsBadMoment()) {
+        // The player comes upon someone living their own life: they notice, once per step of it. Meeting again after
+        // days apart is more, a reunion: their greeting says how long it has been and what they did meanwhile, and their
+        // prompt holds it a while (OwnLifeLine). Never into a scene or the minutes after one, at a player with nothing
+        // on or asleep (mannersHold), nor while somebody else is talking with the player: they wait their turn, as every
+        // visitor does. One greeting at a time.
+        const auto clock = std::chrono::steady_clock::now();
+        if (!IsBadMoment() && !mannersHold && clock - m_lastGreetAt >= kGreetGap) {
             for (const auto& life : m_lives) {
-                if (life.steps == 0 || (life.flags & (LivingWorld::kGreeted | LivingWorld::kWithPlayer | LivingWorld::kOnTask))) continue;
+                if (life.flags & (LivingWorld::kWithPlayer | LivingWorld::kOnTask)) continue;
+                const bool reunion = LivingWorld::ReunionOpen(life, now) && !LivingWorld::Has(life, LivingWorld::kReunionTold);
+                if (!reunion && (life.steps == 0 || LivingWorld::Has(life, LivingWorld::kGreeted))) continue;
                 auto* actor = RE::TESForm::LookupByID<RE::Actor>(life.actor);
                 if (!actor || actor->IsDead() || !NearPlayer(actor, player, kGreetDistance) || actor->IsInCombat()) continue;
                 // Asleep they see no one: the greeting waits until they are up (else it was tried every tick all night).
-                if (auto* state = actor->AsActorState(); state && state->GetSitSleepState() == RE::SIT_SLEEP_STATE::kIsSleeping) {
-                    continue;
-                }
+                // In a scene of the game's or a quest's (an inn's chatter, a bard's song), they finish it first.
+                if (Asleep(actor) || actor->GetCurrentScene()) continue;
+                // Already talking (SkyrimNet's GameMaster or the player started it): that is their greeting, and a
+                // "catches sight of" in the middle of it would start them over. The greeting order still runs, so a
+                // meeting at a dungeon begins (2026-11-18: the GameMaster had Jenassa talk before IntelEngine greeted),
+                // and a reunion's news is in their prompt all the same.
+                const bool talking = TalkingNow(life.actor);
+                if (!talking && OthersHaveTheEar(life.actor)) continue;
                 m_order = Order{};
                 m_order.kind = OrderKind::Greet;
                 m_order.actor = life.actor;
-                // Already talking (SkyrimNet's GameMaster or the player started it): that is their greeting, and a
-                // "catches sight of" in the middle of it would start them over. The greeting order still runs, so a
-                // meeting at a dungeon begins (2026-11-18: the GameMaster had Jenassa talk before IntelEngine greeted).
-                if (const float spoke = SpeechTracker::GetSingleton()->SecondsSinceSpeechEnded(life.actor); spoke < 0.0f || spoke > 30.0f) {
-                    m_order.narration = Fill("{name} catches sight of {player}.", life, player->GetDisplayFullName());
+                m_order.reunion = reunion;
+                if (!talking) {
+                    const std::string playerName = PlayerName();
+                    if (reunion) {
+                        Life meeting = life;   // apart until now (the player may have passed by at a distance first)
+                        LivingWorld::ReunionTold(meeting, now);
+                        m_order.narration = LivingWorld::ReunionNarration(meeting, NamesOf(life.actor, playerName));
+                    }
+                    if (m_order.narration.empty()) m_order.narration = Fill("{name} catches sight of {player}.", life, playerName);
                 }
-                m_orderAt = std::chrono::steady_clock::now();
+                m_orderAt = clock;   // (the gap to the next greeting counts from one that went out: Commit)
+                return true;
+            }
+        }
+
+        // A keepsake brought back for the player changes hands face to face, once the two have met again and stand
+        // together (kKeepsakeReach): never across a room (nothing jumps into the player's pack from afar), never while
+        // somebody else has the player's ear or their own line is still being said, and never on top of their greeting.
+        if (!IsBadMoment() && !mannersHold && clock - m_lastGreetAt >= std::chrono::seconds(20)) {
+            for (auto& life : m_lives) {
+                if (!LivingWorld::MayHandOver(life, now)) continue;
+                auto* actor = RE::TESForm::LookupByID<RE::Actor>(life.actor);
+                if (!actor || actor->IsDead() || actor->IsInCombat() || Asleep(actor) || actor->GetCurrentScene() ||
+                    !NearPlayer(actor, player, LivingWorld::kKeepsakeReach)) {
+                    continue;
+                }
+                if (SpeechTracker::GetSingleton()->IsSpeechPending(life.actor) || OthersHaveTheEar(life.actor)) continue;
+                // Still in their pack? Asked of this one item only, once the two stand together.
+                const RE::FormID id = life.keepsake;
+                std::int32_t have = 0;
+                if (RE::TESForm::LookupByID<RE::TESBoundObject>(id)) {
+                    for (const auto& [object, count] : actor->GetInventoryCounts([id](RE::TESBoundObject& o) { return o.GetFormID() == id; })) {
+                        if (object) have += count;
+                    }
+                }
+                if (have <= 0) {
+                    logger::info("LivingWorld: {} no longer carries what they kept for the player ({:08X}); there is nothing to hand over",
+                                 GameText::In(actor->GetDisplayFullName()), id);
+                    life.keepsake = 0;
+                    life.keepsakeFrom = 0;
+                    continue;
+                }
+                m_order = Order{};
+                m_order.kind = OrderKind::Keepsake;
+                m_order.actor = life.actor;
+                m_order.item = id;
+                m_order.narration = LivingWorld::KeepsakeNarration(life, NamesOf(life.actor, PlayerName()));
+                m_orderAt = clock;
                 return true;
             }
         }
@@ -666,7 +835,7 @@ namespace IntelEngine {
             if (reason != said) {
                 if (!reason.empty()) {
                     auto* actor = RE::TESForm::LookupByID<RE::Actor>(life.actor);
-                    logger::info("LivingWorld: {}'s own life waits: {}", actor ? actor->GetDisplayFullName() : "someone", reason);
+                    logger::info("LivingWorld: {}'s own life waits: {}", actor ? GameText::In(actor->GetDisplayFullName()) : "someone", reason);
                 }
                 said = reason;
             }
@@ -742,8 +911,8 @@ namespace IntelEngine {
         m_order = order;
         m_orderAt = std::chrono::steady_clock::now();
         auto* location = RE::TESForm::LookupByID<RE::BGSLocation>(best->location);
-        const std::string name = location && location->GetFullName() ? location->GetFullName() : "a dungeon";
-        logger::info("LivingWorld: test: {} is sent adventuring at {} ({:.0f} units from the player, marker {:08X})", actor->GetDisplayFullName(), name, bestDistance, best->ref);
+        const std::string name = location && GameText::In(location->GetFullName()) ? GameText::In(location->GetFullName()) : "a dungeon";
+        logger::info("LivingWorld: test: {} is sent adventuring at {} ({:.0f} units from the player, marker {:08X})", GameText::In(actor->GetDisplayFullName()), name, bestDistance, best->ref);
         return name;
     }
 
@@ -785,6 +954,11 @@ namespace IntelEngine {
         return m_order.narration;
     }
 
+    RE::TESForm* LivingWorldBridge::OrderItem() const {
+        std::scoped_lock lock(m_mutex);
+        return m_order.kind == OrderKind::Keepsake && m_order.item ? RE::TESForm::LookupByID(m_order.item) : nullptr;
+    }
+
     void LivingWorldBridge::OrderDone(bool ok) {
         const float now = NowDays();
         std::scoped_lock lock(m_mutex);
@@ -811,7 +985,7 @@ namespace IntelEngine {
         Life* life = find(order.actor);
         if (!life) return;
         auto* actor = RE::TESForm::LookupByID<RE::Actor>(order.actor);
-        const char* name = actor ? actor->GetDisplayFullName() : "someone";
+        const char* name = actor ? GameText::In(actor->GetDisplayFullName()) : "someone";
         switch (order.kind) {
             case OrderKind::Release: {
                 const bool teammate = actor && actor->IsPlayerTeammate();
@@ -837,12 +1011,76 @@ namespace IntelEngine {
             }
             case OrderKind::Greet:
                 life->flags |= LivingWorld::kGreeted;
-                logger::info("LivingWorld: {} noticed the player", name);
+                m_lastGreetAt = std::chrono::steady_clock::now();
+                if (order.reunion) {
+                    LivingWorld::ReunionTold(*life, now);
+                    logger::info("LivingWorld: {} noticed the player again, after {} apart ({})", name, LivingWorld::Span(life->apartDays),
+                                 order.narration.empty() ? "already talking: what passed is in their prompt" : order.narration);
+                } else {
+                    logger::info("LivingWorld: {} noticed the player", name);
+                }
                 return;
+            case OrderKind::Keepsake: {
+                const std::string memory = LivingWorld::KeepsakeMemory(*life, NamesOf(order.actor, PlayerName()));
+                logger::info("LivingWorld: {} put {} into the player's hand", name, ItemName(life->keepsake));
+                m_lastGreetAt = std::chrono::steady_clock::now();
+                life->keepsake = 0;
+                life->keepsakeFrom = 0;
+                if (!memory.empty() && SkyrimNetAPI::AddMemory) {
+                    const RE::FormID who = order.actor;
+                    std::thread([who, memory]() {
+                        const int id = SkyrimNetAPI::AddMemory(who, memory.c_str(), 0.6f, "EXPERIENCE", "", "", "[\"intelengine_life\"]", "[]");
+                        logger::info("LivingWorld: memory {} for {:08X}: {}", id, who, memory);
+                    }).detach();
+                }
+                return;
+            }
             case OrderKind::Move:
             case OrderKind::GoHome: {
                 const bool hadOwnLife = LivingWorld::OwnLife(*life);
                 const bool firstStep = life->steps == 0;
+                Order written = order;
+                written.narration.clear();
+                // Where they set out from (their last place, else where the player left them), and their own home.
+                written.origin = hadOwnLife && life->place ? life->place : life->parkedAt;
+                written.home = HomeOf(actor);
+                // Back from an adventure of their own: how it ended is decided now and made true at once (what they
+                // found goes into their pack, a keepsake is set aside for the player, the rest they remember).
+                if (hadOwnLife && life->activity == Activity::Adventuring && life->place) {
+                    LivingWorld::PastStep* adventure = LivingWorld::LastStep(*life);
+                    if (!adventure || adventure->activity != Activity::Adventuring || adventure->place != life->place || adventure->over) {
+                        LivingWorld::PastStep began;   // (a life of a save from before the steps were kept)
+                        began.activity = Activity::Adventuring;
+                        began.place = life->place;
+                        began.companion = life->companion;
+                        began.at = life->stepAt;
+                        LivingWorld::Remember(*life, began);
+                        adventure = LivingWorld::LastStep(*life);
+                    }
+                    int forced = -1;
+                    if (const auto it = m_forcedReturn.find(order.actor); it != m_forcedReturn.end()) {
+                        forced = it->second;
+                        m_forcedReturn.erase(it);
+                    }
+                    adventure->over = true;
+                    adventure->back = LivingWorld::ComeBack(LivingWorld::detail::Mix(order.actor, static_cast<std::uint32_t>(now * 24.0f)), forced);
+                    adventure->find = adventure->back.find ? SpoilsItem(adventure->back.gem) : 0;
+                    if (!adventure->find) {   // no such item in this game: nothing was found
+                        adventure->back.find = false;
+                        adventure->back.keepsake = false;
+                        adventure->back.gold = 0;
+                    }
+                    if (adventure->back.keepsake) {
+                        life->keepsake = adventure->find;
+                        life->keepsakeFrom = adventure->place;
+                    }
+                    Pack(order.actor, adventure->find, adventure->back.gold);
+                    written.cameBack = true;
+                    written.back = *adventure;
+                    logger::info("LivingWorld: {} came back from '{}': found {} ({} gold), hurt {}, kept for the player {}", name,
+                                 PlaceName(adventure->place), adventure->find ? ItemName(adventure->find) : std::string("nothing"),
+                                 adventure->back.gold, adventure->back.hurt, adventure->back.keepsake);
+                }
                 // Whoever went along with them last time goes their own way now too.
                 for (auto& other : m_lives) {
                     if (other.companion == order.actor && other.actor != order.companion) {
@@ -850,11 +1088,9 @@ namespace IntelEngine {
                         other.nextChange = std::min(other.nextChange, now);
                     }
                 }
-                Order written = order;
-                written.narration.clear();
-                // Going home from home is nothing anyone remembers.
+                // Going home from home is nothing anyone remembers (nor tells when they meet again).
                 const bool remember = order.kind == OrderKind::Move || hadOwnLife || firstStep;
-                auto apply = [&](Life& l, RE::FormID partner) {
+                auto apply = [&](Life& l, RE::FormID partner, bool told) {
                     l.activity = order.step.activity;
                     l.place = order.step.place;
                     l.companion = partner;
@@ -863,17 +1099,25 @@ namespace IntelEngine {
                     l.steps = static_cast<std::uint16_t>(std::min<int>(l.steps + 1, 60000));
                     l.flags &= ~LivingWorld::kGreeted;
                     DropRumor(l);
+                    if (told) {
+                        LivingWorld::PastStep step;
+                        step.activity = order.step.activity;
+                        step.place = order.step.place;
+                        step.companion = partner;
+                        step.at = now;
+                        LivingWorld::Remember(l, step);
+                    }
                 };
-                apply(*life, order.companion);
+                apply(*life, order.companion, remember);
                 if (order.companion) {
-                    if (Life* partner = find(order.companion)) apply(*partner, order.actor);
+                    if (Life* partner = find(order.companion)) apply(*partner, order.actor, true);
                 }
                 if (order.step.activity == Activity::Adventuring) {
                     for (const auto id : {order.actor, order.companion}) {
                         auto* who = id ? RE::TESForm::LookupByID<RE::Actor>(id) : nullptr;
                         auto* base = who ? who->GetActorBase() : nullptr;
                         if (base) {
-                            logger::info("LivingWorld: {} is away at a dungeon: essential {}, protected {}", who->GetDisplayFullName(),
+                            logger::info("LivingWorld: {} is away at a dungeon: essential {}, protected {}", GameText::In(who->GetDisplayFullName()),
                                          base->IsEssential(), base->IsProtected());
                         }
                     }
@@ -900,8 +1144,8 @@ namespace IntelEngine {
         Replace(text, "{parked}", parked);
         Replace(text, "{player}", player);
         Replace(text, "{place}", PlaceName(life.place));
-        Replace(text, "{companion}", companion ? Safe::Name(companion->GetDisplayFullName(), "a companion") : "a companion");
-        Replace(text, "{name}", actor ? Safe::Name(actor->GetDisplayFullName(), "someone") : "someone");
+        Replace(text, "{companion}", companion ? Safe::Name(GameText::In(companion->GetDisplayFullName()), "a companion") : "a companion");
+        Replace(text, "{name}", actor ? Safe::Name(GameText::In(actor->GetDisplayFullName()), "someone") : "someone");
         Replace(text, "{ago}", LivingWorld::Ago(NowDays() - life.parkedSince));
         return text;
     }
@@ -909,7 +1153,7 @@ namespace IntelEngine {
     void LivingWorldBridge::WriteStep(const Order& order) {
         // m_mutex is held: gather the texts now, write them on a worker (SkyrimNet embeds and stores them).
         auto* playerRef = RE::PlayerCharacter::GetSingleton();
-        const std::string player = playerRef ? Safe::Name(playerRef->GetDisplayFullName()) : "";
+        const std::string player = playerRef ? Safe::Name(GameText::In(playerRef->GetDisplayFullName())) : "";
         struct Write {
             RE::FormID actor = 0;
             std::string memory;
@@ -925,6 +1169,13 @@ namespace IntelEngine {
         const bool together = order.companion != 0;
         // steps was counted already: the first step is the one that made it 1.
         const bool firstStep = life->steps == 1;
+        const auto names = NamesOf(order.actor, player);
+        // Back from an adventure of their own: how it went, before the step that follows.
+        if (order.cameBack) {
+            if (auto memory = LivingWorld::ReturnMemory(order.back, names); !memory.empty()) {
+                memories.push_back({order.actor, std::move(memory), order.back.companion ? "[" + std::to_string(order.back.companion) + "]" : "[]"});
+            }
+        }
         memories.push_back({order.actor, Fill(LivingWorld::StepMemory(order.step.activity, firstStep, together), *life, player),
                             together ? "[" + std::to_string(order.companion) + "]" : "[]"});
         if (together) {
@@ -944,7 +1195,7 @@ namespace IntelEngine {
                 if (!holdName.empty() && std::find(holds.begin(), holds.end(), holdName) == holds.end()) holds.push_back(holdName);
             }
             auto* actor = RE::TESForm::LookupByID<RE::Actor>(order.actor);
-            const std::string name = actor ? Safe::Name(actor->GetDisplayFullName()) : "";
+            const std::string name = actor ? Safe::Name(GameText::In(actor->GetDisplayFullName())) : "";
             for (std::size_t i = 0; i < holds.size(); ++i) {
                 condition += (i ? " or " : "(");
                 condition += "get_intelengine_hold(actorUUID) == \"" + Escape(holds[i]) + "\"";
@@ -955,9 +1206,27 @@ namespace IntelEngine {
         const auto placeName = PlaceName(order.step.place);
         const float stepAt = life->stepAt;
         const RE::FormID owner = order.actor;
-        // The talk of the day as well (RumorBridge): each new step of their life replaces the word of the last.
+        // The talk of the day as well (RumorBridge): each new step of their life replaces the word of the last. It is
+        // hearsay of what people could see (where they work, that they set out armed, that they came back bandaged or
+        // with something to show for it), begins where it was seen, carries with its weight to the holds around (a
+        // publican there brings it up to the player) and is forgotten as other talk is.
+        LivingWorld::Told told;
+        told.activity = order.step.activity;
+        told.place = order.step.place;
+        told.companion = order.companion;
+        told.firstStep = firstStep;
+        told.back = order.cameBack ? &order.back : nullptr;
+        told.origin = order.origin;
+        told.home = order.home;
+        const auto talk = LivingWorld::TalkOf(told, names);
         RumorBridge::GetSingleton()->Withdraw(Rumors::Owner::Life, owner);
-        if (!rumor.empty()) RumorBridge::GetSingleton()->Note(Rumors::Kind::Life, rumor, order.step.place, owner, 0, Rumors::Owner::Life, owner, 0.4f, false);
+        if (!talk.text.empty() && talk.where) {
+            // Where this life wrote no entry of its own for the hold the talk begins in (going home, setting out from
+            // another hold), the ledger writes the hold's entry itself.
+            const RE::FormID talkHold = HoldIdOf(talk.where);
+            const bool covered = !rumor.empty() && talkHold && (talkHold == HoldIdOf(order.step.place) || talkHold == HoldIdOf(life->parkedAt));
+            RumorBridge::GetSingleton()->Note(Rumors::Kind::Life, talk.text, talk.where, owner, 0, Rumors::Owner::Life, owner, talk.weight, !covered);
+        }
         std::thread([this, memories, rumor, condition, label, placeName, stepAt, owner]() {
             for (const auto& m : memories) {
                 if (m.memory.empty() || !SkyrimNetAPI::AddMemory) continue;
@@ -1025,10 +1294,20 @@ namespace IntelEngine {
         if (m_settings.level == LivingWorld::WorldLevel::Classic) return {};
         for (const auto& life : m_lives) {
             if (life.actor != actor->GetFormID()) continue;
+            const std::string player = PlayerName();
+            // Meeting the player again after days apart: what passed, while it is theirs to tell (LivingWorld.h).
+            const bool lives = m_settings.level == LivingWorld::WorldLevel::Lives;
+            // Only while the player is about (the last look's): talking with anyone else they are not meeting the player.
+            if (const float now = NowDays(); lives && LivingWorld::Has(life, LivingWorld::kNearPlayer) && LivingWorld::ReunionOpen(life, now)) {
+                Life view = life;   // not greeted yet: apart until now
+                if (!LivingWorld::Has(view, LivingWorld::kReunionTold)) LivingWorld::ReunionTold(view, now);
+                if (auto block = LivingWorld::ReunionBlock(view, NamesOf(life.actor, player)); !block.empty()) return block;
+            }
+            // A keepsake still carried for the player stays theirs to mention until it changes hands.
+            const std::string kept = lives ? LivingWorld::KeepsakeLine(life, NamesOf(life.actor, player)) : std::string();
             const char* line = LivingWorld::OwnLifeLine(life);
-            if (!*line) return {};
-            auto* player = RE::PlayerCharacter::GetSingleton();
-            return "## My own life lately\n" + Fill(line, life, player ? Safe::Name(player->GetDisplayFullName()) : "");
+            if (!*line) return kept.empty() ? std::string() : "## Kept for " + player + "\n" + kept;
+            return "## My own life lately\n" + Fill(line, life, player) + (kept.empty() ? std::string() : "\n" + kept);
         }
         return {};
     }
@@ -1156,7 +1435,7 @@ namespace IntelEngine {
             const char* line = LivingWorld::DirectorLifeLine(life);
             if (!*line) return {};
             auto* player = RE::PlayerCharacter::GetSingleton();
-            return Fill(line, life, player ? Safe::Name(player->GetDisplayFullName()) : "");
+            return Fill(line, life, player ? Safe::Name(GameText::In(player->GetDisplayFullName())) : "");
         }
         return {};
     }
@@ -1174,7 +1453,7 @@ namespace IntelEngine {
             auto* actor = RE::TESForm::LookupByID<RE::Actor>(id);
             if (!actor) continue;
             nlohmann::json j;
-            j["name"] = Safe::Name(actor->GetDisplayFullName());
+            j["name"] = Safe::Name(GameText::In(actor->GetDisplayFullName()));
             j["with_you"] = (flags & LivingWorld::kWithPlayer) != 0 && (flags & LivingWorld::kWaitOrder) == 0;
             j["waiting"] = (flags & LivingWorld::kWaitOrder) != 0;
             j["dead"] = actor->IsDead();
@@ -1189,12 +1468,107 @@ namespace IntelEngine {
         std::scoped_lock lock(m_mutex);
         for (const auto& l : m_lives) {
             if (l.actor != actor->GetFormID()) continue;
+            const float now = NowDays();
+            std::string past;
+            for (std::uint8_t k = 0; k < l.pastCount; ++k) {
+                const auto& s = l.past[k];
+                past += std::format("{}{}@'{}' day {:.1f}{}", k ? ", " : "", static_cast<int>(s.activity), PlaceName(s.place), s.at,
+                                    s.over ? std::format(" (back: find {} {}g hurt {} kept {})", ItemName(s.find), s.back.gold, s.back.hurt, s.back.keepsake)
+                                           : std::string());
+            }
             return std::format("flags={:#06x} activity={} place='{}' companion={:08X} parkedSince={:.2f} parkedAt='{}' steps={} "
-                               "nextChange={:.2f} stepAt={:.2f} rumor={} lastMet={:.2f} now={:.2f}",
+                               "nextChange={:.2f} stepAt={:.2f} rumor={} lastMet={:.2f} now={:.2f} reunion={} (since {:.2f}, apart {:.1f} days, told {}) "
+                               "keepsake='{}' from '{}' past=[{}]",
                                l.flags, static_cast<int>(l.activity), PlaceName(l.place), l.companion, l.parkedSince,
-                               PlaceName(l.parkedAt), l.steps, l.nextChange, l.stepAt, l.rumor, l.lastMet, NowDays());
+                               PlaceName(l.parkedAt), l.steps, l.nextChange, l.stepAt, l.rumor, l.lastMet, now,
+                               LivingWorld::ReunionOpen(l, now) ? "open" : "none", l.metAgainAt, l.apartDays,
+                               LivingWorld::Has(l, LivingWorld::kReunionTold), ItemName(l.keepsake), PlaceName(l.keepsakeFrom), past);
         }
         return "no record";
+    }
+
+    // ---------------------------------------------------------------- test hooks and the lives' own natives
+
+    std::string LivingWorldBridge::DebugApart(RE::Actor* actor, float days) {
+        if (!actor) return "no actor";
+        const float now = NowDays();
+        days = std::clamp(days, LivingWorld::kReunionGapDays, 365.0f);
+        std::scoped_lock lock(m_mutex);
+        for (auto& life : m_lives) {
+            if (life.actor != actor->GetFormID()) continue;
+            if (!LivingWorld::Has(life, LivingWorld::kWasFollower)) return "has never followed the player: there is no life of theirs to tell";
+            if (actor->IsPlayerTeammate()) return "follows the player now: dismiss them first";
+            life.lastMet = now - days;
+            if (life.parkedSince < 0.0f || life.parkedSince > life.lastMet) {
+                life.parkedSince = life.lastMet;
+                if (!life.parkedAt) life.parkedAt = LocationOf(actor);
+            }
+            life.metAgainAt = -1.0f;
+            life.flags &= ~(LivingWorld::kReunionTold | LivingWorld::kNearPlayer | LivingWorld::kSeenRecently);
+            logger::info("LivingWorld: test: the player was last near {} {} ago", GameText::In(actor->GetDisplayFullName()), LivingWorld::Span(days));
+            return "the player was last near them " + LivingWorld::Span(days) + " ago: the next look that finds the player near is a reunion";
+        }
+        return "no record of them";
+    }
+
+    std::string LivingWorldBridge::DebugComeBack(RE::Actor* actor, int outcome) {
+        if (!actor) return "no actor";
+        const float now = NowDays();
+        std::scoped_lock lock(m_mutex);
+        for (auto& life : m_lives) {
+            if (life.actor != actor->GetFormID()) continue;
+            if (life.activity != Activity::Adventuring || !life.place) {
+                return "is on no adventure of their own (IntelEngine_Quests.DebugAdventure sends them on one)";
+            }
+            // 0 by chance; else bits 1 a find, 2 hurt, 4 the find kept for the player (8 alone: back with nothing, unhurt).
+            m_forcedReturn[life.actor] = outcome <= 0 ? -1 : (outcome & 7);
+            life.nextChange = now;
+            logger::info("LivingWorld: test: {}'s adventure at '{}' ends at the next look nobody sees (outcome {})",
+                         GameText::In(actor->GetDisplayFullName()), PlaceName(life.place), outcome);
+            return "their adventure at " + PlaceName(life.place) + " ends at the next look the player cannot see them";
+        }
+        return "no record of them";
+    }
+
+    std::string LivingWorldBridge::DebugKeepsake(RE::Actor* actor) {
+        if (!actor) return "no actor";
+        const float now = NowDays();
+        std::scoped_lock lock(m_mutex);
+        for (auto& life : m_lives) {
+            if (life.actor != actor->GetFormID()) continue;
+            if (!LivingWorld::Has(life, LivingWorld::kWasFollower)) return "has never followed the player";
+            const RE::FormID item = SpoilsItem(static_cast<std::uint8_t>(LivingWorld::detail::Mix(life.actor, static_cast<std::uint32_t>(now * 24.0f))));
+            if (!item) return "this game has none of the gems a find is made of";
+            life.keepsake = item;
+            life.keepsakeFrom = life.place ? life.place : life.parkedAt ? life.parkedAt : LocationOf(actor);
+            life.flags |= LivingWorld::kGreeted;   // as if they had met the player on this step already (MayHandOver)
+            Pack(life.actor, item, 0);
+            logger::info("LivingWorld: test: {} carries {} for the player; it changes hands within {:.0f} units", GameText::In(actor->GetDisplayFullName()),
+                         ItemName(item), LivingWorld::kKeepsakeReach);
+            return "carries " + ItemName(item) + " for the player: walk up to them";
+        }
+        return "no record of them";
+    }
+
+    namespace {
+        RE::TESForm* LivesOrderItem(RE::StaticFunctionTag*) { return LivingWorldBridge::GetSingleton()->OrderItem(); }
+        RE::BSFixedString LivesDebugApart(RE::StaticFunctionTag*, RE::Actor* actor, float days) {
+            return RE::BSFixedString(LivingWorldBridge::GetSingleton()->DebugApart(actor, days).c_str());
+        }
+        RE::BSFixedString LivesDebugComeBack(RE::StaticFunctionTag*, RE::Actor* actor, std::int32_t outcome) {
+            return RE::BSFixedString(LivingWorldBridge::GetSingleton()->DebugComeBack(actor, outcome).c_str());
+        }
+        RE::BSFixedString LivesDebugKeepsake(RE::StaticFunctionTag*, RE::Actor* actor) {
+            return RE::BSFixedString(LivingWorldBridge::GetSingleton()->DebugKeepsake(actor).c_str());
+        }
+    }
+
+    void LivingWorldBridge::RegisterNatives(RE::BSScript::IVirtualMachine* a_vm, int& count) {
+        constexpr const char* script = "IntelEngine_Lives";
+        a_vm->RegisterFunction("LivesOrderItem", script, LivesOrderItem); ++count;
+        a_vm->RegisterFunction("LivesDebugApart", script, LivesDebugApart); ++count;
+        a_vm->RegisterFunction("LivesDebugComeBack", script, LivesDebugComeBack); ++count;
+        a_vm->RegisterFunction("LivesDebugKeepsake", script, LivesDebugKeepsake); ++count;
     }
 
     int LivingWorldBridge::QuestTie(RE::Actor* actor, bool skipStorylines) {
@@ -1205,7 +1579,7 @@ namespace IntelEngine {
 
     std::string LivingWorldBridge::HoldName(RE::Actor* actor) {
         auto* hold = actor ? HoldOf(actor->GetCurrentLocation()) : nullptr;
-        const char* name = hold ? hold->GetFullName() : nullptr;
+        const char* name = hold ? GameText::In(hold->GetFullName()) : nullptr;
         return name ? name : "";
     }
 }

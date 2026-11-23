@@ -72,8 +72,9 @@ namespace IntelEngine {
 
         // ---- lives of followers the player left behind (LivingWorldLives.cpp) ----
 
-        /** What a life change asks of the scripts. One is out at a time. */
-        enum class OrderKind : int { None = 0, Move = 1, GoHome = 2, Release = 3, Greet = 4 };
+        /** What a life change asks of the scripts. One is out at a time. Keepsake: they put what they kept for the
+         *  player into the player's hand (OrderItem), face to face, at a reunion. */
+        enum class OrderKind : int { None = 0, Move = 1, GoHome = 2, Release = 3, Greet = 4, Keepsake = 5 };
 
         /** From the scripts every few seconds: see who serves the player, who was left behind and who is on one of
          *  the player's tasks, and plan at most one change. Only at the Lives level do lives begin; below it the
@@ -95,8 +96,21 @@ namespace IntelEngine {
         RE::Actor* OrderCompanion() const;
         bool OrderProtect() const;
         std::string OrderNarration() const;
+        /** The item a Keepsake order hands over, else null. */
+        RE::TESForm* OrderItem() const;
         /** The scripts carried it out (true) or could not now (false: someone could see, try again later). */
         void OrderDone(bool ok);
+
+        /** Test hooks (IntelEngine_Lives.DebugApart / DebugComeBack / DebugKeepsake): as if the player had last been
+         *  near this former follower `days` ago (the next look that finds the player near is a reunion); their
+         *  adventure ends at the next look nobody sees, with this outcome (bits 1 a find, 2 hurt, 4 the find kept for
+         *  the player; 0 by chance); a keepsake put in their pack, as if they had greeted the player already, so
+         *  walking up to them shows the hand-over. A line for the log: what was done, or why not. */
+        std::string DebugApart(RE::Actor* actor, float days);
+        std::string DebugComeBack(RE::Actor* actor, int outcome);
+        std::string DebugKeepsake(RE::Actor* actor);
+        /** The lives' own natives (script IntelEngine_Lives): the keepsake's item and the test hooks above. */
+        static void RegisterNatives(RE::BSScript::IVirtualMachine* a_vm, int& count);
 
         /** For the NPC's own prompt: their life since the player left them, first person. Empty when none. */
         std::string OwnLifeLine(RE::Actor* actor) const;
@@ -202,11 +216,20 @@ namespace IntelEngine {
             Spot spot;
             LivingWorld::LifeStep step;
             std::string narration;
+            bool reunion = false;                  // Greet: the greeting of a reunion (what passed is brought up)
+            RE::FormID item = 0;                   // Keepsake: what changes hands
+            // Filled by Commit for what is written of a step: back from an adventure (how it ended), where they set
+            // out from, their home.
+            bool cameBack = false;
+            LivingWorld::PastStep back;
+            RE::FormID origin = 0;
+            RE::FormID home = 0;
         };
 
         void BuildCatalogue();                                   // once, on the first Track
         const Spot* FindSpot(RE::FormID location) const;
-        bool PlanOne(float now, const LivingWorld::Settings& settings, bool writable);  // m_mutex held
+        // mannersHold: the player is in a scene or just out of one, wears nothing or sleeps (asked before the lock)
+        bool PlanOne(float now, const LivingWorld::Settings& settings, bool writable, bool mannersHold);  // m_mutex held
         void Commit(const Order& order, float now);             // m_mutex held
         void WriteStep(const Order& order);                     // memories and the rumor, off the game's threads
         void DropRumor(LivingWorld::Life& life);                // m_mutex held
@@ -245,5 +268,7 @@ namespace IntelEngine {
         std::atomic<std::uint32_t> m_scanEpoch{0};
         std::uint32_t m_scanEpochSeen = 0;
         std::unordered_map<RE::FormID, std::string> m_whyNot;  // why someone's own life waits, for the log
+        std::chrono::steady_clock::time_point m_lastGreetAt{};  // greetings come one at a time, never a chorus
+        std::unordered_map<RE::FormID, int> m_forcedReturn;    // test hook: how the next return from an adventure ends
     };
 }

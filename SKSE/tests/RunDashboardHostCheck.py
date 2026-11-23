@@ -201,6 +201,7 @@ extern "C" short GetAsyncKeyState(int);
 #include "UiHost.h"
 #include "PrismaUI_API.h"
 #include "MagelightUI_API.h"
+#include "GameText.h"
 #include <nlohmann/json.hpp>
 #include <algorithm>
 #include <array>
@@ -899,7 +900,8 @@ void testManager() {
     m->ProcessFullState("{\"ready\":true}",generation);
     const auto repairedState=nlohmann::json::parse(m->pendingFullStatePayload_);
     assert(repairedState["ready"]==true);
-    assert(repairedState["loadedNpcs"][2]["name"]=="S\xEF\xBF\xBDnn");
+    // a name saved in an old code page (Windows-1252 here) is read in that page at the door (GameText::In)
+    assert(repairedState["loadedNpcs"][2]["name"]=="S\xC3\xA9nn");
     named.name="Brey";
     m->actionCacheLoaded_=false;
     m->LoadActionYAMLs();

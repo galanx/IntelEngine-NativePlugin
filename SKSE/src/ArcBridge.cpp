@@ -1,4 +1,5 @@
 #include "ArcBridge.h"
+#include "GameText.h"
 #include "LanguageBridge.h"
 #include "FrameCost.h"
 #include "RumorBridge.h"
@@ -115,22 +116,22 @@ namespace IntelEngine {
             auto* form = RE::TESForm::LookupByID(id);
             if (!form) return {};
             if (auto* ref = form->As<RE::TESObjectREFR>()) {
-                const char* name = ref->GetDisplayFullName();
+                const char* name = GameText::In(ref->GetDisplayFullName());
                 return name ? name : "";
             }
-            const char* name = form->GetName();
+            const char* name = GameText::In(form->GetName());
             return name ? name : "";
         }
 
         std::string PlaceName(RE::FormID location) {
             auto* loc = location ? RE::TESForm::LookupByID<RE::BGSLocation>(location) : nullptr;
-            const char* name = loc ? loc->GetFullName() : nullptr;
+            const char* name = loc ? GameText::In(loc->GetFullName()) : nullptr;
             return name && *name ? name : "town";
         }
 
         std::string PlayerName() {
             auto* player = RE::PlayerCharacter::GetSingleton();
-            const char* name = player ? player->GetDisplayFullName() : nullptr;
+            const char* name = player ? GameText::In(player->GetDisplayFullName()) : nullptr;
             return name && *name ? name : "the traveller";
         }
 
@@ -311,7 +312,7 @@ namespace IntelEngine {
             auto* actor = RE::TESForm::LookupByID<RE::Actor>(id);
             auto* base = actor ? actor->GetActorBase() : nullptr;
             if (!base || !base->IsUnique() || actor->IsChild() || !bases.insert(base->GetFormID()).second) continue;
-            const char* name = actor->GetDisplayFullName();
+            const char* name = GameText::In(actor->GetDisplayFullName());
             if (!name || !*name) continue;
             RE::FormID home = 0;
             RE::BGSLocation* where = nullptr;
@@ -482,6 +483,29 @@ namespace IntelEngine {
         return true;
     }
 
+    RE::FormID ArcBridge::CaptiveOf(RE::BGSLocation* town, std::uint32_t seed) const {
+        // The town itself, wherever in it the place given lies (a house, a market).
+        int depth = 0;
+        for (; town && depth < 12; town = town->parentLoc, ++depth) {
+            if ((town->HasKeywordString("LocTypeCity") || town->HasKeywordString("LocTypeTown")) && !town->HasKeywordString("LocTypeDwelling")) break;
+        }
+        if (!town || depth >= 12) return 0;
+        const auto townId = town->GetFormID();
+        std::vector<RE::FormID> people;
+        for (const auto& f : m_folk) {
+            if (f.town == townId && f.placedHome) people.push_back(f.ref);   // somebody the game knows to live there
+        }
+        if (people.empty()) return 0;
+        // From a place of the seed, the first who may be held; a handful looked at, no more.
+        const std::size_t start = seed % people.size();
+        std::string why;
+        for (std::size_t k = 0; k < people.size() && k < 12; ++k) {
+            auto* actor = RE::TESForm::LookupByID<RE::Actor>(people[(start + k) % people.size()]);
+            if (actor && Usable(actor, kKillable, why)) return actor->GetFormID();
+        }
+        return 0;
+    }
+
     // ------------------------------------------------------------------ planning
 
     bool ArcBridge::Cast(A::Arc& a, RE::Actor* asker, std::string& why) const {
@@ -569,7 +593,7 @@ namespace IntelEngine {
                 const auto keepsakes = QuestBridge::GetSingleton()->Keepsakes();
                 if (keepsakes.empty()) return why = "no keepsake in the load order", false;
                 a.propBase[0] = keepsakes[A::detail::Mix(a.seed, 53u) % keepsakes.size()];
-                a.propName[0] = ShortName(asker->GetDisplayFullName()) + "'s " + ItemNames::Display(NameOf(a.propBase[0]));
+                a.propName[0] = ShortName(GameText::In(asker->GetDisplayFullName())) + "'s " + ItemNames::Display(NameOf(a.propBase[0]));
                 return true;
             }
             case A::Pattern::Murder: {
@@ -831,7 +855,7 @@ namespace IntelEngine {
         // A tale is being written for this town: a story planned now would take its people from under it (the
         // director planned a theft with Arcadia while Heimskr's tale, with her in it, was being written, 2026-11-19).
         if (m_taleBusy.load() && pattern == 0) {
-            logger::info("Arcs: no arc for {}: a tale is being written", asker->GetDisplayFullName());
+            logger::info("Arcs: no arc for {}: a tale is being written", GameText::In(asker->GetDisplayFullName()));
             return 0;
         }
         const float now = NowDays();
@@ -842,24 +866,24 @@ namespace IntelEngine {
             auto* cell = player->GetParentCell();
             auto* here = TownOf(cell && cell->GetLocation() ? cell->GetLocation() : player->GetCurrentLocation());
             if (!me || !here || here->GetFormID() != me->town) {
-                logger::info("Arcs: no arc for {}: the player is not in their town", asker->GetDisplayFullName());
+                logger::info("Arcs: no arc for {}: the player is not in their town", GameText::In(asker->GetDisplayFullName()));
                 return 0;
             }
             // Someone who just asked (and was helped, refused or let down) does not come back with another story soon.
             if (AskedWithin(asker->GetFormID(), kAskerRestDays)) {
-                logger::info("Arcs: no arc for {}: they asked the player for something lately", asker->GetDisplayFullName());
+                logger::info("Arcs: no arc for {}: they asked the player for something lately", GameText::In(asker->GetDisplayFullName()));
                 return 0;
             }
         }
         if (!Usable(asker, kStays, why)) {
-            logger::info("Arcs: no arc for {}: {}", asker->GetDisplayFullName(), why);
+            logger::info("Arcs: no arc for {}: {}", GameText::In(asker->GetDisplayFullName()), why);
             return 0;
         }
         {
             std::scoped_lock lock(m_mutex);
             if (const float last = m_book.LastBeat(), now = NowDays(); !A::QuietFor(last, now, A::kQuietHours)) {
                 logger::info("Arcs: no arc for {}: a story came to the player or ended {:.1f} hours ago (quiet for {:.0f})",
-                             asker->GetDisplayFullName(), (now - last) * 24.0f, A::kQuietHours);
+                             GameText::In(asker->GetDisplayFullName()), (now - last) * 24.0f, A::kQuietHours);
                 return 0;
             }
         }
@@ -882,7 +906,7 @@ namespace IntelEngine {
             a.pattern = p;
             a.seed = A::detail::Mix(asker->GetFormID(), static_cast<std::uint32_t>(now * 1440.0f) + static_cast<std::uint32_t>(p));
             if (!Cast(a, asker, why)) {
-                logger::info("Arcs: no {} for {}: {}", static_cast<int>(p), asker->GetDisplayFullName(), why);
+                logger::info("Arcs: no {} for {}: {}", static_cast<int>(p), GameText::In(asker->GetDisplayFullName()), why);
                 continue;
             }
             if (p == A::Pattern::Murder) a.order = A::ShuffleSuspects(a.seed);
@@ -892,7 +916,7 @@ namespace IntelEngine {
             // A pattern chosen on purpose (a test, the director's pick) is not refused for having run last.
             if (pattern > 0) m_book.lastPattern = A::Pattern::None;
             if (const auto refusal = m_book.Refusal(a); !refusal.empty()) {
-                logger::info("Arcs: no {} for {}: {}", static_cast<int>(p), asker->GetDisplayFullName(), refusal);
+                logger::info("Arcs: no {} for {}: {}", static_cast<int>(p), GameText::In(asker->GetDisplayFullName()), refusal);
                 return 0;
             }
             const auto id = m_book.Plan(a, now);
@@ -929,7 +953,7 @@ namespace IntelEngine {
     void ArcBridge::Tell(std::uint32_t id, const std::string& rumor, int replace, RE::FormID askerId, RE::FormID placeId) {
         auto* town = RE::TESForm::LookupByID<RE::BGSLocation>(placeId);
         auto* hold = HoldOf(town);
-        const std::string holdName = hold && hold->GetFullName() ? hold->GetFullName() : "";
+        const std::string holdName = hold && GameText::In(hold->GetFullName()) ? GameText::In(hold->GetFullName()) : "";
         const std::string askerName = NameOf(askerId);
         // What the hold keeps (below) is also the talk of the day: brought up at the inn, carried to the next hold,
         // forgotten in a week or two (RumorBridge). The newer word of a story replaces its older one.
@@ -1351,7 +1375,7 @@ namespace IntelEngine {
         // mention it, and the player may go to them or not.
         std::string hook = TroubleTalk(NameOf(askerId), ask);
         auto* homeCell = home ? RE::TESForm::LookupByID<RE::TESObjectCELL>(home) : nullptr;
-        if (const char* homeName = homeCell ? homeCell->GetFullName() : nullptr; homeName && *homeName) {
+        if (const char* homeName = homeCell ? GameText::In(homeCell->GetFullName()) : nullptr; homeName && *homeName) {
             hook += " " + NameOf(askerId) + " lives at " + homeName + ".";
         }
         RumorBridge::GetSingleton()->Note(Rumors::Kind::Trouble, hook, town, 0, askerId, Rumors::Owner::Arc, id, 0.65f, true);
@@ -2156,7 +2180,7 @@ namespace IntelEngine {
         }
         player->RemoveItem(found.object, 1, RE::ITEM_REMOVE_REASON::kStoreInContainer, found.extra, to);
         m_pending[id].handed |= static_cast<std::uint8_t>(1u << prop);
-        logger::info("Arcs: #{} '{}' handed to {}", id, a->propName[prop], to->GetDisplayFullName());
+        logger::info("Arcs: #{} '{}' handed to {}", id, a->propName[prop], GameText::In(to->GetDisplayFullName()));
         return true;
     }
 
@@ -2255,7 +2279,7 @@ namespace IntelEngine {
                 if (name) {
                     now += name;
                 } else {
-                    const char* display = ref->GetDisplayFullName();
+                    const char* display = GameText::In(ref->GetDisplayFullName());
                     now += '\n';
                     now += display ? display : "";
                 }
@@ -2415,13 +2439,13 @@ namespace IntelEngine {
             // The crosshair's word for someone held (once, at the main menu: the plugin files are read by now).
             if (auto* data = RE::TESDataHandler::GetSingleton()) {
                 auto* message = data->LookupForm<RE::BGSMessage>(0x58E5, "IntelEngine.esp");
-                const char* word = message ? message->GetFullName() : nullptr;
+                const char* word = message ? GameText::In(message->GetFullName()) : nullptr;
                 if (word && *word) g_cutLoose = word;
                 auto* look = data->LookupForm<RE::BGSMessage>(0x58E6, "IntelEngine.esp");
-                const char* lookWord = look ? look->GetFullName() : nullptr;
+                const char* lookWord = look ? GameText::In(look->GetFullName()) : nullptr;
                 if (lookWord && *lookWord) g_examine = lookWord;
                 auto* rest = data->LookupForm<RE::BGSMessage>(0x58E7, "IntelEngine.esp");
-                const char* restWord = rest ? rest->GetFullName() : nullptr;
+                const char* restWord = rest ? GameText::In(rest->GetFullName()) : nullptr;
                 if (restWord && *restWord) g_layToRest = restWord;
                 logger::info("Arcs: the crosshair's word for someone held bound: \"{}\"{}", g_cutLoose, message ? "" : " (no such message in IntelEngine.esp)");
             }
@@ -2768,7 +2792,7 @@ namespace IntelEngine {
             std::string wait;
             if (!wilds) {
                 auto* loc = player->GetCurrentLocation();
-                const char* where = loc ? loc->GetFullName() : nullptr;
+                const char* where = loc ? GameText::In(loc->GetFullName()) : nullptr;
                 wait = std::string("not out in the wilds (") + (where && *where ? where : "an interior or nowhere named") + ")";
             } else if (real - pending.wildsSince < 20.0f || hours < 0.25f) {
                 wait = "too soon";
@@ -2906,7 +2930,7 @@ namespace IntelEngine {
         auto* a = m_book.Find(id);
         if (!a || k < 0 || k >= static_cast<int>(A::kThugs) || !thug) return;
         a->thug[static_cast<std::size_t>(k)] = thug->GetFormID();
-        logger::info("Arcs: #{} the ambush: {} ({:08X}) waits{}", id, thug->GetDisplayFullName(), thug->GetFormID(), k == 0 ? ", leading them" : "");
+        logger::info("Arcs: #{} the ambush: {} ({:08X}) waits{}", id, GameText::In(thug->GetDisplayFullName()), thug->GetFormID(), k == 0 ? ", leading them" : "");
     }
 
     void ArcBridge::AmbushDone(std::uint32_t id, int what) {
@@ -3033,7 +3057,7 @@ namespace IntelEngine {
         for (const auto questId : it->second) {
             auto* q = RE::TESForm::LookupByID<RE::TESQuest>(questId);
             if (q && !q->IsCompleted()) {
-                const char* name = q->GetFullName();
+                const char* name = GameText::In(q->GetFullName());
                 if (quest) *quest = name && *name ? name : "a quest";
                 return true;
             }
@@ -3643,7 +3667,7 @@ namespace IntelEngine {
                 auto* holder = ref ? RE::TESForm::LookupByID<RE::TESObjectREFR>(ref) : nullptr;
                 auto* base = holder ? holder->GetBaseObject() : nullptr;
                 auto* full = base ? base->As<RE::TESFullName>() : nullptr;
-                if (full) full->fullName = text.c_str();
+                if (full) full->fullName = GameText::Out(text).c_str();
             };
             name(m_holders[a.slot][0], Fill(a.story, a));
             // The journal shows a quest's latest log entry only: the ending carries the whole tale with it.
@@ -3722,11 +3746,14 @@ namespace IntelEngine {
     std::string ArcBridge::DashboardJson() const {
         const float now = NowDays();
         nlohmann::json open = nlohmann::json::array();
-        int planned = 0;
+        int planned = 0, talk = 0;
         {
             std::scoped_lock lock(m_mutex);
             for (const auto& a : m_book.all) {
                 if (a.phase == A::Phase::Planned) ++planned;
+                // Of those, the ones whose asker waits to meet the player, their trouble going round as talk: they are
+                // not on their way (the page told them as coming).
+                if (a.phase == A::Phase::Planned && (a.flags & A::Flag::Deferred) != 0) ++talk;
                 if (a.phase != A::Phase::Open) continue;
                 nlohmann::json j;
                 j["id"] = a.id;
@@ -3749,6 +3776,7 @@ namespace IntelEngine {
         nlohmann::json out;
         out["open"] = std::move(open);
         out["planned"] = planned;
+        out["talk"] = talk;
         return out.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
     }
 
@@ -3934,6 +3962,9 @@ namespace IntelEngine {
             seed.otherHold = reach >= 2;
             return ArcBridge::GetSingleton()->RequestTale(giver, {}, &seed);
         }
+        std::int32_t ArcOfActor(RE::StaticFunctionTag*, RE::Actor* actor) {
+            return actor ? static_cast<std::int32_t>(ArcBridge::GetSingleton()->ArcOf(actor->GetFormID())) : 0;
+        }
         void ArcThugPlaced(RE::StaticFunctionTag*, std::int32_t id, std::int32_t k, RE::Actor* thug) {
             ArcBridge::GetSingleton()->ThugPlaced(U(id), k, thug);
         }
@@ -3983,7 +4014,7 @@ namespace IntelEngine {
         void ArcOfferHeldBack(RE::StaticFunctionTag*, std::int32_t id) {
             auto* bridge = ArcBridge::GetSingleton();
             auto* by = bridge->Company(U(id));
-            const char* name = by ? by->GetDisplayFullName() : nullptr;
+            const char* name = by ? GameText::In(by->GetDisplayFullName()) : nullptr;
             bridge->OfferDeferred(U(id), name && *name ? name : "someone");
         }
         bool ArcHurries(RE::StaticFunctionTag*, std::int32_t id, RE::Actor* actor) {
@@ -3996,7 +4027,7 @@ namespace IntelEngine {
             if (!actor) return -1;
             const int reach = NPCIndex::ReachOf(actor);
             const bool bonded = LivingWorldBridge::GetSingleton()->CloseToPlayer(actor);
-            logger::info("[Director] test: {} is {}{}; someone came from afar within {:.0f} days: {}", actor->GetDisplayFullName(),
+            logger::info("[Director] test: {} is {}{}; someone came from afar within {:.0f} days: {}", GameText::In(actor->GetDisplayFullName()),
                          reach == 0 ? "here" : reach == 1 ? "elsewhere in the hold" : "in another hold",
                          bonded ? ", close to the player" : ", not close to the player", StoryDirector::kFarRestDays,
                          ArcBridge::GetSingleton()->FarComerLately(StoryDirector::kFarRestDays) ? "yes" : "no");
@@ -4057,6 +4088,7 @@ namespace IntelEngine {
         a_vm->RegisterFunction("ArcSpiritGone", script, ArcSpiritGone); ++count;
         a_vm->RegisterFunction("ArcSpiritRest", script, ArcSpiritRest); ++count;
         a_vm->RegisterFunction("ArcRequestRescue", script, ArcRequestRescue); ++count;
+        a_vm->RegisterFunction("ArcOfActor", script, ArcOfActor); ++count;
         a_vm->RegisterFunction("ArcThugPlaced", script, ArcThugPlaced); ++count;
         a_vm->RegisterFunction("ArcAmbushDone", script, ArcAmbushDone); ++count;
         a_vm->RegisterFunction("ArcInWilds", script, ArcInWilds); ++count;

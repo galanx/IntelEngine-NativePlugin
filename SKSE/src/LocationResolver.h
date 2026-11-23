@@ -78,6 +78,12 @@ namespace IntelEngine {
         RE::BGSLocation* ResolveLocation(const std::string& locationName);
 
         /**
+         * The location of exactly this name (any case, its marks or not, the game's own names and those of the
+         * place-name files: English on a translated install), or nullptr. No fuzzy search: cheap enough for a frame.
+         */
+        RE::BGSLocation* ExactLocation(const std::string& locationName) const;
+
+        /**
          * Find a door in loaded cells that leads to the target location.
          * If found, NPC can walk to this door and use it.
          * If not found (target not in loaded cells), returns nullptr
@@ -312,25 +318,9 @@ namespace IntelEngine {
         // All indexed names (for fuzzy search)
         std::vector<std::string> m_allCellNames;
         std::vector<std::string> m_allLocationNames;
+        std::unordered_map<std::string, RE::FormID> m_locationPlain;   // a location's name in plain letters (NameForms::Key)
 
-        // Semantic terms set
-        std::unordered_set<std::string> m_semanticTerms = {
-            "upstairs", "up", "above",
-            "downstairs", "down", "below",
-            "outside", "out", "exterior",
-            "inside", "in", "interior",
-            "the back", "back room", "back",
-            "cellar", "basement", "below stairs",
-            "my room", "bedroom", "the bedroom", "my bed", "bed", "room",
-            "kitchen", "the kitchen",
-            "the bar", "counter", "bar counter",
-            "near the fire", "fireplace", "hearth",
-            "stairs", "stairwell", "staircase",
-            "home", "my home", "my house", "my place",
-            "your home", "your house", "your place",
-            "the river", "river", "lake", "stream", "water", "swim", "wash",
-            "bath", "bathe", "the bath", "hot spring"
-        };
+        // (The words of place were a set here; they are data now: PlaceWords.h.)
 
         // NPC home index: ActorBase FormID -> home cell FormID
         // Built at startup from bed ownership (actor + faction).

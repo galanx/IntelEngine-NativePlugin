@@ -1,7 +1,9 @@
 #include "RumorBridge.h"
+#include "GameText.h"
 #include "NameMatch.h"
 #include "FrameCost.h"
 #include "LivingWorldBridge.h"
+#include "LocationResolver.h"
 #include "Safe.h"
 #include "SkyrimNetAPI.h"
 
@@ -37,13 +39,13 @@ namespace IntelEngine {
 
         std::string HoldName(std::uint8_t hold) {
             auto* loc = hold < R::kHolds ? RE::TESForm::LookupByID<RE::BGSLocation>(R::kHoldLocation[hold]) : nullptr;
-            const char* name = loc ? loc->GetFullName() : nullptr;
+            const char* name = loc ? GameText::In(loc->GetFullName()) : nullptr;
             return name ? name : "";
         }
 
         std::string NameOf(RE::FormID ref) {
             auto* actor = ref ? RE::TESForm::LookupByID<RE::Actor>(ref) : nullptr;
-            return actor ? Safe::Name(actor->GetDisplayFullName()) : std::string();
+            return actor ? Safe::Name(GameText::In(actor->GetDisplayFullName())) : std::string();
         }
 
         std::string Escape(const std::string& text) {
@@ -141,6 +143,11 @@ namespace IntelEngine {
         // As whole words: "reach" was found inside "Dragonsreach", and the jarl's hall counted as the Reach.
         for (const auto& [name, index] : kNames) {
             if (NameMatch::WholeWords(lower, name)) return index;
+        }
+        // Not an English name of the data files: the game's own place of that name, in whatever language the game
+        // is in ("Weisslauf", "Vaitran"), and the hold it lies in by the game's own records.
+        if (!where.empty()) {
+            if (auto* location = LocationResolver::GetSingleton()->ExactLocation(where)) return HoldOf(location);
         }
         return R::NoHold;
     }
@@ -302,7 +309,7 @@ namespace IntelEngine {
             }
         }
         if (lines.empty()) return {};
-        const std::string name = Safe::Name(actor->GetDisplayFullName());
+        const std::string name = Safe::Name(GameText::In(actor->GetDisplayFullName()));
         std::string out;
         if (hears) {
             out = "## What is going round\nPeople bring their talk to " + name + ". What " + name + " has heard lately:\n";
@@ -349,22 +356,44 @@ namespace IntelEngine {
         const float now = NowDays();
         std::string text;
         std::uint32_t id = 0;
+        // Who the talk is about and stands within hearing of the player now (the room, or SkyrimNet's interaction
+        // distance out of doors): that talk waits until they are out of earshot.
+        std::vector<std::uint32_t> about;
         {
             std::scoped_lock lock(m_mutex);
-            if (const R::Rumor* r = m_ledger.ToBringUp(hold, teller->GetFormID(), now)) {
+            for (const auto& r : m_ledger.all) {
+                if (r.about && (r.heardIn & R::Bit(hold)) && std::find(about.begin(), about.end(), r.about) == about.end()) about.push_back(r.about);
+            }
+        }
+        std::vector<std::uint32_t> present;
+        if (auto* player = RE::PlayerCharacter::GetSingleton()) {
+            for (const auto who : about) {
+                auto* actor = RE::TESForm::LookupByID<RE::Actor>(who);
+                if (!actor || actor->IsDead() || !actor->Is3DLoaded()) continue;
+                auto* theirs = actor->GetParentCell();
+                auto* mine = player->GetParentCell();
+                if (!theirs || !mine) continue;
+                const bool sameRoom = theirs == mine && theirs->IsInteriorCell();
+                const bool inHearing = !theirs->IsInteriorCell() && !mine->IsInteriorCell() && actor->GetPosition().GetDistance(player->GetPosition()) < 1600.0f;
+                if (sameRoom || inHearing) present.push_back(who);
+            }
+        }
+        {
+            std::scoped_lock lock(m_mutex);
+            if (const R::Rumor* r = m_ledger.ToBringUp(hold, teller->GetFormID(), now, present)) {
                 text = TextIn(*r, hold);
                 id = r->id;
                 m_ledger.Told(id, now);
             }
         }
         if (id) {
-            logger::info("Rumors: {} brings up #{} to the player: {}", Safe::Name(teller->GetDisplayFullName()), id, text);
+            logger::info("Rumors: {} brings up #{} to the player: {}", Safe::Name(GameText::In(teller->GetDisplayFullName())), id, text);
             // Who told whom is the teller's own memory (SkyrimNet): so they know later that they were the one who
             // said it, and can ask what came of it.
             auto* player = RE::PlayerCharacter::GetSingleton();
-            const std::string listener = player ? Safe::Name(player->GetDisplayFullName()) : std::string();
+            const std::string listener = player ? Safe::Name(GameText::In(player->GetDisplayFullName())) : std::string();
             auto* at = teller->GetCurrentLocation();
-            const std::string place = at && at->GetFullName() ? at->GetFullName() : "";
+            const std::string place = at && GameText::In(at->GetFullName()) ? GameText::In(at->GetFullName()) : "";
             const RE::FormID who = teller->GetFormID();
             if (!listener.empty()) {
                 std::thread([who, listener, place, text]() {
@@ -483,5 +512,8 @@ namespace IntelEngine {
         a_vm->RegisterFunction("RumorPublican", script, RumorPublican); ++count;
         a_vm->RegisterFunction("RumorBringUp", script, RumorBringUp); ++count;
         a_vm->RegisterFunction("RumorDebugNote", script, RumorDebugNote); ++count;
+        // The lives' own natives (script IntelEngine_Lives: a keepsake's item, the test hooks of what passed while
+        // apart) come in here, with the talk their steps become: Papyrus.cpp already calls this.
+        LivingWorldBridge::RegisterNatives(a_vm, count);
     }
 }

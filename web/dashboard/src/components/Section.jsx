@@ -1,4 +1,5 @@
 import { Children, cloneElement, useState } from 'react';
+import { englishOf } from '../i18n';
 function Section({ id, header, children }) {
   const [open, setOpen] = useState(() => { try { return localStorage.getItem('intelengine.section.' + id) !== 'closed'; } catch { return true; } });
   return <details className="dashboard-section" open={open} onToggle={event => { const value = event.currentTarget.open; setOpen(value); try { localStorage.setItem('intelengine.section.' + id, value ? 'open' : 'closed'); } catch {} }}><summary onClick={event => { if (event.target.closest('[data-expand-section]')) setOpen(true); if (event.target.closest('button, a, input, select, textarea')) event.preventDefault(); }}>{header}</summary>{children}</details>;
@@ -10,7 +11,7 @@ export default function withSections(renderTab) {
       if (node?.type !== 'section') return node;
       const [header, ...body] = Children.toArray(node.props.children);
       const heading = header.type === 'h2' ? header : Children.toArray(header.props.children).find(child => child.type === 'h2');
-      return cloneElement(node, { 'data-n': ++n }, <Section id={Children.toArray(heading.props.children).find(child => typeof child === 'string').trim()} header={header}>{body}</Section>);
+      return cloneElement(node, { 'data-n': ++n }, <Section id={englishOf(Children.toArray(heading.props.children).find(child => typeof child === 'string')).trim()} header={header}>{body}</Section>);
     });
     const page = view.props.className || '';
     return /\bie-page\b/.test(page) && !/\bie-page-wide\b/.test(page) ? twoColumns(view, cards) : cloneElement(view, {}, cards);

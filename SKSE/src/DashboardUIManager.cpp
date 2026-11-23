@@ -1,4 +1,5 @@
 #include <chrono>
+#include "GameText.h"
 #include "LanguageBridge.h"
 /**
  * Dashboard UI Manager Implementation
@@ -519,7 +520,7 @@ namespace IntelEngine {
                         if (!base) return false;
                         nlohmann::json entry;
                         entry["formId"] = actor->GetFormID();
-                        entry["name"] = actor->GetDisplayFullName();
+                        entry["name"] = GameText::In(actor->GetDisplayFullName());
                         npcs.push_back(entry);
                         return false;
                     });
@@ -1050,10 +1051,10 @@ namespace IntelEngine {
             };
             if (auto* player = RE::PlayerCharacter::GetSingleton()) {
                 auto* cell = player->GetParentCell();
-                const char* location = cell && cell->IsInteriorCell() ? cell->GetName() : nullptr;
+                const char* location = cell && cell->IsInteriorCell() ? GameText::In(cell->GetName()) : nullptr;
                 if (!location || !location[0]) {
                     auto* current = player->GetCurrentLocation();
-                    location = current ? current->GetFullName() : nullptr;
+                    location = current ? GameText::In(current->GetFullName()) : nullptr;
                 }
                 request["currentLocation"] = location && location[0] ? location : "";
             } else request["currentLocation"] = "";

@@ -112,6 +112,7 @@ namespace IntelEngine {
         RumorBridge::GetSingleton()->Save(a_intfc);
         BattleManager::GetSingleton()->Save(a_intfc);
         FactionPolitics::GetSingleton()->Save(a_intfc);
+        FactionPolitics::GetSingleton()->SaveHeld(a_intfc);
         FactionPolitics::GetSingleton()->SaveRanks(a_intfc);
         BondBridge::GetSingleton()->Save(a_intfc);
     }
@@ -152,6 +153,8 @@ namespace IntelEngine {
                 BattleManager::GetSingleton()->Load(a_intfc, version, length);
             } else if (type == kFallenLeadersRecord) {
                 FactionPolitics::GetSingleton()->Load(a_intfc, version, length);
+            } else if (type == kHeldEventRecord) {
+                FactionPolitics::GetSingleton()->LoadHeld(a_intfc, version, length);
             } else if (type == Ranks::kRecordType) {
                 FactionPolitics::GetSingleton()->LoadRanks(a_intfc, version, length);
             } else if (type == Bonds::kRecordType) {
@@ -451,9 +454,11 @@ namespace IntelEngine {
                             return id ? std::to_string(id) : std::string();
                         });
                     logger::info("{} SkyrimNet decorator: get_intelengine_in_venture", meetingRegistered ? "Registered" : "Failed to register");
-                    // The story arc this NPC has a part in (planned or open), empty when none: their own request and
-                    // their own trips are not offered meanwhile. Arrived to ask for help with her stolen circlet, Ysolda's
-                    // model also chose AskPlayerForHelp, and a second request for the same circlet opened (2026-11-18).
+                    // The story arc this NPC has a part in (planned or open), empty when none: their own request is not
+                    // offered meanwhile. Arrived to ask for help with her stolen circlet, Ysolda's model also chose
+                    // AskPlayerForHelp, and a second request for the same circlet opened (2026-11-18). (Their trips are
+                    // offered again since 2026-11-23: the player may send them; a trip of their own idea is refused by
+                    // Travel.GoToLocation until the story is over.)
                     const bool arcRegistered = SkyrimNetAPI::RegisterDecorator(
                         "get_intelengine_arc",
                         "Returns the id of the story arc this NPC has a part in now, empty when none.",
@@ -539,6 +544,7 @@ namespace IntelEngine {
                 {
                     auto* task = SKSE::GetTaskInterface();
                     if (task) {
+                        task->AddTask([]() { FactionPolitics::GetSingleton()->NoteTheDeadQuietly(); });   // a new game: nobody yet
                         task->AddTask([]() { DispatchMaintenanceCall(true); });
                         // A new game has its first story request too: the same first lookups, made now.
                         task->AddTask([]() {
@@ -582,6 +588,11 @@ namespace IntelEngine {
                     g_hasReverted = false;
                     InitializePoliticalDB();
                     FactionPolitics::GetSingleton()->Initialize();
+                }
+                // A save of 3.8 keeps no record of the fallen: its dead are remembered without being told as news (the
+                // game's thread, once the indexes above are fresh; nothing when the record was there).
+                if (auto* quiet = SKSE::GetTaskInterface()) {
+                    quiet->AddTask([] { FactionPolitics::GetSingleton()->NoteTheDeadQuietly(); });
                 }
                 // Re-sync SkyrimNet busy state from co-save-loaded SlotTracker
                 // (LoadCallback fires before SkyrimNet is ready, so we sync here)

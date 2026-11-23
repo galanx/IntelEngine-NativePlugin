@@ -6,7 +6,7 @@ cmake_minimum_required(VERSION 3.21)
 
 project(
     IntelEngine
-    VERSION 3.8.3
+    VERSION 4.0.0
     DESCRIPTION "Intelligent NPC Task Execution for SkyrimNet"
     LANGUAGES CXX
 )
@@ -225,10 +225,20 @@ target_include_directories(TalesCheck PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(TalesCheck PRIVATE nlohmann_json::nlohmann_json)
 add_executable(LivingWorldCheck EXCLUDE_FROM_ALL tests/LivingWorldCheck.cpp)
 target_include_directories(LivingWorldCheck PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+# What passed while apart, told: reunions, adventures' endings, keepsakes, the talk of the day (LivingWorld.h, Rumors.h).
+add_executable(LivesToldCheck EXCLUDE_FROM_ALL tests/LivesToldCheck.cpp)
+target_include_directories(LivesToldCheck PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 add_executable(PlaceNamesCheck EXCLUDE_FROM_ALL tests/PlaceNamesCheck.cpp)
 target_include_directories(PlaceNamesCheck PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 add_executable(ItemNamesCheck EXCLUDE_FROM_ALL tests/ItemNamesCheck.cpp)
 target_include_directories(ItemNamesCheck PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+# The game's text and ours (GameText.h, LetterFold.h) and words of place as data (PlaceWords.h); both files are UTF-8.
+add_executable(GameTextCheck EXCLUDE_FROM_ALL tests/GameTextCheck.cpp)
+target_include_directories(GameTextCheck PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_compile_options(GameTextCheck PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/utf-8>)
+add_executable(PlaceWordsCheck EXCLUDE_FROM_ALL tests/PlaceWordsCheck.cpp)
+target_include_directories(PlaceWordsCheck PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_compile_options(PlaceWordsCheck PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/utf-8>)
 add_executable(StoryDirectorCheck EXCLUDE_FROM_ALL tests/StoryDirectorCheck.cpp)
 target_include_directories(StoryDirectorCheck PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 add_executable(StoryCandidateResolutionCheck EXCLUDE_FROM_ALL tests/StoryCandidateResolutionCheck.cpp)

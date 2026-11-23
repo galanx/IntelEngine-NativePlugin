@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Arcs.h"
+#include "GameText.h"
 #include "FrameSpread.h"
 
 #include <atomic>
@@ -20,9 +21,9 @@ namespace IntelEngine {
     // places only the running quest can fill left as dots.
     inline std::string QuestLabel(RE::TESQuest* quest) {
         if (!quest) return {};
-        if (const char* title = quest->GetFullName(); title && *title) return title;
+        if (const char* title = GameText::In(quest->GetFullName()); title && *title) return title;
         for (auto* objective : quest->objectives) {
-            const char* text = objective ? objective->displayText.c_str() : nullptr;
+            const char* text = objective ? GameText::In(objective->displayText.c_str()) : nullptr;
             if (!text || !*text) continue;
             std::string label = text;
             for (auto at = label.find('<'); at != std::string::npos; at = label.find('<', at)) {
@@ -160,6 +161,11 @@ namespace IntelEngine {
         bool GameNeedsPlace(RE::FormID location, std::string* quest = nullptr) const;
         /** A live story has this place among its own. Takes this bridge's lock. */
         bool PlaceInStory(RE::FormID location) const;
+        /** Somebody of this town who may be held at a place out in the world when a faction's rescue begins, by the
+         *  measure a tale holds a captive to (out of the player's sight, nobody the town or a quest of the game needs,
+         *  no part of any story): the actor's form id, 0 when nobody is. `town`: a town or city, or any place in one.
+         *  The game's thread; never called with this bridge's lock held. */
+        RE::FormID CaptiveOf(RE::BGSLocation* town, std::uint32_t seed) const;
         /** Someone near the asker of a story that began as talk whom they can stop and ask on their way to the player:
          *  alive, awake, at peace, a person, no part of any story, not right beside the player and not out of the
          *  player's sight. Null when nobody is. The game's thread; never called with this bridge's lock held. */
