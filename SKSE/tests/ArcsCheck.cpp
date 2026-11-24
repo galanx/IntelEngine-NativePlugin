@@ -279,7 +279,7 @@ static void SaveData() {
     Book untouched = back;
     Require(!Deserialize(bad, untouched), "a short record is refused");
     Require(untouched.all.size() == back.all.size(), "a refused record leaves the book as it was");
-    Require(!Deserialize(bytes, untouched, 11), "an unknown version is refused");
+    Require(!Deserialize(bytes, untouched, kRecordVersion + 1), "an unknown version is refused");
     // ---- talk in town, and the one it is about: who asks around, who sets out, and when
     {
         Arc plain;

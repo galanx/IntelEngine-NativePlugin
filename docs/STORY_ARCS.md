@@ -463,6 +463,32 @@ was switched on and saved ("1 setting(s) taken from settings.yaml", "skipped tim
 MCM its info text shows in full and a click switched it off again ("does not count"). With the switch on, the town
 pacer was not watched beginning a story after a skip (only the director's verdict was).
 
+### Papers (2026-11-24)
+
+A player's report: a tale about a hidden ledger stamped "Lemkil's Hidden Ledger" on an amulet. The item list a
+tale may turn on (`TaleAuthor.cpp` `ItemChoices`) held jewellery, gems, ingots, two instruments and two daggers;
+the author named an amulet after the ledger its story needed. Now:
+
+- Four papers in IntelEngine.esp (`esp/EspBuilder` `AddPapers`, BOOK 0x58E9 letter, 0x58EA ledger, 0x58EB journal,
+  0x58EC note) with the model, inventory art and sound of the game's own letters, account books and diaries. They
+  come first in the item list, named through the language pack (`ArcBridge::kPapers`, labels), marked "(paper)".
+- An item of a tale may have `"text"`: the words written in it (`Tales::kPaperLetters` = 700 letters, cut where a
+  sentence ends; `<`, `>`, `[`, `]` taken out, the player as `{player}`). Only a paper has words: words in anything
+  else fail the tale ("i1 has words written in it, so it is a paper: choose Letter, Ledger, ..."), and the repair
+  round writes it again. No keyword is read: the author says it is writing by giving it words.
+- `Arc::propText`, co-save IEAR version 11 (version 10 records load, their papers without words).
+- When the game's book opens (`MenuOpenCloseEvent`, `ArcBridge::BookOpened`) on one of the papers, the stamped name
+  of the copy read (the reference's extra data, or `BookMenu::GetDisplayData` from a pack) finds its story, and
+  `BookMenu::GetDescription` is given the story's words in the game's handwriting font before the book draws its
+  page. A copy no story holds shows the plain words of its kind (`kPapers[].blank`, through the language pack).
+  The four addresses it reads are in every Address Library this was checked against: 1.5.97, all of 1.6, 1.7.104
+  and VR 1.4.15.
+- Played on the test profile (test hook `IntelEngine_Arcs.DebugReadProp id p fromPack`, the tale
+  `Scripts\intelengine\tales\test_paper.json`): the ledger read where it lay, the letter read from the pack (a
+  single sheet, "If Prisoner has brought you this"), a plain ledger, both find steps done by the papers carried.
+  The hook's "from the pack" does not open the book (`EquipItem` on a book reads nothing); read from the
+  inventory with the keys instead. Not played: a model-written tale choosing a paper, the hand-over of a paper.
+
 ### Any language (2026-11-22)
 
 The user: "Create the necessary dictionaries and language detection logic that properly handles place names in the
