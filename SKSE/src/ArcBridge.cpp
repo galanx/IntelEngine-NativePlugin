@@ -2240,6 +2240,15 @@ namespace IntelEngine {
     namespace {
         // The player lays hands on someone (activates them). The game sends this for every activation by anyone, of
         // anything: all but the player's on an actor fall out at once, so it costs nothing while playing.
+        // The game's book opening: a story's paper shows what the story wrote in it (ArcBridge::BookOpened).
+        class BookSink : public RE::BSTEventSink<RE::MenuOpenCloseEvent> {
+        public:
+            RE::BSEventNotifyControl ProcessEvent(const RE::MenuOpenCloseEvent* e, RE::BSTEventSource<RE::MenuOpenCloseEvent>*) override {
+                if (e && e->opening && e->menuName == RE::BookMenu::MENU_NAME) ArcBridge::GetSingleton()->BookOpened();
+                return RE::BSEventNotifyControl::kContinue;
+            }
+        };
+
         class ActivateSink : public RE::BSTEventSink<RE::TESActivateEvent> {
         public:
             RE::BSEventNotifyControl ProcessEvent(const RE::TESActivateEvent* e, RE::BSTEventSource<RE::TESActivateEvent>*) override {
@@ -2430,6 +2439,7 @@ namespace IntelEngine {
         static GoldSink sink;
         static QuestStageSink stages;
         static ActivateSink hands;
+        static BookSink books;
         static bool listening = false;
         if (listening) return;
         if (auto* events = RE::ScriptEventSourceHolder::GetSingleton()) {
@@ -2447,11 +2457,81 @@ namespace IntelEngine {
                 auto* rest = data->LookupForm<RE::BGSMessage>(0x58E7, "IntelEngine.esp");
                 const char* restWord = rest ? GameText::In(rest->GetFullName()) : nullptr;
                 if (restWord && *restWord) g_layToRest = restWord;
+                // The papers a story may turn on; none while the plugin file is older than they are (2026-11-24).
+                std::size_t papers = 0;
+                for (std::size_t i = 0; i < kPapers.size(); ++i) {
+                    auto* paper = data->LookupForm<RE::TESObjectBOOK>(kPapers[i].local, "IntelEngine.esp");
+                    m_papers[i] = paper ? paper->GetFormID() : 0u;
+                    if (paper) ++papers;
+                }
+                if (papers < kPapers.size()) {
+                    logger::info("Arcs: {} of the {} papers are in IntelEngine.esp (an older plugin file): stories turn on the rest", papers,
+                                 kPapers.size());
+                }
                 logger::info("Arcs: the crosshair's word for someone held bound: \"{}\"{}", g_cutLoose, message ? "" : " (no such message in IntelEngine.esp)");
             }
             REL::Relocation<std::uintptr_t> npc{RE::VTABLE_TESNPC[0]};
             NpcActivateText::func = npc.write_vfunc(0x4C, NpcActivateText::thunk);
+            if (auto* ui = RE::UI::GetSingleton()) ui->AddEventSink<RE::MenuOpenCloseEvent>(&books);
             listening = true;
+        }
+    }
+
+    void ArcBridge::BookOpened() {
+        auto* book = RE::BookMenu::GetTargetForm();
+        if (!book) return;
+        std::size_t kind = kPapers.size();
+        for (std::size_t i = 0; i < kPapers.size(); ++i) {
+            if (m_papers[i] && m_papers[i] == book->GetFormID()) kind = i;
+        }
+        if (kind == kPapers.size()) return;
+        // The name stamped on this copy: on the reference read where it lies, or on the inventory entry read from a
+        // pack or a container.
+        std::string stamped;
+        auto* extra = RE::BookMenu::GetExtraList();
+        auto* shown = extra ? extra->GetByType<RE::ExtraTextDisplayData>() : nullptr;
+        if (!shown) shown = RE::BookMenu::GetDisplayData();
+        if (shown && shown->displayName.c_str()) stamped = shown->displayName.c_str();
+        std::string words;
+        std::uint32_t id = 0;
+        if (!stamped.empty()) {
+            std::scoped_lock lock(m_mutex);
+            for (const auto& a : m_book.all) {
+                for (std::size_t p = 0; p < A::kProps && words.empty(); ++p) {
+                    if (a.propBase[p] == book->GetFormID() && a.propName[p] == stamped && !a.propText[p].empty()) {
+                        words = Fill(a.propText[p], a);
+                        id = a.id;
+                    }
+                }
+                if (!words.empty()) break;
+            }
+        }
+        // No story holds this copy (one that ended long ago and was let go, or one written before stories had words
+        // for their papers): it reads as the plain paper it is. Both in the game's own text encoding from here on.
+        const std::string shownWords = id ? GameText::Out(words) : LanguageBridge::GetSingleton()->Label(kPapers[kind].blank);
+        // The page in the game's book markup, in a hand and not in print. The story's words carry no markup of their
+        // own (brackets were taken out when it was compiled); "&" is the one sign the book would read as the start
+        // of some.
+        std::string page = "<font face='$HandwrittenFont'>";
+        for (const char c : shownWords) {
+            if (c == '&') {
+                page += "&amp;";
+            } else if (c != '<' && c != '>') {
+                page += c;
+            }
+        }
+        page += "</font>";
+        RE::BookMenu::GetDescription() = page.c_str();
+        bool drawn = false;
+        if (auto* ui = RE::UI::GetSingleton()) {
+            if (auto menu = ui->GetMenu<RE::BookMenu>()) drawn = menu->GetRuntimeData().bookInitialized;
+        }
+        if (id) {
+            logger::info("Arcs: #{} the player reads '{}' ({} bytes of the story's words){}", id, stamped, words.size(),
+                         drawn ? "; the book was drawn already, the words may not show" : "");
+        } else {
+            logger::info("Arcs: the player reads '{}', which no story holds: its plain words{}", stamped.empty() ? kPapers[kind].name : stamped,
+                         drawn ? "; the book was drawn already, they may not show" : "");
         }
     }
 

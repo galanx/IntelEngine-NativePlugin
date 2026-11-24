@@ -4,6 +4,7 @@
 #include "GameText.h"
 #include "FrameSpread.h"
 
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <memory>
@@ -89,6 +90,25 @@ namespace IntelEngine {
         /** At data load: the inventory event that sees gold reach the player, and the quest stages that say the
          *  player is busy with a quest. */
         void Listen();
+        /** The papers a tale may turn on (IntelEngine.esp, built by esp/EspBuilder AddPapers): a letter, a ledger, a
+         *  journal and a note. A story names its copy and writes the words in it (Tales.h, "text"); the player reads
+         *  them in the game's book (BookOpened). "blank" is what a copy says when no story holds it any more. */
+        struct Paper {
+            RE::FormID local;    // in IntelEngine.esp
+            const char* name;    // English; the writer is given it through the language pack (LanguageBridge::Label)
+            const char* blank;
+        };
+        static constexpr std::array<Paper, 4> kPapers{{
+            {0x58E9, "Letter", "The letter has been folded and unfolded so often that the creases have worn through. The ink has run in places."},
+            {0x58EA, "Ledger", "Dates, names and sums run down every page in a cramped hand. Some rows have been scratched out and written over."},
+            {0x58EB, "Journal", "Page after page in the same hand: some entries a line long, some running on for pages."},
+            {0x58EC, "Note", "A few lines, written in haste."},
+        }};
+        /** The base form of paper i, 0 while IntelEngine.esp is older than the papers (read in Listen). Any thread. */
+        RE::FormID PaperBase(std::size_t i) const { return i < kPapers.size() ? m_papers[i].load() : 0u; }
+        /** The game's book has just opened. When what is read is one of the papers, its page shows what the story
+         *  wrote in that copy (the book draws the text it was handed a moment later). Main thread. */
+        void BookOpened();
         /** The player is in talk with somebody other than this one: a line said to the player within `within` real
          *  seconds, or one of theirs still on its way or being said. Whoever comes with words of their own waits for
          *  that talk to be over: a request sent into it was given to the other speaker by SkyrimNet (Acolyte Jenssen's,
@@ -389,6 +409,7 @@ namespace IntelEngine {
         std::mutex m_questMutex;
         std::array<QuestMove, 6> m_questMoves{};
         std::array<std::array<RE::FormID, 2>, Arcs::kSlots> m_holders{};
+        std::array<std::atomic<RE::FormID>, kPapers.size()> m_papers{};
 
         std::string Fill(std::string text, const Arcs::Arc& a) const;
         const Folk* FolkOf(RE::FormID ref) const;

@@ -147,6 +147,16 @@ def from_dll(folder):
     return found
 
 
+def from_papers(folder):
+    # The papers a tale may turn on (ArcBridge.h kPapers): the name the story's writer is given, and what a copy
+    # reads when no story holds it.
+    found = []
+    text = read(os.path.join(folder, "ArcBridge.h"))
+    for m in re.finditer(r'\{0x[0-9A-Fa-f]+, "([^"]+)", "([^"]+)"\}', text):
+        found += [(m.group(1), "ArcBridge.h"), (m.group(2), "ArcBridge.h")]
+    return found
+
+
 # What is put together out of sight of this tool: a rank beginning with a vowel ("an Auxiliary", aRank), and an
 # appointment (IntelEngine_Schedule.psc): its time is translated on its own first (ShownTime, a clock of 24 hours:
 # "tomorrow at 20:30"), then the sentence, whose task words (meetingDescription, taskDescription) are held in
@@ -177,7 +187,7 @@ LEFT_OUT = {"{1} will {2} {3}"}
 
 
 def build():
-    rows = from_scripts(os.path.join(NATIVE, "Source", "Scripts")) + from_dll(os.path.join(NATIVE, "SKSE", "src")) + MORE
+    rows = from_scripts(os.path.join(NATIVE, "Source", "Scripts")) + from_dll(os.path.join(NATIVE, "SKSE", "src")) + from_papers(os.path.join(NATIVE, "SKSE", "src")) + MORE
     seen, lines = {}, []
     for pattern, where in rows:
         if pattern not in LEFT_OUT:

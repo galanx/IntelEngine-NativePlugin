@@ -592,6 +592,8 @@ once, at its line in the builder.
 | Program.cs:112 | Examine | crosshair word (a message's name) |
 | Program.cs:113 | Lay to rest | crosshair word (a message's name) |
 | Program.cs:197 | Cut loose | crosshair word (a message's name) |
+| Program.cs (Papers) | Letter, Ledger, Journal, Note | names of the four papers; the DLL gives a tale's writer the pack's label, a story stamps its own name on its copy |
+| Program.cs (Papers) | what a copy of each reads | shown only if the DLL could not put a page in; the DLL shows the pack's label of `ArcBridge::kPapers[].blank` |
 | Program.cs:215 | Ask <Alias=Witness> about the theft | objective |
 | Program.cs:216 | Find <Alias.ShortName=Asker>'s <Alias=Item0> | objective |
 | Program.cs:217 | Confront <Alias=Culprit> | objective |

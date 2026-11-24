@@ -379,6 +379,7 @@ namespace IntelEngine::Arcs {
         std::array<std::uint32_t, kRoles> cast{};
         std::array<std::uint32_t, kProps> propBase{};  // the base item of each prop, 0 = none
         std::array<std::string, kProps> propName{};    // its stamped name ("Ysolda's Silver Necklace")
+        std::array<std::string, kProps> propText{};    // the words written in it when it is a paper (a letter, a ledger), else empty
         std::array<std::uint32_t, kProps> propAt{};    // where it was put: an actor or a container, 0 = not yet
         std::array<Role, 3> order{RNone, RNone, RNone};  // Choose with roles: who each shown answer names
         std::uint32_t place = 0;       // the town (location) the arc happens in
@@ -1191,7 +1192,7 @@ namespace IntelEngine::Arcs {
     // ------------------------------------------------------------------ save data (co-save record 'IEAR')
 
     constexpr std::uint32_t kRecordType = 'IEAR';
-    constexpr std::uint32_t kRecordVersion = 10;   // 10: a trail of three things to examine, what an ending leaves open, sequels; 2: tales; 3: a visit's why; 4: places out in the world; 5: ambushes; 6: stalkers; 7: someone held at a place; 8: remains to examine; 9: what walks by night. Older ones load
+    constexpr std::uint32_t kRecordVersion = 11;   // 11: the words written in a paper; 10: a trail of three things to examine, what an ending leaves open, sequels; 2: tales; 3: a visit's why; 4: places out in the world; 5: ambushes; 6: stalkers; 7: someone held at a place; 8: remains to examine; 9: what walks by night. Older ones load
 
     namespace detail {
         template <class T>
@@ -1425,6 +1426,8 @@ namespace IntelEngine::Arcs {
             for (const auto& e : a.ends) detail::PutLong(out, e.after);
             detail::Put(out, a.sequelOf);
             detail::Put(out, a.followed);
+            // ---- version 11: the words written in a paper (2026-11-24: before, a story had no papers to turn on)
+            for (const auto& words : a.propText) detail::PutLong(out, words);
         }
         return out;
     }
@@ -1544,6 +1547,11 @@ namespace IntelEngine::Arcs {
                     if (!detail::GetLong(in, at, e.after)) return false;
                 }
                 if (!detail::Get(in, at, a.sequelOf) || !detail::Get(in, at, a.followed) || a.followed > 1) return false;
+            }
+            if (version >= 11) {
+                for (auto& words : a.propText) {
+                    if (!detail::GetLong(in, at, words)) return false;
+                }
             }
             const bool tale = pattern == static_cast<std::uint8_t>(Pattern::Tale);
             const bool known = pattern >= 1 && pattern <= kPatterns;

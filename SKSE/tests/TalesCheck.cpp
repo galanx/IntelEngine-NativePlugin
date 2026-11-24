@@ -316,6 +316,56 @@ static void CloserAndApart() {
     Require(!Tales::Compile(j, Town()).ok, "only someone of the story");
 }
 
+// Papers: a story about a ledger hides a ledger, and the words written in it are the story's (a player's report,
+// 2026-11-24: a tale named a necklace "Lemkil's Hidden Ledger", having nothing else to turn on).
+static void Papers() {
+    auto pool = Town();
+    pool.items.push_back({"Ledger", 0x5E0, true, true});
+    pool.items.push_back({"Letter", 0x5E1, true, true});
+    json j = Sample();
+    j["items"] = json::parse(R"([{"id": "i1", "item": "ledger", "name": "Brenuin's Ledger", "hidden": "pocket", "of": "p1",
+                                  "text": "4th of Frostfall: 50 gold to <U.> for the ring [paid]. The player knows nothing & never will."}])");
+    auto r = Tales::Compile(j, pool);
+    if (!r.ok) std::cerr << r.errors;
+    Require(r.ok, "a story turns on a ledger");
+    Require(r.arc.propBase[0] == 0x5E0 && r.arc.propName[0] == "Brenuin's Ledger" && r.arc.propPocket[0] == 2, "it is a ledger, in Brenuin's pocket");
+    Require(r.arc.propText[0] == "4th of Frostfall: 50 gold to U. for the ring paid. {player} knows nothing & never will.",
+            "its words are kept, without the book's markup signs, the player as {player}");
+    // The words survive the co-save; a record of version 10 (before papers had words) loads without them.
+    Book book;
+    const auto id = book.Plan(r.arc, 1.0f);
+    const auto bytes = Serialize(book);
+    Book back;
+    Require(Deserialize(bytes, back) && back.Find(id)->propText[0] == r.arc.propText[0], "the words come back from the co-save");
+    auto v10 = Serialize(book);
+    const auto words = r.arc.propText[0].size();
+    v10.resize(v10.size() - (2 + words) - 2 - 2);
+    Book older;
+    Require(Deserialize(v10, older, 10) && older.Find(id)->propText[0].empty() && older.Find(id)->propName[0] == "Brenuin's Ledger",
+            "a record of version 10 loads, its paper without words");
+    Require(!Deserialize(bytes, older, 10), "a record with words read as version 10 is refused, not misread");
+    // Long words are cut where a sentence ends.
+    std::string many;
+    for (int k = 0; k < 120; ++k) many += "Paid again. ";
+    j["items"][0]["text"] = many;
+    r = Tales::Compile(j, pool);
+    Require(r.ok && r.arc.propText[0].size() <= Tales::kPaperLetters && r.arc.propText[0].ends_with("Paid again."), "long words end at a sentence");
+    // A paper without words is still a paper (the book shows the plain paper's words).
+    j["items"][0].erase("text");
+    r = Tales::Compile(j, pool);
+    Require(r.ok && r.arc.propText[0].empty(), "a paper may have no words");
+    // Words written in a ring: refused, and the writer is told which papers there are.
+    j["items"] = json::parse(R"([{"id": "i1", "item": "Silver Ring", "name": "Brenuin's Hidden Ledger", "hidden": "home", "of": "p1",
+                                  "text": "50 gold to Uthgerd."}])");
+    r = Tales::Compile(j, pool);
+    Require(!r.ok && r.errors.find("i1 has words written in it") != std::string::npos && r.errors.find("choose Ledger, Letter, not Silver Ring") != std::string::npos,
+            "words in a ring are refused, naming the papers");
+    r = Tales::Compile(j, Town());
+    Require(!r.ok && r.errors.find("the list has none: leave \"text\" out") != std::string::npos, "and with no papers on the list, the words are to go");
+    j["items"][0].erase("text");
+    Require(Tales::Compile(j, pool).ok, "a ring without words is a ring (its name is the writer's)");
+}
+
 static void HandsOver() {
     // A talk where the person gives the item up: the effect carries the prop and the giver.
     json j = Sample();
@@ -376,7 +426,7 @@ static void Adventure() {
     Require(back.Find(id)->bossName[0] == "Grelka the Silent" && back.Find(id)->graph[1].site == 1 && back.Find(id)->propSite[0] == 1, "whole");
     // A save made before ambushes (record version 4: no ambush block) still loads.
     auto v4 = bytes;
-    v4.resize(v4.size() - (3 * 4 + 2 + 1) - 3 - 14 - 12 - 21);   // (and the 21 of version 10: a trail, what an ending leaves open, sequels) the ambush block, the three bytes of someone held (version 7), the fourteen of remains (8), the twelve of what walks by night (9)
+    v4.resize(v4.size() - (3 * 4 + 2 + 1) - 3 - 14 - 12 - 21 - 6);   // (and the 6 of version 11: three papers without words)   // (and the 21 of version 10: a trail, what an ending leaves open, sequels) the ambush block, the three bytes of someone held (version 7), the fourteen of remains (8), the twelve of what walks by night (9)
     Book older;
     Require(Deserialize(v4, older, 4) && older.Find(id)->bossName[0] == "Grelka the Silent", "a record of version 4 loads");
 
@@ -451,7 +501,7 @@ static void Ambush() {
     // A save of record version 5 (ambushes, before stalkers) loads as it was.
     Book five;
     auto v5 = bytes;
-    v5.resize(v5.size() - 3 - 14 - 12 - 21);   // before someone could be held (version 7), remains examined (8) or anything walked by night (9)
+    v5.resize(v5.size() - 3 - 14 - 12 - 21 - 6);   // before someone could be held (version 7), remains examined (8) or anything walked by night (9)
     Require(Deserialize(v5, five, 5) && five.Find(id)->graph[0].kind == Kind::Ambush, "a record of version 5 loads");
 
     const auto errorsOf = [](json x) { return Tales::Compile(x, Town()).errors; };
@@ -629,10 +679,10 @@ static void Mystery() {
     Require(b.clueWhat[0] == RemainsHunter && b.clueSite[0] == 1 && b.clueRef[0] == 0xFF001234 && b.clueState[0] == CluePlaced && b.graph[1].kind == Kind::Examine, "whole");
     Book seven;
     auto v7 = bytes;
-    v7.resize(v7.size() - 14 - 12 - 21);
+    v7.resize(v7.size() - 14 - 12 - 21 - 6);
     Require(!Deserialize(v7, seven, 7), "a step that examines read as version 7 is refused, not misread");
     auto wrong = bytes;
-    wrong[wrong.size() - 1 - 12 - 21] = 7;   // no such state
+    wrong[wrong.size() - 1 - 12 - 21 - 6] = 7;   // no such state (before the 6 bytes of version 11)
     Require(!Deserialize(wrong, seven), "a state that does not exist is refused");
 
     const auto errorsOf = [](json x, Tales::Pool pool) { return Tales::Compile(x, pool).errors; };
@@ -701,7 +751,7 @@ static void Mystery() {
         Require(kept.sequelOf == 7 && kept.followed == 1 && kept.ends[0].after == "Grelka's brother is still up at the mine." && kept.ends[1].after.empty(),
                 "and what an ending leaves open, and which tale took it up");
         auto broken = Serialize(trail);
-        broken[broken.size() - 1] = 2;   // "followed" is yes or no
+        broken[broken.size() - 1 - 6] = 2;   // "followed" is yes or no (before the 6 bytes of version 11)
         Require(!Deserialize(broken, again), "a record that says neither is refused");
     }
     // What an ending leaves open, in the writer's words; nothing when it says nothing.
@@ -1028,10 +1078,10 @@ static void Captive() {
             back.Find(id)->graph[2].kind == Kind::Free, "whole");
     Book six;
     auto v6 = bytes;
-    v6.resize(v6.size() - 3 - 14 - 12 - 21);   // without the three bytes of someone held, the fourteen of the remains and the twelve of what walks by night after them
+    v6.resize(v6.size() - 3 - 14 - 12 - 21 - 6);   // without the three bytes of someone held, the fourteen of the remains and the twelve of what walks by night after them
     Require(!Deserialize(v6, six, 6), "a step that frees someone read as version 6 is refused, not misread");
     auto wrong = bytes;
-    wrong[wrong.size() - 1 - 14 - 12 - 21] = 9;   // no such state
+    wrong[wrong.size() - 1 - 14 - 12 - 21 - 6] = 9;   // no such state (before the 6 bytes of version 11)
     Require(!Deserialize(wrong, six), "a state that does not exist is refused");
 
     const auto errorsOf = [](json x, Tales::Pool pool) { return Tales::Compile(x, pool).errors; };
@@ -1253,6 +1303,7 @@ int main() {
         LongWords();
         Refusals();
         Titles();
+        Papers();
     } catch (const std::exception& e) {
         std::cerr << "TalesCheck FAILED: " << e.what() << "\n";
         return 1;

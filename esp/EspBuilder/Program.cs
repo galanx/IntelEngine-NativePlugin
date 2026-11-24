@@ -47,6 +47,7 @@ public static class Program
         if (args.Length >= 3 && args[0] == "findloc") return FindLoc(args[1], args[2]);
         if (args.Length >= 3 && args[0] == "questdump") return QuestDump(args[1], args[2]);
         if (args.Length >= 3 && args[0] == "finditem") return FindItem(args[1], args[2]);
+        if (args.Length >= 3 && args[0] == "findbook") return FindBook(args[1], args[2]);
         if (args.Length >= 3 && args[0] == "findnpc") return FindNpc(args[1], args[2]);
         if (args.Length >= 3 && args[0] == "npc") return NpcInfo(args[1], args.Skip(2).ToArray());
         Console.Error.WriteLine("usage: info <esp> | build <esp in> <output folder>");
@@ -112,6 +113,7 @@ public static class Program
         var examine = AddWord(mod, Examine, "Examine");
         var layToRest = AddWord(mod, LayToRest, "Lay to rest");
         var call = AddCallQuest(mod);
+        var papers = AddPapers(mod);
         int alliedSides = AllyBattleSides(mod);
         mod.WriteToBinary(output);
         Console.WriteLine($"battle sides allied to themselves: {alliedSides}");
@@ -126,6 +128,7 @@ public static class Program
         Console.WriteLine($"{Examine} [{examine.FormKey.ID:X6}]");
         Console.WriteLine($"{LayToRest} [{layToRest.FormKey.ID:X6}]");
         Console.WriteLine($"{CallQuest} [{call.FormKey.ID:X6}]: {call.Aliases.Count} aliases, {call.Objectives.Count} objective, {call.Stages.Count} stages");
+        Console.WriteLine("papers " + string.Join(", ", papers.Select(b => $"{b.EditorID} [{b.FormKey.ID:X6}]")));
         return 0;
     }
 
@@ -172,6 +175,52 @@ public static class Program
     // The crosshair's word on what walks by night while the player carries the one thing it wants, where the game
     // would say "Talk": read by the DLL the same way (ArcBridge.cpp, g_layToRest).
     public const string LayToRest = "IntelEngine_LayToRest";
+
+    // The papers a tale may turn on: a letter, a ledger, a journal and a note, each with the look of the game's own
+    // (model, inventory art and sound of a vanilla letter, account book, diary and note). The story gives each its
+    // name and the words written in it; the DLL shows those words when the player reads it (ArcBridge.cpp, the book
+    // menu's text) and gives the base its name in the game's language. The text here is shown only if the DLL could
+    // not put the story's words in; it says nothing a story could contradict. Before 2026-11-24 a tale had only
+    // jewellery, gems and the like to choose from, and a story about a hidden ledger stamped that name on a necklace.
+    public static readonly (string EditorId, string Name, string Model, uint Art, bool Light, string Text)[] Papers =
+    {
+        ("IntelEngine_PaperLetter", "Letter", "Clutter\\Books\\Note01.nif", 0x097788, true,
+         "<font face='$HandwrittenFont'>The letter has been folded and unfolded so often that the creases have worn through. The ink has run in places.</font>"),
+        ("IntelEngine_PaperLedger", "Ledger", "Clutter\\Books\\JournalLowPoly02.nif", 0x01542E, false,
+         "<font face='$HandwrittenFont'>Dates, names and sums run down every page in a cramped hand. Some rows have been scratched out and written over.</font>"),
+        ("IntelEngine_PaperJournal", "Journal", "Clutter\\Books\\JournalLowPoly01.nif", 0x0B7E3D, false,
+         "<font face='$HandwrittenFont'>Page after page in the same hand: some entries a line long, some running on for pages.</font>"),
+        ("IntelEngine_PaperNote", "Note", "Clutter\\Books\\Note03.nif", 0x01541C, true,
+         "<font face='$HandwrittenFont'>A few lines, written in haste.</font>"),
+    };
+
+    static List<Book> AddPapers(SkyrimMod mod)
+    {
+        var skyrim = ModKey.FromNameAndExtension("Skyrim.esm");
+        var list = new List<Book>();
+        foreach (var (editorId, name, model, art, light, text) in Papers)
+        {
+            var book = mod.Books.FirstOrDefault(b => b.EditorID == editorId);
+            if (book == null)
+            {
+                book = mod.Books.AddNew();
+                book.EditorID = editorId;
+            }
+            book.Name = name;
+            book.BookText = text;
+            book.Model = new Model { File = model };
+            book.InventoryArt.SetTo(new FormKey(skyrim, art));
+            book.PickUpSound.SetTo(new FormKey(skyrim, 0x0C7A54));                           // ITMNoteUp, as the game's letters
+            book.Keywords = new() { new FormLink<IKeywordGetter>(new FormKey(skyrim, 0x0937A2)) };   // VendorItemBook
+            book.Type = Book.BookType.BookOrTome;                                               // as the game's own letters and journals
+            book.Flags = 0;
+            book.Teaches = null;
+            book.Value = light ? 0u : 5u;
+            book.Weight = light ? 0f : 1f;
+            list.Add(book);
+        }
+        return list;
+    }
 
     static Message AddWord(SkyrimMod mod, string editorId, string word)
     {
@@ -784,6 +833,20 @@ public static class Program
         foreach (var kw in mod.Keywords)
             if ((kw.EditorID ?? "").Contains("Brawl", StringComparison.OrdinalIgnoreCase) || (kw.EditorID ?? "").Contains("Intimidate", StringComparison.OrdinalIgnoreCase))
                 Console.WriteLine($"   kw {kw.FormKey.ID:X8} {kw.EditorID}");
+        return 0;
+    }
+
+    // Books by editor ID part: models, kind and price (the papers a tale may turn on take a vanilla book's look).
+    static int FindBook(string path, string part)
+    {
+        using var mod = SkyrimMod.CreateFromBinaryOverlay(path, SkyrimRelease.SkyrimSE);
+        foreach (var b in mod.Books)
+        {
+            if (!(b.EditorID ?? "").Contains(part, StringComparison.OrdinalIgnoreCase)) continue;
+            Console.WriteLine($"BOOK {b.FormKey.ID:X8} {b.EditorID} type={b.Type} flags={b.Flags} value={b.Value} weight={b.Weight} " +
+                              $"model={b.Model?.File.DataRelativePath} art={b.InventoryArt.FormKey.ID:X8} pickup={b.PickUpSound.FormKey.ID:X8} " +
+                              $"putdown={b.PutDownSound.FormKey.ID:X8} keywords={string.Join("/", (b.Keywords ?? new List<IFormLinkGetter<IKeywordGetter>>()).Select(k => k.FormKey.ID.ToString("X8")))}");
+        }
         return 0;
     }
 

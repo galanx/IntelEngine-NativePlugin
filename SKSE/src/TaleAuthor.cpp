@@ -230,14 +230,27 @@ namespace IntelEngine {
             return out;
         }
 
-        // Things a story may turn on: the town's plain jewellery and a few small valuables and tools. Rings and the
-        // like are hidden at home only (an NPC may put them on); the rest may sit in a pocket.
+        // Things a story may turn on: papers (a letter, a ledger, a journal, a note: the story writes what is in
+        // them), the town's plain jewellery and a few small valuables and tools. Rings and the like are hidden at home
+        // only (an NPC may put them on); the rest may sit in a pocket.
         std::vector<Tales::Item> ItemChoices() {
             // The load order's items do not change in a session: looked up once.
             static std::vector<Tales::Item> cached;
             if (!cached.empty()) return cached;
             std::vector<Tales::Item> out;
             std::vector<std::string> names;
+            // The papers first, named in the game's language (the language pack's labels): a story about a ledger
+            // has a ledger to put in someone's chest, not a necklace with "Ledger" stamped on it (a player's report,
+            // 2026-11-24). Without them (an older IntelEngine.esp) the list is as it was.
+            auto* arcs = ArcBridge::GetSingleton();
+            for (std::size_t i = 0; i < ArcBridge::kPapers.size(); ++i) {
+                const auto id = arcs->PaperBase(i);
+                if (!id) continue;
+                const auto name = GameText::In(LanguageBridge::GetSingleton()->Label(ArcBridge::kPapers[i].name));
+                if (name.empty() || std::find(names.begin(), names.end(), name) != names.end()) continue;
+                names.push_back(name);
+                out.push_back({name, id, true, true});
+            }
             for (const auto id : QuestBridge::GetSingleton()->Keepsakes()) {
                 const auto name = NameOf(id);
                 if (name.empty() || std::find(names.begin(), names.end(), name) != names.end()) continue;
@@ -1056,7 +1069,7 @@ namespace IntelEngine {
         ctx["asker_name"] = request->pool.people[0].name;
         ctx["people"] = people;
         nlohmann::json items = nlohmann::json::array();
-        for (const auto& i : request->pool.items) items.push_back(i.pocket ? i.name : i.name + " (home only)");
+        for (const auto& i : request->pool.items) items.push_back(i.paper ? i.name + " (paper)" : i.pocket ? i.name : i.name + " (home only)");
         ctx["items"] = items;
         // Heavy beats are not told back to back: an ambush at most once in four stories, a brawl once in three, and
         // after two stories that led out into the world the next stays among people. The engine holds to it (the

@@ -10,7 +10,8 @@
 //   "title": "...", "genre": "crime", "premise": "the hidden truth",
 //   "people": [ {"who": "p0", "part": "the one who asks", "truth": "first person: what I know, want, hide, say"}, ... ],
 //               one of them may carry "held": "d1": taken to that place before the story begins, and freed in a step
-//   "items":  [ {"id": "i1", "item": "<a name of the item list>", "name": "Ysolda's Silver Ring", "hidden": "home"|"pocket"|"at"|"ambush", "of": "p3"} ],
+//   "items":  [ {"id": "i1", "item": "<a name of the item list>", "name": "Ysolda's Silver Ring", "hidden": "home"|"pocket"|"at"|"ambush", "of": "p3"},
+//               {"id": "i2", "item": "Ledger", "name": "Lemkil's Ledger", "text": "the words written in it", ...} ],   a paper only
 //   "offer":  {"words": "what drives the asker to come", "ask": "what the player is asked", "journal": "first line", "reward": 150, "days": 3},
 //   "steps":  [ {"id": "s1", "do": "talk|find|give|choose|visit|wait|brawl|go|delve|slay|free|ambush|stalk", ...}, ... ],
 //   "endings": {"good": {...}, "bad": {...}, "other": {...}}   each {"journal", "rumor", "pay", "memories": {"p0": "..."}}
@@ -54,7 +55,12 @@ namespace IntelEngine::Tales {
         std::string name;
         std::uint32_t base = 0;
         bool pocket = true;       // may be carried in someone's pack (nothing they might put on or wield)
+        bool paper = false;       // a letter, a ledger, a journal, a note: the story writes the words in it ("text")
     };
+
+    // The most letters of what a paper says (a letter, a page of a ledger): long enough for the clue, short enough
+    // that the player reads it whole.
+    constexpr std::size_t kPaperLetters = 700;
 
     // What lives in a place, and so who waits at its heart: the boss is always the place's own kind (a centurion in a
     // Dwemer ruin, an overlord in a Nordic tomb), never the author's choice.
@@ -464,6 +470,22 @@ namespace IntelEngine::Tales {
                 a.propBase[p] = base->base;
                 a.propName[p] = Words(Str(it, "name"), 60);
                 if (a.propName[p].empty()) a.propName[p] = base->name;
+                // What is written in it. Only a paper has words in it: a story whose "ledger" was a necklace (a
+                // player's report, 2026-11-24) gave its words to the one thing on the list that could not hold
+                // them; told so, the writer picks a paper instead. The words are the writer's: the book shows them.
+                auto written = Str(it, "text");
+                std::erase_if(written, [](char c) { return c == '<' || c == '>' || c == '[' || c == ']'; });
+                written = Trim(std::move(written));
+                if (base->paper) {
+                    a.propText[p] = Words(std::move(written), kPaperLetters);
+                } else if (!written.empty()) {
+                    std::string papers;
+                    for (const auto& i : pool.items) {
+                        if (i.paper) papers += (papers.empty() ? "" : ", ") + i.name;
+                    }
+                    fail("items: " + id + " has words written in it (\"text\"), so it is a paper" +
+                         (papers.empty() ? std::string(", and the list has none: leave \"text\" out") : ": choose " + papers + ", not " + base->name));
+                }
                 const auto hidden = Lower(Str(it, "hidden"));
                 if (hidden == "ambush" || hidden == "thugs" || hidden == "leader") {
                     // Carried by the leader of the story's ambush (found on them once they are down).
