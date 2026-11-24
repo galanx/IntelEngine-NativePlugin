@@ -1,4 +1,5 @@
 import { Children, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
+import { t } from '../i18n';
 
 // Shared by selects and the searchable faction picker; geometry is in viewport pixels.
 export function useDropdown(open, setOpen, content) {
@@ -55,7 +56,9 @@ export function useDropdown(open, setOpen, content) {
 
 export const dropdownClass = 'absolute z-50 left-0 right-0 overflow-y-auto bg-[#1a1a2e] border border-white/10 rounded shadow-lg';
 
-export default function Select({ value, onChange, children, className = '', containerClassName = '', disabled = false, 'aria-label': label }) {
+// `aria-label`: the English name of what is chosen; shown (and read out) in the page's language.
+export default function Select({ value, onChange, children, className = '', containerClassName = '', disabled = false, 'aria-label': english }) {
+  const label = english && t(english);
   const allOptions = Children.toArray(children);
   const optionText = option => Children.toArray(option?.props.children).join('');
   const selectedOption = allOptions.find(option => String(option.props.value) === String(value));
@@ -115,7 +118,7 @@ export default function Select({ value, onChange, children, className = '', cont
     <div ref={ref} className={`relative min-w-0 ${containerClassName}`}>
       <input {...controlProps} type="text" autoComplete="off" aria-autocomplete="list"
         value={text}
-        placeholder={optionText(allOptions.find(option => String(option.props.value) === '')) || `${label}...`}
+        placeholder={optionText(allOptions.find(option => String(option.props.value) === '')) || t('{label}...', { label })}
         style={{ paddingRight: 24 }} onClick={() => expanded ? setOpen(false) : show()}
         onChange={e => {
           setQuery(e.target.value); setActive(0); setOpen(true);
@@ -123,7 +126,7 @@ export default function Select({ value, onChange, children, className = '', cont
         }} />
       {String(text) === '' && <span aria-hidden="true" className="absolute right-2 top-1/2 -translate-y-1/2 text-[9px] text-gray-500 pointer-events-none">▼</span>}
       {String(text) !== '' && (
-        <button type="button" aria-label={`Clear ${label}`} disabled={disabled}
+        <button type="button" aria-label={t('Clear {label}', { label })} disabled={disabled}
           onMouseDown={e => e.preventDefault()} onClick={() => {
             if (String(value) !== '') onChange({ target: { value: '' } });
             setQuery(''); setActive(0); setOpen(true); controlRef.current.focus({ preventScroll: true });
@@ -143,7 +146,7 @@ export default function Select({ value, onChange, children, className = '', cont
               {option.props.children}
             </div>
           ))}
-          {!options.length && <div className="px-2 py-1 text-xs text-gray-500">No matches</div>}
+          {!options.length && <div className="px-2 py-1 text-xs text-gray-500">{t('No matches')}</div>}
         </div>
       )}
     </div>

@@ -6,8 +6,14 @@
 #include <string_view>
 
 namespace IntelEngine {
-inline std::string BuildTaskHistoryDescription(std::string_view type, std::string_view target,
+inline std::string BuildTaskHistoryDescription(std::string_view rawType, std::string_view target,
     std::string_view result, std::string_view message, std::string_view location) {
+    // The type comes back in the string pool's spelling too ("Travel" when another script
+    // registered that spelling first), so compare it lowercased.
+    std::string lowerType(rawType);
+    std::ranges::transform(lowerType, lowerType.begin(),
+        [](unsigned char c) { return static_cast<char>(c >= 'A' && c <= 'Z' ? c + ('a' - 'A') : c); });
+    const std::string_view type = lowerType;
     // Papyrus/BSFixedString outcomes are case-insensitive; c_str() preserves
     // the pool's spelling, not necessarily the lowercase spelling of the writer.
     for (std::string_view outcome : {"success", "arrived", "player_arrived", "timeout", "delivered"}) {

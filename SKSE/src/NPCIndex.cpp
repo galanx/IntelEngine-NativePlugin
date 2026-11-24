@@ -5,6 +5,13 @@
  */
 
 #include "NPCIndex.h"
+#include "GameText.h"
+#include "LanguageBridge.h"
+#include "NameForms.h"
+#include "ArcBridge.h"
+#include "NameMatch.h"
+#include "LivingWorldBridge.h"
+#include "StorylineBridge.h"
 #include "Utf8Truncate.h"
 #include <algorithm>
 #include "CellAnalyzer.h"
@@ -15,10 +22,12 @@
 #include "SlotTracker.h"
 #include "StringUtils.h"
 #include "FactionLeaderNameMatch.h"
+#include "SoldierTemplates.h"
 #include "DirectorActorResolution.h"
 #include "ProcessUtils.h"
 #include "Settings.h"
 #include "SkyrimNetAPI.h"
+#include "SocialGroups.h"
 
 // SkyrimNetAPI.h pulls in Windows.h whose min/max macros conflict with std::min/std::max
 #ifdef max
@@ -30,9 +39,14 @@
 
 #include <random>
 #include <cmath>
+#include <atomic>
 #include <chrono>
+#include <format>
+#include <limits>
 #include <mutex>
 #include <sstream>
+#include <thread>
+#include "AsyncDispatch.h"
 
 namespace IntelEngine {
 
@@ -69,11 +83,23 @@ namespace IntelEngine {
     static std::vector<BlockedFaction> s_blockedFactions;
     static std::chrono::steady_clock::time_point s_lastBlocklistRefresh;
 
+    // The story filters below (block lists and white lists) are read from SkyrimNet's config on a worker thread before
+    // every director round (RefreshStoryFilters). Inside a frame of play they are read only when that never happened
+    // yet: reading them there, every 30 seconds, made the slice of a frame it fell into a third of a millisecond longer.
+    static std::atomic<bool> s_filtersReadOffFrame{false};
+    static thread_local bool t_readingFiltersOffFrame = false;
+
+    static bool FilterDue(std::chrono::steady_clock::time_point& lastRefresh, std::chrono::steady_clock::time_point now) {
+        if (t_readingFiltersOffFrame) return true;
+        if (s_filtersReadOffFrame.load(std::memory_order_relaxed)) return false;
+        return now - lastRefresh >= std::chrono::seconds(30);
+    }
+
     static void RefreshFactionBlocklist() {
         auto now = std::chrono::steady_clock::now();
         {
             std::lock_guard<std::mutex> lock(s_blocklistMutex);
-            if (now - s_lastBlocklistRefresh < std::chrono::seconds(30)) return;
+            if (!FilterDue(s_lastBlocklistRefresh, now)) return;
             s_lastBlocklistRefresh = now;
         }
 
@@ -179,7 +205,7 @@ namespace IntelEngine {
         auto now = std::chrono::steady_clock::now();
         {
             std::lock_guard<std::mutex> lock(mtx);
-            if (now - lastRefresh < std::chrono::seconds(30)) return;
+            if (!FilterDue(lastRefresh, now)) return;
             lastRefresh = now;
         }
         if (!SkyrimNetAPI::GetPluginConfigValue) return;
@@ -250,7 +276,7 @@ namespace IntelEngine {
     static bool IsBlockedByName(RE::Actor* actor) {
         std::lock_guard<std::mutex> lock(s_npcNameMutex);
         if (s_blockedNPCNames.empty()) return false;
-        auto displayName = actor->GetDisplayFullName();
+        auto displayName = GameText::In(actor->GetDisplayFullName());
         if (!displayName || !displayName[0]) return false;
         std::string nameLower = StringUtils::ToLowerStd(displayName);
         for (const auto& blocked : s_blockedNPCNames) {
@@ -273,7 +299,7 @@ namespace IntelEngine {
         RefreshNPCWhitelist();
         std::lock_guard<std::mutex> lock(s_npcWhitelistMutex);
         if (s_whitelistedNPCNames.empty()) return true;  // empty = everything allowed
-        auto displayName = actor->GetDisplayFullName();
+        auto displayName = GameText::In(actor->GetDisplayFullName());
         if (!displayName || !displayName[0]) return false;
         std::string nameLower = StringUtils::ToLowerStd(displayName);
         for (const auto& allowed : s_whitelistedNPCNames) {
@@ -315,7 +341,7 @@ namespace IntelEngine {
         auto now = std::chrono::steady_clock::now();
         {
             std::lock_guard<std::mutex> lock(s_factionWhitelistMutex);
-            if (now - s_factionWhitelistLastRefresh < std::chrono::seconds(30)) return;
+            if (!FilterDue(s_factionWhitelistLastRefresh, now)) return;
             s_factionWhitelistLastRefresh = now;
         }
         if (!SkyrimNetAPI::GetPluginConfigValue) return;
@@ -342,6 +368,21 @@ namespace IntelEngine {
             logger::info("Faction whitelist refreshed: {} entries", s_whitelistedFactions.size());
         }
     }
+
+    // Every story filter, read on a worker thread (Phase 0 of a director round).
+    static void RefreshStoryFilters() {
+        t_readingFiltersOffFrame = true;
+        RefreshFactionBlocklist();
+        RefreshLocationBlocklist();
+        RefreshNPCNameBlocklist();
+        RefreshNPCWhitelist();
+        RefreshLocationWhitelist();
+        RefreshFactionWhitelist();
+        t_readingFiltersOffFrame = false;
+        s_filtersReadOffFrame.store(true, std::memory_order_relaxed);
+    }
+
+    void NPCIndex::ReadStoryFilters() { RefreshStoryFilters(); }
 
     static bool PassesFactionWhitelist(RE::Actor* actor) {
         RefreshFactionWhitelist();
@@ -399,7 +440,7 @@ namespace IntelEngine {
             if (!npcForm) continue;
 
             // Get the NPC's name
-            auto name = npcForm->GetFullName();
+            auto name = GameText::In(npcForm->GetFullName());
             if (!name || strlen(name) == 0) continue;
 
             // Skip generic NPCs (no unique name)
@@ -428,13 +469,13 @@ namespace IntelEngine {
 
                 auto* actor = ref->As<RE::Actor>();
                 if (!actor || actor->IsDeleted()) return RE::BSContainer::ForEachResult::kContinue;
-                const char* displayName = actor->GetDisplayFullName();
+                const char* displayName = GameText::In(actor->GetDisplayFullName());
                 if (displayName && *displayName) m_directorActorNames[actor->GetFormID()] = displayName;
 
                 auto* base = actor->GetActorBase();
                 if (!base || !base->IsUnique()) return RE::BSContainer::ForEachResult::kContinue;
 
-                auto baseName = base->GetFullName();
+                auto baseName = GameText::In(base->GetFullName());
                 if (!baseName || strlen(baseName) == 0) return RE::BSContainer::ForEachResult::kContinue;
 
                 std::string lowerName = StringUtils::ToLowerStd(baseName);
@@ -498,7 +539,7 @@ namespace IntelEngine {
     void NPCIndex::IndexLoadedNPC(RE::Actor* actor) {
         if (!actor) return;
 
-        auto name = actor->GetDisplayFullName();
+        auto name = GameText::In(actor->GetDisplayFullName());
         if (!name || strlen(name) == 0) return;
 
         std::string lowerName = StringUtils::ToLowerStd(name);
@@ -512,7 +553,7 @@ namespace IntelEngine {
 
         // Update current location
         if (auto* cell = actor->GetParentCell()) {
-            auto cellName = cell->GetName();
+            auto cellName = GameText::In(cell->GetName());
             if (cellName && strlen(cellName) > 0) {
                 m_npcCurrentLocations[lowerName] = cellName;
             }
@@ -557,8 +598,19 @@ namespace IntelEngine {
 
         if (searchTerm.empty()) return nullptr;
 
-        std::string lowerSearch = StringUtils::ToLowerStd(searchTerm);
+        std::string lowerSearch = StringUtils::ToLowerStd(GameText::In(searchTerm));
         std::string matchedName;
+        const auto saidWords = NameForms::Read(lowerSearch);
+        const auto freeWords = LanguageBridge::GetSingleton()->Free();
+        // By a name the index holds: the loaded actor, else the one its form id gives.
+        const auto byIndexedName = [&](const std::string& name) -> RE::Actor* {
+            auto loadedIt = m_npcIndex.find(name);
+            if (loadedIt != m_npcIndex.end()) {
+                if (auto* valid = ValidateCachedActor(loadedIt->second)) return valid;
+            }
+            auto formIdIt = m_npcFormIds.find(name);
+            return formIdIt != m_npcFormIds.end() ? GetActorFromFormId(formIdIt->second) : nullptr;
+        };
 
         // 1. Exact match in loaded NPCs
         auto exactIt = m_npcIndex.find(lowerSearch);
@@ -570,11 +622,24 @@ namespace IntelEngine {
             // Stale pointer — fall through to other strategies
         }
 
+        // 1b. The name as people say it in their language (NameForms.h): with a case ending ("k Lidii"), an article
+        // ("zur ..."), an ending hung behind ("Lydian", "Whiterunit") or a particle without a space (Korean,
+        // Japanese). The whole name first; part of a name with another ending only after the ways below.
+        const auto forms = NameForms::Find(lowerSearch, m_allNames, NameForms::PartForms, freeWords);
+        if (forms && forms.stand >= NameForms::Forms) {
+            if (auto* actor = byIndexedName(m_allNames[static_cast<std::size_t>(forms.index)])) {
+                logger::info("FindNPCByName('{}') -> '{}' (the name in another form)", searchTerm, m_allNames[static_cast<std::size_t>(forms.index)]);
+                return actor;
+            }
+        }
+
         // 2. Fuzzy match with Levenshtein distance
         int maxDist = Settings::GetSingleton()->fuzzyMatchThreshold;
         auto fuzzy = StringUtils::FuzzyFind(lowerSearch, m_allNames, maxDist);
 
-        if (fuzzy) {
+        // A slip of the pen is measured by the length of the name (NameMatch.h): three letters off in a name of four
+        // is another name.
+        if (fuzzy && fuzzy.distance <= NameMatch::Slips(lowerSearch, fuzzy.match, maxDist)) {
             matchedName = fuzzy.match;
             // First try loaded actor
             auto loadedIt = m_npcIndex.find(matchedName);
@@ -598,10 +663,10 @@ namespace IntelEngine {
             }
         }
 
-        // 4. Partial substring match
+        // 4. One name inside the other, as whole words ("Jon" for "Jon Battle-Born"; never "Garth" for "Gollgarth",
+        // who came from another mod's land when someone asked for Gollgarth, or a modded name with "tsun" in it for Tsun)
         for (const auto& name : m_allNames) {
-            if (name.find(lowerSearch) != std::string::npos ||
-                lowerSearch.find(name) != std::string::npos) {
+            if (NameMatch::PartOf(name, lowerSearch)) {
 
                 auto loadedIt = m_npcIndex.find(name);
                 if (loadedIt != m_npcIndex.end()) {
@@ -624,14 +689,24 @@ namespace IntelEngine {
             }
         }
 
+        // 4b. Part of the name with another ending ("k Ionu" for Jon Battle-Born), when one name alone fits.
+        if (forms && forms.stand == NameForms::PartForms) {
+            if (auto* actor = byIndexedName(m_allNames[static_cast<std::size_t>(forms.index)])) {
+                logger::info("FindNPCByName('{}') -> '{}' (part of the name, in another form)", searchTerm, m_allNames[static_cast<std::size_t>(forms.index)]);
+                return actor;
+            }
+        }
+
         // 5. Live scan - search ALL currently loaded actors as last resort
         // This catches NPCs missed by the index (non-unique, newly spawned, etc.)
         RE::Actor* bestLiveMatch = nullptr;
         int bestLiveDist = maxDist + 1;
 
+        static auto* kwPerson = RE::TESForm::LookupByID<RE::BGSKeyword>(0x00013794);   // ActorTypeNPC
         ProcessUtils::ForEachLoadedActor([&](RE::Actor* actor) {
-            if (!actor || actor->IsDeleted()) return false;
-            auto displayName = actor->GetDisplayFullName();
+            // The dead and the disabled are nobody to send for.
+            if (!actor || actor->IsDeleted() || actor->IsDead() || actor->IsDisabled()) return false;
+            auto displayName = GameText::In(actor->GetDisplayFullName());
             if (!displayName || strlen(displayName) == 0) return false;
 
             std::string lowerName = StringUtils::ToLowerStd(displayName);
@@ -642,16 +717,23 @@ namespace IntelEngine {
                 bestLiveDist = 0;
                 return true;
             }
+            // A creature answers to its own name only (a summoned "Edan's Shadow" drew every near-miss to itself).
+            if (kwPerson && !actor->HasKeyword(kwPerson)) return false;
 
-            // Fuzzy match
+            // A slip of the pen, by the length of the name
             int dist = StringUtils::LevenshteinDistance(lowerSearch, lowerName);
-            if (dist < bestLiveDist) {
+            if (dist <= NameMatch::Slips(lowerSearch, lowerName, maxDist) && dist < bestLiveDist) {
                 bestLiveDist = dist;
                 bestLiveMatch = actor;
             }
 
-            // Substring match (treat as distance 1)
-            if (lowerName.find(lowerSearch) != std::string::npos && 1 < bestLiveDist) {
+            // The name asked for inside theirs, as whole words (treated as distance 1)
+            if (NameMatch::WholeWords(lowerName, lowerSearch) && 1 < bestLiveDist) {
+                bestLiveDist = 1;
+                bestLiveMatch = actor;
+            }
+            // ... or their name in another form (an ending, a particle): the same
+            if (1 < bestLiveDist && NameForms::Stands(NameForms::Read(lowerName), saidWords, freeWords).stand >= NameForms::Forms) {
                 bestLiveDist = 1;
                 bestLiveMatch = actor;
             }
@@ -661,7 +743,7 @@ namespace IntelEngine {
 
         if (bestLiveMatch && bestLiveDist <= maxDist) {
             logger::info("FindNPCByName('{}') -> Live scan found '{}' (distance={})",
-                        searchTerm, bestLiveMatch->GetDisplayFullName(), bestLiveDist);
+                        searchTerm, GameText::In(bestLiveMatch->GetDisplayFullName()), bestLiveDist);
             return bestLiveMatch;
         }
 
@@ -678,9 +760,11 @@ namespace IntelEngine {
         std::shared_lock lock(m_mutex);
         if (searchTerm.empty()) return nullptr;
 
-        std::string lowerSearch = StringUtils::ToLowerStd(searchTerm);
+        std::string lowerSearch = StringUtils::ToLowerStd(GameText::In(searchTerm));
         int maxDist = Settings::GetSingleton()->fuzzyMatchThreshold;
         auto nearPos = nearActor->GetPosition();
+        const auto saidWords = NameForms::Read(lowerSearch);
+        const auto freeWords = LanguageBridge::GetSingleton()->Free();
 
         struct Candidate {
             RE::Actor* actor;
@@ -691,23 +775,29 @@ namespace IntelEngine {
         std::vector<Candidate> candidates;
 
         // Single pass through all loaded actors — collect all candidates
+        static auto* kwPersonNear = RE::TESForm::LookupByID<RE::BGSKeyword>(0x00013794);   // ActorTypeNPC
         ProcessUtils::ForEachLoadedActor([&](RE::Actor* actor) {
-            if (!actor || actor->IsDeleted()) return false;
+            if (!actor || actor->IsDeleted() || actor->IsDead() || actor->IsDisabled()) return false;
             if (!allowSelf && actor == nearActor) return false;  // skip self unless allowed
-            auto displayName = actor->GetDisplayFullName();
+            auto displayName = GameText::In(actor->GetDisplayFullName());
             if (!displayName || strlen(displayName) == 0) return false;
 
             std::string lowerName = StringUtils::ToLowerStd(displayName);
             int nameScore = -1;  // -1 = no match
+            // A creature answers to its own name only; people also to part of it (whole words) or a slip of the pen.
+            const bool person = !kwPersonNear || actor->HasKeyword(kwPersonNear);
 
             if (lowerName == lowerSearch) {
                 nameScore = 0;  // exact
-            } else if (lowerName.find(lowerSearch) != std::string::npos ||
-                       lowerSearch.find(lowerName) != std::string::npos) {
-                nameScore = 1;  // substring
-            } else {
+            } else if (person && NameMatch::PartOf(lowerName, lowerSearch)) {
+                nameScore = 1;  // one name inside the other, as whole words (NameMatch.h)
+            } else if (const auto stands = person ? NameForms::Stands(NameForms::Read(lowerName), saidWords, freeWords).stand : NameForms::No;
+                       stands >= NameForms::PartForms) {
+                // their name in another form (NameForms.h): the whole name like a whole-word match, part of it after
+                nameScore = stands >= NameForms::Forms ? 1 : 2;
+            } else if (person) {
                 int leven = StringUtils::LevenshteinDistance(lowerSearch, lowerName);
-                if (leven <= maxDist) {
+                if (leven <= NameMatch::Slips(lowerSearch, lowerName, maxDist)) {
                     nameScore = 2 + leven;  // fuzzy
                 }
             }
@@ -740,7 +830,7 @@ namespace IntelEngine {
         }
 
         logger::debug("FindByNameNear('{}') -> '{}' (score={}, dist={:.0f}, {} candidates)",
-                     searchTerm, best->actor->GetDisplayFullName(), best->nameScore,
+                     searchTerm, GameText::In(best->actor->GetDisplayFullName()), best->nameScore,
                      std::sqrt(best->distSq), candidates.size());
         return best->actor;
     }
@@ -748,14 +838,29 @@ namespace IntelEngine {
     RE::FormID NPCIndex::FindFactionLeaderFormId(const std::string& searchTerm) {
         if (searchTerm.empty()) return 0;
 
-        std::shared_lock lock(m_mutex);
-        RE::FormID boundaryMatch = 0;
-        for (const auto& [indexedName, formId] : m_npcFormIds) {
-            if (!formId || !IsFactionLeaderNameMatch(indexedName, searchTerm)) continue;
-            if (indexedName.size() == searchTerm.size()) return formId;
-            if (!boundaryMatch) boundaryMatch = formId;
+        // A leader given by record ("0x0001327E", "MyMod.esp|0x000801"): that record, whatever the game calls it.
+        if (SoldierTemplates::Ref ref; SoldierTemplates::ParseRef(searchTerm, ref)) {
+            RE::TESForm* form = nullptr;
+            if (ref.plugin.empty()) {
+                form = RE::TESForm::LookupByID(ref.formId);
+            } else if (auto* data = RE::TESDataHandler::GetSingleton()) {
+                form = data->LookupForm(ref.formId, ref.plugin);
+            }
+            return form ? form->GetFormID() : 0;
         }
-        return boundaryMatch;
+
+        {
+            std::shared_lock lock(m_mutex);
+            RE::FormID boundaryMatch = 0;
+            for (const auto& [indexedName, formId] : m_npcFormIds) {
+                if (!formId || !IsFactionLeaderNameMatch(indexedName, searchTerm)) continue;
+                if (indexedName.size() == searchTerm.size()) return formId;
+                if (!boundaryMatch) boundaryMatch = formId;
+            }
+            if (boundaryMatch) return boundaryMatch;
+        }
+        // Nobody of that name: a game in another language. The shipped leaders are known by their records.
+        return KnownLeaderRecord(searchTerm);
     }
 
     RE::FormID NPCIndex::FindFormIdByName(const std::string& searchTerm) {
@@ -763,12 +868,18 @@ namespace IntelEngine {
 
         if (searchTerm.empty()) return 0;
 
-        std::string lowerSearch = StringUtils::ToLowerStd(searchTerm);
+        std::string lowerSearch = StringUtils::ToLowerStd(GameText::In(searchTerm));
 
         // 1. Exact match
         auto exactIt = m_npcFormIds.find(lowerSearch);
         if (exactIt != m_npcFormIds.end()) {
             return exactIt->second;
+        }
+
+        // 1b. The name in another form (NameForms.h)
+        if (const auto forms = NameForms::Find(lowerSearch, m_allNames, NameForms::Forms, LanguageBridge::GetSingleton()->Free())) {
+            auto it = m_npcFormIds.find(m_allNames[static_cast<std::size_t>(forms.index)]);
+            if (it != m_npcFormIds.end()) return it->second;
         }
 
         // 2. Fuzzy match
@@ -789,12 +900,18 @@ namespace IntelEngine {
 
         if (searchTerm.empty()) return "";
 
-        std::string lowerSearch = StringUtils::ToLowerStd(searchTerm);
+        std::string lowerSearch = StringUtils::ToLowerStd(GameText::In(searchTerm));
 
         // Exact match
         auto exactIt = m_npcCurrentLocations.find(lowerSearch);
         if (exactIt != m_npcCurrentLocations.end()) {
             return RE::BSFixedString(exactIt->second);
+        }
+
+        // The name in another form (NameForms.h)
+        if (const auto forms = NameForms::Find(lowerSearch, m_allNames, NameForms::Forms, LanguageBridge::GetSingleton()->Free())) {
+            auto locIt = m_npcCurrentLocations.find(m_allNames[static_cast<std::size_t>(forms.index)]);
+            if (locIt != m_npcCurrentLocations.end()) return RE::BSFixedString(locIt->second);
         }
 
         // Fuzzy match — use FuzzyFind (consistent with rest of codebase)
@@ -855,7 +972,7 @@ namespace IntelEngine {
         // Merge current references: actors can spawn or change display names after the load-time build.
         ProcessUtils::ForEachLoadedActor([this](RE::Actor* actor) {
             if (!actor) return false;
-            const char* displayName = actor->GetDisplayFullName();
+            const char* displayName = GameText::In(actor->GetDisplayFullName());
             if (displayName && *displayName) m_directorActorNames[actor->GetFormID()] = displayName;
             else m_directorActorNames.erase(actor->GetFormID());
             return false;
@@ -917,6 +1034,46 @@ namespace IntelEngine {
 
     RE::Actor* NPCIndex::ResolveStoryCandidate(const std::string& name, const std::string& partnerName, RE::Actor* anchor) {
         std::shared_lock lock(m_mutex);
+        // The social engine's answer names two people of one group of its request: they are looked for together, in
+        // that group. A name alone does not say who on a load order with several of that name (a mod's copy of Sven
+        // in a back room, three "Imperial Soldier" in a camp), and the tie-break below asks who is nearest the player,
+        // which is nobody when the scene is somewhere the player is not: every pair the model chose at Riverwood's
+        // inn was dropped as "no-match" after the model had been paid for it (2026-11-23, StoryCandidateResolution.h).
+        if (!partnerName.empty()) {
+            // The last request's people, then those of the one before (its answer may come after the next request
+            // went out). The second of a pair is looked for where the first one was offered.
+            const bool earlierHolds = m_npcPoolGeneration == SlotTracker::GetSingleton()->loadGeneration.load(std::memory_order_relaxed);
+            for (const bool earlier : {false, true}) {
+                if (earlier && !earlierHolds) break;
+                const auto& pool = earlier ? m_npcEarlierPool : m_npcCandidatePool;
+                const auto& groups = earlier ? m_npcEarlierGroups : m_npcCandidateGroups;
+                if (pool.empty()) continue;
+                std::uint32_t id = 0;
+                const char* how = "";
+                bool told = false;
+                if (anchor) {
+                    if (!groups.count(anchor->GetFormID())) continue;
+                    id = ResolveStoryPartner(name, anchor->GetFormID(), pool, groups);
+                } else {
+                    const auto pair = ResolveStoryPair(name, partnerName, pool, groups);
+                    id = pair.first;
+                    how = pair.how;
+                    told = pair.told;
+                }
+                auto* found = id ? RE::TESForm::LookupByID<RE::Actor>(id) : nullptr;
+                if (found && !found->IsDeleted() && found->GetFormID() == id) {
+                    if (told) {
+                        logger::info("ResolveStoryCandidate('{}') -> {:08X}: several of that name were offered, the one in the "
+                                     "group of '{}' is meant", name, id, partnerName);
+                    }
+                    if (earlier) logger::info("ResolveStoryCandidate('{}') -> {:08X}: of the request before the last", name, id);
+                    return found;
+                }
+                if (!anchor && !earlier && std::string_view(how) != "no-match") {
+                    logger::info("ResolveStoryCandidate('{}' with '{}') -> no pair among those offered ({})", name, partnerName, how);
+                }
+            }
+        }
         // ponytail: latest-tick pools cannot isolate overlapping requests;
         // upgrade to request-bound resolution via the Papyrus contract.
         StoryCandidateRejection rejection;
@@ -1034,7 +1191,7 @@ namespace IntelEngine {
             return "";
         }
 
-        std::string lowerSearch = StringUtils::ToLowerStd(searchTerm);
+        std::string lowerSearch = StringUtils::ToLowerStd(GameText::In(searchTerm));
 
         // Find closest match (distance <= 5 for suggestions)
         auto fuzzy = StringUtils::FuzzyFind(lowerSearch, m_allNames, 5);
@@ -1044,7 +1201,7 @@ namespace IntelEngine {
             auto it = m_npcIndex.find(fuzzy.match);
             if (it != m_npcIndex.end()) {
                 if (auto* valid = ValidateCachedActor(it->second)) {
-                    return valid->GetDisplayFullName();
+                    return GameText::In(valid->GetDisplayFullName());
                 }
             }
         }
@@ -1079,7 +1236,7 @@ namespace IntelEngine {
     static bool PassesCommonEligibility(RE::Actor* actor, RE::Actor* player, SlotTracker* tracker, bool verbose) {
         if (!actor || actor == player) return false;
 
-        auto displayName = actor->GetDisplayFullName();
+        auto displayName = GameText::In(actor->GetDisplayFullName());
         if (!displayName || !displayName[0] || std::string_view(displayName) == "Unknown") {
             if (verbose) logger::debug("[StoryDM] Rejected 0x{:08X}: no display name", actor->GetFormID());
             return false;
@@ -1097,6 +1254,12 @@ namespace IntelEngine {
             if (verbose) logger::debug("[StoryDM] Rejected '{}': disabled", displayName);
             return false;
         }
+        // 4.0: a scene holds them (a bard performing, a quest's conversation): no package moves them until it ends,
+        // so a moment sent with them stalls where the player can see it.
+        if (actor->GetCurrentScene()) {
+            if (verbose) logger::debug("[StoryDM] Rejected '{}': in a scene", displayName);
+            return false;
+        }
         if (tracker && (tracker->HasActiveTask(actor) || tracker->IsOnCooldown(actor))) {
             if (verbose) logger::debug("[StoryDM] Rejected '{}': active task or cooldown", displayName);
             return false;
@@ -1107,6 +1270,24 @@ namespace IntelEngine {
             if (verbose) logger::debug("[StoryDM] Rejected '{}': not ActorTypeNPC", displayName);
             return false;
         }
+        // The people of the game's carriages and ferries stay with their cart or boat (CarriageSystemFaction,
+        // JobCarriageFaction; Dawnguard's DLC1FerrySystemFaction; Hearthfire's BYOHCarriageDriverFaction): sent to the
+        // player they were stuck off it for good, and the service was broken.
+        {
+            static const std::array<RE::TESFaction*, 4> kDrivers = []() {
+                auto* data = RE::TESDataHandler::GetSingleton();
+                return std::array<RE::TESFaction*, 4>{
+                    RE::TESForm::LookupByID<RE::TESFaction>(0x00017F04), RE::TESForm::LookupByID<RE::TESFaction>(0x000DDDA8),
+                    data ? data->LookupForm<RE::TESFaction>(0x016849, "Dawnguard.esm") : nullptr,
+                    data ? data->LookupForm<RE::TESFaction>(0x007890, "HearthFires.esm") : nullptr};
+            }();
+            for (auto* drivers : kDrivers) {
+                if (drivers && actor->IsInFaction(drivers)) {
+                    if (verbose) logger::debug("[StoryDM] Rejected '{}': a carriage driver or ferryman", displayName);
+                    return false;
+                }
+            }
+        }
         if (auto* race = actor->GetRace()) {
             if (race->IsChildRace()) {
                 if (verbose) logger::debug("[StoryDM] Rejected '{}': child race", displayName);
@@ -1115,6 +1296,13 @@ namespace IntelEngine {
         }
         if (NPCIndex::GetSingleton()->IsOnStoryCooldown(actor->GetFormID(), NPCIndex::GetStoryCooldownHours())) {
             if (verbose) logger::debug("[StoryDM] Rejected '{}': story cooldown", displayName);
+            return false;
+        }
+
+        // 4.0: the target of an objective the player has open never moves; at "Quest NPCs may move:
+        // Never" nobody in a running quest is offered (at "only for something important" the dispatch checks the kind).
+        if (!LivingWorldBridge::GetSingleton()->MayOfferForStory(actor)) {
+            if (verbose) logger::debug("[StoryDM] Rejected '{}': held by a running quest", displayName);
             return false;
         }
 
@@ -1166,6 +1354,25 @@ namespace IntelEngine {
         return true;
     }
 
+    bool NPCIndex::IsPleaPlace(RE::Actor* player) {
+        auto* location = player ? player->GetCurrentLocation() : nullptr;
+        if (!location || location->HasKeywordString("LocTypePlayerHouse") || LivingWorldBridge::IsDungeon(location)) return false;
+        if (CellAnalyzer::GetSingleton()->IsPlayerInDangerousLocation()) return false;
+        if (location->HasKeywordString("LocTypeInn")) return true;
+        for (auto* loc = location; loc; loc = loc->parentLoc) {
+            if (loc->HasKeywordString("LocTypeCity") || loc->HasKeywordString("LocTypeTown") ||
+                loc->HasKeywordString("LocTypeSettlement")) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    bool NPCIndex::BlockedForStories(RE::Actor* actor) {
+        if (!actor) return true;
+        return IsInBlockedFaction(actor) || IsBlockedByName(actor) || !PassesFactionWhitelist(actor) || !PassesNPCWhitelist(actor);
+    }
+
     bool NPCIndex::IsEligibleStoryCandidate(RE::Actor* actor, RE::Actor* player,
         RE::TESObjectCELL* playerCell, SlotTracker* tracker) {
         if (!PassesCommonEligibility(actor, player, tracker, false)) return false;
@@ -1194,18 +1401,18 @@ namespace IntelEngine {
 
         // Loaded: use current cell/location
         if (auto* cell = actor->GetParentCell()) {
-            auto cellName = cell->GetName();
+            auto cellName = GameText::In(cell->GetName());
             if (cellName && cellName[0]) return cellName;
 
             if (auto* loc = actor->GetCurrentLocation()) {
-                auto locName = loc->GetFullName();
+                auto locName = GameText::In(loc->GetFullName());
                 if (locName && locName[0]) return locName;
             }
         }
 
         // Unloaded: fall back to editor location
         if (auto* editorLoc = actor->GetEditorLocation()) {
-            auto locName = editorLoc->GetFullName();
+            auto locName = GameText::In(editorLoc->GetFullName());
             if (locName && locName[0]) return locName;
         }
 
@@ -1230,16 +1437,78 @@ namespace IntelEngine {
         return loc;
     }
 
+    namespace {
+        // The hold the player was last known to be in, for the stretches of open country the game gives no place at
+        // all (the tundra between Whiterun and its camps): there the player's hold read as none, everybody of the
+        // hold as "in another hold", and the user's own limits on who may cross holds as passed, since no hold could
+        // be told (the play session of 2026-11-22). Forgotten when a save is loaded.
+        std::mutex g_playerHoldMutex;
+        std::string g_playerHoldLast;
+        std::uint32_t g_playerHoldGeneration = 0;
+    }
+
+    void NPCIndex::NotePlayerHold(const RE::BGSLocation* location) {
+        int depth = 0;
+        for (auto* at = location; at && depth < 12; at = at->parentLoc, ++depth) {
+            if (!at->HasKeywordString("LocTypeHold")) continue;
+            const char* name = GameText::In(at->GetFullName());
+            if (!name || !name[0]) return;
+            const auto generation = SlotTracker::GetSingleton()->loadGeneration.load(std::memory_order_relaxed);
+            std::scoped_lock lock(g_playerHoldMutex);
+            g_playerHoldGeneration = generation;
+            g_playerHoldLast = name;
+            return;
+        }
+    }
+
     std::string NPCIndex::GetNPCHoldName(RE::Actor* actor) {
-        auto* loc = ResolveActorLocation(actor);
+        if (actor && actor->IsPlayerRef()) {
+            // Only a place the game itself marks as a hold counts as knowing where the player is: in open country the
+            // nearest name is the land's ("Skyrim"), which the rule for load orders without marked holds would take for
+            // a hold of its own, and everybody of Whiterun stood "in another hold" from a player a mile outside its
+            // walls (seen on the full list, 2026-11-22).
+            auto* place = ResolveActorLocation(actor);
+            std::string hold;
+            int depth = 0;
+            for (auto* at = place; at && depth < 12; at = at->parentLoc, ++depth) {
+                if (!at->HasKeywordString("LocTypeHold")) continue;
+                if (auto holdName = GameText::In(at->GetFullName()); holdName && holdName[0]) hold = holdName;
+                break;
+            }
+            const auto generation = SlotTracker::GetSingleton()->loadGeneration.load(std::memory_order_relaxed);
+            std::scoped_lock lock(g_playerHoldMutex);
+            if (g_playerHoldGeneration != generation) {
+                g_playerHoldGeneration = generation;
+                g_playerHoldLast.clear();
+            }
+            if (!hold.empty()) {
+                g_playerHoldLast = hold;
+                return hold;
+            }
+            if (auto* cell = actor->GetParentCell(); cell && !cell->IsInteriorCell() && !g_playerHoldLast.empty()) return g_playerHoldLast;
+            return HoldNameAt(place);   // no hold walked in yet this session, or a load order without marked holds
+        }
+        return HoldNameAt(ResolveActorLocation(actor));
+    }
+
+    std::string NPCIndex::HoldNameAt(RE::BGSLocation* loc) {
         if (!loc) return "";
 
+        // The hold is the location the game itself marks as one (LocTypeHold). Where a load order has none above
+        // this place, the old rule below stands in.
+        {
+            int depth = 0;
+            for (auto* at = loc; at && depth < 12; at = at->parentLoc, ++depth) {
+                if (!at->HasKeywordString("LocTypeHold")) continue;
+                if (auto holdName = GameText::In(at->GetFullName()); holdName && holdName[0]) return holdName;
+            }
+        }
         // Walk up but stop at the hold level — the topmost is "Tamriel" (worldspace), one too far.
         // Stop when the parent's parent is null (parent = worldspace = top).
         while (loc->parentLoc && loc->parentLoc->parentLoc) {
             loc = loc->parentLoc;
         }
-        auto name = loc->GetFullName();
+        auto name = GameText::In(loc->GetFullName());
         return (name && name[0]) ? name : "";
     }
 
@@ -1256,7 +1525,7 @@ namespace IntelEngine {
         while (current) {
             if ((s_cityKW && current->HasKeyword(s_cityKW)) ||
                 (s_townKW && current->HasKeyword(s_townKW))) {
-                auto name = current->GetFullName();
+                auto name = GameText::In(current->GetFullName());
                 return (name && name[0]) ? name : "";
             }
             current = current->parentLoc;
@@ -1264,7 +1533,7 @@ namespace IntelEngine {
 
         // No city/town keyword found — NPC is in wilderness/unnamed area.
         // Return the immediate location name as fallback.
-        auto name = loc->GetFullName();
+        auto name = GameText::In(loc->GetFullName());
         return (name && name[0]) ? name : "";
     }
 
@@ -1312,7 +1581,7 @@ namespace IntelEngine {
             if (!IsEligibleStoryCandidate(actor, player, playerCell, tracker)) continue;
 
             logger::info("GetMemoryDrivenCandidate: '{}' (score: {:.1f})",
-                        actor->GetDisplayFullName(), score);
+                        GameText::In(actor->GetDisplayFullName()), score);
             return actor;
         }
 
@@ -1342,7 +1611,7 @@ namespace IntelEngine {
             if (!IsEligibleStoryCandidate(actor, player, playerCell, tracker)) continue;
 
             logger::info("GetRelatedCandidate: '{}' related to '{}' (score: {:.1f})",
-                        actor->GetDisplayFullName(), relatedTo->GetDisplayFullName(), score);
+                        GameText::In(actor->GetDisplayFullName()), GameText::In(relatedTo->GetDisplayFullName()), score);
             return actor;
         }
 
@@ -1356,7 +1625,7 @@ namespace IntelEngine {
             if (!IsEligibleStoryCandidate(actor, player, playerCell, tracker)) continue;
 
             logger::info("GetRelatedCandidate: '{}' (fallback, score: {:.1f})",
-                        actor->GetDisplayFullName(), score);
+                        GameText::In(actor->GetDisplayFullName()), score);
             return actor;
         }
 
@@ -1407,7 +1676,7 @@ namespace IntelEngine {
                 for (auto* actor : householdActors) {
                     if (isValidMessenger(actor)) {
                         logger::info("FindMessengerForSender: household '{}' for '{}'",
-                            actor->GetDisplayFullName(), sender->GetDisplayFullName());
+                            GameText::In(actor->GetDisplayFullName()), GameText::In(sender->GetDisplayFullName()));
                         return actor;
                     }
                 }
@@ -1423,7 +1692,7 @@ namespace IntelEngine {
                 auto* actor = ResolveFromMemoryDB(formId, name);
                 if (isValidMessenger(actor) && !senderHold.empty() && GetNPCHoldName(actor) == senderHold) {
                     logger::info("FindMessengerForSender: associate '{}' for '{}' (score: {:.1f})",
-                        actor->GetDisplayFullName(), sender->GetDisplayFullName(), score);
+                        GameText::In(actor->GetDisplayFullName()), GameText::In(sender->GetDisplayFullName()), score);
                     return actor;
                 }
             }
@@ -1457,7 +1726,7 @@ namespace IntelEngine {
             std::uniform_int_distribution<size_t> dist(0, guards.size() - 1);
             auto* guard = guards[dist(rng)];
             logger::info("FindMessengerForSender: guard '{}' from {} for '{}'",
-                guard->GetDisplayFullName(), senderHold, sender->GetDisplayFullName());
+                GameText::In(guard->GetDisplayFullName()), senderHold, GameText::In(sender->GetDisplayFullName()));
             return guard;
         }
 
@@ -1467,7 +1736,7 @@ namespace IntelEngine {
             std::uniform_int_distribution<size_t> dist(0, sameHoldCivilians.size() - 1);
             auto* civ = sameHoldCivilians[dist(rng)];
             logger::info("FindMessengerForSender: civilian '{}' for '{}'",
-                civ->GetDisplayFullName(), sender->GetDisplayFullName());
+                GameText::In(civ->GetDisplayFullName()), GameText::In(sender->GetDisplayFullName()));
             return civ;
         }
 
@@ -1479,12 +1748,12 @@ namespace IntelEngine {
             std::uniform_int_distribution<size_t> dist(0, anyHoldMessengers.size() - 1);
             auto* msg = anyHoldMessengers[dist(rng)];
             logger::info("FindMessengerForSender: any-hold fallback '{}' ({}) for '{}'",
-                msg->GetDisplayFullName(), GetNPCHoldName(msg), sender->GetDisplayFullName());
+                GameText::In(msg->GetDisplayFullName()), GetNPCHoldName(msg), GameText::In(sender->GetDisplayFullName()));
             return msg;
         }
 
         logger::info("FindMessengerForSender: no messenger found for '{}'",
-            sender->GetDisplayFullName());
+            GameText::In(sender->GetDisplayFullName()));
         return nullptr;
     }
 
@@ -1498,11 +1767,21 @@ namespace IntelEngine {
         // Only known civilian classes get mapped to CIVILIAN — everything else
         // is returned uppercased so the DM LLM can interpret it contextually.
         if (auto* cls = base->npcClass) {
-            auto raw = cls->GetFullName();
+            // The game's own civilian classes by their records: their names are the game's language's ("Buerger",
+            // "Krestyanin"), the records are the same in every game. Read from Skyrim.esm 1.5.97 with the English
+            // string table: every class named Citizen, Farmer, Beggar, Child, Lumberjack, Miner, Food Vendor,
+            // Apothecary or Blacksmith (the trainers so named among them). The DLCs add none.
+            static constexpr RE::FormID kCivilianClasses[] = {
+                0x0001326B, 0x0001326C, 0x0001327B, 0x00013279, 0x0001326E, 0x0001326D, 0x00013256, 0x00013258, 0x00013257,
+                0x000B8340, 0x000AEDD2, 0x00042DC1, 0x000E7F45, 0x000E3A6E, 0x000E3A61, 0x000E3A60, 0x000E3A5F, 0x000E3A5D};
+            if (std::find(std::begin(kCivilianClasses), std::end(kCivilianClasses), cls->GetFormID()) != std::end(kCivilianClasses)) {
+                return "CIVILIAN";
+            }
+            auto raw = GameText::In(cls->GetFullName());
             if (raw && raw[0]) {
                 std::string classLower = StringUtils::ToLowerStd(raw);
 
-                // Known civilian classes → CIVILIAN
+                // Known civilian classes → CIVILIAN (a mod's classes, by their English names)
                 if (classLower == "citizen" || classLower == "farmer" ||
                     classLower == "beggar" || classLower == "child" ||
                     classLower == "bard's college" || classLower == "food vendor" ||
@@ -1563,7 +1842,7 @@ namespace IntelEngine {
             return true;
 
         // Name-based fallback for modded games that strip vanilla factions
-        auto name = actor->GetDisplayFullName();
+        auto name = GameText::In(actor->GetDisplayFullName());
         if (name && std::string_view(name).substr(0, 5) == "Jarl ") {
             logger::debug("IsJarl: '{}' matched by name prefix (faction check failed)", name);
             return true;
@@ -1606,6 +1885,30 @@ namespace IntelEngine {
             if (actor->IsInFaction(hsFaction)) return true;
         }
         return false;
+    }
+
+    std::uint8_t NPCIndex::ReachOf(RE::Actor* actor) {
+        auto* player = RE::PlayerCharacter::GetSingleton();
+        if (!actor || !player) return 2;
+        // With the player: in the same room, or out of doors in the same world and not far off. "Loaded" alone says
+        // nothing: the game keeps the people of a place it just left in memory (Sven in Riverwood read as "here"
+        // from inside the inn at Whiterun, 2026-11-19).
+        auto* theirCell = actor->GetParentCell();
+        auto* cell = player->GetParentCell();
+        if (theirCell && cell) {
+            if (theirCell == cell) return 0;
+            if (!theirCell->IsInteriorCell() && !cell->IsInteriorCell() && actor->GetWorldspace() == player->GetWorldspace() &&
+                actor->GetPosition().GetDistance(player->GetPosition()) < 10000.0f) {
+                return 0;
+            }
+        }
+        // Of the player's own settlement, with the player among its houses. With the player out at one of its farms or
+        // on the road, somebody of the town is no nearer than the rest of the hold: they need the reason, and the
+        // acquaintance, anybody there needs (an innkeeper walked out of Whiterun to a farm for a favour, 2026-11-21).
+        const std::string theirTown = GetActorSettlementName(actor);
+        if (!theirTown.empty() && theirTown == GetActorSettlementName(player)) return ArcBridge::GetSingleton()->PlayerInTownProper() ? 0 : 1;
+        const std::string theirHold = GetNPCHoldName(actor);
+        return !theirHold.empty() && theirHold == GetNPCHoldName(player) ? 1 : 2;
     }
 
     // Check if an NPC passes the hold restriction policy for a given story type.
@@ -1663,7 +1966,7 @@ namespace IntelEngine {
         // message + quest only — they NEVER travel personally.
         // For quest, the DM prompt enforces courier mode (NPC as sender, not courier).
         if (IsHighStatus(actor)) {
-            auto name = actor->GetDisplayFullName();
+            auto name = GameText::In(actor->GetDisplayFullName());
             logger::debug("GetEligibleStoryTypes: '{}' is high-status -> message, quest only", name ? name : "?");
             return "message, quest";
         }
@@ -1730,7 +2033,7 @@ namespace IntelEngine {
         std::string result;
 
         if (auto* race = base->GetRace()) {
-            auto raceName = race->GetFullName();
+            auto raceName = GameText::In(race->GetFullName());
             if (raceName && raceName[0]) {
                 result = raceName;
             }
@@ -1742,7 +2045,7 @@ namespace IntelEngine {
             if (fr.faction->GetFormType() != RE::FormType::Faction) {
                 static bool warned = false;
                 if (!warned) {
-                    logger::warn("[NPCIndex] Skipping non-faction entry {:08X} (type {}) in faction list of {:08X} '{}'", fr.faction->GetFormID(), static_cast<uint32_t>(fr.faction->GetFormType()), base->GetFormID(), base->GetFullName());
+                    logger::warn("[NPCIndex] Skipping non-faction entry {:08X} (type {}) in faction list of {:08X} '{}'", fr.faction->GetFormID(), static_cast<uint32_t>(fr.faction->GetFormType()), base->GetFormID(), GameText::In(base->GetFullName()));
                     warned = true;
                 }
                 continue;
@@ -1769,7 +2072,7 @@ namespace IntelEngine {
             if (eid.find("Favor") != std::string::npos) continue;
             if (eid.find("defaultDisallow") != std::string::npos) continue;
 
-            auto dispName = fr.faction->GetFullName();
+            auto dispName = GameText::In(fr.faction->GetFullName());
             if (dispName && dispName[0]) {
                 factionNames.push_back(dispName);
             } else {
@@ -1837,18 +2140,40 @@ namespace IntelEngine {
     // Async NPC interaction tick — Phase A (snapshot, main thread)
     // =========================================================================
 
-    NPCIndex::NPCTickSnapshot NPCIndex::BuildNPCTickSnapshot(int maxPairs) {
-        NPCTickSnapshot snap;
-        snap.maxPairs = maxPairs;
+    namespace {
+        // Runs step() on the game's thread once per frame until it returns true, then finish(): a worker waits about
+        // a frame between them before it hands the next one over, as the proximity watch does, so two never share a
+        // frame. Nothing more runs once a save was loaded meanwhile.
+        void RunAcrossFrames(std::uint32_t generation, std::function<bool()> step, std::function<void()> finish) {
+            AsyncDispatch::Submit([generation, step = std::move(step), finish = std::move(finish)]() {
+                std::this_thread::sleep_for(std::chrono::milliseconds(16));
+                auto* task = SKSE::GetTaskInterface();
+                if (!task) return;
+                task->AddTask([generation, step, finish]() {
+                    if (SlotTracker::GetSingleton()->loadGeneration.load(std::memory_order_relaxed) != generation) {
+                        logger::info("[NPCIndex] a save was loaded while a snapshot was taken: dropped");
+                        return;
+                    }
+                    if (!step()) {
+                        RunAcrossFrames(generation, step, finish);
+                        return;
+                    }
+                    finish();
+                });
+            });
+        }
+    }
+
+    bool NPCIndex::BeginNPCTickSnapshot(NPCTickSnapshot& snap) {
         snap.loadGeneration = SlotTracker::GetSingleton()->loadGeneration.load(std::memory_order_relaxed);
 
         auto* player = RE::PlayerCharacter::GetSingleton();
-        if (!player) return snap;
+        if (!player) return false;
         auto* playerCell = player->GetParentCell();
-        if (!playerCell) return snap;
+        if (!playerCell) return false;
 
         snap.playerCellFormId = playerCell->GetFormID();
-        if (auto* nm = player->GetDisplayFullName()) snap.playerName = nm;
+        if (auto* nm = GameText::In(player->GetDisplayFullName())) snap.playerName = nm;
 
         auto* locResolver = LocationResolver::GetSingleton();
         snap.playerLocation = locResolver->GetActorLocationName(player).c_str();
@@ -1858,63 +2183,252 @@ namespace IntelEngine {
 
         auto* cal = RE::Calendar::GetSingleton();
         snap.currentGameTime = cal ? cal->GetCurrentGameTime() : 0.f;
-
-        auto* tracker = SlotTracker::GetSingleton();
-        static auto* kwActorTypeNPC = RE::TESForm::LookupByID<RE::BGSKeyword>(0x00013794);
-        const float storyCooldownHours = GetStoryCooldownHours();
-
         snap.candidates.reserve(64);
+        return true;
+    }
 
+    namespace {
+        // A back room: an interior with no door to anywhere and no place of the world it belongs to. Mods keep their
+        // stock there (a museum's thirty figures named "Planter", a test cell of soldiers, copies of townsfolk for a
+        // scene); nobody walks in, and the people in it are no company for a scene. Both signs must fail, so that a
+        // real house a mod gave no location, or one whose door is not to be seen while it is not loaded, stays.
+        bool BackRoom(RE::TESObjectCELL* cell, std::unordered_map<RE::FormID, bool>& rooms) {
+            if (!cell || !cell->IsInteriorCell()) return false;
+            const auto [known, fresh] = rooms.try_emplace(cell->GetFormID(), false);
+            if (!fresh) return known->second;
+            if (cell->GetLocation()) return false;
+            bool door = false;
+            cell->ForEachReference([&](RE::TESObjectREFR* ref) -> RE::BSContainer::ForEachResult {
+                if (!ref || ref->IsDeleted()) return RE::BSContainer::ForEachResult::kContinue;
+                if (ref->extraList.GetByType<RE::ExtraTeleport>()) {
+                    door = true;
+                    return RE::BSContainer::ForEachResult::kStop;
+                }
+                return RE::BSContainer::ForEachResult::kContinue;
+            });
+            known->second = !door;
+            return !door;
+        }
+
+        // What a slice of a snapshot spread over frames may spend before it ends. It runs over by its last person, and
+        // one person can take 0.17 ms: with 0.35, three scans of sixteen had a frame of 0.48 to 0.50 ms on a list of
+        // 9,800 actors (2026-11-23). Half a millisecond of a frame is the limit.
+        constexpr double kSliceMs = 0.30;
+        // A slice that has spent more than this ends before a room nobody has looked at yet (see BackRoom).
+        constexpr double kRoomAloneMs = 0.05;
+
+        // Everyone the game has in its lists, as it keeps them: the handles are copied as they are. Asking each for
+        // its actor and the actor for a handle of its own took 1.1 to 1.2 ms of one frame on a list of 9,800 actors
+        // (2026-11-23), every time either snapshot began; the slices that follow ask each handle for its actor anyway.
+
+        void GatherLoaded(std::vector<RE::ActorHandle>& loaded) {
+            auto* lists = RE::ProcessLists::GetSingleton();
+            if (!lists) return;
+            loaded.reserve(loaded.size() + lists->highActorHandles.size() + lists->middleHighActorHandles.size() +
+                           lists->middleLowActorHandles.size() + lists->lowActorHandles.size());
+            for (const auto* tier : {&lists->highActorHandles, &lists->middleHighActorHandles, &lists->middleLowActorHandles,
+                                     &lists->lowActorHandles}) {
+                for (const auto& handle : *tier) loaded.push_back(handle);
+            }
+        }
+    }
+
+    void NPCIndex::WarmUpSocial() {
+        const auto started = std::chrono::steady_clock::now();
+        std::vector<RE::ActorHandle> loaded;
+        GatherLoaded(loaded);
+        auto* player = RE::PlayerCharacter::GetSingleton();
+        const float storyCooldownHours = GetStoryCooldownHours();
+        const std::size_t known = m_backRooms.size();
+        int rooms = 0, tried = 0;
+        std::unordered_map<RE::FormID, std::pair<std::string, int>> fullest;     // for the log: which rooms, how many in each
+        for (const auto& handle : loaded) {
+            const auto held = handle.get();
+            auto* actor = held.get();
+            auto* cell = actor ? actor->GetParentCell() : nullptr;
+            if (!cell) continue;
+            if (BackRoom(cell, m_backRooms)) {
+                ++rooms;
+                auto& entry = fullest[cell->GetFormID()];
+                if (entry.second++ == 0) {
+                    const char* name = GameText::In(cell->GetName());
+                    const char* editor = cell->GetFormEditorID();
+                    entry.first = name && name[0] ? name : editor && editor[0] ? editor : std::format("{:08X}", cell->GetFormID());
+                }
+            }
+            // The checks made of each person, for a few of them: whatever they look up for the first time.
+            if (tried < 8 && player && actor != player) {
+                NPCTickActorSnapshot a;
+                if (ConsiderForNPCTick(actor, player, storyCooldownHours, a)) ++tried;
+            }
+        }
+        const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
+        std::vector<std::pair<std::string, int>> byCount;
+        for (auto& entry : fullest) byCount.push_back(std::move(entry.second));
+        std::sort(byCount.begin(), byCount.end(), [](const auto& a, const auto& b) { return a.second != b.second ? a.second > b.second : a.first < b.first; });
+        std::string named;
+        for (std::size_t i = 0; i < byCount.size() && i < 12; ++i) {
+            named += std::format("{}{} ({})", named.empty() ? "" : ", ", byCount[i].first, byCount[i].second);
+        }
+        logger::info("Social engine: the rooms of {} loaded people looked at while the save came in ({} rooms new; {:.2f} ms). "
+                     "{} people stand in {} back rooms nobody can walk into (no door, no place of the world) and take no part "
+                     "in scenes{}{}", loaded.size(), m_backRooms.size() - known, ms, rooms, byCount.size(),
+                     named.empty() ? "" : ": ", named);
+    }
+
+    bool NPCIndex::RoomUnseen(RE::TESObjectCELL* cell) const {
+        return cell && cell->IsInteriorCell() && !m_backRooms.contains(cell->GetFormID()) && !cell->GetLocation();
+    }
+
+    bool NPCIndex::ConsiderForNPCTick(RE::Actor* actor, RE::Actor* player, float storyCooldownHours, NPCTickActorSnapshot& a) {
+        if (!actor || actor == player) return false;
+        auto* cell = actor->GetParentCell();
+        if (!cell) return false;
+        if (actor->IsDead() || actor->IsDisabled() || actor->IsDynamicForm()) return false;  // fix97: no spawned actors
+        if (BackRoom(cell, m_backRooms)) return false;
+        if (actor->IsInCombat()) return false;
+        if (actor->IsHostileToActor(player)) return false;
+        auto* tracker = SlotTracker::GetSingleton();
+        if (tracker && (tracker->HasActiveTask(actor) || tracker->IsOnCooldown(actor))) return false;
+        static auto* kwActorTypeNPC = RE::TESForm::LookupByID<RE::BGSKeyword>(0x00013794);
+        if (kwActorTypeNPC && !actor->HasKeyword(kwActorTypeNPC)) return false;
+        // Exclude active followers — they're with the player, not independently socializing.
+        if (actor->IsPlayerTeammate()) return false;
+
+        auto displayName = GameText::In(actor->GetDisplayFullName());
+        if (!displayName || !displayName[0]) return false;
+        std::string nameStr(displayName);
+        if (IsGenericCreatureName(nameStr)) return false;
+
+        if (auto* race = actor->GetRace()) {
+            if (race->IsChildRace()) return false;
+        }
+
+        // Cooldown reads use the in-memory cache + Calendar — fine on main thread.
+        if (IsOnStoryCooldown(actor->GetFormID(), storyCooldownHours)) return false;
+        if (IsOnSocialCooldown(actor->GetFormID())) return false;
+
+        std::string loc = GetNPCLocationName(actor);
+        if (loc.empty()) return false;
+        if (loc == "Marker Storage Unit" || loc == "TestTony") return false;
+
+        a.formId       = actor->GetFormID();
+        a.cellFormId   = cell->GetFormID();
+        a.nameDisplay  = std::move(nameStr);
+        a.nameLower    = StringUtils::ToLowerStd(a.nameDisplay);
+        a.location     = std::move(loc);
+        a.archetype    = ClassifyNPCArchetype(actor);
+        // Capture only the engine-touch fallback here (cheap, no disk I/O).
+        // Phase B prefers the file-based bio summary when available — moves the
+        // ~10-15ms-per-file reads off the main thread on first encounter.
+        a.bio          = GetNPCBioFallbackLine(actor);
+        a.isFollower   = false;  // already filtered followers above
+        a.isFemale     = false;
+        if (auto* base = actor->GetActorBase()) {
+            if (base->GetSex() == RE::SEX::kFemale) a.isFemale = true;
+            a.unique = base->IsUnique();
+        }
+        return true;
+    }
+
+    NPCIndex::NPCTickSnapshot NPCIndex::BuildNPCTickSnapshot(int maxPairs) {
+        NPCTickSnapshot snap;
+        snap.maxPairs = maxPairs;
+        if (!BeginNPCTickSnapshot(snap)) return snap;
+        auto* player = RE::PlayerCharacter::GetSingleton();
+        const float storyCooldownHours = GetStoryCooldownHours();
         ProcessUtils::ForEachLoadedActor([&](RE::Actor* actor) {
-            if (!actor || actor == player) return false;
-            auto* cell = actor->GetParentCell();
-            if (!cell) return false;
-            if (actor->IsDead() || actor->IsDisabled() || actor->IsDynamicForm()) return false;  // fix97: no spawned actors
-            if (actor->IsInCombat()) return false;
-            if (actor->IsHostileToActor(player)) return false;
-            if (tracker && (tracker->HasActiveTask(actor) || tracker->IsOnCooldown(actor))) return false;
-            if (kwActorTypeNPC && !actor->HasKeyword(kwActorTypeNPC)) return false;
-            // Exclude active followers — they're with the player, not independently socializing.
-            if (actor->IsPlayerTeammate()) return false;
-
-            auto displayName = actor->GetDisplayFullName();
-            if (!displayName || !displayName[0]) return false;
-            std::string nameStr(displayName);
-            if (IsGenericCreatureName(nameStr)) return false;
-
-            if (auto* race = actor->GetRace()) {
-                if (race->IsChildRace()) return false;
-            }
-
-            // Cooldown reads use the in-memory cache + Calendar — fine on main thread.
-            if (IsOnStoryCooldown(actor->GetFormID(), storyCooldownHours)) return false;
-            if (IsOnSocialCooldown(actor->GetFormID())) return false;
-
-            std::string loc = GetNPCLocationName(actor);
-            if (loc.empty()) return false;
-            if (loc == "Marker Storage Unit" || loc == "TestTony") return false;
-
             NPCTickActorSnapshot a;
-            a.formId       = actor->GetFormID();
-            a.cellFormId   = cell->GetFormID();
-            a.nameDisplay  = std::move(nameStr);
-            a.nameLower    = StringUtils::ToLowerStd(a.nameDisplay);
-            a.location     = std::move(loc);
-            a.archetype    = ClassifyNPCArchetype(actor);
-            // Capture only the engine-touch fallback here (cheap, no disk I/O).
-            // Phase B prefers the file-based bio summary when available — moves the
-            // ~10-15ms-per-file reads off the main thread on first encounter.
-            a.bio          = GetNPCBioFallbackLine(actor);
-            a.isFollower   = false;  // already filtered followers above
-            a.isFemale     = false;
-            if (auto* base = actor->GetActorBase()) {
-                if (base->GetSex() == RE::SEX::kFemale) a.isFemale = true;
-            }
-            snap.candidates.push_back(std::move(a));
+            if (ConsiderForNPCTick(actor, player, storyCooldownHours, a)) snap.candidates.push_back(std::move(a));
             return false;
         });
-
         return snap;
+    }
+
+    void NPCIndex::BuildNPCTickSnapshotSpread(int maxPairs, std::function<void(NPCTickSnapshot)> done) {
+        struct Scan {
+            NPCTickSnapshot snap;
+            std::vector<RE::ActorHandle> loaded;
+            std::size_t next = 0;
+            float storyCooldownHours = 0.f;
+            double totalMs = 0.0;
+            double worstMs = 0.0;
+            int frames = 0;
+            std::string perFrame;       // each frame's share, so that a slow one can be told from the rest
+            double slowestMs = 0.0;     // the one person who took longest, for a frame that went over
+            RE::FormID slowestId = 0;
+            bool slowestNewRoom = false;
+            void Count(std::chrono::steady_clock::time_point since) {
+                const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - since).count();
+                totalMs += ms;
+                worstMs = std::max(worstMs, ms);
+                ++frames;
+                perFrame += std::format("{}{:.2f}", perFrame.empty() ? "" : " ", ms);
+            }
+        };
+        auto scan = std::make_shared<Scan>();
+        const auto started = std::chrono::steady_clock::now();
+        scan->snap.maxPairs = maxPairs;
+        if (!BeginNPCTickSnapshot(scan->snap)) {
+            done(std::move(scan->snap));
+            return;
+        }
+        scan->storyCooldownHours = GetStoryCooldownHours();
+        GatherLoaded(scan->loaded);
+        scan->Count(started);
+        auto step = [scan]() -> bool {
+            const auto sliceStarted = std::chrono::steady_clock::now();
+            auto* self = NPCIndex::GetSingleton();
+            auto* player = RE::PlayerCharacter::GetSingleton();
+            while (scan->next < scan->loaded.size()) {
+                // A slice ends once kSliceMs are spent, so it runs over by its last person: with 0.5 every frame of the
+                // snapshot took 0.50 to 0.66 ms on a list of 9,800 actors (2026-11-23). Half a millisecond is the limit.
+                const auto before = std::chrono::steady_clock::now();
+                const double spent = std::chrono::duration<double, std::milli>(before - sliceStarted).count();
+                if (spent >= kSliceMs) {
+                    scan->Count(sliceStarted);
+                    return false;
+                }
+                const auto held = scan->loaded[scan->next].get();
+                auto* actor = held.get();
+                // A room nobody looked at yet is walked through once, however much stands in it: that goes at the start
+                // of a frame, never on top of one already spent.
+                const bool newRoom = actor && self->RoomUnseen(actor->GetParentCell());
+                if (newRoom && spent > kRoomAloneMs) {
+                    scan->Count(sliceStarted);
+                    return false;
+                }
+                ++scan->next;
+                NPCTickActorSnapshot a;
+                if (self->ConsiderForNPCTick(actor, player, scan->storyCooldownHours, a)) {
+                    scan->snap.candidates.push_back(std::move(a));
+                }
+                const double took = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - before).count();
+                if (took > scan->slowestMs) {
+                    scan->slowestMs = took;
+                    scan->slowestId = actor ? actor->GetFormID() : 0;
+                    scan->slowestNewRoom = newRoom;
+                }
+            }
+            scan->Count(sliceStarted);
+            return true;
+        };
+        auto finish = [scan, done = std::move(done)]() {
+            std::string slowest;
+            if (scan->worstMs > 0.5) {
+                auto* who = scan->slowestId ? RE::TESForm::LookupByID<RE::Actor>(scan->slowestId) : nullptr;
+                const char* name = who ? GameText::In(who->GetDisplayFullName()) : nullptr;
+                slowest = std::format("; the one who took longest: {} ({:08X}), {:.2f} ms{}", name && name[0] ? name : "nobody by name",
+                                      scan->slowestId, scan->slowestMs,
+                                      scan->slowestNewRoom ? ", in a room looked at for the first time" : "");
+            }
+            logger::info("[NPCTick] snapshot: {} of {} people over {} frames, {:.2f} ms of the game's thread in all, at "
+                         "most {:.2f} ms of one frame ({}){}",
+                         scan->snap.candidates.size(), scan->loaded.size(), scan->frames, scan->totalMs, scan->worstMs,
+                         scan->perFrame, slowest);
+            done(std::move(scan->snap));
+        };
+        RunAcrossFrames(scan->snap.loadGeneration, std::move(step), std::move(finish));
     }
 
     // =========================================================================
@@ -1923,7 +2437,18 @@ namespace IntelEngine {
 
     bool NPCIndex::PublishNPCTickResult(NPCTickResult& result) {
         std::unique_lock poolLock(m_mutex);
-        return result.Publish(SlotTracker::GetSingleton()->loadGeneration, m_npcCandidatePool);
+        const auto& generation = SlotTracker::GetSingleton()->loadGeneration;
+        if (result.loadGeneration != generation.load(std::memory_order_relaxed)) return false;
+        // Those of the request before stay answerable for one more request (never across a load).
+        if (m_npcPoolGeneration == result.loadGeneration && !m_npcCandidatePool.empty()) {
+            m_npcEarlierPool = std::move(m_npcCandidatePool);
+            m_npcEarlierGroups = std::move(m_npcCandidateGroups);
+        } else if (m_npcPoolGeneration != result.loadGeneration) {
+            m_npcEarlierPool.clear();
+            m_npcEarlierGroups.clear();
+        }
+        m_npcPoolGeneration = result.loadGeneration;
+        return result.Publish(generation, m_npcCandidatePool, m_npcCandidateGroups);
     }
 
     NPCTickResult NPCIndex::BuildNPCInteractionContextFromSnapshot(const NPCTickSnapshot& snap) {
@@ -1940,21 +2465,12 @@ namespace IntelEngine {
             socialScoreLookup[StringUtils::ToLowerStd(name)] = score;
         }
 
-        // Group by location.
+        // The places offered, anywhere in the loaded world (SocialGroups.h): one entry for people of one name, two
+        // people at least and one of them somebody, a crowd counted no further than four.
         struct GroupedActor {
             const NPCTickActorSnapshot* actor;
             float socialScore;
         };
-        std::unordered_map<std::string, std::vector<GroupedActor>> locationGroups;
-        for (const auto& a : snap.candidates) {
-            float socialScore = 0.f;
-            auto it = socialScoreLookup.find(a.nameLower);
-            if (it != socialScoreLookup.end()) socialScore = it->second;
-            std::string locKey = StringUtils::ToLowerStd(a.location);
-            locationGroups[locKey].push_back({&a, socialScore});
-        }
-
-        // Score and filter: only locations with 2+ NPCs form candidate groups.
         struct ScoredGroup {
             std::string locationDisplay;
             std::vector<GroupedActor> npcs;
@@ -1962,44 +2478,41 @@ namespace IntelEngine {
             bool playerNearby;
         };
         std::vector<ScoredGroup> groups;
-
-        static thread_local std::mt19937 rng(std::random_device{}());
-        std::uniform_real_distribution<float> noiseDist(0.0f, 1.0f);
-
-        for (auto& [locKey, npcs] : locationGroups) {
-            if (npcs.size() < 2) continue;
-
-            float groupScore = static_cast<float>(npcs.size());
-            for (const auto& n : npcs) groupScore += n.socialScore * 0.3f;
-            groupScore += noiseDist(rng);
-
-            bool nearPlayer = false;
-            for (const auto& n : npcs) {
-                if (n.actor->cellFormId == snap.playerCellFormId) {
-                    nearPlayer = true;
-                    break;
-                }
+        {
+            std::vector<SocialGroups::Person> people;
+            people.reserve(snap.candidates.size());
+            for (const auto& a : snap.candidates) {
+                SocialGroups::Person p;
+                p.id = a.formId;
+                p.nameLower = a.nameLower;
+                p.placeLower = StringUtils::ToLowerStd(a.location);
+                p.unique = a.unique;
+                p.withPlayer = a.cellFormId == snap.playerCellFormId;
+                if (auto it = socialScoreLookup.find(a.nameLower); it != socialScoreLookup.end()) p.social = it->second;
+                people.push_back(std::move(p));
             }
-            if (nearPlayer) groupScore += 2.0f;
-
-            groups.push_back({npcs[0].actor->location, std::move(npcs), groupScore, nearPlayer});
+            static thread_local std::mt19937 rng(std::random_device{}());
+            std::uniform_real_distribution<float> noiseDist(0.0f, 1.0f);
+            const auto chosen = SocialGroups::Build(people, static_cast<std::size_t>(std::max(snap.maxPairs, 1)),
+                                                    [&]() { return noiseDist(rng); });
+            for (const auto& g : chosen) {
+                ScoredGroup group{snap.candidates[g.people.front()].location, {}, g.score, g.playerNearby};
+                for (const auto i : g.people) group.npcs.push_back({&snap.candidates[i], people[i].social});
+                groups.push_back(std::move(group));
+            }
         }
 
         if (groups.empty()) {
-            logger::debug("[NPCTick] No location groups with 2+ NPCs");
+            logger::info("[NPCTick] nowhere two people for a scene among {} looked at: nothing is asked", snap.candidates.size());
             return result;
         }
 
-        std::sort(groups.begin(), groups.end(),
-                  [](const ScoredGroup& a, const ScoredGroup& b) { return a.groupScore > b.groupScore; });
-        if (static_cast<int>(groups.size()) > snap.maxPairs) {
-            groups.resize(snap.maxPairs);
-        }
-
-        // Keep the pool private to this result until main-thread generation validation.
-        for (const auto& group : groups) {
-            for (const auto& n : group.npcs) {
+        // Keep the pool private to this result until main-thread generation validation. With each person goes the
+        // group they are offered in: the answer names two of one group.
+        for (std::size_t g = 0; g < groups.size(); ++g) {
+            for (const auto& n : groups[g].npcs) {
                 result.candidates.emplace(n.actor->nameLower, n.actor->formId);
+                result.groups.emplace(n.actor->formId, static_cast<std::uint32_t>(g));
             }
         }
 
@@ -2075,7 +2588,14 @@ namespace IntelEngine {
             md += "\n\n";
         }
 
-        logger::info("[NPCTick] async context: {} groups, {} chars", groups.size(), md.size());
+        {
+            std::string offered;
+            for (const auto& group : groups) {
+                offered += std::format("{}{} ({}{})", offered.empty() ? "" : ", ", group.locationDisplay, group.npcs.size(),
+                                       group.playerNearby ? ", the player there" : "");
+            }
+            logger::info("[NPCTick] async context: {} groups, {} chars; offered: {}", groups.size(), md.size(), offered);
+        }
         result.context = MemoryDB::EscapeJsonString(md);
         return result;
     }
@@ -2091,7 +2611,7 @@ namespace IntelEngine {
         a.dbScore      = dbScore;
         a.fromMemoryDB = fromMemoryDB;
 
-        if (auto* nm = actor->GetDisplayFullName()) a.nameDisplay = nm;
+        if (auto* nm = GameText::In(actor->GetDisplayFullName())) a.nameDisplay = nm;
         a.nameLower    = StringUtils::ToLowerStd(a.nameDisplay);
 
         a.location     = NPCIndex::GetNPCLocationName(actor);
@@ -2102,9 +2622,18 @@ namespace IntelEngine {
         // (file I/O moved off main thread to eliminate first-encounter stutter).
         a.bio          = NPCIndex::GetNPCBioFallbackLine(actor);
 
-        a.npcHold      = NPCIndex::GetActorSettlementName(actor);
-        if (a.npcHold.empty()) a.npcHold = NPCIndex::GetNPCHoldName(actor);
+        // The hold is the hold: it is compared with the player's ("same hold" or "different hold (far)"), and a
+        // town's name stood here instead, so someone in Dragon Bridge or in Solitude itself read as "different hold
+        // (far)" for a player standing in Haafingar. The town is shown beside it.
+        a.npcSettlement = NPCIndex::GetActorSettlementName(actor);
+        a.npcHold       = NPCIndex::GetNPCHoldName(actor);
+        if (a.npcHold.empty()) a.npcHold = a.npcSettlement;
         if (a.npcHold.empty()) a.npcHold = "Unknown";
+
+        // How far they are from the player, for the director's rule on who may come (StoryDirectorPick.h MayCome):
+        // loaded or of the player's own settlement, the same hold, or another hold. Someone nobody can place is far.
+        a.reach = NPCIndex::ReachOf(actor);
+        a.bonded = LivingWorldBridge::GetSingleton()->CloseToPlayer(actor);
 
         if (auto* base = actor->GetActorBase()) {
             if (base->GetSex() == RE::SEX::kFemale) a.isFemale = true;
@@ -2132,26 +2661,72 @@ namespace IntelEngine {
         StoryDMPhaseAPrefetch p;
         auto* memDB = MemoryDB::GetSingleton();
         if (!memDB) return p;
+        RefreshStoryFilters();   // here, off the game's thread
         const float absenceHours = absenceDays * 24.f;
         p.recentPlayerNPCs = memDB->GetRecentPlayerInteractionNames(absenceHours);
         p.ranked = memDB->GetRankedCandidateFormIDs(maxCandidates * 4);
         return p;
     }
 
-    NPCIndex::StoryDMTickSnapshot NPCIndex::BuildStoryDMTickSnapshot(int maxCandidates, float absenceDays,
-                                                                     const StoryDMPhaseAPrefetch& prefetch) {
+    // ---- The story DM's snapshot, in steps (4.0) ----
+    // All in one frame it cost 2.5 ms on a small load order (5.5 ms while the log was still written on the game's
+    // thread), most of it checking everyone loaded, and that grows with the people a load order puts in a town. The
+    // director's rounds now take it a slice per frame (BuildStoryDMTickSnapshotSpread); the answer is the same.
+
+    struct NPCIndex::StoryDMScan {
+        int maxCandidates = 7;
+        float absenceDays = 0.f;
+        StoryDMPhaseAPrefetch prefetch;
         StoryDMTickSnapshot snap;
-        snap.maxCandidates = maxCandidates;
-        snap.absenceDays   = absenceDays;
+        struct Staged {
+            RE::ActorHandle actor;
+            RE::FormID dbFormId = 0;
+            float dbScore = 0.f;
+            bool fromMemoryDB = false;
+        };
+        std::vector<Staged> staged;               // the people known (Pass 1), then those chosen from the loaded
+        std::unordered_set<RE::FormID> stagedIds;
+        bool pleas = false;                       // someone right here may plead for help (Pass 4)
+        std::vector<RE::ActorHandle> loaded;      // everyone loaded when the snapshot began
+        bool gathered = false;
+        std::size_t next = 0;
+        struct Seen {
+            RE::ActorHandle actor;
+            RE::FormID id = 0;
+            bool sameHold = false;
+            std::string locationLower;
+        };
+        std::vector<Seen> eligible;               // loaded, elsewhere, may be part of a story (Passes 2 and 3)
+        std::vector<Seen> here;                   // loaded, right here, may plead (Pass 4)
+        std::uint32_t generation = 0;
+        std::function<void(StoryDMTickSnapshot)> done;
+        // How much of the game's thread it took, for the log.
+        double totalMs = 0.0;
+        double worstMs = 0.0;
+        int frames = 0;
+        std::string perFrame;
+        void Count(std::chrono::steady_clock::time_point since) {
+            const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - since).count();
+            totalMs += ms;
+            worstMs = std::max(worstMs, ms);
+            ++frames;
+            perFrame += std::format("{}{:.2f}", perFrame.empty() ? "" : " ", ms);
+        }
+    };
+
+    bool NPCIndex::BeginStoryDMScan(StoryDMScan& scan) {
+        auto& snap = scan.snap;
+        snap.maxCandidates = scan.maxCandidates;
+        snap.absenceDays   = scan.absenceDays;
 
         auto* player = RE::PlayerCharacter::GetSingleton();
-        if (!player) return snap;
+        if (!player) return false;
         auto* playerCell = player->GetParentCell();
-        if (!playerCell) return snap;
+        if (!playerCell) return false;
 
         if (IsPlayerInBlockedLocation()) {
             logger::info("[StoryDM] Player at blocked location — skipping DM tick");
-            return snap;
+            return false;
         }
 
         auto* tracker = SlotTracker::GetSingleton();
@@ -2160,7 +2735,7 @@ namespace IntelEngine {
         auto* cellAnalyzer = CellAnalyzer::GetSingleton();
 
         // Player snapshot
-        if (auto* nm = player->GetDisplayFullName()) snap.playerName = nm;
+        if (auto* nm = GameText::In(player->GetDisplayFullName())) snap.playerName = nm;
         snap.playerLocation = locResolver->GetActorLocationName(player).c_str();
         if (snap.playerLocation.empty()) snap.playerLocation = "Unknown";
         snap.playerHold = GetNPCHoldName(player);
@@ -2189,18 +2764,9 @@ namespace IntelEngine {
         // and may be rewritten from the main thread on config reload.
         snap.memoriesPerCandidate = std::min(Settings::GetSingleton()->maxMemoriesInContext, 2);
 
-        // Pool of (actor, dbFormId, dbScore, fromMemoryDB) before snapshot conversion
-        struct StagedCandidate {
-            RE::Actor* actor;
-            RE::FormID dbFormId;
-            float      dbScore;
-            bool       fromMemoryDB;
-        };
-        std::vector<StagedCandidate> staged;
-
         // SQL inputs come from Phase 0 (pre-fetched on worker thread).
-        const auto& recentPlayerNPCs = prefetch.recentPlayerNPCs;
-        const auto& ranked           = prefetch.ranked;
+        const auto& recentPlayerNPCs = scan.prefetch.recentPlayerNPCs;
+        const auto& ranked           = scan.prefetch.ranked;
 
         // Pass 1: MemoryDB-ranked candidates (allows unloaded NPCs).
         int dbUnresolved = 0, dbIneligible = 0, dbPlayerCell = 0, dbAccepted = 0, dbCreature = 0;
@@ -2236,7 +2802,8 @@ namespace IntelEngine {
                 logger::info("[StoryDM Pass1] skipped-playercell: '{}' (score={:.1f})", name, score);
                 continue;
             }
-            staged.push_back({actor, formId, score, true});
+            scan.staged.push_back({actor->GetHandle(), formId, score, true});
+            scan.stagedIds.insert(actor->GetFormID());
             dbAccepted++;
             logger::info("[StoryDM Pass1] ACCEPTED: '{}' (score={:.1f})", name, score);
         }
@@ -2244,69 +2811,212 @@ namespace IntelEngine {
             "{} creature, {} unresolved, {} ineligible, {} player-cell",
             ranked.size(), dbAccepted, dbCreature, dbUnresolved, dbIneligible, dbPlayerCell);
 
-        // Pass 2: random encounter slots (always 3, regardless of pool fullness).
+        scan.pleas = !LivingWorldBridge::GetSingleton()->IsClassic() && NPCIndex::IsPleaPlace(player);
+        return true;
+    }
+
+    bool NPCIndex::StepStoryDMScan(StoryDMScan& scan, double budgetMs) {
+        const auto started = std::chrono::steady_clock::now();
+        auto* player = RE::PlayerCharacter::GetSingleton();
+        auto* playerCell = player ? player->GetParentCell() : nullptr;
+        if (!player || !playerCell) {
+            scan.next = scan.loaded.size();
+            return true;
+        }
+        auto* tracker = SlotTracker::GetSingleton();
+        const auto& recentPlayerNPCs = scan.prefetch.recentPlayerNPCs;
+        while (scan.next < scan.loaded.size()) {
+            if (std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count() >= budgetMs) {
+                return false;
+            }
+            const auto handle = scan.loaded[scan.next++];
+            const auto held = handle.get();
+            RE::Actor* actor = held.get();
+            if (!actor || actor == player || scan.stagedIds.count(actor->GetFormID())) continue;
+            if (actor->GetParentCell() == playerCell) {
+                // Pass 4 (4.0): ordinary people right here with the player, in a town or an inn, for a public plea:
+                // they cry out for help in front of everyone and then turn to the player (a quest only). Not in a
+                // dungeon, a dangerous place or the player's home; never a follower, a guard or anyone a running
+                // quest holds.
+                if (!scan.pleas || !actor->Is3DLoaded()) continue;
+                if (actor->IsPlayerTeammate() || actor->IsInCombat() || actor->IsHostileToActor(player)) continue;
+                if (!PassesCommonEligibility(actor, player, tracker, false)) continue;
+                if (NPCIndex::ClassifyNPCArchetype(actor) != "CIVILIAN") continue;
+                scan.here.push_back({handle, actor->GetFormID()});
+                continue;
+            }
+            // Passes 2 and 3: someone elsewhere who may be part of a story.
+            if (recentPlayerNPCs.count(StringUtils::ToLowerStd(GameText::In(actor->GetDisplayFullName())))) continue;
+            if (!IsEligibleStoryCandidate(actor, player, playerCell, tracker)) continue;
+            StoryDMScan::Seen seen{handle, actor->GetFormID()};
+            seen.sameHold = GetNPCHoldName(actor) == scan.snap.playerHold;
+            seen.locationLower = StringUtils::ToLowerStd(GetNPCLocationName(actor));
+            scan.eligible.push_back(std::move(seen));
+        }
+        return true;
+    }
+
+    void NPCIndex::FinishStoryDMScan(StoryDMScan& scan) {
+        // Pass 2: random encounter slots (always 3, regardless of pool fullness). Drawn at random, people of the
+        // player's own hold first: taking the first three of the process lists gave the same three every time,
+        // Largashbur's orcs while the player was in Whiterun (2026-11-17). At most one from another hold, for the odd
+        // stranger on the road.
         constexpr int RANDOM_ENCOUNTER_SLOTS = 3;
         {
-            std::unordered_set<RE::FormID> stagedIds;
-            for (auto& c : staged) stagedIds.insert(c.actor->GetFormID());
-
+            std::vector<const StoryDMScan::Seen*> sameHold, otherHold;
+            for (const auto& s : scan.eligible) (s.sameHold ? sameHold : otherHold).push_back(&s);
+            static thread_local std::mt19937 encounterRng(std::random_device{}());
+            std::shuffle(sameHold.begin(), sameHold.end(), encounterRng);
+            std::shuffle(otherHold.begin(), otherHold.end(), encounterRng);
+            if (otherHold.size() > 1) otherHold.resize(1);
             int randomsAdded = 0;
-            ProcessUtils::ForEachLoadedActor([&](RE::Actor* actor) {
-                if (randomsAdded >= RANDOM_ENCOUNTER_SLOTS) return true;
-                if (stagedIds.count(actor->GetFormID())) return false;
-                if (recentPlayerNPCs.count(StringUtils::ToLowerStd(actor->GetDisplayFullName()))) return false;
-                if (!IsEligibleStoryCandidate(actor, player, playerCell, tracker)) return false;
-                staged.push_back({actor, actor->GetFormID(), 0.f, false});
-                stagedIds.insert(actor->GetFormID());
-                randomsAdded++;
-                logger::info("[StoryDM Pass2] ACCEPTED-loaded: '{}'", actor->GetDisplayFullName());
-                return false;
-            });
+            for (auto* list : {&sameHold, &otherHold}) {
+                for (auto* s : *list) {
+                    if (randomsAdded >= RANDOM_ENCOUNTER_SLOTS) break;
+                    const auto held = s->actor.get();
+                    if (!held) continue;
+                    scan.staged.push_back({s->actor, s->id, 0.f, false});
+                    scan.stagedIds.insert(s->id);
+                    randomsAdded++;
+                    logger::info("[StoryDM Pass2] ACCEPTED-loaded: '{}'", GameText::In(held->GetDisplayFullName()));
+                }
+            }
             logger::info("[StoryDM Pass2] added {} random-encounter slots", randomsAdded);
         }
 
         // Pass 3: location-mate candidates (for npc_interaction/npc_gossip variety).
         {
-            std::unordered_set<RE::FormID> stagedIds;
-            for (auto& c : staged) stagedIds.insert(c.actor->GetFormID());
-
             std::unordered_set<std::string> poolLocations;
-            for (auto& c : staged) {
-                std::string loc = GetNPCLocationName(c.actor);
+            for (const auto& c : scan.staged) {
+                const auto held = c.actor.get();
+                if (!held) continue;
+                std::string loc = GetNPCLocationName(held.get());
                 if (!loc.empty() && loc != "Unknown") {
                     poolLocations.insert(StringUtils::ToLowerStd(loc));
                 }
             }
-
             int locationMatesAdded = 0;
             constexpr int MAX_LOCATION_MATES = 4;
-            ProcessUtils::ForEachLoadedActor([&](RE::Actor* actor) {
-                if (locationMatesAdded >= MAX_LOCATION_MATES) return true;
-                if (!actor || stagedIds.count(actor->GetFormID())) return false;
-                std::string actorNameLower = StringUtils::ToLowerStd(actor->GetDisplayFullName());
-                if (recentPlayerNPCs.count(actorNameLower)) return false;
-                if (!IsEligibleStoryCandidate(actor, player, playerCell, tracker)) return false;
-                std::string actorLoc = GetNPCLocationName(actor);
-                if (actorLoc.empty()) return false;
-                if (!poolLocations.count(StringUtils::ToLowerStd(actorLoc))) return false;
-                staged.push_back({actor, actor->GetFormID(), 1.f, false});
-                stagedIds.insert(actor->GetFormID());
+            for (const auto& s : scan.eligible) {
+                if (locationMatesAdded >= MAX_LOCATION_MATES) break;
+                if (scan.stagedIds.count(s.id) || s.locationLower.empty() || !poolLocations.count(s.locationLower)) continue;
+                const auto held = s.actor.get();
+                if (!held) continue;
+                scan.staged.push_back({s.actor, s.id, 1.f, false});
+                scan.stagedIds.insert(s.id);
                 locationMatesAdded++;
-                logger::info("[StoryDM Pass3] ACCEPTED-locmate: '{}' at '{}'", actor->GetDisplayFullName(), actorLoc);
-                return false;
-            });
+                logger::info("[StoryDM Pass3] ACCEPTED-locmate: '{}' at '{}'", GameText::In(held->GetDisplayFullName()), GetNPCLocationName(held.get()));
+            }
             logger::info("[StoryDM Pass3] added {} location-mate slots (pool locations: {})",
                 locationMatesAdded, poolLocations.size());
         }
 
+        // Pass 4: at most two of the people right here, at random.
+        std::unordered_set<RE::FormID> hereIds;
+        {
+            static thread_local std::mt19937 hereRng(std::random_device{}());
+            std::shuffle(scan.here.begin(), scan.here.end(), hereRng);
+            constexpr std::size_t MAX_HERE = 2;
+            for (const auto& s : scan.here) {
+                if (hereIds.size() >= MAX_HERE) break;
+                const auto held = s.actor.get();
+                if (!held) continue;
+                scan.staged.push_back({s.actor, s.id, 0.f, false});
+                hereIds.insert(s.id);
+                logger::info("[StoryDM Pass4] ACCEPTED-here: '{}' (a public plea)", GameText::In(held->GetDisplayFullName()));
+            }
+        }
+
         // Convert staged to value snapshots
-        snap.candidates.reserve(staged.size());
-        for (auto& s : staged) {
+        auto& snap = scan.snap;
+        snap.candidates.reserve(scan.staged.size());
+        for (const auto& s : scan.staged) {
+            const auto held = s.actor.get();
+            if (!held) continue;
             StoryDMActorSnapshot a;
-            FillStoryDMActorSnapshot(a, s.actor, s.dbFormId, s.dbScore, s.fromMemoryDB);
+            FillStoryDMActorSnapshot(a, held.get(), s.dbFormId, s.dbScore, s.fromMemoryDB);
+            if (hereIds.count(a.formId)) {
+                a.hereWithPlayer = true;
+                a.eligibleTypes = "quest";
+            }
             snap.candidates.push_back(std::move(a));
         }
-        return snap;
+    }
+
+    // Everyone loaded now (a frame of its own when spread); StepStoryDMScan checks them a slice at a time.
+    static void GatherStoryDMScan(std::vector<RE::ActorHandle>& loaded) {
+        GatherLoaded(loaded);     // the player among them: the slices pass the player by
+    }
+
+    NPCIndex::StoryDMTickSnapshot NPCIndex::BuildStoryDMTickSnapshot(int maxCandidates, float absenceDays,
+                                                                     const StoryDMPhaseAPrefetch& prefetch) {
+        StoryDMScan scan;
+        scan.maxCandidates = maxCandidates;
+        scan.absenceDays = absenceDays;
+        scan.prefetch = prefetch;
+        if (!BeginStoryDMScan(scan)) return std::move(scan.snap);
+        GatherStoryDMScan(scan.loaded);
+        while (!StepStoryDMScan(scan, std::numeric_limits<double>::infinity())) {
+        }
+        FinishStoryDMScan(scan);
+        return std::move(scan.snap);
+    }
+
+    void NPCIndex::BuildStoryDMTickSnapshotSpread(int maxCandidates, float absenceDays, StoryDMPhaseAPrefetch prefetch,
+                                                  std::function<void(StoryDMTickSnapshot)> done) {
+        auto scan = std::make_shared<StoryDMScan>();
+        scan->maxCandidates = maxCandidates;
+        scan->absenceDays = absenceDays;
+        scan->prefetch = std::move(prefetch);
+        scan->done = std::move(done);
+        scan->generation = SlotTracker::GetSingleton()->loadGeneration.load(std::memory_order_relaxed);
+        const auto started = std::chrono::steady_clock::now();
+        if (!BeginStoryDMScan(*scan)) {
+            auto finished = std::move(scan->done);
+            finished(std::move(scan->snap));
+            return;
+        }
+        scan->Count(started);
+        NextStoryDMSlice(scan);
+    }
+
+    void NPCIndex::NextStoryDMSlice(std::shared_ptr<StoryDMScan> scan) {
+        // A frame later: the worker waits about one frame before it hands the slice to the game's thread, as the
+        // proximity watch does, so two slices never share a frame.
+        AsyncDispatch::Submit([scan]() {
+            std::this_thread::sleep_for(std::chrono::milliseconds(16));
+            auto* task = SKSE::GetTaskInterface();
+            if (!task) return;
+            task->AddTask([scan]() {
+                if (SlotTracker::GetSingleton()->loadGeneration.load(std::memory_order_relaxed) != scan->generation) {
+                    logger::info("[StoryDM] a save was loaded while the world's snapshot was taken: dropped");
+                    return;
+                }
+                auto* self = NPCIndex::GetSingleton();
+                const auto started = std::chrono::steady_clock::now();
+                // One job per frame: gathering everyone loaded, a slice of them, and the choice at the end.
+                if (!scan->gathered) {
+                    GatherStoryDMScan(scan->loaded);
+                    scan->gathered = true;
+                    scan->Count(started);
+                    NextStoryDMSlice(scan);
+                    return;
+                }
+                if (scan->next < scan->loaded.size()) {
+                    self->StepStoryDMScan(*scan, kSliceMs);
+                    scan->Count(started);
+                    NextStoryDMSlice(scan);
+                    return;
+                }
+                self->FinishStoryDMScan(*scan);
+                scan->Count(started);
+                logger::info("[StoryDM] the world's snapshot: {} people looked at over {} frames, {:.2f} ms of the "
+                             "game's thread in all, at most {:.2f} ms of one frame ({})",
+                             scan->loaded.size(), scan->frames, scan->totalMs, scan->worstMs, scan->perFrame);
+                auto finished = std::move(scan->done);
+                finished(std::move(scan->snap));
+            });
+        });
     }
 
     // =========================================================================
@@ -2316,7 +3026,13 @@ namespace IntelEngine {
     std::string NPCIndex::BuildDungeonMasterContextFromSnapshot(
         const StoryDMTickSnapshot& snap,
         const std::unordered_set<std::string>& excludedTypes) {
-        if (snap.candidates.empty()) return "";
+        auto pool = RankStoryDMCandidates(snap);
+        if (pool.empty()) return "";
+        return RenderDungeonMasterContext(snap, std::move(pool), excludedTypes);
+    }
+
+    std::vector<NPCIndex::RankedCandidate> NPCIndex::RankStoryDMCandidates(const StoryDMTickSnapshot& snap) {
+        if (snap.candidates.empty()) return {};
 
         auto* memDB = MemoryDB::GetSingleton();
 
@@ -2358,15 +3074,14 @@ namespace IntelEngine {
         }
 
         // Score
-        struct ScoredCandidate {
-            const StoryDMActorSnapshot* a;
-            float score;
-        };
+        using ScoredCandidate = RankedCandidate;
         std::vector<ScoredCandidate> scored;
         scored.reserve(snap.candidates.size());
 
         static thread_local std::mt19937 rng(std::random_device{}());
         std::uniform_real_distribution<float> noiseDist(0.0f, RANDOM_NOISE_MAX);
+        auto* livingWorld = LivingWorldBridge::GetSingleton();
+        const bool living = !livingWorld->IsClassic();
 
         for (const auto& a : snap.candidates) {
             float activity = std::log2(a.dbScore + 1.0f);
@@ -2397,6 +3112,15 @@ namespace IntelEngine {
 
             float noise = noiseDist(rng);
             float score = activity + absenceBonus + noveltyBonus + geoBonus + fofBonus + noise;
+            if (living && a.fromMemoryDB) {
+                // 4.0: the director ranks people the player knows (bond, absence, rotation, novelty).
+                const bool met = relIt != relMap.end() && relIt->second.interactionCount > 0;
+                const float days = met ? std::max(0.f, (snap.currentDBHours - relIt->second.lastInteractionHours) / 86400.0f) : -1.f;
+                score = livingWorld->ScoreStoryCandidate(a.formId, met ? relIt->second.interactionCount : 0, days,
+                                                         geoBonus > 0.f, fofBonus > 0.f, snap.currentGameTime,
+                                                         static_cast<std::uint32_t>(snap.currentGameTime * 1440.0f)) +
+                        activity * 0.2f;
+            }
             scored.push_back({&a, score});
         }
 
@@ -2406,19 +3130,26 @@ namespace IntelEngine {
         // Split: top maxCandidates ranked + up to 3 random encounters
         std::vector<ScoredCandidate> rankedPool;
         std::vector<ScoredCandidate> randomPool;
+        std::vector<ScoredCandidate> herePool;  // 4.0: people right here, for a public plea (at most 2, never trimmed)
         for (auto& s : scored) {
-            if (s.a->fromMemoryDB) rankedPool.push_back(s);
-            else                   randomPool.push_back(s);
+            if (s.a->hereWithPlayer)    herePool.push_back(s);
+            else if (s.a->fromMemoryDB) rankedPool.push_back(s);
+            else                        randomPool.push_back(s);
         }
-        if (static_cast<int>(rankedPool.size()) > snap.maxCandidates) rankedPool.resize(snap.maxCandidates);
-        if (static_cast<int>(randomPool.size()) > RANDOM_ENCOUNTER_SLOTS) randomPool.resize(RANDOM_ENCOUNTER_SLOTS);
+        // As many as 3.8 offered: at the living-world levels the staged director (StoryDirector) asks about each
+        // candidate on their own, so nobody is cut to save prompt space.
+        const int rankedLimit = snap.maxCandidates;
+        const int randomLimit = RANDOM_ENCOUNTER_SLOTS;
+        if (static_cast<int>(rankedPool.size()) > rankedLimit) rankedPool.resize(rankedLimit);
+        if (static_cast<int>(randomPool.size()) > randomLimit) randomPool.resize(randomLimit);
 
         std::vector<ScoredCandidate> finalPool = std::move(rankedPool);
         for (auto& s : randomPool) finalPool.push_back(s);
+        for (auto& s : herePool) finalPool.push_back(s);
 
         if (finalPool.empty()) {
             logger::debug("[StoryDM async] No eligible candidates after scoring");
-            return "";
+            return {};
         }
 
         // Update DM candidate pool for response resolution
@@ -2428,6 +3159,19 @@ namespace IntelEngine {
             for (const auto& s : finalPool) {
                 m_dmCandidatePool.emplace(s.a->nameLower, s.a->formId);
             }
+        }
+        return finalPool;
+    }
+
+    std::string NPCIndex::RenderDungeonMasterContext(const StoryDMTickSnapshot& snap, std::vector<RankedCandidate> finalPool,
+                                                     const std::unordered_set<std::string>& excludedTypes) {
+        if (finalPool.empty()) return "";
+        auto* memDB = MemoryDB::GetSingleton();
+        std::unordered_map<std::string, PlayerRelationship> relMap;
+        std::unordered_map<RE::FormID, PlayerRelationship> relMapById;
+        for (const auto& rel : memDB->GetPlayerRelationshipData()) {
+            relMap[StringUtils::ToLowerStd(rel.name)] = rel;
+            if (rel.formId > 0) relMapById[rel.formId] = rel;
         }
 
         // --- Build markdown ---
@@ -2632,7 +3376,26 @@ namespace IntelEngine {
             md += " [";    md += a->archetype;  md += ", ";  md += gender;  md += "] - ";  md += a->location;
             md += " (";    md += uuid;          md += ")\n";
             md += "Eligible: ";   md += a->eligibleTypes;  md += "\n";
-            md += "Hold: ";       md += a->npcHold;        md += "\n";
+            if (a->hereWithPlayer) {
+                md += "Here: in the same place as the player right now; a quest from them is a public plea\n";
+            }
+            md += "Hold: ";       md += a->npcHold;
+            if (!a->npcSettlement.empty() && a->npcSettlement != a->npcHold) { md += " ("; md += a->npcSettlement; md += ")"; }
+            md += "\n";
+            // 4.0: what is already going on between them and the player, so a new beat continues it rather than
+            // asking the same thing again.
+            if (const auto business = StorylineBridge::GetSingleton()->BusinessLine(a->formId); !business.empty()) {
+                md += "Unfinished business with the player: ";  md += business;  md += "\n";
+            }
+            // Where their own life stands since the player left them: a moment must start from there.
+            if (const auto life = LivingWorldBridge::GetSingleton()->DirectorLifeLine(a->formId); !life.empty()) {
+                md += "Their own life lately: ";  md += life;  md += "\n";
+            }
+            if (auto* tied = RE::TESForm::LookupByID<RE::Actor>(a->formId)) {
+                if (const auto line = LivingWorldBridge::GetSingleton()->QuestTieLine(tied); !line.empty()) {
+                    md += "Quest: ";  md += line;  md += "\n";
+                }
+            }
             md += "Distance: ";   md += distStr;           md += "\n";
             md += "Knows player: ";  md += familiarityStr; md += "\n";
             md += "Last met player: ";  md += lastInteractionStr;  md += "\n";
@@ -2836,7 +3599,7 @@ namespace IntelEngine {
         if (!npcNamesLower.empty()) {
             ProcessUtils::ForEachLoadedActor([&](RE::Actor* actor) -> bool {
                 if (!actor) return false;
-                auto* dispName = actor->GetDisplayFullName();
+                auto* dispName = GameText::In(actor->GetDisplayFullName());
                 if (!dispName) return false;
                 std::string nameLower = StringUtils::ToLowerStd(dispName);
                 if (npcNamesLower.count(nameLower)) {
@@ -2881,6 +3644,12 @@ namespace IntelEngine {
 
         std::unique_lock lock(m_mutex);
         m_recentGossipContext = result;
+    }
+
+    int NPCIndex::StoryTypePickCount(const std::string& storyType) const {
+        std::shared_lock lock(m_mutex);
+        const auto it = m_storyTypeCounts.find(storyType);
+        return it == m_storyTypeCounts.end() ? 0 : it->second;
     }
 
     std::string NPCIndex::GetStoryTypeCountsMarkdown(
@@ -3012,7 +3781,7 @@ namespace IntelEngine {
             auto* baseForm = RE::TESForm::LookupByID<RE::TESNPC>(baseFormId);
             if (!baseForm) continue;
 
-            auto name = baseForm->GetFullName();
+            auto name = GameText::In(baseForm->GetFullName());
             if (!name || name[0] == '\0') continue;
 
             // Skip dead or disabled household members — prevents DM from picking
@@ -3085,7 +3854,7 @@ namespace IntelEngine {
                 if (!first) json += ",";
                 first = false;
                 json += "{\"name\":\"";
-                auto name = actor->GetDisplayFullName();
+                auto name = GameText::In(actor->GetDisplayFullName());
                 std::string nameStr = name ? name : "Unknown";
                 json += MemoryDB::EscapeJsonString(nameStr);
                 json += "\",\"formId\":";

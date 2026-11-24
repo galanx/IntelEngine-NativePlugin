@@ -34,6 +34,26 @@ with tempfile.TemporaryDirectory(prefix="pe-prompts-") as directory:
                 (b"(Imperial Legion, Stormcloaks, Thalmor): border_skirmish, war_declaration", b"(Imperial Legion, Stormcloaks, Thalmor): border_skirmish, and war_declaration only for pairs with `war_possible: true`")]:
                 assert o in data, o
                 data = data.replace(o, n)
+            # 4.0: IntelEngine says nothing of worship (faith neutrality, 2026-11-23): the Thalmor's line names what they
+            # do without a word on whose worship they suppress.
+            data = data.replace(b"diplomacy, and Talos worship crackdowns.", b"diplomacy, and crackdowns on dissent.")
+            # 4.0: the game's own civil war is told at the head of the lore section, with or without Political Engine
+            # (VanillaWar.h). The same paragraph goes into the baseline, so that only the PE gating is compared.
+            current = (repo / (base+name)).read_bytes()
+            head, after = b"## Lore & Geography", b"Each faction controls a specific hold"
+            start = current.index(head) + len(head)
+            told = current[start:current.index(after, start)]
+            assert b"civil_war" in told, "the lore section tells of the game's own civil war"
+            at = data.index(head) + len(head)
+            data = data[:at] + told + data[data.index(after, at):]
+            # 4.0: a faction bound by its own story in the game (VanillaWar.h, BoundBy) has a section of its own, with
+            # or without Political Engine. The same section goes into the baseline.
+            bound_head, bound_after = b"## Factions bound by their own story", b"## World Knowledge"
+            begin = current.index(bound_head)
+            section = current[begin:current.index(bound_after, begin)]
+            assert b"`bound`" in section, "the section names the bound line"
+            at = data.index(bound_after)
+            data = data[:at] + section + data[at:]
         (work / f"baseline{i}.prompt").write_bytes(data)
     (work / "check.cpp").write_text(r'''
 #include <inja/inja.hpp>

@@ -6,7 +6,7 @@ cmake_minimum_required(VERSION 3.21)
 
 project(
     IntelEngine
-    VERSION 3.8.3
+    VERSION 4.0.0
     DESCRIPTION "Intelligent NPC Task Execution for SkyrimNet"
     LANGUAGES CXX
 )
@@ -153,9 +153,22 @@ set(SOURCES
     src/PoliticalDB.cpp
     src/FactionPolitics.cpp
     src/FactionConfigLoader.cpp
+    src/FactionEditor.cpp
     src/BattleManager.cpp
     src/DialogueTracker.cpp
     src/SpeechTracker.cpp
+    src/LanguageBridge.cpp
+    src/LivingWorldBridge.cpp
+    src/LivingWorldLives.cpp
+    src/PlaceTargets.cpp
+    src/StorylineBridge.cpp
+    src/QuestBridge.cpp
+    src/ArcBridge.cpp
+    src/TaleAuthor.cpp
+    src/HeartBridge.cpp
+    src/BondBridge.cpp
+    src/RumorBridge.cpp
+    src/StoryDirector.cpp
     src/SettingsBridge.cpp
     src/AsyncDispatch.cpp
     src/PoliticalEngineBridge.cpp
@@ -199,11 +212,48 @@ add_executable(Utf8TruncateCheck EXCLUDE_FROM_ALL tests/Utf8TruncateCheck.cpp)
 target_include_directories(Utf8TruncateCheck PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 add_executable(DashboardUtf8DumpCheck EXCLUDE_FROM_ALL tests/DashboardUtf8DumpCheck.cpp)
 target_link_libraries(DashboardUtf8DumpCheck PRIVATE nlohmann_json::nlohmann_json)
+add_executable(StorylinesCheck EXCLUDE_FROM_ALL tests/StorylinesCheck.cpp)
+target_include_directories(StorylinesCheck PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+add_executable(QuestsCheck EXCLUDE_FROM_ALL tests/QuestsCheck.cpp)
+target_include_directories(QuestsCheck PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+add_executable(ArcsCheck EXCLUDE_FROM_ALL tests/ArcsCheck.cpp)
+target_include_directories(ArcsCheck PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+add_executable(HeartsCheck EXCLUDE_FROM_ALL tests/HeartsCheck.cpp)
+target_include_directories(HeartsCheck PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+add_executable(TalesCheck EXCLUDE_FROM_ALL tests/TalesCheck.cpp)
+target_include_directories(TalesCheck PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(TalesCheck PRIVATE nlohmann_json::nlohmann_json)
+add_executable(LivingWorldCheck EXCLUDE_FROM_ALL tests/LivingWorldCheck.cpp)
+target_include_directories(LivingWorldCheck PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+# Where the player's cell-change event source sits on each game version (PlayerCellEventSource.h).
+add_executable(PlayerCellEventSourceCheck EXCLUDE_FROM_ALL tests/PlayerCellEventSourceCheck.cpp)
+target_include_directories(PlayerCellEventSourceCheck PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+# What passed while apart, told: reunions, adventures' endings, keepsakes, the talk of the day (LivingWorld.h, Rumors.h).
+add_executable(LivesToldCheck EXCLUDE_FROM_ALL tests/LivesToldCheck.cpp)
+target_include_directories(LivesToldCheck PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+add_executable(PlaceNamesCheck EXCLUDE_FROM_ALL tests/PlaceNamesCheck.cpp)
+target_include_directories(PlaceNamesCheck PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+add_executable(ItemNamesCheck EXCLUDE_FROM_ALL tests/ItemNamesCheck.cpp)
+target_include_directories(ItemNamesCheck PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+# The game's text and ours (GameText.h, LetterFold.h) and words of place as data (PlaceWords.h); both files are UTF-8.
+add_executable(GameTextCheck EXCLUDE_FROM_ALL tests/GameTextCheck.cpp)
+target_include_directories(GameTextCheck PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_compile_options(GameTextCheck PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/utf-8>)
+add_executable(PlaceWordsCheck EXCLUDE_FROM_ALL tests/PlaceWordsCheck.cpp)
+target_include_directories(PlaceWordsCheck PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_compile_options(PlaceWordsCheck PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/utf-8>)
+add_executable(StoryDirectorCheck EXCLUDE_FROM_ALL tests/StoryDirectorCheck.cpp)
+target_include_directories(StoryDirectorCheck PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 add_executable(StoryCandidateResolutionCheck EXCLUDE_FROM_ALL tests/StoryCandidateResolutionCheck.cpp)
 target_include_directories(StoryCandidateResolutionCheck PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+add_executable(SocialGroupsCheck EXCLUDE_FROM_ALL tests/SocialGroupsCheck.cpp)
+target_include_directories(SocialGroupsCheck PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_compile_options(SocialGroupsCheck PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/utf-8>)
 add_executable(NamedPlaceMatchCheck EXCLUDE_FROM_ALL tests/NamedPlaceMatchCheck.cpp)
 target_include_directories(NamedPlaceMatchCheck PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(NamedPlaceMatchCheck PRIVATE nlohmann_json::nlohmann_json)
+add_executable(LocalizedNameCheck EXCLUDE_FROM_ALL tests/LocalizedNameCheck.cpp)
+target_include_directories(LocalizedNameCheck PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 add_executable(FactionLeaderNameMatchCheck EXCLUDE_FROM_ALL tests/FactionLeaderNameMatchCheck.cpp)
 target_include_directories(FactionLeaderNameMatchCheck PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 add_executable(FormIDStringCheck EXCLUDE_FROM_ALL tests/FormIDStringCheck.cpp)

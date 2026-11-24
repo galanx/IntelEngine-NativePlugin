@@ -1,4 +1,6 @@
 #include <chrono>
+#include "GameText.h"
+#include "LanguageBridge.h"
 /**
  * Dashboard UI Manager Implementation
  *
@@ -13,6 +15,8 @@
 #include "DashboardUIManager.h"
 #include "DashboardConfig.h"
 #include "FactionPolitics.h"
+#include "FactionEditor.h"
+#include <thread>
 #include "PoliticalEngineBridge.h"
 #include "SkyrimNetAPI.h"
 #include "NPCIndex.h"
@@ -87,6 +91,7 @@ namespace IntelEngine {
             {"onDashboard_dispatchPolitics", OnDispatchPoliticsStatic},
             {"onDashboard_executeAction", OnExecuteActionStatic},
             {"onDashboard_toggleAction", OnToggleActionStatic},
+            {"onDashboard_factionEditor", OnFactionEditorStatic},
             {"onDashboard_generateDirector", OnGenerateDirectorStatic},
             {"onDashboard_textFocus", OnTextFocusStatic},
         };
@@ -466,6 +471,9 @@ namespace IntelEngine {
                     pc["story.faction_whitelist"] = rv("story.faction_whitelist", "");
                     pc["story.location_whitelist"] = rv("story.location_whitelist", "");
                     pc["story.npc_whitelist"] = rv("story.npc_whitelist", "");
+                    pc["language.text"] = rv("language.text", "auto");
+                    pc["language.spoken"] = rv("language.spoken", "auto");
+                    pc["language.now"] = LanguageBridge::GetSingleton()->Describe();   // what is in force, for the page
                     pc["llm.endpoint"] = rv("llm.endpoint", "");
                     pc["llm.api_key"] = rv("llm.api_key", "");
                     pc["llm.model_name"] = rv("llm.model_name", "");
@@ -512,7 +520,7 @@ namespace IntelEngine {
                         if (!base) return false;
                         nlohmann::json entry;
                         entry["formId"] = actor->GetFormID();
-                        entry["name"] = actor->GetDisplayFullName();
+                        entry["name"] = GameText::In(actor->GetDisplayFullName());
                         npcs.push_back(entry);
                         return false;
                     });
@@ -575,7 +583,7 @@ namespace IntelEngine {
             pollCondition_.wait_for(lock, kPollIntervalMs, [this] {
                 const bool ready = requestedOpen_ && isOpen_.load() && domReady_.load() && !shuttingDown_;
                 return stopPolling_.load() || pendingOpen_ || pendingClose_ ||
-                       pendingReload_ || !pendingDirectorResults_.empty() || (ready && !gameTaskQueued_ &&
+                       pendingReload_ || !pendingDirectorResults_.empty() || !pendingEditorResults_.empty() || (ready && !gameTaskQueued_ &&
                            (pendingFlush_ || pendingFullStateSet_ ||
                             pendingSlotPayloadSet_ || pendingFullStatePayloadSet_));
             });
@@ -619,6 +627,8 @@ namespace IntelEngine {
             if (fullState) state = std::move(pendingFullState_);
             auto directorResults = std::move(pendingDirectorResults_);
             pendingDirectorResults_.clear();
+            auto editorResults = std::move(pendingEditorResults_);
+            pendingEditorResults_.clear();
             const bool queueGameTask = flush || fullState;
             if (queueGameTask) gameTaskQueued_ = true;
             lock.unlock();
@@ -692,6 +702,15 @@ namespace IntelEngine {
                               isOpen_.load() && domReady_.load();
                 }
                 if (current && host_) host_->Call("directorGenerateResult", payload);
+            }
+            for (const auto& [resultGeneration, payload] : editorResults) {
+                bool current;
+                {
+                    std::lock_guard<std::mutex> resultLock(mutex_);
+                    current = !shuttingDown_ && generation_ == resultGeneration && requestedOpen_ &&
+                              isOpen_.load() && domReady_.load();
+                }
+                if (current && host_) host_->Call("factionEditorResult", payload);
             }
             if (queueGameTask) {
                 auto* task = SKSE::GetTaskInterface();
@@ -1032,10 +1051,10 @@ namespace IntelEngine {
             };
             if (auto* player = RE::PlayerCharacter::GetSingleton()) {
                 auto* cell = player->GetParentCell();
-                const char* location = cell && cell->IsInteriorCell() ? cell->GetName() : nullptr;
+                const char* location = cell && cell->IsInteriorCell() ? GameText::In(cell->GetName()) : nullptr;
                 if (!location || !location[0]) {
                     auto* current = player->GetCurrentLocation();
-                    location = current ? current->GetFullName() : nullptr;
+                    location = current ? GameText::In(current->GetFullName()) : nullptr;
                 }
                 request["currentLocation"] = location && location[0] ? location : "";
             } else request["currentLocation"] = "";
@@ -1047,7 +1066,9 @@ namespace IntelEngine {
                 [queue, form, id](const char* response, int success) mutable {
                     std::string_view raw = response ? response : "";
                     logger::info("[Dashboard] Generate form={} request={} raw={}", form, id, raw.substr(0, 600));
-                    if (!success) { queue({}, "Generation failed"); return; }
+                    // SkyrimNet's reason when it gives one ("Global AI disabled"), so the form doesn't just say it failed.
+                    if (!success) { queue({}, raw.empty() ? std::string("Generation failed")
+                                              : "Generation failed: " + std::string(raw.substr(0, 160))); return; }
                     try {
                         const auto first = raw.find('{'), last = raw.rfind('}');
                         auto fields = nlohmann::json::parse(first != raw.npos && last != raw.npos ? raw.substr(first, last - first + 1) : raw);
@@ -1243,6 +1264,48 @@ namespace IntelEngine {
     // =========================================================================
     // Actions Tab: Toggle enabled in YAML (persistent, restart required)
     // =========================================================================
+
+    // The faction editor (Politics tab): {"do": "open"} asks for what the load order offers and the faction file as
+    // it stands; {"do": "save", "factions": [...]} writes the file and reads it in again. Both off this thread: the
+    // catalogue walks every faction and leveled list of the load order, and saving writes a file.
+    void DashboardUIManager::OnFactionEditorStatic(const char* jsonArg) {
+        auto* mgr = GetSingleton();
+        if (!mgr->acceptingCallbacks_.load()) return;
+        try {
+            auto request = nlohmann::json::parse(jsonArg ? jsonArg : "{}");
+            const std::string what = request.value("do", "");
+            if (what != "open" && what != "save") return;
+            std::uint64_t generation;
+            {
+                std::lock_guard<std::mutex> lock(mgr->mutex_);
+                if (mgr->shuttingDown_ || !mgr->requestedOpen_ || !mgr->isOpen_ || !mgr->domReady_) return;
+                generation = mgr->generation_;
+            }
+            std::thread([mgr, generation, what, request = std::move(request)]() {
+                nlohmann::json result{{"do", what}, {"ok", false}};
+                try {
+                    if (what == "open") {
+                        result["catalog"] = nlohmann::json::parse(FactionEditor::Catalog(), nullptr, false);
+                        result["factions"] = FactionEditor::Current();
+                        result["ok"] = true;
+                    } else {
+                        const auto saved = FactionEditor::Save(request.value("factions", nlohmann::json::array()));
+                        for (const auto& [key, value] : saved.items()) result[key] = value;
+                    }
+                } catch (const std::exception& e) {
+                    result["error"] = e.what();
+                }
+                {
+                    std::lock_guard<std::mutex> lock(mgr->mutex_);
+                    if (mgr->generation_ != generation || mgr->shuttingDown_) return;
+                    mgr->pendingEditorResults_.emplace_back(generation, SafeDump(result));
+                }
+                mgr->pollCondition_.notify_one();
+            }).detach();
+        } catch (const std::exception& e) {
+            logger::warn("[Dashboard] faction editor: {}", e.what());
+        }
+    }
 
     void DashboardUIManager::OnToggleActionStatic(const char* jsonArg) {
         if (!GetSingleton()->acceptingCallbacks_.load()) return;

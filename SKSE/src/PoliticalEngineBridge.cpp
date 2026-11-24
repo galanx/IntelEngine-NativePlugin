@@ -101,7 +101,7 @@ namespace IntelEngine {
         auto sides = active_ && sidesReader_ ? ReadJSON(sidesReader_) : std::nullopt;
         if (!active_ || epoch != resetEpoch_.load()) {
             logger::debug("[diag:pe] inactive snapshot={} data_ready={} bEnabled={}", snapshot.has_value(),
-                snapshot ? PEField(*snapshot, "data_ready").dump() : "-", snapshot ? PEField(PEField(*snapshot, "status"), "bEnabled").dump() : "-");
+                snapshot ? PEField(*snapshot, "data_ready").dump(-1, ' ', false, nlohmann::json::error_handler_t::replace) : "-", snapshot ? PEField(PEField(*snapshot, "status"), "bEnabled").dump(-1, ' ', false, nlohmann::json::error_handler_t::replace) : "-");
             active_.store(false); baseline_ = nullptr; initiativeReady_ = false; return changes;
         }
         auto current = PEComparable(*snapshot);
@@ -114,9 +114,9 @@ namespace IntelEngine {
         if (spdlog::default_logger()->should_log(spdlog::level::debug)) {
             std::string player = "none";
             if (const auto& rulers = PEField(*snapshot, "rulers"); rulers.is_array())
-                for (const auto& r : rulers) if (PEField(r, "player_realm") == true) player = PEField(r, "realm").dump() + " id=" + PEField(r, "realm_id").dump();
-            logger::debug("[diag:pe] poll revision={} playerRealm={} sidesReader={} sidesRaw={}", PEField(*snapshot, "revision").dump(), player,
-                sidesReader_ != nullptr, sides_.dump().substr(0, 2000));
+                for (const auto& r : rulers) if (PEField(r, "player_realm") == true) player = PEField(r, "realm").dump(-1, ' ', false, nlohmann::json::error_handler_t::replace) + " id=" + PEField(r, "realm_id").dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
+            logger::debug("[diag:pe] poll revision={} playerRealm={} sidesReader={} sidesRaw={}", PEField(*snapshot, "revision").dump(-1, ' ', false, nlohmann::json::error_handler_t::replace), player,
+                sidesReader_ != nullptr, sides_.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace).substr(0, 2000));
         }
         const auto& revision = current["revision"];
         if (!baseline_.is_object() || baselineEpoch_ != epoch) { revision_ = nullptr; revisionCount_ = 0; }
@@ -132,7 +132,7 @@ namespace IntelEngine {
             // ponytail: four public records per revision; raise only if real news is lost.
             if (changes.size() > 4 - revisionCount_) changes.erase(changes.begin() + (4 - revisionCount_), changes.end());
             revisionCount_ += changes.size();
-            for (const auto& change : changes) logger::debug("[diag:pe] change {}", change.dump().substr(0, 600));
+            for (const auto& change : changes) logger::debug("[diag:pe] change {}", change.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace).substr(0, 600));
         }
         baseline_ = std::move(current);
         baselineEpoch_ = epoch;

@@ -2,7 +2,7 @@
 ### NPC Autonomy, Faction Politics & Player-Driven Task Framework for SkyrimNet
 
 > **Compatibility:** IntelEngine 3.8.0 requires **SkyrimNet Beta 27** or newer (its travel prompt uses the `get_place_names` decorator added in Beta 27); 3.5.1–3.6.x required Beta 25. Beta 26 and earlier are incompatible with 3.8.0.
-> The native build includes SE/AE/VR. 3.8 was tested on Skyrim SE **1.5.97** (with SkyrimNet 1.1.1 Alpha), on a small test setup and on a full Nolvus Awakening load order; it was not retested on the newer runtimes. 3.6.0 was tested on Skyrim **1.6.1170.0** and **1.7.104.0**. Skyrim VR **1.4.15** should work and was partly tested. **1.6.640.0** and **1.7.99.0** are untested targets.
+> The native build includes SE/AE/VR. 4.0 was played on Skyrim SE **1.5.97** with SkyrimNet 1.2.0 and 1.3.1, and 3.8 on **1.5.97** with SkyrimNet 1.1.1 Alpha, both on a small test setup and on a full Nolvus Awakening load order; they were not retested on the newer runtimes. 3.6.0 was tested on Skyrim **1.6.1170.0** and **1.7.104.0**. Skyrim VR **1.4.15** should work and was partly tested. **1.6.640.0** and **1.7.99.0** are untested targets.
 >
 > This repository carries a compatibility update for current SkyrimNet releases. IntelEngine was originally created by [Galanx](https://github.com/galanx).
 > Players: report bugs at [IntelEngine GamePlugin issues](https://github.com/galanx/IntelEngine-GamePlugin/issues). This repository holds the SKSE DLL source.
@@ -508,7 +508,7 @@ Ten story types, each individually toggleable via MCM:
 **Background events in SkyrimNet History — implemented, pending live acceptance:** persistent `intel_social` and `intel_story` schemas categorize executed NPC interactions, gossip exchanges and story/seek/informant outcomes. Matching generic memories are replaced rather than duplicated; travel proposals, rejections and cooldown blocks do not emit these types. SkyrimNet's existing automatic-audience distance/configuration filters still apply, so off-screen registration does not guarantee History retention. Politics remains in IntelEngine's Politics tab: SkyrimNet currently has no History-only sink excluded from NPC prompts/memory.
 
 Every event injects facts into NPC bios that persist and influence all future dialogue. Message and quest courier facts/memories are recorded only after arrival passes the travel rejection checks; rejected pending quests do not publish quest facts or repetition history. The Dungeon Master prompt lists only enabled story types and guards long-absence seek-player guidance accordingly. Anti-repetition, type balancing, and per-NPC cooldowns keep stories varied and meaningful. Story arrival interleaving has compiled-PEX coverage, but live acceptance remains pending. Localized-place-name prompt guidance is not localized-install acceptance.
-Travel resolves SkyrimNet Named Places by exact name (needs SkyrimNet v1.0.0-rc1 or later). Localized place-name guidance still adds no Unicode/alias resolution.
+Travel resolves SkyrimNet Named Places by exact name (needs SkyrimNet v1.0.0-rc1 or later). Place names in another language resolve too: `SKSE/Plugins/IntelEngine/placenames/*.tsv` adds names for vanilla/DLC locations and interior cells (`english.tsv` ships, so English names work on a German or Russian game), and name matching folds Cyrillic and accented letters. NPC names and holds are not covered yet.
 
 ---
 
@@ -605,9 +605,9 @@ The native MSVC Release profile disables optimization with `/Od /Ob0`, retains C
 
 ## Requirements
 
-- The native build includes Skyrim SE, AE and VR. 3.8 was tested on Skyrim SE **1.5.97**; 3.6.0 on Skyrim **1.6.1170.0** and **1.7.104.0**; Skyrim VR **1.4.15** should work and was partly tested. Other listed targets are untested.
+- The native build includes Skyrim SE, AE and VR. 4.0 and 3.8 were tested on Skyrim SE **1.5.97**; 3.6.0 on Skyrim **1.6.1170.0** and **1.7.104.0**; Skyrim VR **1.4.15** should work and was partly tested. Other listed targets are untested.
 - [SKSE](https://skse.silverlock.org/)
-- [SkyrimNet Beta 27 or newer](https://github.com/MinLL/SkyrimNet-GamePlugin) (3.8.0 minimum; 3.8 was tested with SkyrimNet 1.1.1 Alpha, 3.6.0 with official Beta 28)
+- [SkyrimNet Beta 27 or newer](https://github.com/MinLL/SkyrimNet-GamePlugin) (3.8.0 minimum; 4.0 was played with SkyrimNet 1.2.0 and 1.3.1, 3.8 with SkyrimNet 1.1.1 Alpha, 3.6.0 with official Beta 28)
 - [SkyUI](https://www.nexusmods.com/skyrimspecialedition/mods/12604) (MCM)
 - [PapyrusUtil](https://www.nexusmods.com/skyrimspecialedition/mods/13048) (persistent storage)
 - [powerofthree's Papyrus Extender](https://www.nexusmods.com/skyrimspecialedition/mods/22854) (package management, linked refs)

@@ -8,9 +8,10 @@
 
 #include <RE/Skyrim.h>
 #include <SKSE/SKSE.h>
+#include <spdlog/async.h>
 #include <spdlog/sinks/basic_file_sink.h>
 
-#define INTELENGINE_VERSION "3.8.3"
+#define INTELENGINE_VERSION "4.0.0"
 
 using namespace std::literals;
 

@@ -201,6 +201,18 @@ namespace IntelEngine {
          * Returns interaction count + last interaction time per NPC.
          */
         std::vector<PlayerRelationship> GetPlayerRelationshipData();
+        /** Has this NPC ever had to do with the player, by the last relationship data read (the director reads it
+         *  on every round, off the game's thread)? False before the first read. Any thread. */
+        bool HasMetPlayer(RE::FormID formId) const;
+        /** How many times SkyrimNet has seen this person and the player have to do with each other (0: never), as of
+         *  the last reading of the player's relationships. Any thread. */
+        int TimesWithPlayer(RE::FormID formId) const;
+        /** Everybody the count is at least `atLeast` for, with their count. Any thread. */
+        std::vector<std::pair<RE::FormID, int>> TimesWithPlayerAll(int atLeast) const;
+        /** What this person remembers that has to do with `about` (SkyrimNet's own search of their memories by that
+         *  name), formatted for a prompt, and how many memories that were. Reads the database: worker thread. */
+        std::string GetMemoriesAbout(RE::FormID formId, const std::string& about, int maxCount, int& count);
+        std::vector<PlayerRelationship> ReadPlayerRelationshipData();
 
         /**
          * Get NPCs ranked by NPC-to-NPC event density (excluding player interactions).

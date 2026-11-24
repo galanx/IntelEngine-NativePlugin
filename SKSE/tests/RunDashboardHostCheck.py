@@ -60,7 +60,9 @@ def method(source, signature):
 
 manager = pathlib.Path(sys.argv[2]).read_text(encoding="utf-8") if len(sys.argv) > 2 else (SRC / "DashboardUIManager.cpp").read_text(encoding="utf-8")
 has_generate = "    void DashboardUIManager::OnGenerateDirectorStatic(" in manager
-listener_count = 16 + int(has_generate)
+# 4.0: the faction editor's listener (FactionEditor.cpp does its work; here it only has to be routed).
+has_editor = "    void DashboardUIManager::OnFactionEditorStatic(" in manager
+listener_count = 16 + int(has_generate) + int(has_editor)
 listener_start = manager.index("        static const UiListener listeners[] = {")
 listener_end = manager.index("        };", listener_start)
 listener_entries = manager[manager.index("{", listener_start) + 1:listener_end]
@@ -70,6 +72,7 @@ for index, callback in enumerate((
     "OnToggleStoryTypeStatic", "OnChangeSettingStatic", "OnRemovePackagesStatic",
     "OnChangePluginConfigStatic", "OnDispatchStoryStatic", "OnDispatchNpcSocialStatic",
     "OnDispatchPoliticsStatic", "OnExecuteActionStatic", "OnToggleActionStatic",
+    *(["OnFactionEditorStatic"] if has_editor else []),
     "OnGenerateDirectorStatic",
     "OnTextFocusStatic",
 )):
@@ -198,6 +201,7 @@ extern "C" short GetAsyncKeyState(int);
 #include "UiHost.h"
 #include "PrismaUI_API.h"
 #include "MagelightUI_API.h"
+#include "GameText.h"
 #include <nlohmann/json.hpp>
 #include <algorithm>
 #include <array>
@@ -266,7 +270,7 @@ void route(int id,const char* arg) { ++callbackHits; routedListener=id; listener
 #define ROUTE(N) void listener##N(const char* a){route(N,a);}
 ROUTE(0) ROUTE(1) ROUTE(2) ROUTE(3) ROUTE(4) ROUTE(5) ROUTE(6) ROUTE(7)
 ROUTE(8) ROUTE(9) ROUTE(10) ROUTE(11) ROUTE(12) ROUTE(13) ROUTE(14) ROUTE(15)
-ROUTE(16)
+ROUTE(16) ROUTE(17)
 #undef ROUTE
 namespace IntelEngine::SkyrimNetAPI {
 inline bool (*SendCustomPromptToLLM)(const char*, const char*, const char*,
@@ -287,6 +291,7 @@ const std::array<std::string_view, ''' + str(listener_count) + r'''> expectedNam
     "onDashboard_toggleStoryType", "onDashboard_changeSetting", "onDashboard_removePackages",
     "onDashboard_changePluginConfig", "onDashboard_dispatchStory", "onDashboard_dispatchNpcSocial",
     "onDashboard_dispatchPolitics", "onDashboard_executeAction", "onDashboard_toggleAction",
+    *(["onDashboard_factionEditor"] if has_editor else []),
     *(["onDashboard_generateDirector"] if has_generate else []),
     "onDashboard_textFocus",
 )) + r'''};
@@ -666,6 +671,7 @@ class DashboardConfig { public: static ConfigStub* GetSingleton(){static ConfigS
 class FactionPolitics { public: static PoliticsStub* GetSingleton(){static PoliticsStub p;return &p;} };
 class PoliticalEngineBridge { public: static PoliticalEngineBridge* GetSingleton(){static PoliticalEngineBridge b;return &b;} bool IsDetected()const{return false;} };
 class SlotTracker { public: static SlotStub* GetSingleton(){static SlotStub s;return &s;} };
+class LanguageBridge { public: static LanguageBridge* GetSingleton(){static LanguageBridge b;return &b;} std::string Describe()const{return "English";} };
 
 class NPCIndex { public:
     static NPCIndex* GetSingleton(){static NPCIndex index;return &index;}
@@ -725,6 +731,7 @@ public:
     std::string pendingFullState_,pendingSlotPayload_,pendingFullStatePayload_;
     std::atomic_size_t knownNpcsSize_{static_cast<std::size_t>(-1)};
     std::vector<std::pair<std::uint64_t,std::string>> pendingDirectorResults_;
+    std::vector<std::pair<std::uint64_t,std::string>> pendingEditorResults_;
     std::mutex mutex_,actionCacheMutex_; std::condition_variable pollCondition_;
     struct ActionParam {std::string name,description;std::vector<std::string> enumValues;};
     struct ActionMeta {std::string name,fileName,description;bool enabled=true;std::vector<ActionParam> params;std::string category;bool isCategory=true;};
@@ -741,11 +748,14 @@ public:
     static void OnDispatchStoryStatic(const char*); static void OnDispatchNpcSocialStatic(const char*); static void OnDispatchPoliticsStatic(const char*); static void OnExecuteActionStatic(const char*);
     static void OnChangePluginConfigStatic(const char*); static void OnToggleActionStatic(const char*);
     static void OnGenerateDirectorStatic(const char*);
+    static void OnFactionEditorStatic(const char*);
     static void OnTextFocusStatic(const char*);
 };
 }
 ''' + "namespace IntelEngine {\n" + "\n".join(callbacks) + (
     "\nvoid DashboardUIManager::OnGenerateDirectorStatic(const char*) {}\n" if not has_generate else ""
+) + (
+    "\nvoid DashboardUIManager::OnFactionEditorStatic(const char*) {}\n"
 ) + r'''
 void testManager() {
     auto* m=DashboardUIManager::GetSingleton(); m->host_=std::make_unique<FakeHost>();
@@ -801,7 +811,13 @@ void testManager() {
     drainDirector();
     assert(resultCount()==4);
     auto serviceFailure=nlohmann::json::parse(host->calls.back().second);
-    assert(!serviceFailure["ok"] && serviceFailure["error"]=="Generation failed");
+    // SkyrimNet's own reason is passed on when it gives one (pull request 30); without one the plain words stay.
+    assert(!serviceFailure["ok"] && serviceFailure["error"]=="Generation failed: service unavailable");
+    generate();
+    if (directorCompletion) directorCompletion("",0);
+    drainDirector();
+    auto silentFailure=nlohmann::json::parse(host->calls.back().second);
+    assert(!silentFailure["ok"] && silentFailure["error"]=="Generation failed");
     generate();
     directorCompletion(R"({"narration":"Keep valid narrative","unexpected":false})",1); drainDirector();
     auto partialResult=nlohmann::json::parse(host->calls.back().second);
@@ -884,7 +900,8 @@ void testManager() {
     m->ProcessFullState("{\"ready\":true}",generation);
     const auto repairedState=nlohmann::json::parse(m->pendingFullStatePayload_);
     assert(repairedState["ready"]==true);
-    assert(repairedState["loadedNpcs"][2]["name"]=="S\xEF\xBF\xBDnn");
+    // a name saved in an old code page (Windows-1252 here) is read in that page at the door (GameText::In)
+    assert(repairedState["loadedNpcs"][2]["name"]=="S\xC3\xA9nn");
     named.name="Brey";
     m->actionCacheLoaded_=false;
     m->LoadActionYAMLs();

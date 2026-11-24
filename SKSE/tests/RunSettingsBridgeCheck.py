@@ -77,6 +77,7 @@ int main(int, char** argv) {
     file["stories.check_interval_hours"] = "999";           // past the range: clamped
     file["tasks.confirm_fetch_person"] = "\"Nobody\"";      // not one of the choices: the game keeps its value
     file["meetings.timeout_hours"] = "soon";                // not a number: the game keeps its value
+    file["living_world.interruptions"] = "\"Only when urgent\"";   // a choice word of an older build: likewise
     file["tasks.confirm_go_to_location"] = "2";             // a choice given by position
     file["tasks.followers_fetch_person"] = "false";         // switched off on the page: the game must skip it
     auto changes = ApplyFromFile(config, store);
@@ -92,14 +93,19 @@ int main(int, char** argv) {
     assert(byArg["storyInterval"].second == 168.0f);
     assert(byArg["confirmGoToLocation"].second == 2.0f);
     assert(byArg.count("confirmFetchPerson") == 0 && byArg.count("meetingTimeoutHours") == 0);
+    assert(byArg.count("livingWorldInterruptions") == 0);
+    // ... and the file is given the game's value at once, so the page shows what is in force
+    assert(file["tasks.confirm_fetch_person"] == "\"Followers only\"");
+    assert(file["meetings.timeout_hours"] == "5");
+    assert(file["living_world.interruptions"] == "\"If urgent\"");
 
     // 4. Once the game has taken them over, nothing is left to apply, and a sync leaves the valid file values alone
-    //    (the two unreadable ones are rewritten from the game).
+    //    (the unreadable ones were rewritten from the game when the file was read).
     config["storyEnabled"] = false; config["maxTasks"] = 3; config["holdPolicyInformant"] = 3; config["typeAmbush"] = false;
     config["typeNpcGossip"] = false; config["storyInterval"] = 168; config["confirmGoToLocation"] = 2;
     config["skipFollowerFetchPerson"] = true;
     assert(ApplyFromFile(config, store).empty());
-    assert(SyncToFile(config, store) == 2);      // the two unreadable ones: "Nobody" and "soon"
+    assert(SyncToFile(config, store) == 0);
     assert(file["tasks.confirm_fetch_person"] == "\"Followers only\"");
     assert(file["meetings.timeout_hours"] == "5");
     assert(file["stories.check_interval_hours"] == "999");     // reads as the clamped 168, which is what the game has

@@ -46,6 +46,11 @@ int main(int argc, char** argv) {
     Require(describe("deliver_message", "DELIVERED") == "Delivered a message to Nazeem");
     Require(describe("travel", "ARRIVED") == "Traveled to Nazeem");
     Require(describe("fetch_npc", "Success") == "Found Nazeem and brought them back");
+    // The game can hand back the pooled spelling of the type too (seen live: "Travel").
+    Require(describe("Travel", "timeout") == "Went to Nazeem but gave up waiting");
+    Require(describe("TRAVEL", "arrived") == "Traveled to Nazeem");
+    Require(describe("Fetch_NPC", "success") == "Found Nazeem and brought them back");
+    Require(describe("Deliver_Message", "delivered") == "Delivered a message to Nazeem");
     for (const auto location : {"", "none", "None", "NONE"}) {
         Require(BuildTaskHistoryDescription("deliver_message", "Nazeem", "delivered", "Hello", location)
             == "Delivered a message to Nazeem: 'Hello'");

@@ -5,6 +5,8 @@
  */
 
 #include "CellAnalyzer.h"
+#include "GameText.h"
+#include "LanguageBridge.h"
 #include "LocationResolver.h"
 #include "StringUtils.h"
 
@@ -62,7 +64,7 @@ namespace IntelEngine {
         auto* destDoor = GetDoorDestination(door);
         if (!destDoor) {
             // No teleport data, check if it has a name directly
-            auto doorName = door->GetName();
+            auto doorName = GameText::In(door->GetName());
             if (doorName && strlen(doorName) > 0) {
                 return doorName;
             }
@@ -73,7 +75,7 @@ namespace IntelEngine {
         if (!destCell) destCell = destDoor->GetParentCell();
         if (!destCell) return "Unknown";
 
-        auto cellName = destCell->GetName();
+        auto cellName = GameText::In(destCell->GetName());
         if (cellName && strlen(cellName) > 0) {
             return cellName;
         }
@@ -129,27 +131,21 @@ namespace IntelEngine {
     bool CellAnalyzer::IsDoorNameUpward(RE::TESObjectREFR* door) {
         if (!door) return false;
 
+        // What a name calls "up" is data (PlaceWords.h, `name upstairs`): English's words and those of the language
+        // the game is in. (Heights of doors need no word: IsDoorUpward.)
         auto destName = GetDoorDestinationName(door);
-        std::string lowerDest = StringUtils::ToLowerStd(destName.c_str());
-
-        auto doorName = door->GetName();
-        std::string lowerDoor = doorName ? StringUtils::ToLowerStd(doorName) : "";
-
-        return StringUtils::ContainsAny(lowerDest, {"upstairs", "upper", "second floor", "top floor", "upper level", "attic"}) ||
-               StringUtils::ContainsAny(lowerDoor, {"upstairs", "upper", "second floor", "top floor", "upper level", "attic"});
+        auto doorName = GameText::In(door->GetName());
+        auto* language = LanguageBridge::GetSingleton();
+        return language->NameSays(destName.c_str(), "upstairs") || (doorName && language->NameSays(doorName, "upstairs"));
     }
 
     bool CellAnalyzer::IsDoorNameDownward(RE::TESObjectREFR* door) {
         if (!door) return false;
 
         auto destName = GetDoorDestinationName(door);
-        std::string lowerDest = StringUtils::ToLowerStd(destName.c_str());
-
-        auto doorName = door->GetName();
-        std::string lowerDoor = doorName ? StringUtils::ToLowerStd(doorName) : "";
-
-        return StringUtils::ContainsAny(lowerDest, {"downstairs", "lower", "cellar", "basement", "dungeon", "below", "crypt", "undercroft"}) ||
-               StringUtils::ContainsAny(lowerDoor, {"downstairs", "lower", "cellar", "basement", "dungeon", "below", "crypt", "undercroft"});
+        auto doorName = GameText::In(door->GetName());
+        auto* language = LanguageBridge::GetSingleton();
+        return language->NameSays(destName.c_str(), "downstairs") || (doorName && language->NameSays(doorName, "downstairs"));
     }
 
     std::string CellAnalyzer::GetDirection(RE::Actor* actor, RE::TESObjectREFR* target) {
@@ -180,7 +176,7 @@ namespace IntelEngine {
 
     std::string CellAnalyzer::ResolveCellName(RE::Actor* actor, RE::TESObjectCELL* cell) {
         // 1. Try cell display name
-        auto cellName = cell->GetName();
+        auto cellName = GameText::In(cell->GetName());
         if (cellName && strlen(cellName) > 0) {
             return cellName;
         }
@@ -188,7 +184,7 @@ namespace IntelEngine {
         // 2. Fallback: actor's BGSLocation name (works for modded interiors in exterior cells)
         auto* location = actor->GetCurrentLocation();
         if (location) {
-            auto locName = location->GetFullName();
+            auto locName = GameText::In(location->GetFullName());
             if (locName && strlen(locName) > 0) {
                 return locName;
             }
@@ -204,7 +200,7 @@ namespace IntelEngine {
         if (!cell->IsInteriorCell()) {
             auto* worldspace = cell->GetRuntimeData().worldSpace;
             if (worldspace) {
-                auto wsName = worldspace->GetFullName();
+                auto wsName = GameText::In(worldspace->GetFullName());
                 if (wsName && strlen(wsName) > 0) {
                     return wsName;
                 }
@@ -263,27 +259,18 @@ namespace IntelEngine {
         auto* baseObj = ref->GetBaseObject();
         if (!baseObj || !baseObj->Is(RE::FormType::Furniture)) return false;
 
-        auto containsBedKeyword = [](const std::string& str) {
-            return str.find("bed") != std::string::npos ||
-                   str.find("hammock") != std::string::npos ||
-                   str.find("sleeping") != std::string::npos;
-        };
-
-        // Check display name
-        auto* name = baseObj->GetName();
-        if (name && strlen(name) > 0) {
-            std::string lower = StringUtils::ToLowerStd(name);
-            if (containsBedKeyword(lower)) return true;
+        // The game's own word first, which is no word: furniture one can sleep in. The same in every language.
+        if (auto* furniture = baseObj->As<RE::TESFurniture>(); furniture && furniture->furnFlags.any(RE::TESFurniture::ActiveMarker::kCanSleep)) {
+            return true;
         }
 
-        // Check editor ID (more reliable for generic/unnamed furniture)
+        // Then its editor id (English in every game; more reliable for generic/unnamed furniture), then what it is
+        // called: the words are data (PlaceWords.h, `name bed`), English's and those of the language in force.
+        auto* language = LanguageBridge::GetSingleton();
         auto editorId = baseObj->GetFormEditorID();
-        if (editorId && strlen(editorId) > 0) {
-            std::string lower = StringUtils::ToLowerStd(editorId);
-            if (containsBedKeyword(lower)) return true;
-        }
-
-        return false;
+        if (editorId && editorId[0] && language->NameSays(editorId, "bed", true)) return true;
+        auto* name = GameText::In(baseObj->GetName());
+        return name && name[0] && language->NameSays(name, "bed");
     }
 
     bool CellAnalyzer::IsCookingStation(RE::TESObjectREFR* ref) {
@@ -296,29 +283,19 @@ namespace IntelEngine {
         if (!baseObj->Is(RE::FormType::Furniture) && !baseObj->Is(RE::FormType::Activator))
             return false;
 
-        auto containsCookingKeyword = [](const std::string& str) {
-            return str.find("cooking") != std::string::npos ||
-                   str.find("cook") != std::string::npos ||
-                   str.find("oven") != std::string::npos ||
-                   str.find("spit") != std::string::npos ||
-                   str.find("cauldron") != std::string::npos;
-        };
+        // The game's own keyword first: what the cooking menu itself goes by, in every language.
+        RE::BGSKeywordForm* keywords = nullptr;
+        if (auto* furniture = baseObj->As<RE::TESFurniture>()) keywords = furniture;
+        else if (auto* activator = baseObj->As<RE::TESObjectACTI>()) keywords = activator;
+        if (keywords && (keywords->HasKeywordString("CraftingCookpot") || keywords->HasKeywordString("BYOHCraftingOven"))) return true;
 
-        // Check display name
-        auto* name = baseObj->GetName();
-        if (name && strlen(name) > 0) {
-            std::string lower = StringUtils::ToLowerStd(name);
-            if (containsCookingKeyword(lower)) return true;
-        }
-
-        // Check editor ID
+        // Then its editor id (English in every game), then what it is called: the words are data (PlaceWords.h,
+        // `name cooking`).
+        auto* language = LanguageBridge::GetSingleton();
         auto editorId = baseObj->GetFormEditorID();
-        if (editorId && strlen(editorId) > 0) {
-            std::string lower = StringUtils::ToLowerStd(editorId);
-            if (containsCookingKeyword(lower)) return true;
-        }
-
-        return false;
+        if (editorId && editorId[0] && language->NameSays(editorId, "cooking", true)) return true;
+        auto* name = GameText::In(baseObj->GetName());
+        return name && name[0] && language->NameSays(name, "cooking");
     }
 
     std::vector<RE::TESObjectREFR*> CellAnalyzer::FindCookingStations(RE::Actor* actor) {
@@ -435,7 +412,7 @@ namespace IntelEngine {
             auto* cell = actor->GetParentCell();
             if (!cell) {
                 logger::warn("GetSpatialInfoJSON: Actor '{}' has no parent cell",
-                             actor->GetDisplayFullName());
+                             GameText::In(actor->GetDisplayFullName()));
                 return "{}";
             }
 
@@ -448,7 +425,7 @@ namespace IntelEngine {
             result["cellType"] = isInterior ? "interior" : "exterior";
 
             logger::debug("GetSpatialInfoJSON: Actor '{}' -> cell='{}', type={}, isInterior={}",
-                         actor->GetDisplayFullName(), cellNameStr,
+                         GameText::In(actor->GetDisplayFullName()), cellNameStr,
                          cell->IsInteriorCell() ? "interior-cell" : "exterior-cell",
                          isInterior);
 
@@ -500,7 +477,7 @@ namespace IntelEngine {
             // TODO: Scan for notable furniture (bars, fireplaces, beds)
             result["notableAreas"] = areasJson;
 
-            auto jsonStr = result.dump();
+            auto jsonStr = result.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
             logger::debug("GetSpatialInfoJSON: Returning {} bytes of JSON", jsonStr.size());
             return RE::BSFixedString(jsonStr);
 
@@ -560,7 +537,7 @@ namespace IntelEngine {
             static RE::BGSLocation* previousLocation = nullptr;
             static bool previousDangerous = false, initialized = false;
             if (!initialized || location != previousLocation || dangerous != previousDangerous) {
-                const char* name = location ? location->GetFullName() : nullptr;
+                const char* name = location ? GameText::In(location->GetFullName()) : nullptr;
                 const char* keyword = matched ? matched->GetFormEditorID() : nullptr;
                 logger::debug("[diag:danger] location='{}' FormID={} safeKeyword={}",
                     name ? name : "null", location ? location->GetFormID() : 0,
@@ -585,7 +562,7 @@ namespace IntelEngine {
         // Name-based: specific sacred/peaceful locations that should never have combat quests.
         // Does NOT walk parent chain — sub-dungeons inside castles (Nchuand-Zel, dragon trap)
         // are valid combat zones even if their parent is a protected location.
-        auto locName = location->GetFullName();
+        auto locName = GameText::In(location->GetFullName());
         if (locName && locName[0]) {
             static const std::vector<std::string> kNonCombative = {
                 "High Hrothgar", "Sky Haven Temple",
@@ -620,7 +597,7 @@ namespace IntelEngine {
 
         if (location && keyword && location->HasKeyword(keyword)) {
             logger::debug("IsPlayerInOwnHome: true (player location '{}' has LocTypePlayerHouse)",
-                         location->GetFullName() ? location->GetFullName() : "unnamed");
+                         GameText::In(location->GetFullName()) ? GameText::In(location->GetFullName()) : "unnamed");
             return true;
         }
 
@@ -629,14 +606,14 @@ namespace IntelEngine {
             auto* cellLoc = cell->GetLocation();
             if (cellLoc && keyword && cellLoc->HasKeyword(keyword)) {
                 logger::debug("IsPlayerInOwnHome: true (cell location '{}' has LocTypePlayerHouse)",
-                             cellLoc->GetFullName() ? cellLoc->GetFullName() : "unnamed");
+                             GameText::In(cellLoc->GetFullName()) ? GameText::In(cellLoc->GetFullName()) : "unnamed");
                 return true;
             }
         }
 
         logger::debug("IsPlayerInOwnHome: false (location={}, cell={})",
-                     location ? (location->GetFullName() ? location->GetFullName() : "unnamed") : "null",
-                     cell ? (cell->GetName() ? cell->GetName() : "unnamed") : "null");
+                     location ? (GameText::In(location->GetFullName()) ? GameText::In(location->GetFullName()) : "unnamed") : "null",
+                     cell ? (GameText::In(cell->GetName()) ? GameText::In(cell->GetName()) : "unnamed") : "null");
         return false;
     }
 

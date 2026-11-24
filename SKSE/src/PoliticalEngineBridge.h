@@ -16,7 +16,9 @@ namespace IntelEngine {
         }
         void Initialize();
         void MarkDirty(bool reset = false);
-        void SetEnabled(bool on) { enabled_.store(on); MarkDirty(true); }
+        // Reset only on a real change: every settings reload calls this with the same value, and a reset
+        // blanks the realm sides (faction colours), Context() and Rulers() until the next poll.
+        void SetEnabled(bool on) { if (enabled_.exchange(on) != on) MarkDirty(true); }
         nlohmann::json Poll();
         bool IsDetected() const { return reader_ != nullptr; }
         bool HasSidesExport() const { return sidesReader_ != nullptr; }

@@ -1,6 +1,7 @@
 import React from 'react';
+import { t, tk } from '../i18n';
 
-const MONTHS = ["Morning Star", "Sun's Dawn", "First Seed", "Rain's Hand", "Second Seed", 'Midyear', "Sun's Height", 'Last Seed', 'Hearthfire', 'Frostfall', "Sun's Dusk", 'Evening Star'];
+const MONTHS = [tk("Morning Star"), tk("Sun's Dawn"), tk("First Seed"), tk("Rain's Hand"), tk("Second Seed"), tk('Midyear'), tk("Sun's Height"), tk('Last Seed'), tk('Hearthfire'), tk('Frostfall'), tk("Sun's Dusk"), tk('Evening Star')];
 const DAYS = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
 
 export function formatGameTime(time, calendar) {
@@ -16,7 +17,8 @@ export function formatGameTime(time, calendar) {
   let month = 0;
   while (date >= DAYS[month]) date -= DAYS[month++];
   const minutes = totalMinutes - dayOffset * 1440;
-  return `${date + 1} ${MONTHS[month]}, 4E ${year} ${String(Math.floor(minutes / 60)).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')}`;
+  return t('{day} {month}, 4E {year} {time}', { day: date + 1, month: t(MONTHS[month]), year,
+    time: `${String(Math.floor(minutes / 60)).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')}` });
 }
 
 export default function GameTime({ time, calendar }) {

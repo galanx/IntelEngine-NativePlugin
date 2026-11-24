@@ -5,10 +5,13 @@ import SettingsTab from './components/SettingsTab';
 import DirectorTab from './components/DirectorTab';
 import ActionsTab from './components/ActionsTab';
 import PoliticsTab from './components/PoliticsTab';
+import WorldTab from './components/WorldTab';
+import { t, setLanguage, languageOf } from './i18n';
 
 const TABS = [
   { id: 'tasks', label: 'Tasks', hint: 'What people are doing for you' },
   { id: 'story', label: 'Story', hint: 'The dungeon master and its stories' },
+  { id: 'world', label: 'World', hint: 'Talk of the day, your stories, your people' },
   { id: 'politics', label: 'Politics', hint: 'Factions, wars and alliances' },
   { id: 'director', label: 'Director', hint: 'Stage an event yourself' },
   { id: 'actions', label: 'Actions', hint: 'What NPCs are allowed to do' },
@@ -121,6 +124,13 @@ function App() {
         'llm.timeout': 0,
       };
 
+      // What the DLL tells and the page never changes: the newest word wins (the language in force, whether the
+      // Political Engine is there).
+      const told = {};
+      for (const key of ['language.now', 'language.reading', 'politics.pe_detected']) {
+        if (data.pluginConfig && key in data.pluginConfig) told[key] = data.pluginConfig[key];
+      }
+
       setState(prev => ({
         ...data,
         knownNpcs: data.knownNpcs ?? prev.knownNpcs,
@@ -129,6 +139,7 @@ function App() {
           ...pluginDefaults,
           ...(data.pluginConfig || {}),
           ...(prev.pluginConfig || {}),
+          ...told,
         },
       }));
     } catch (e) {
@@ -271,8 +282,17 @@ function App() {
     return () => window.removeEventListener('keydown', onKey);
   }, [stepTab]);
 
+  // The page speaks the language the DLL reads labels in; set before anything below is drawn.
+  const lang = languageOf(state.pluginConfig);
+  setLanguage(lang);
+  useEffect(() => { try { document.documentElement.lang = lang; } catch {} }, [lang]);
+
   const active = TABS.find(tab => tab.id === activeTab) || TABS[0];
-  const badges = { tasks: activeCount + scheduledCount };
+  const badges = {
+    tasks: activeCount + scheduledCount,
+    world: (state.world?.stories?.open?.length || 0) + (state.world?.quests?.length || 0) + (state.world?.asks?.length || 0),
+    politics: (state.politics?.field?.battle ? 1 : 0) + (state.politics?.field?.gatherings?.length || 0),
+  };
 
   return (
     <div className="ie-backdrop">
@@ -285,7 +305,7 @@ function App() {
         <nav className="ie-nav">
           <div className="ie-brand">
             <h1>IntelEngine</h1>
-            <span>{activeCount} active{scheduledCount > 0 ? ` · ${scheduledCount} scheduled` : ''}</span>
+            <span>{t('{n} active', { n: activeCount })}{scheduledCount > 0 ? t(' · {n} scheduled', { n: scheduledCount }) : ''}</span>
           </div>
           <div className="ie-nav-list" role="tablist" aria-orientation="vertical">
             {TABS.map(tab => (
@@ -296,32 +316,32 @@ function App() {
                 aria-selected={activeTab === tab.id ? 'true' : 'false'}
                 onClick={() => setActiveTab(tab.id)}
                 className="ie-nav-item"
-                data-hint={tab.hint}
+                data-hint={t(tab.hint)}
                 data-badge={badges[tab.id] > 0 ? badges[tab.id] : undefined}
-                aria-description={tab.hint}
+                aria-description={t(tab.hint)}
               >
                 {/* The button's text is the page name alone (tests and screen readers go by it); the hint
                     and the count are drawn from the attributes above by the stylesheet. */}
-                <span className="ie-nav-label">{tab.label}</span>
+                <span className="ie-nav-label">{t(tab.label)}</span>
               </button>
             ))}
           </div>
           <div className="ie-nav-foot">
             {padInUse
-              ? <>LB / RB pages · A select · B back</>
-              : <>Arrow keys move · Page Up / Down pages · Esc closes</>}
+              ? <>{t('LB / RB pages · A select · B back')}</>
+              : <>{t('Arrow keys move · Page Up / Down pages · Esc closes')}</>}
           </div>
         </nav>
 
         <div className="ie-main">
           <div className="ie-header">
             <div className="min-w-0">
-              <h2 className="ie-title">{active.label}</h2>
-              <div className="ie-subtitle">{active.hint}</div>
+              <h2 className="ie-title">{t(active.label)}</h2>
+              <div className="ie-subtitle">{t(active.hint)}</div>
             </div>
             <div className="flex items-center gap-2">
-              <button onClick={handleRefresh} className="ie-btn" title="Refresh">&#x21BB; Refresh</button>
-              <button onClick={handleClose} className="ie-btn" title="Close">&#x2715; Close</button>
+              <button onClick={handleRefresh} className="ie-btn" title={t('Refresh')}>&#x21BB; {t('Refresh')}</button>
+              <button onClick={handleClose} className="ie-btn" title={t('Close')}>&#x2715; {t('Close')}</button>
             </div>
           </div>
 
@@ -348,11 +368,13 @@ function App() {
                 sendAction={sendAction}
               />
             )}
+            {activeTab === 'world' && <WorldTab world={state.world} />}
             {activeTab === 'politics' && (
               <PoliticsTab
                 politics={state.politics}
                 calendar={state.calendar}
                 sendAction={sendAction}
+                knownNpcs={state.knownNpcs || []}
               />
             )}
             <div hidden={activeTab !== 'director'}>

@@ -1,0 +1,17 @@
+{
+  "{n} NPCs": { "one": "{n} NPC", "other": "{n} NPCs" },
+  "{n} battles": { "one": "{n} battle", "other": "{n} battles" },
+  "{n} champions slain": { "one": "{n} champion slain", "other": "{n} champions slain" },
+  "{n} captains slain": { "one": "{n} captain slain", "other": "{n} captains slain" },
+  "{n} lives saved": { "one": "{n} life saved", "other": "{n} lives saved" },
+  "{n} errands": { "one": "{n} errand", "other": "{n} errands" },
+  "{n} battles walked away from": { "one": "{n} battle walked away from", "other": "{n} battles walked away from" },
+  "{n} hours ago": { "one": "{n} hour ago", "other": "{n} hours ago" },
+  "{n} days ago": { "one": "{n} day ago", "other": "{n} days ago" },
+  "{n} hours left": { "one": "{n} hour left", "other": "{n} hours left" },
+  "{n} days left": { "one": "{n} day left", "other": "{n} days left" },
+  "Other holds have their own talk: {n} things that nobody here has heard.": {
+    "one": "Other holds have their own talk: {n} thing that nobody here has heard.",
+    "other": "Other holds have their own talk: {n} things that nobody here has heard."
+  }
+}

@@ -18,6 +18,11 @@ namespace IntelEngine::SettingsBridge {
             "No restriction|Same hold (civilians)|Same hold (except followers)|Same hold (everyone)|"
             "Same town (civilians)|Same town (except followers)|Same town (everyone)";
         constexpr const char* kConfirm = "Disabled|Followers only|Everyone";
+        // 4.0 living world
+        constexpr const char* kLwLevels = "Classic|Rumors|Lives";
+        constexpr const char* kLwInterruptions = "Never|If urgent|Realistic";
+        constexpr const char* kLwQuestNpcs = "Never|If important|Freely";
+        constexpr const char* kLwPacing = "Calm|Normal|Lively";
 
         constexpr const char* kHoldText =
             "How far this kind of story may reach for its NPC. Same hold or same town keeps visitors local; "
@@ -26,7 +31,8 @@ namespace IntelEngine::SettingsBridge {
             "Ask you before an NPC starts this task: never, only for your followers, or for everyone.";
         constexpr const char* kAllowText =
             "On: your followers can be given this action like anyone else. Off: it is refused for your active followers, without a prompt.";
-        constexpr const char* kHoldShort = "How far this kind of story may reach for its NPC.";
+        constexpr const char* kHoldShort =
+            "How far this kind of story may reach for its NPC. Above Classic the director keeps people of other holds at home all the same, unless they are close to you and the matter presses.";
 
         Entry Bool(const char* key, const char* section, const char* name, bool def, const char* category,
                    const char* label, const char* description, const char* event = nullptr, const char* arg = nullptr) {
@@ -58,12 +64,13 @@ namespace IntelEngine::SettingsBridge {
             const char* TF = "Tasks: what followers can be asked to do";
             const char* M = "Meetings";
             const char* O = "Other";
+            const char* LW = "Living world";
             return {
                 // ── Stories ──
                 Bool("storyEnabled", "stories", "enabled", true, S, "Stories",
                      "The dungeon master: NPCs who know you come to you, send word, lie in wait or bring work."),
                 Num(Kind::Float, "storyInterval", "stories", "check_interval_hours", 0.5, 168, 3, S, "Check interval (game hours)",
-                    "How often the dungeon master considers starting something."),
+                    "At Classic: how often the dungeon master looks for somebody with a reason to come to you. Above Classic it is not used: the pace is 'How often something happens', and the dungeon master looks when you arrive somewhere, when you wake, and every three game hours besides."),
                 Num(Kind::Float, "longAbsenceDays", "stories", "long_absence_days", 1, 14, 3, S, "Long absence (days)",
                     "After this many days without meeting you, an NPC counts as not having seen you for a long time."),
                 Num(Kind::Float, "maxTravelDays", "stories", "max_travel_days", 0.25, 3, 1, S, "Longest journey (days)",
@@ -78,17 +85,48 @@ namespace IntelEngine::SettingsBridge {
                      kToggleStoryEvent, "road_encounter"),
                 Bool("typeMessage", "stories", "type_message", true, S, "Story type: a message is delivered", "",
                      kToggleStoryEvent, "message"),
-                Bool("typeQuest", "stories", "type_quest", true, S, "Story type: someone has work for you", "",
+                Bool("typeQuest", "stories", "type_quest", true, S, "Story type: someone has work for you",
+                     "People who need your help. Off: nobody brings you their trouble, and no story of the town begins.",
                      kToggleStoryEvent, "quest"),
-                Bool("typeAmbush", "stories", "type_ambush", true, S, "Story type: an ambush", "", kToggleStoryEvent, "ambush"),
+                Bool("typeAmbush", "stories", "type_ambush", true, S, "Story type: an ambush",
+                     "Someone with a grudge lies in wait on the road. Off: no ambush inside a town's story either.", kToggleStoryEvent, "ambush"),
                 Bool("typeFactionAmbush", "stories", "type_faction_ambush", true, S, "Story type: a faction's patrol hunts you",
-                     "", kToggleStoryEvent, "faction_ambush"),
-                Bool("typeStalker", "stories", "type_stalker", true, S, "Story type: someone follows you unseen", "",
+                     "A faction that holds you for an enemy (standing -40 or worse) sends men after you on the road, now and then. Never while you are with somebody, resting or settled somewhere.",
+                     kToggleStoryEvent, "faction_ambush"),
+                Bool("typeStalker", "stories", "type_stalker", true, S, "Story type: someone follows you unseen",
+                     "Someone shadows you from a distance, out of doors. Off: nobody does inside a town's story either.",
                      kToggleStoryEvent, "stalker"),
                 Choice("dangerZonePolicy", "stories", "danger_zone_policy", kNpcPolicy, 1, S, "NPCs sent into dangerous places",
-                       "Who may be sent to you while you are in a dungeon or another dangerous place."),
+                       "Who may be sent to you while you are out in the wilds, away from any settlement. Above Classic nobody is sent into a dungeon after you whatever this says (they wait until you are out), and nobody is ever sent to another plane."),
                 Choice("playerHomePolicy", "stories", "player_home_policy", kNpcPolicy, 0, S, "NPCs sent into your home",
                        "Who may come to you while you are in one of your homes."),
+
+                // ── Living world (4.0) ──
+                Choice("livingWorldLevel", "living_world", "level", kLwLevels, 2, LW, "How alive the world is",
+                       "Classic: as before 4.0. Rumors: the world moves on while you are away and you hear about it, but "
+                       "followers you left wait where you left them. Lives: followers you left behind live lives of their "
+                       "own (work at an inn, an adventure, a trip) and you can come upon them later; people close to you "
+                       "miss you while you are away."),
+                Choice("livingWorldInterruptions", "living_world", "interruptions", kLwInterruptions, 1, LW,
+                       "Interruptions at bad moments",
+                       "Whether someone may turn up during a fight, a conversation, a scene or a menu: never, only for "
+                       "something urgent, or now and then, as in real life."),
+                Choice("livingWorldQuestNpcs", "living_world", "quest_npcs_move", kLwQuestNpcs, 1, LW,
+                       "Quest NPCs may move",
+                       "Whether NPCs who take part in a running quest may travel or move for a story. The target of an "
+                       "objective you have open never moves."),
+                Choice("livingWorldPacing", "living_world", "pacing", kLwPacing, 1, LW, "How often something happens",
+                       "About one notable moment every two game days, every game day, or twice a game day. Moments wait "
+                       "for a good time: arriving in a town or an inn, coming home, leaving a dungeon, waking up."),
+                Bool("livingWorldSkippedTime", "living_world", "skipped_time_counts", false, LW, "Skipped time counts toward the pace",
+                     "Off: waiting, sleeping and fast travel do not bring the next moment sooner. It also takes time actually played: eight minutes between two moments, four minutes in a town before a story of its own begins there, twenty minutes between two such stories. On: the game's clock alone counts: skip a day and a day's worth of moments is due."),
+                Num(Kind::Float, "livingWorldWaitDays", "living_world", "wait_order_days", 1, 120, 30, LW,
+                    "A follower told to wait waits (days)",
+                    "How long after you told a follower to wait they start a life of their own, once their follower mod "
+                    "lets them go. While it still holds them, they keep waiting."),
+                Num(Kind::Float, "livingWorldLifeDays", "living_world", "life_start_days", 1, 60, 7, LW,
+                    "A follower left behind moves on (days)",
+                    "How long a follower you dismissed stays where you left them before starting a life of their own."),
 
                 // ── Stories: reach ──
                 Choice("holdPolicySeekPlayer", "stories", "reach_seek_player", kHoldPolicy, 1, SH, "Someone comes to see you",
@@ -102,14 +140,16 @@ namespace IntelEngine::SettingsBridge {
                 Choice("holdPolicyStalker", "stories", "reach_stalker", kHoldPolicy, 1, SH, "Someone follows you unseen", kHoldShort),
 
                 // ── Stories: quests ──
-                Bool("questCombat", "stories", "quest_combat", true, SQ, "Quest kind: clear out enemies", ""),
-                Bool("questRescue", "stories", "quest_rescue", true, SQ, "Quest kind: rescue someone", ""),
-                Bool("questFindItem", "stories", "quest_find_item", true, SQ, "Quest kind: find an item", ""),
+                Bool("questCombat", "stories", "quest_combat", true, SQ, "Quest kind: clear out enemies",
+                     "A bounty on what lives at a place. Off: no bounty, and no master of a place to kill inside a town's story."),
+                Bool("questRescue", "stories", "quest_rescue", true, SQ, "Quest kind: rescue someone",
+                     "Someone of the town held at a place out in the world. Off: nobody is held in a story."),
+                Bool("questFindItem", "stories", "quest_find_item", true, SQ, "Quest kind: find an item", "A keepsake lost at a place. Off: no keepsake hunt."),
                 Bool("questFactionCombat", "stories", "quest_faction_combat", true, SQ, "Quest kind: fight a faction's enemies", ""),
                 Bool("questFactionRescue", "stories", "quest_faction_rescue", true, SQ, "Quest kind: rescue for a faction", ""),
                 Bool("questFactionBattle", "stories", "quest_faction_battle", true, SQ, "Quest kind: join a faction's battle", ""),
                 Num(Kind::Float, "questTimeoutDays", "stories", "quest_timeout_days", 1, 30, 1, SQ, "Quest expires after (days)",
-                    "A quest you were offered and did not finish ends after this many days."),
+                    "A quest of the dungeon master's own that you were offered and did not finish ends after this many days. A story of the town says in its offer how long it waits."),
 
                 // ── NPCs among themselves ──
                 Bool("npcTickEnabled", "social", "enabled", true, N, "NPCs visit and talk to each other",
@@ -359,7 +399,12 @@ namespace IntelEngine::SettingsBridge {
                 continue;
             }
             double file = 0.0;
-            if (!FromYaml(entry, text, file)) continue;         // unreadable: the game keeps its value
+            if (!FromYaml(entry, text, file)) {
+                // Unreadable (a typo, or a choice word an older build wrote and this one no longer has): the game
+                // keeps its value, and the file is given it, so the page shows what is in force.
+                if (known && store.write) store.write(entry.section, entry.name, ToYaml(entry, game));
+                continue;
+            }
             if (known && Same(entry, game, file)) continue;
             Change change;
             change.event = entry.event ? entry.event : kSettingEvent;

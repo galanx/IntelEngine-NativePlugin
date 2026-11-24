@@ -216,7 +216,10 @@ namespace IntelEngine {
                     << "story:\n"
                     << "  faction_whitelist: \"\"\n"
                     << "  npc_whitelist: \"\"\n"
-                    << "  location_whitelist: \"\"\n";
+                    << "  location_whitelist: \"\"\n"
+                    << "language:\n"
+                    << "  text: auto\n"
+                    << "  spoken: auto\n";
                 out.close();
                 logger::info("DashboardConfig: Default settings.yaml created");
             }

@@ -5,6 +5,7 @@
  */
 
 #include "Papyrus.h"
+#include "GameText.h"
 #include "FormIDString.h"
 #include "FactionLeaderNameMatch.h"
 #include "FactionPairValidation.h"
@@ -13,11 +14,27 @@
 #include "FriendlyKey.h"
 #include "JsonKeys.h"
 #include "NPCIndex.h"
+#include "LivingWorldBridge.h"
+#include "LanguageBridge.h"
+#include "NameForms.h"
+#include "Utf8Fold.h"
+#include "BondBridge.h"
+#include "HeartBridge.h"
+#include "ItemNames.h"
+#include "StoryDirector.h"
+#include "StorylineBridge.h"
+#include "QuestBridge.h"
+#include "ArcBridge.h"
+#include "RumorBridge.h"
+#include "FrameCost.h"
+#include "PlaceTargets.h"
 #include "ItemIndex.h"
 #include <random>
 #include <algorithm>
 #include <chrono>
 #include <mutex>
+#include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include "LocationResolver.h"
 #include "StringUtils.h"
@@ -36,6 +53,9 @@
 #include "DashboardConfig.h"
 #include "DashboardUIManager.h"
 #include "FactionPolitics.h"
+#include "FactionEditor.h"
+#include "Patrols.h"
+#include "FactionQuests.h"
 #include "PoliticalDB.h"
 #include "BattleManager.h"
 #include "ProcessUtils.h"
@@ -53,6 +73,7 @@
 namespace IntelEngine::Papyrus {
 
     bool StoryLoadRecovered(RE::StaticFunctionTag*, bool complete) { return IntelEngineStoryLoadRecovered(complete); }
+    std::int32_t LoadStamp(RE::StaticFunctionTag*) { return intelEngineLoadStamp.load(); }
     // Forward declarations for functions defined after Register()
     void MarkSystemPending(RE::StaticFunctionTag*, RE::BSFixedString, float);
     void ClearSystemPending(RE::StaticFunctionTag*, RE::BSFixedString);
@@ -69,6 +90,57 @@ namespace IntelEngine::Papyrus {
     void NotifySocialCooldown(RE::StaticFunctionTag*, RE::Actor*, float, float);
     void NotifyStoryTypePicked(RE::StaticFunctionTag*, RE::BSFixedString);
     void RecordStoryDispatch(RE::StaticFunctionTag*, RE::BSFixedString, RE::BSFixedString, RE::BSFixedString);
+    bool LivingWorldMayDeliver(RE::StaticFunctionTag*, std::int32_t, bool);
+    void SetLivingWorldSettings(RE::StaticFunctionTag*, std::int32_t, std::int32_t, std::int32_t, std::int32_t, float, float, bool);
+    void LivingWorldMomentDispatched(RE::StaticFunctionTag*, RE::Actor*, RE::BSFixedString);
+    std::int32_t StorylineOpen(RE::StaticFunctionTag*, std::int32_t, std::int32_t, RE::Actor*, RE::Actor*, RE::BGSLocation*,
+                               RE::TESObjectREFR*, RE::TESForm*, float, std::int32_t, bool);
+    RE::BSFixedString StorylineRefusal(RE::StaticFunctionTag*, std::int32_t, std::int32_t, RE::Actor*);
+    bool StorylineEvent(RE::StaticFunctionTag*, std::int32_t, std::int32_t);
+    std::vector<std::int32_t> StorylineOpenIds(RE::StaticFunctionTag*);
+    std::vector<std::int32_t> StorylineOverdue(RE::StaticFunctionTag*);
+    std::int32_t StorylineField(RE::StaticFunctionTag*, std::int32_t, RE::BSFixedString);
+    RE::Actor* StorylineOwner(RE::StaticFunctionTag*, std::int32_t);
+    RE::Actor* StorylineOther(RE::StaticFunctionTag*, std::int32_t);
+    RE::BGSLocation* StorylinePlace(RE::StaticFunctionTag*, std::int32_t);
+    RE::TESObjectREFR* StorylineTarget(RE::StaticFunctionTag*, std::int32_t);
+    RE::TESForm* StorylineItem(RE::StaticFunctionTag*, std::int32_t);
+    RE::BSFixedString StorylineMemory(RE::StaticFunctionTag*, std::int32_t);
+    std::int32_t StorylineReward(RE::StaticFunctionTag*, std::int32_t, std::int32_t);
+    std::int32_t StorylineOpenIdFor(RE::StaticFunctionTag*, RE::Actor*);
+    bool StorylineCallOff(RE::StaticFunctionTag*, std::int32_t, RE::BSFixedString);
+    RE::BSFixedString StorylineAmend(RE::StaticFunctionTag*, std::int32_t, std::int32_t, RE::Actor*, RE::BGSLocation*,
+                                     RE::TESObjectREFR*, RE::TESForm*, std::int32_t, RE::BSFixedString);
+    RE::BSFixedString StorylineReply(RE::StaticFunctionTag*, std::int32_t, RE::Actor*, RE::BSFixedString, bool);
+    std::int32_t StorylineAboutId(RE::StaticFunctionTag*, RE::Actor*);
+    RE::BSFixedString StorylineOtherMemory(RE::StaticFunctionTag*, std::int32_t);
+    std::int32_t StorylineOfferedGold(RE::StaticFunctionTag*, std::int32_t, std::int32_t);
+    bool StorylineMayComeAlong(RE::StaticFunctionTag*, RE::Actor*);
+    bool StorylineSetAbout(RE::StaticFunctionTag*, std::int32_t, RE::BSFixedString);
+    RE::BSFixedString StorylineText(RE::StaticFunctionTag*, std::int32_t, RE::BSFixedString);
+    void LivingWorldTrack(RE::StaticFunctionTag*);
+    bool BondJudge(RE::StaticFunctionTag*, RE::Actor*);
+    void BondPretendNoMod(RE::StaticFunctionTag*, bool);
+    RE::BSFixedString BondDescribe(RE::StaticFunctionTag*, RE::Actor*);
+    RE::BSFixedString LivingWorldDebugAdventure(RE::StaticFunctionTag*, RE::Actor*);
+    void LivingWorldMarkGreeted(RE::StaticFunctionTag*, RE::Actor*);
+    RE::Actor* LivingWorldTakeOrder(RE::StaticFunctionTag*);
+    std::vector<RE::Actor*> LivingWorldKeepers(RE::StaticFunctionTag*, std::int32_t);
+    std::int32_t LivingWorldOrderKind(RE::StaticFunctionTag*);
+    RE::TESObjectREFR* LivingWorldOrderTarget(RE::StaticFunctionTag*);
+    float LivingWorldOrderOffset(RE::StaticFunctionTag*, std::int32_t);
+    RE::Actor* LivingWorldOrderCompanion(RE::StaticFunctionTag*);
+    bool LivingWorldOrderProtect(RE::StaticFunctionTag*);
+    RE::BSFixedString LivingWorldOrderNarration(RE::StaticFunctionTag*);
+    void LivingWorldOrderDone(RE::StaticFunctionTag*, bool);
+    RE::BSFixedString LivingWorldDescribe(RE::StaticFunctionTag*, RE::Actor*);
+    bool LivingWorldMayMove(RE::StaticFunctionTag*, RE::Actor*, RE::BSFixedString);
+    bool LivingWorldQuestHolds(RE::StaticFunctionTag*, RE::Actor*);
+    void LivingWorldSceneBusy(RE::StaticFunctionTag*, bool);
+    RE::TESObjectREFR* ResolveSkyrimNetPlace(RE::StaticFunctionTag*, RE::Actor*, RE::BSFixedString);
+    float SkyrimNetPlaceOffset(RE::StaticFunctionTag*, RE::Actor*, std::int32_t);
+    RE::TESForm* ResolveItemByName(RE::StaticFunctionTag*, RE::BSFixedString);
+    RE::TESForm* FindItemNamedExactly(RE::StaticFunctionTag*, RE::Actor*, RE::BSFixedString);
     void MarkLastDispatchFailed(RE::StaticFunctionTag*, RE::BSFixedString);
     void WarmStoryTypeCountsFromCSV(RE::StaticFunctionTag*, RE::BSFixedString);
     void SetRecentGossipContext(RE::StaticFunctionTag*, RE::BSFixedString);
@@ -109,17 +181,35 @@ namespace IntelEngine::Papyrus {
     std::int32_t GetSkyrimNetPackageApiVersion(RE::StaticFunctionTag*);
     std::int32_t SyncPluginSettings(RE::StaticFunctionTag*, RE::BSFixedString);
     std::int32_t ApplyPluginSettings(RE::StaticFunctionTag*, RE::BSFixedString);
+    RE::BSFixedString PlaceInEnglish(RE::StaticFunctionTag*, RE::BSFixedString);
+    bool IsNoneWord(RE::StaticFunctionTag*, RE::BSFixedString);
+    RE::BSFixedString LabelText(RE::StaticFunctionTag*, RE::BSFixedString);
+    bool TextMentionsName(RE::StaticFunctionTag*, RE::BSFixedString, RE::BSFixedString);
+    RE::BSFixedString TextLanguage(RE::StaticFunctionTag*);
+    RE::BSFixedString ReplaceWholeWord(RE::StaticFunctionTag*, RE::BSFixedString, RE::BSFixedString, RE::BSFixedString);
+    RE::BSFixedString CommaList(RE::StaticFunctionTag*, RE::BSFixedString);
 
     // Political system forward declarations
     int GetFactionRelation(RE::StaticFunctionTag*, RE::BSFixedString, RE::BSFixedString);
     int AdjustFactionRelation(RE::StaticFunctionTag*, RE::BSFixedString, RE::BSFixedString, int);
     int GetPlayerFactionStanding(RE::StaticFunctionTag*, RE::BSFixedString);
+    RE::BSFixedString FactionPatrolDue(RE::StaticFunctionTag*);
+    void FactionPatrolSent(RE::StaticFunctionTag*);
+    void FactionPatrolTest(RE::StaticFunctionTag*, bool);
+    RE::BSFixedString FactionQuestDue(RE::StaticFunctionTag*, std::int32_t);
+    void FactionQuestSent(RE::StaticFunctionTag*);
+    void FactionQuestTest(RE::StaticFunctionTag*, bool);
+    RE::BSFixedString PrivateMomentNow(RE::StaticFunctionTag*);
+    float LivingWorldClockHours(RE::StaticFunctionTag*);
+    std::int32_t PlaceBarsArrival(RE::StaticFunctionTag*, RE::Actor*, RE::TESObjectREFR*);
+    RE::BSFixedString PlaceBarsNow(RE::StaticFunctionTag*);
     int AdjustPlayerFactionStanding(RE::StaticFunctionTag*, RE::BSFixedString, int);
     bool IsFactionAtWar(RE::StaticFunctionTag*, RE::BSFixedString, RE::BSFixedString);
     int GetWarMorale(RE::StaticFunctionTag*, RE::BSFixedString, RE::BSFixedString, RE::BSFixedString);
     RE::BSFixedString GetRelationStatus(RE::StaticFunctionTag*, RE::BSFixedString, RE::BSFixedString);
     RE::BSFixedString BuildPoliticalContext(RE::StaticFunctionTag*, float);
     RE::BSFixedString BuildPoliticalDashboardJson(RE::StaticFunctionTag*);
+    RE::BSFixedString BuildWorldDashboardJson(RE::StaticFunctionTag*);
     int RecordPoliticalEvent(RE::StaticFunctionTag*, RE::BSFixedString, RE::BSFixedString,
                              RE::BSFixedString, RE::BSFixedString, int, float);
     bool IsPoliticsEnabled(RE::StaticFunctionTag*);
@@ -157,6 +247,19 @@ namespace IntelEngine::Papyrus {
     RE::Actor* GetAssassinationTarget(RE::StaticFunctionTag*);
     RE::BSFixedString GetAssassinationLeaderName(RE::StaticFunctionTag*);
     void TriggerAssassinationAttack(RE::StaticFunctionTag*);
+    void ManifestationFailed(RE::StaticFunctionTag*);
+    void ManifestationDone(RE::StaticFunctionTag*);
+    RE::BSFixedString AssassinationOutcome(RE::StaticFunctionTag*, RE::BSFixedString, RE::BSFixedString, RE::BSFixedString, RE::BSFixedString);
+    void BattleSetSkirmish(RE::StaticFunctionTag*, int);
+    RE::BSFixedString BattlePickAmbush(RE::StaticFunctionTag*, RE::Actor*);
+    bool BattleFieldBusy(RE::StaticFunctionTag*);
+    RE::BSFixedString BattleFlankLine(RE::StaticFunctionTag*, RE::BSFixedString, int, int, RE::Actor*);
+    RE::BSFixedString BattleTurnCoats(RE::StaticFunctionTag*, RE::BSFixedString);
+    RE::BSFixedString BattleChampionLine(RE::StaticFunctionTag*, RE::BSFixedString, RE::Actor*);
+    void BattleSetTwists(RE::StaticFunctionTag*, int, int, int);
+    int PlayerFactionRank(RE::StaticFunctionTag*, RE::BSFixedString);
+    RE::BSFixedString PlayerRankTitle(RE::StaticFunctionTag*, RE::BSFixedString);
+    RE::BSFixedString PlayerDidFor(RE::StaticFunctionTag*, RE::BSFixedString, RE::BSFixedString);
 
     // Faction query forward declarations
     bool IsHighStatusNPC(RE::StaticFunctionTag*, RE::Actor*);
@@ -171,13 +274,31 @@ namespace IntelEngine::Papyrus {
     // Battle system forward declarations
     RE::BSFixedString GetFactionSoldierTemplate(RE::StaticFunctionTag*, RE::BSFixedString);
     std::vector<RE::Actor*> SpawnBattleSoldiers(RE::StaticFunctionTag*, RE::BSFixedString, RE::TESObjectREFR*);
-    RE::BSFixedString ExecuteFullBattleSpawn(RE::StaticFunctionTag*, RE::BSFixedString, RE::Actor*, float, RE::TESObjectREFR*);
-    RE::BSFixedString SpawnReinforcements(RE::StaticFunctionTag*, int, RE::Actor*, RE::TESObjectREFR*);
+    RE::BSFixedString BattlePickField(RE::StaticFunctionTag*, RE::Actor*, RE::TESObjectREFR*);
+    RE::BSFixedString BattleMusterLine(RE::StaticFunctionTag*, RE::BSFixedString, int, int, RE::Actor*);
+    RE::BSFixedString BattleReinforceLine(RE::StaticFunctionTag*, RE::BSFixedString, int, int, RE::Actor*);
+    RE::BSFixedString BattleSettle(RE::StaticFunctionTag*);
+    int BattlePrepareGroup(RE::StaticFunctionTag*, RE::BSFixedString, int, RE::Actor*);
+    void BattleBeginFight(RE::StaticFunctionTag*);
+    RE::BSFixedString BattleVerdict(RE::StaticFunctionTag*);
+    RE::BSFixedString BattleIdleHands(RE::StaticFunctionTag*, int);
+    void BattleNoteTurnedDown(RE::StaticFunctionTag*, RE::BSFixedString);
+    void BattleNotePlayerLeft(RE::StaticFunctionTag*);
+    RE::BSFixedString BattleFieldInfo(RE::StaticFunctionTag*);
+    RE::BSFixedString BattleCall(RE::StaticFunctionTag*);
+    RE::TESObjectREFR* BattleWayHome(RE::StaticFunctionTag*, RE::BSFixedString, float, float, float, float, bool, RE::TESObjectREFR*);
+    void BattleTendBounty(RE::StaticFunctionTag*);
+    void BattleCallText(RE::StaticFunctionTag*, RE::BSFixedString, RE::BSFixedString);
+    RE::BSFixedString BattleSay(RE::StaticFunctionTag*, RE::BSFixedString, RE::BSFixedString, RE::BSFixedString, RE::BSFixedString, int, int);
+    int GetBattleWaveOf(RE::StaticFunctionTag*, RE::BSFixedString);
+    void AdvanceBattleWaveOf(RE::StaticFunctionTag*, RE::BSFixedString);
     int GetJsonArrayInt(RE::StaticFunctionTag*, RE::BSFixedString, RE::BSFixedString, int);
     void SetActorProtected(RE::StaticFunctionTag*, RE::Actor*, bool);
     RE::BSFixedString GetBattleSoldierFormIds(RE::StaticFunctionTag*, RE::BSFixedString);
     void SetBattleSoldiersAsTeammates(RE::StaticFunctionTag*, RE::BSFixedString);
     int CountDeadBattleSoldiers(RE::StaticFunctionTag*, RE::BSFixedString);
+    int BattleCeaseFire(RE::StaticFunctionTag*, int, int, bool);
+    void BattleDebugBodies(RE::StaticFunctionTag*);
     int CleanupBattleSoldiers(RE::StaticFunctionTag*, float, float, float, float, bool);
     void ForceCleanupAllSoldiers(RE::StaticFunctionTag*);
     void ForgetBattleSoldiers(RE::StaticFunctionTag*);
@@ -416,6 +537,55 @@ namespace IntelEngine::Papyrus {
         a_vm->RegisterFunction("NotifySocialCooldown", SCRIPT_NAME, NotifySocialCooldown); ++count;
         a_vm->RegisterFunction("NotifyStoryTypePicked", SCRIPT_NAME, NotifyStoryTypePicked); ++count;
         a_vm->RegisterFunction("RecordStoryDispatch", SCRIPT_NAME, RecordStoryDispatch); ++count;
+        a_vm->RegisterFunction("LivingWorldMayDeliver", SCRIPT_NAME, LivingWorldMayDeliver); ++count;
+        a_vm->RegisterFunction("SetLivingWorldSettings", SCRIPT_NAME, SetLivingWorldSettings); ++count;
+        a_vm->RegisterFunction("LivingWorldMomentDispatched", SCRIPT_NAME, LivingWorldMomentDispatched); ++count;
+        a_vm->RegisterFunction("StorylineOpen", SCRIPT_NAME, StorylineOpen); ++count;
+        a_vm->RegisterFunction("StorylineRefusal", SCRIPT_NAME, StorylineRefusal); ++count;
+        a_vm->RegisterFunction("StorylineEvent", SCRIPT_NAME, StorylineEvent); ++count;
+        a_vm->RegisterFunction("StorylineOpenIds", SCRIPT_NAME, StorylineOpenIds); ++count;
+        a_vm->RegisterFunction("StorylineOverdue", SCRIPT_NAME, StorylineOverdue); ++count;
+        a_vm->RegisterFunction("StorylineField", SCRIPT_NAME, StorylineField); ++count;
+        a_vm->RegisterFunction("StorylineOwner", SCRIPT_NAME, StorylineOwner); ++count;
+        a_vm->RegisterFunction("StorylineOther", SCRIPT_NAME, StorylineOther); ++count;
+        a_vm->RegisterFunction("StorylinePlace", SCRIPT_NAME, StorylinePlace); ++count;
+        a_vm->RegisterFunction("StorylineTarget", SCRIPT_NAME, StorylineTarget); ++count;
+        a_vm->RegisterFunction("StorylineItem", SCRIPT_NAME, StorylineItem); ++count;
+        a_vm->RegisterFunction("StorylineMemory", SCRIPT_NAME, StorylineMemory); ++count;
+        a_vm->RegisterFunction("StorylineReward", SCRIPT_NAME, StorylineReward); ++count;
+        a_vm->RegisterFunction("StorylineOpenIdFor", SCRIPT_NAME, StorylineOpenIdFor); ++count;
+        a_vm->RegisterFunction("StorylineCallOff", SCRIPT_NAME, StorylineCallOff); ++count;
+        a_vm->RegisterFunction("StorylineAmend", SCRIPT_NAME, StorylineAmend); ++count;
+        a_vm->RegisterFunction("StorylineReply", SCRIPT_NAME, StorylineReply); ++count;
+        a_vm->RegisterFunction("StorylineAboutId", SCRIPT_NAME, StorylineAboutId); ++count;
+        a_vm->RegisterFunction("StorylineOtherMemory", SCRIPT_NAME, StorylineOtherMemory); ++count;
+        a_vm->RegisterFunction("StorylineOfferedGold", SCRIPT_NAME, StorylineOfferedGold); ++count;
+        a_vm->RegisterFunction("StorylineMayComeAlong", SCRIPT_NAME, StorylineMayComeAlong); ++count;
+        a_vm->RegisterFunction("StorylineSetAbout", SCRIPT_NAME, StorylineSetAbout); ++count;
+        a_vm->RegisterFunction("StorylineText", SCRIPT_NAME, StorylineText); ++count;
+        a_vm->RegisterFunction("LivingWorldTrack", SCRIPT_NAME, LivingWorldTrack); ++count;
+        a_vm->RegisterFunction("BondJudge", SCRIPT_NAME, BondJudge); ++count;
+        a_vm->RegisterFunction("BondPretendNoMod", SCRIPT_NAME, BondPretendNoMod); ++count;
+        a_vm->RegisterFunction("BondDescribe", SCRIPT_NAME, BondDescribe); ++count;
+        a_vm->RegisterFunction("LivingWorldDebugAdventure", SCRIPT_NAME, LivingWorldDebugAdventure); ++count;
+        a_vm->RegisterFunction("LivingWorldMarkGreeted", SCRIPT_NAME, LivingWorldMarkGreeted); ++count;
+        a_vm->RegisterFunction("LivingWorldTakeOrder", SCRIPT_NAME, LivingWorldTakeOrder); ++count;
+        a_vm->RegisterFunction("LivingWorldKeepers", SCRIPT_NAME, LivingWorldKeepers); ++count;
+        a_vm->RegisterFunction("LivingWorldOrderKind", SCRIPT_NAME, LivingWorldOrderKind); ++count;
+        a_vm->RegisterFunction("LivingWorldOrderTarget", SCRIPT_NAME, LivingWorldOrderTarget); ++count;
+        a_vm->RegisterFunction("LivingWorldOrderOffset", SCRIPT_NAME, LivingWorldOrderOffset); ++count;
+        a_vm->RegisterFunction("LivingWorldOrderCompanion", SCRIPT_NAME, LivingWorldOrderCompanion); ++count;
+        a_vm->RegisterFunction("LivingWorldOrderProtect", SCRIPT_NAME, LivingWorldOrderProtect); ++count;
+        a_vm->RegisterFunction("LivingWorldOrderNarration", SCRIPT_NAME, LivingWorldOrderNarration); ++count;
+        a_vm->RegisterFunction("LivingWorldOrderDone", SCRIPT_NAME, LivingWorldOrderDone); ++count;
+        a_vm->RegisterFunction("LivingWorldDescribe", SCRIPT_NAME, LivingWorldDescribe); ++count;
+        a_vm->RegisterFunction("LivingWorldMayMove", SCRIPT_NAME, LivingWorldMayMove); ++count;
+        a_vm->RegisterFunction("LivingWorldQuestHolds", SCRIPT_NAME, LivingWorldQuestHolds); ++count;
+        a_vm->RegisterFunction("LivingWorldSceneBusy", SCRIPT_NAME, LivingWorldSceneBusy); ++count;
+        a_vm->RegisterFunction("ResolveSkyrimNetPlace", SCRIPT_NAME, ResolveSkyrimNetPlace); ++count;
+        a_vm->RegisterFunction("SkyrimNetPlaceOffset", SCRIPT_NAME, SkyrimNetPlaceOffset); ++count;
+        a_vm->RegisterFunction("ResolveItemByName", SCRIPT_NAME, ResolveItemByName); ++count;
+        a_vm->RegisterFunction("FindItemNamedExactly", SCRIPT_NAME, FindItemNamedExactly); ++count;
         a_vm->RegisterFunction("MarkLastDispatchFailed", SCRIPT_NAME, MarkLastDispatchFailed); ++count;
         a_vm->RegisterFunction("WarmStoryTypeCountsFromCSV", SCRIPT_NAME, WarmStoryTypeCountsFromCSV); ++count;
         a_vm->RegisterFunction("SetRecentGossipContext", SCRIPT_NAME, SetRecentGossipContext); ++count;
@@ -476,17 +646,36 @@ namespace IntelEngine::Papyrus {
         a_vm->RegisterFunction("GetSkyrimNetPackageApiVersion", SCRIPT_NAME, GetSkyrimNetPackageApiVersion); ++count;
         a_vm->RegisterFunction("SyncPluginSettings", SCRIPT_NAME, SyncPluginSettings); ++count;
         a_vm->RegisterFunction("ApplyPluginSettings", SCRIPT_NAME, ApplyPluginSettings); ++count;
+        a_vm->RegisterFunction("LoadStamp", SCRIPT_NAME, LoadStamp); ++count;
+        a_vm->RegisterFunction("PlaceInEnglish", SCRIPT_NAME, PlaceInEnglish); ++count;
+        a_vm->RegisterFunction("IsNoneWord", SCRIPT_NAME, IsNoneWord); ++count;
+        a_vm->RegisterFunction("L", SCRIPT_NAME, LabelText); ++count;
+        a_vm->RegisterFunction("TextMentionsName", SCRIPT_NAME, TextMentionsName); ++count;
+        a_vm->RegisterFunction("TextLanguage", SCRIPT_NAME, TextLanguage); ++count;
+        a_vm->RegisterFunction("ReplaceWholeWord", SCRIPT_NAME, ReplaceWholeWord); ++count;
+        a_vm->RegisterFunction("CommaList", SCRIPT_NAME, CommaList); ++count;
 
         // Faction Politics Functions
         a_vm->RegisterFunction("GetFactionRelation", SCRIPT_NAME, GetFactionRelation); ++count;
         a_vm->RegisterFunction("AdjustFactionRelation", SCRIPT_NAME, AdjustFactionRelation); ++count;
         a_vm->RegisterFunction("GetPlayerFactionStanding", SCRIPT_NAME, GetPlayerFactionStanding); ++count;
+        a_vm->RegisterFunction("FactionPatrolDue", SCRIPT_NAME, FactionPatrolDue); ++count;
+        a_vm->RegisterFunction("FactionPatrolSent", SCRIPT_NAME, FactionPatrolSent); ++count;
+        a_vm->RegisterFunction("FactionPatrolTest", SCRIPT_NAME, FactionPatrolTest); ++count;
+        a_vm->RegisterFunction("FactionQuestDue", SCRIPT_NAME, FactionQuestDue); ++count;
+        a_vm->RegisterFunction("FactionQuestSent", SCRIPT_NAME, FactionQuestSent); ++count;
+        a_vm->RegisterFunction("FactionQuestTest", SCRIPT_NAME, FactionQuestTest); ++count;
+        a_vm->RegisterFunction("PrivateMomentNow", SCRIPT_NAME, PrivateMomentNow); ++count;
+        a_vm->RegisterFunction("LivingWorldClockHours", SCRIPT_NAME, LivingWorldClockHours); ++count;
+        a_vm->RegisterFunction("PlaceBarsArrival", SCRIPT_NAME, PlaceBarsArrival); ++count;
+        a_vm->RegisterFunction("PlaceBarsNow", SCRIPT_NAME, PlaceBarsNow); ++count;
         a_vm->RegisterFunction("AdjustPlayerFactionStanding", SCRIPT_NAME, AdjustPlayerFactionStanding); ++count;
         a_vm->RegisterFunction("IsFactionAtWar", SCRIPT_NAME, IsFactionAtWar); ++count;
         a_vm->RegisterFunction("GetWarMorale", SCRIPT_NAME, GetWarMorale); ++count;
         a_vm->RegisterFunction("GetRelationStatus", SCRIPT_NAME, GetRelationStatus); ++count;
         a_vm->RegisterFunction("BuildPoliticalContext", SCRIPT_NAME, BuildPoliticalContext); ++count;
         a_vm->RegisterFunction("BuildPoliticalDashboardJson", SCRIPT_NAME, BuildPoliticalDashboardJson); ++count;
+        a_vm->RegisterFunction("BuildWorldDashboardJson", SCRIPT_NAME, BuildWorldDashboardJson); ++count;
         a_vm->RegisterFunction("RecordPoliticalEvent", SCRIPT_NAME, RecordPoliticalEvent); ++count;
         a_vm->RegisterFunction("GetPoliticalEventsAfter", SCRIPT_NAME, GetPoliticalEventsAfter); ++count;
         a_vm->RegisterFunction("GetFactionsJson", SCRIPT_NAME, GetFactionsJson); ++count;
@@ -542,6 +731,19 @@ namespace IntelEngine::Papyrus {
         a_vm->RegisterFunction("GetAssassinationTarget", SCRIPT_NAME, GetAssassinationTarget); ++count;
         a_vm->RegisterFunction("GetAssassinationLeaderName", SCRIPT_NAME, GetAssassinationLeaderName); ++count;
         a_vm->RegisterFunction("TriggerAssassinationAttack", SCRIPT_NAME, TriggerAssassinationAttack); ++count;
+        a_vm->RegisterFunction("ManifestationFailed", SCRIPT_NAME, ManifestationFailed); ++count;
+        a_vm->RegisterFunction("ManifestationDone", SCRIPT_NAME, ManifestationDone); ++count;
+        a_vm->RegisterFunction("AssassinationOutcome", SCRIPT_NAME, AssassinationOutcome); ++count;
+        a_vm->RegisterFunction("BattleSetSkirmish", SCRIPT_NAME, BattleSetSkirmish); ++count;
+        a_vm->RegisterFunction("BattlePickAmbush", SCRIPT_NAME, BattlePickAmbush); ++count;
+        a_vm->RegisterFunction("BattleFieldBusy", SCRIPT_NAME, BattleFieldBusy); ++count;
+        a_vm->RegisterFunction("BattleFlankLine", SCRIPT_NAME, BattleFlankLine); ++count;
+        a_vm->RegisterFunction("BattleTurnCoats", SCRIPT_NAME, BattleTurnCoats); ++count;
+        a_vm->RegisterFunction("BattleChampionLine", SCRIPT_NAME, BattleChampionLine); ++count;
+        a_vm->RegisterFunction("BattleSetTwists", SCRIPT_NAME, BattleSetTwists); ++count;
+        a_vm->RegisterFunction("PlayerFactionRank", SCRIPT_NAME, PlayerFactionRank); ++count;
+        a_vm->RegisterFunction("PlayerRankTitle", SCRIPT_NAME, PlayerRankTitle); ++count;
+        a_vm->RegisterFunction("PlayerDidFor", SCRIPT_NAME, PlayerDidFor); ++count;
 
         // NPC Status Check
         a_vm->RegisterFunction("IsHighStatusNPC", SCRIPT_NAME, IsHighStatusNPC); ++count;
@@ -558,13 +760,31 @@ namespace IntelEngine::Papyrus {
         // Battle System Functions
         a_vm->RegisterFunction("GetFactionSoldierTemplate", SCRIPT_NAME, GetFactionSoldierTemplate); ++count;
         a_vm->RegisterFunction("SpawnBattleSoldiers", SCRIPT_NAME, SpawnBattleSoldiers); ++count;
-        a_vm->RegisterFunction("ExecuteFullBattleSpawn", SCRIPT_NAME, ExecuteFullBattleSpawn); ++count;
-        a_vm->RegisterFunction("SpawnReinforcements", SCRIPT_NAME, SpawnReinforcements); ++count;
+        a_vm->RegisterFunction("BattlePickField", SCRIPT_NAME, BattlePickField); ++count;
+        a_vm->RegisterFunction("BattleMusterLine", SCRIPT_NAME, BattleMusterLine); ++count;
+        a_vm->RegisterFunction("BattleReinforceLine", SCRIPT_NAME, BattleReinforceLine); ++count;
+        a_vm->RegisterFunction("BattleSettle", SCRIPT_NAME, BattleSettle); ++count;
+        a_vm->RegisterFunction("BattlePrepareGroup", SCRIPT_NAME, BattlePrepareGroup); ++count;
+        a_vm->RegisterFunction("BattleBeginFight", SCRIPT_NAME, BattleBeginFight); ++count;
+        a_vm->RegisterFunction("BattleVerdict", SCRIPT_NAME, BattleVerdict); ++count;
+        a_vm->RegisterFunction("BattleIdleHands", SCRIPT_NAME, BattleIdleHands); ++count;
+        a_vm->RegisterFunction("BattleNoteTurnedDown", SCRIPT_NAME, BattleNoteTurnedDown); ++count;
+        a_vm->RegisterFunction("BattleNotePlayerLeft", SCRIPT_NAME, BattleNotePlayerLeft); ++count;
+        a_vm->RegisterFunction("BattleFieldInfo", SCRIPT_NAME, BattleFieldInfo); ++count;
+        a_vm->RegisterFunction("BattleCall", SCRIPT_NAME, BattleCall); ++count;
+        a_vm->RegisterFunction("BattleWayHome", SCRIPT_NAME, BattleWayHome); ++count;
+        a_vm->RegisterFunction("BattleTendBounty", SCRIPT_NAME, BattleTendBounty); ++count;
+        a_vm->RegisterFunction("BattleCallText", SCRIPT_NAME, BattleCallText); ++count;
+        a_vm->RegisterFunction("BattleSay", SCRIPT_NAME, BattleSay); ++count;
+        a_vm->RegisterFunction("GetBattleWaveOf", SCRIPT_NAME, GetBattleWaveOf); ++count;
+        a_vm->RegisterFunction("AdvanceBattleWaveOf", SCRIPT_NAME, AdvanceBattleWaveOf); ++count;
         a_vm->RegisterFunction("GetJsonArrayInt", SCRIPT_NAME, GetJsonArrayInt); ++count;
         a_vm->RegisterFunction("SetActorProtected", SCRIPT_NAME, SetActorProtected); ++count;
         a_vm->RegisterFunction("GetBattleSoldierFormIds", SCRIPT_NAME, GetBattleSoldierFormIds); ++count;
         a_vm->RegisterFunction("SetBattleSoldiersAsTeammates", SCRIPT_NAME, SetBattleSoldiersAsTeammates); ++count;
         a_vm->RegisterFunction("CountDeadBattleSoldiers", SCRIPT_NAME, CountDeadBattleSoldiers); ++count;
+        a_vm->RegisterFunction("BattleCeaseFire", SCRIPT_NAME, BattleCeaseFire); ++count;
+        a_vm->RegisterFunction("BattleDebugBodies", SCRIPT_NAME, BattleDebugBodies); ++count;
         a_vm->RegisterFunction("CleanupBattleSoldiers", SCRIPT_NAME, CleanupBattleSoldiers); ++count;
         a_vm->RegisterFunction("ForceCleanupAllSoldiers", SCRIPT_NAME, ForceCleanupAllSoldiers); ++count;
         a_vm->RegisterFunction("ForgetBattleSoldiers", SCRIPT_NAME, ForgetBattleSoldiers); ++count;
@@ -643,6 +863,16 @@ namespace IntelEngine::Papyrus {
         a_vm->RegisterFunction("GetAutoBioCount", SCRIPT_NAME, GetAutoBioCount); ++count;
         a_vm->RegisterFunction("GetAutoBioCountsJson", SCRIPT_NAME, GetAutoBioCountsJson); ++count;
 
+        // 4.0 quests (QuestBridge)
+        {
+            int questCount = 0;
+            QuestNatives::Register(a_vm, questCount);
+            ArcBridge::Register(a_vm, questCount);   // story arcs
+            RumorBridge::Register(a_vm, questCount);   // the talk of the day
+            FactionEditor::Register(a_vm, questCount);  // the faction editor's test hook
+            count += questCount;
+        }
+
         logger::info("Registered {} Papyrus functions", count);
         return true;
     }
@@ -715,14 +945,14 @@ namespace IntelEngine::Papyrus {
         // Walk up to parent location (e.g., The Resting Pilgrim -> Helgen)
         auto* parent = loc->parentLoc;
         if (parent) {
-            auto name = parent->GetFullName();
+            auto name = GameText::In(parent->GetFullName());
             if (name && strlen(name) > 0) {
                 return name;
             }
         }
 
         // No parent, return the location's own name
-        auto name = loc->GetFullName();
+        auto name = GameText::In(loc->GetFullName());
         return (name && strlen(name) > 0) ? name : "";
     }
 
@@ -949,7 +1179,7 @@ namespace IntelEngine::Papyrus {
             return nullptr;
         }
 
-        std::string searchTerm = StringUtils::ToLowerStd(itemName.c_str());
+        std::string searchTerm = StringUtils::ToLowerStd(GameText::In(itemName.c_str()));
         auto inventory = akActor->GetInventory();
 
         RE::TESForm* bestMatch = nullptr;
@@ -959,7 +1189,7 @@ namespace IntelEngine::Papyrus {
         for (const auto& [item, data] : inventory) {
             if (!item || data.first <= 0) continue;
 
-            const char* name = item->GetName();
+            const char* name = GameText::In(item->GetName());
             if (!name || strlen(name) == 0) continue;
 
             std::string lowerName = StringUtils::ToLowerStd(name);
@@ -988,7 +1218,7 @@ namespace IntelEngine::Papyrus {
         }
 
         if (bestMatch) {
-            logger::debug("FindItemInInventory('{}') -> Found: {}", itemName.c_str(), bestMatch->GetName());
+            logger::debug("FindItemInInventory('{}') -> Found: {}", itemName.c_str(), GameText::In(bestMatch->GetName()));
         }
 
         return bestMatch;
@@ -1007,7 +1237,7 @@ namespace IntelEngine::Papyrus {
             return nullptr;
         }
 
-        std::string searchTerm = StringUtils::ToLowerStd(itemName.c_str());
+        std::string searchTerm = StringUtils::ToLowerStd(GameText::In(itemName.c_str()));
         RE::NiPoint3 actorPos = akActor->GetPosition();
 
         RE::TESObjectREFR* bestMatch = nullptr;
@@ -1047,7 +1277,7 @@ namespace IntelEngine::Papyrus {
             }
 
             // Check name match
-            const char* name = baseObj->GetName();
+            const char* name = GameText::In(baseObj->GetName());
             if (!name || strlen(name) == 0) {
                 return RE::BSContainer::ForEachResult::kContinue;
             }
@@ -1083,7 +1313,7 @@ namespace IntelEngine::Papyrus {
 
         if (bestMatch) {
             logger::debug("FindNearbyItemByName('{}', {}) -> Found: {} at distance {}",
-                         itemName.c_str(), radius, bestMatch->GetBaseObject()->GetName(), bestDistance);
+                         itemName.c_str(), radius, GameText::In(bestMatch->GetBaseObject()->GetName()), bestDistance);
         }
 
         return bestMatch;
@@ -1219,15 +1449,108 @@ namespace IntelEngine::Papyrus {
             currentHour = (currentGameTime - std::floor(currentGameTime)) * 24.0f;
         }
 
-        const float result = NaturalTime::Parse(
-            condition.c_str() ? condition.c_str() : "", currentHour);
+        // The model writes a time in the language it speaks ("zavtra utrom", "morgen frueh", "neser ne mengjes" in
+        // their own letters); the reader knows English. The language packs in force put it into English first
+        // (LanguageBridge.h); English comes through as it was.
+        const std::string said = condition.c_str() ? condition.c_str() : "";
+        const std::string english = LanguageBridge::GetSingleton()->TimeToEnglish(said);
+        const float result = NaturalTime::Parse(english, currentHour);
         if (result < 0.0f) {
-            logger::debug("ParseTimeCondition: could not parse '{}'", condition.c_str());
+            logger::info("ParseTimeCondition: could not read '{}'{}", said, english == said ? std::string{} : " (as '" + english + "')");
+        } else if (english != said) {
+            logger::info("ParseTimeCondition: '{}' (as '{}') -> {}", said, english, result);
         } else {
-            logger::debug("ParseTimeCondition: '{}' -> {}", condition.c_str(), result);
+            logger::debug("ParseTimeCondition: '{}' -> {}", said, result);
         }
         return result;
     }
+
+    // ==========================================================================
+    // Languages (LanguageBridge.h, LanguagePack.h)
+    // ==========================================================================
+
+    // A word of place said in another language, in English ("domoi": "home"), when the whole of what was said is
+    // one; anything else (a name, English) comes back as it was.
+    RE::BSFixedString PlaceInEnglish(RE::StaticFunctionTag*, RE::BSFixedString said) {
+        const std::string english = LanguageBridge::GetSingleton()->PlaceToEnglish(said.c_str() ? said.c_str() : "");
+        return english.empty() ? said : RE::BSFixedString(english);
+    }
+
+    // Nothing, "none", or the word for it in a language in force ("net", "keine", "asnje").
+    bool IsNoneWord(RE::StaticFunctionTag*, RE::BSFixedString said) {
+        return LanguageBridge::GetSingleton()->IsNone(said.c_str() ? said.c_str() : "");
+    }
+
+    // What the player reads, in the language of the game where its pack has the sentence; else as it came.
+    RE::BSFixedString LabelText(RE::StaticFunctionTag*, RE::BSFixedString english) {
+        const std::string text = english.c_str() ? english.c_str() : "";
+        const std::string there = LanguageBridge::GetSingleton()->Label(text);
+        return there == text ? english : RE::BSFixedString(there);
+    }
+
+    // Does a sentence speak of this name, in whatever form its language puts it (NameForms.h)?
+    bool TextMentionsName(RE::StaticFunctionTag*, RE::BSFixedString text, RE::BSFixedString name) {
+        return NameForms::Mentions(FoldUtf8(GameText::In(std::string(text.c_str() ? text.c_str() : ""))), FoldUtf8(GameText::In(std::string(name.c_str() ? name.c_str() : ""))),
+                                   LanguageBridge::GetSingleton()->Free());
+    }
+
+    // Every whole-word occurrence of `what` in `text` replaced by `with`, whatever the case, with word boundaries
+    // of any script (NameForms.h). The scripts' own version asked StringUtil.IsLetter, which knows ASCII only:
+    // every byte of a Cyrillic letter was a boundary, so a name was replaced in the middle of its declined form.
+    RE::BSFixedString ReplaceWholeWord(RE::StaticFunctionTag*, RE::BSFixedString text, RE::BSFixedString what, RE::BSFixedString with) {
+        const std::string original = text.c_str() ? text.c_str() : "";
+        const std::string word = what.c_str() ? what.c_str() : "";
+        const std::string to = with.c_str() ? with.c_str() : "";
+        if (original.empty() || word.empty()) return text;
+        const std::string hay = FoldUtf8(original), needle = FoldUtf8(word);   // folding keeps the byte length
+        if (hay.size() != original.size() || needle.empty()) return text;
+        // (The apostrophe is a boundary here, as it was in the scripts' own loop: "Sinmir's" gives way to "my",
+        // and what is left of "Sinmir" to "me".)
+        const auto separatorAt = [&](std::size_t at) {
+            char32_t c = 0;
+            NameForms::Decode(hay, at, c);
+            return NameForms::Separator(c) || NameForms::Apostrophe(c);
+        };
+        std::string out;
+        std::size_t copied = 0;
+        for (auto at = hay.find(needle); at != std::string::npos; at = hay.find(needle, at + 1)) {
+            if (at < copied) continue;
+            const std::size_t end = at + needle.size();
+            bool left = at == 0;
+            if (!left) {
+                std::size_t b = at - 1;
+                while (b > 0 && (static_cast<unsigned char>(hay[b]) & 0xC0) == 0x80) --b;
+                left = separatorAt(b);
+            }
+            const bool right = end >= hay.size() || separatorAt(end);
+            if (!left || !right) continue;
+            out.append(original, copied, at - copied);
+            out += to;
+            copied = end;
+        }
+        if (copied == 0) return text;
+        out.append(original, copied, std::string::npos);
+        return RE::BSFixedString(out);
+    }
+
+    // A list of names with commas between them, whatever the model put there: the ideographic and the full-width
+    // comma and the semicolons of any width become commas ("A、B" was one long name, and nobody came along).
+    RE::BSFixedString CommaList(RE::StaticFunctionTag*, RE::BSFixedString said) {
+        const std::string in = said.c_str() ? said.c_str() : "";
+        std::string out;
+        out.reserve(in.size());
+        char32_t c = 0;
+        for (std::size_t i = 0; i < in.size();) {
+            const auto n = NameForms::Decode(in, i, c);
+            if (c == 0x3001 || c == 0xFF0C || c == 0xFF1B || c == ';' || c == 0x060C) out += ',';
+            else out.append(in, i, n);
+            i += n;
+        }
+        return out == in ? said : RE::BSFixedString(out);
+    }
+
+    // The English name of the language the player reads in ("Russian"); empty for English.
+    RE::BSFixedString TextLanguage(RE::StaticFunctionTag*) { return RE::BSFixedString(LanguageBridge::GetSingleton()->TextLanguage()); }
 
     float CalculateTargetGameTime(RE::StaticFunctionTag*, float targetHour, float currentHour) {
         auto* calendar = RE::Calendar::GetSingleton();
@@ -1306,7 +1629,7 @@ namespace IntelEngine::Papyrus {
         OffScreenTracker::GetSingleton()->InitSlot(
             slot, estimatedArrivalGameTime, pos.x, pos.y);
         logger::debug("[diag:offscreen] {} slot={} init XY=({},{}) loaded={}",
-            actor->GetName(), slot, pos.x, pos.y, actor->Is3DLoaded());
+            GameText::In(actor->GetName()), slot, pos.x, pos.y, actor->Is3DLoaded());
     }
 
     int CheckOffScreenProgress(RE::StaticFunctionTag*, int slot,
@@ -1323,9 +1646,9 @@ namespace IntelEngine::Papyrus {
             auto* package = actor->GetCurrentPackage();
             const auto playerPos = player ? player->GetPosition() : RE::NiPoint3{};
             logger::debug("[diag:offscreen] {} ref={:08X} slot={} xyz=({},{},{}) cell={}({:08X}) space={}({:08X}) loaded={} package={:08X} playerXY=({},{}) {} movement={} stationaryTicks={} return={}",
-                actor->GetName(), actor->GetFormID(), slot, pos.x, pos.y, pos.z,
-                cell ? cell->GetName() : "none", cell ? cell->GetFormID() : 0,
-                cell && cell->IsInteriorCell() ? "interior" : world ? world->GetName() : "none", world ? world->GetFormID() : 0,
+                GameText::In(actor->GetName()), actor->GetFormID(), slot, pos.x, pos.y, pos.z,
+                cell ? GameText::In(cell->GetName()) : "none", cell ? cell->GetFormID() : 0,
+                cell && cell->IsInteriorCell() ? "interior" : world ? GameText::In(world->GetName()) : "none", world ? world->GetFormID() : 0,
                 actor->Is3DLoaded(), package ? package->GetFormID() : 0, playerPos.x, playerPos.y, DescribeDistance(nullptr, actor, player).c_str(), movement, ticks, status);
         }
         return status;
@@ -1495,7 +1818,7 @@ namespace IntelEngine::Papyrus {
         bool available = !hasTask && !onCooldown;
 
         logger::info("IsActorAvailable({}): hasTask={}, onCooldown={}, available={}",
-                    akActor->GetDisplayFullName(), hasTask, onCooldown, available);
+                    GameText::In(akActor->GetDisplayFullName()), hasTask, onCooldown, available);
 
         return available;
     }
@@ -1511,7 +1834,7 @@ namespace IntelEngine::Papyrus {
         }
         bool hasPackages = count > 0;
         logger::info("HasBaseAIPackages({}): {} base AI package(s), formID={:08X}",
-                    akActor->GetDisplayFullName(), count, akActor->GetFormID());
+                    GameText::In(akActor->GetDisplayFullName()), count, akActor->GetFormID());
         return hasPackages;
     }
 
@@ -1528,12 +1851,12 @@ namespace IntelEngine::Papyrus {
                 type != RE::PACKAGE_TYPE::kWander &&
                 type != RE::PACKAGE_TYPE::kDoNothing) {
                 logger::info("HasNonSandboxAI({}): TRUE — found package type {}",
-                            akActor->GetDisplayFullName(), static_cast<int>(type));
+                            GameText::In(akActor->GetDisplayFullName()), static_cast<int>(type));
                 return true;
             }
         }
         logger::info("HasNonSandboxAI({}): FALSE — all packages are sandbox/wander",
-                    akActor->GetDisplayFullName());
+                    GameText::In(akActor->GetDisplayFullName()));
         return false;
     }
 
@@ -1543,7 +1866,7 @@ namespace IntelEngine::Papyrus {
         auto* editorLoc = akActor->GetEditorLocation();
         if (!editorLoc) {
             logger::info("GetEditorLocationRef({}): no editor location",
-                        akActor->GetDisplayFullName());
+                        GameText::In(akActor->GetDisplayFullName()));
             return nullptr;
         }
 
@@ -1553,8 +1876,8 @@ namespace IntelEngine::Papyrus {
             auto* marker = markerPtr.get();
             if (marker) {
                 logger::info("GetEditorLocationRef({}): found marker at location '{}'",
-                            akActor->GetDisplayFullName(),
-                            editorLoc->GetFullName() ? editorLoc->GetFullName() : "unnamed");
+                            GameText::In(akActor->GetDisplayFullName()),
+                            GameText::In(editorLoc->GetFullName()) ? GameText::In(editorLoc->GetFullName()) : "unnamed");
                 return marker;
             }
         }
@@ -1566,15 +1889,15 @@ namespace IntelEngine::Papyrus {
                 auto* parentMarker = parentPtr.get();
                 if (parentMarker) {
                     logger::info("GetEditorLocationRef({}): found marker at parent location '{}'",
-                                akActor->GetDisplayFullName(),
-                                editorLoc->parentLoc->GetFullName() ? editorLoc->parentLoc->GetFullName() : "unnamed");
+                                GameText::In(akActor->GetDisplayFullName()),
+                                GameText::In(editorLoc->parentLoc->GetFullName()) ? GameText::In(editorLoc->parentLoc->GetFullName()) : "unnamed");
                     return parentMarker;
                 }
             }
         }
 
         logger::info("GetEditorLocationRef({}): no usable world marker found",
-                    akActor->GetDisplayFullName());
+                    GameText::In(akActor->GetDisplayFullName()));
         return nullptr;
     }
 
@@ -1585,7 +1908,7 @@ namespace IntelEngine::Papyrus {
     RE::Actor* GetRandomStoryCandidate(RE::StaticFunctionTag*) {
         auto* candidate = NPCIndex::GetSingleton()->GetRandomStoryCandidate();
         if (candidate) {
-            logger::info("GetRandomStoryCandidate: Selected '{}'", candidate->GetDisplayFullName());
+            logger::info("GetRandomStoryCandidate: Selected '{}'", GameText::In(candidate->GetDisplayFullName()));
         } else {
             logger::debug("GetRandomStoryCandidate: No eligible candidates found");
         }
@@ -1653,7 +1976,7 @@ namespace IntelEngine::Papyrus {
             if (destLoc && analyzer->IsLocationDangerous(destLoc)) {
                 found = true;
                 logger::info("[IntelEngine] HasNearbyDungeonEntrance: door to dangerous interior '{}'",
-                            destCell->GetName());
+                            GameText::In(destCell->GetName()));
             }
 
             return found ? RE::BSContainer::ForEachResult::kStop
@@ -1715,8 +2038,33 @@ namespace IntelEngine::Papyrus {
         return RE::BSFixedString(NPCIndex::GetNPCHoldName(actor).c_str());
     }
 
+    namespace {
+        // The game's own record of an acquaintance: the player has talked to them in its dialogue at least once, or
+        // their relationship rank with the player is anything but the neutral 0 (friend, ally, lover, rival, foe).
+        // SkyrimNet's history alone made old acquaintances strangers: anyone met in vanilla quests, or before
+        // SkyrimNet was installed ("I don't know you, stranger" from someone the player knows, the user, 2026-11-18).
+        bool GameSaysTheyMet(RE::Actor* actor, RE::PlayerCharacter* player) {
+            if (!actor || !player) return false;
+            RE::ConditionCheckParams params(actor, player);
+            RE::TESConditionItem talked;
+            talked.data.functionData.function = RE::FUNCTION_DATA::FunctionID::kGetTalkedToPC;
+            talked.data.comparisonValue.f = 1.0f;
+            talked.data.flags.opCode = RE::CONDITION_ITEM_DATA::OpCode::kEqualTo;
+            talked.data.object = RE::CONDITIONITEMOBJECT::kSelf;
+            if (talked(params)) return true;
+            RE::TESConditionItem rank;
+            rank.data.functionData.function = RE::FUNCTION_DATA::FunctionID::kGetRelationshipRank;
+            rank.data.functionData.params[0] = player;
+            rank.data.comparisonValue.f = 0.0f;
+            rank.data.flags.opCode = RE::CONDITION_ITEM_DATA::OpCode::kNotEqualTo;
+            rank.data.object = RE::CONDITIONITEMOBJECT::kSelf;
+            return rank(params);
+        }
+    }
+
     bool NPCKnowsPlayer(RE::StaticFunctionTag*, RE::Actor* actor) {
         if (!actor) return false;
+        if (GameSaysTheyMet(actor, RE::PlayerCharacter::GetSingleton())) return true;
         auto* memDB = MemoryDB::GetSingleton();
         if (!memDB) return false;
         RE::FormID formId = actor->GetFormID();
@@ -1730,7 +2078,7 @@ namespace IntelEngine::Papyrus {
         // so an NPC who only has memories about third parties would false-positive without this filter.
         auto* player = RE::PlayerCharacter::GetSingleton();
         if (player) {
-            std::string playerName = player->GetDisplayFullName();
+            std::string playerName = GameText::In(player->GetDisplayFullName());
             if (!playerName.empty()) {
                 auto memories = memDB->GetFormattedMemories(formId, 5);
                 if (!memories.empty()) {
@@ -1884,7 +2232,7 @@ namespace IntelEngine::Papyrus {
                         } else if (value.is_null()) {
                             s_cachedFields[keyLower] = "";
                         } else {
-                            s_cachedFields[keyLower] = value.dump();
+                            s_cachedFields[keyLower] = value.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
                         }
                     }
 
@@ -1949,13 +2297,13 @@ namespace IntelEngine::Papyrus {
             default: pfx = "actor";  break;
         }
 
-        std::string name = actor->GetDisplayFullName();
+        std::string name = GameText::In(actor->GetDisplayFullName());
         logger::info("[IntelEngine] BuildActorContextJson: slot={}, actor='{}'", slot, name);
 
         // Race
         std::string race;
         if (auto* raceForm = actor->GetRace()) {
-            const char* raceName = raceForm->GetFullName();
+            const char* raceName = GameText::In(raceForm->GetFullName());
             if (raceName && raceName[0] != '\0') {
                 race = raceName;
             }
@@ -2080,7 +2428,10 @@ namespace IntelEngine::Papyrus {
             }
             std::string questEditorId = qedit;
             logger::debug("[NPCTick] Phase A snapshot (gen={})", generation);
-            auto snap = NPCIndex::GetSingleton()->BuildNPCTickSnapshot(static_cast<int>(maxPairs));
+            // The snapshot is taken a slice per frame; the rest goes on, on the game's thread, once it is done.
+            NPCIndex::GetSingleton()->BuildNPCTickSnapshotSpread(static_cast<int>(maxPairs),
+                [generation, questEditorId = std::move(questEditorId), scriptName = std::move(scriptName),
+                 functionName = std::move(functionName)](NPCIndex::NPCTickSnapshot snap) mutable {
             const bool playerAtInn = FactionPolitics::IsPlayerAtInn();
             if (snap.candidates.empty()) {
                 NPCTickResult result;
@@ -2118,6 +2469,7 @@ namespace IntelEngine::Papyrus {
                     AsyncDispatch::ExecuteQuestFunctionString(questEditorId, scriptName, functionName, requestJson);
                 });
             });
+                });
         });
     }
 
@@ -2164,6 +2516,409 @@ namespace IntelEngine::Papyrus {
      * type and subType cleanly — single source of truth for sub-type
      * derivation lives in Papyrus, not duplicated against a cached JSON field.
      */
+    /** 4.0 living world: may a story moment land now (pacing, seams, bad moments)? */
+    bool LivingWorldMayDeliver(RE::StaticFunctionTag*, std::int32_t seam, bool urgent) {
+        return LivingWorldBridge::GetSingleton()->MayDeliver(seam, urgent);
+    }
+
+    /** 4.0 living world: the six settings, from the scripts on load and on every change. Out-of-range values clamp. */
+    void SetLivingWorldSettings(RE::StaticFunctionTag*, std::int32_t level, std::int32_t interruptions, std::int32_t questNpcs,
+                                std::int32_t pacing, float waitDays, float lifeDays, bool skippedTimeCounts) {
+        LivingWorld::Settings s;
+        s.level = static_cast<LivingWorld::WorldLevel>(std::clamp(level, 0, 2));
+        s.interruptions = static_cast<LivingWorld::Interruptions>(std::clamp(interruptions, 0, 2));
+        s.questNpcMoves = static_cast<LivingWorld::QuestNpcMoves>(std::clamp(questNpcs, 0, 2));
+        s.pacing = static_cast<LivingWorld::Pacing>(std::clamp(pacing, 0, 2));
+        s.waitOrderDays = std::clamp(waitDays, 1.0f, 120.0f);
+        s.lifeStartDays = std::clamp(lifeDays, 1.0f, 60.0f);
+        s.skippedTimeCounts = skippedTimeCounts;
+        LivingWorldBridge::GetSingleton()->SetSettings(s);
+    }
+
+    // ---------------------------------------------------------------- 4.0 storylines (StorylineBridge)
+
+    std::int32_t StorylineOpen(RE::StaticFunctionTag*, std::int32_t kind, std::int32_t request, RE::Actor* owner,
+                               RE::Actor* other, RE::BGSLocation* place, RE::TESObjectREFR* target, RE::TESForm* item,
+                               float days, std::int32_t importance, bool urgent) {
+        if (!owner || kind < 1 || kind > 3 || request < 0 || request > static_cast<int>(Storylines::Request::Rescue)) return 0;
+        Storylines::Storyline s;
+        s.kind = static_cast<Storylines::Kind>(kind);
+        s.request = static_cast<Storylines::Request>(request);
+        s.owner = owner->GetFormID();
+        s.other = other ? other->GetFormID() : 0;
+        s.place = place ? place->GetFormID() : 0;
+        s.target = target ? target->GetFormID() : 0;
+        s.item = item ? item->GetFormID() : 0;
+        s.importance = static_cast<std::uint8_t>(std::clamp(importance, 1, 3));
+        auto* calendar = RE::Calendar::GetSingleton();
+        s.deadline = days > 0.0f && calendar ? calendar->GetCurrentGameTime() + days : 0.0f;
+        return static_cast<std::int32_t>(StorylineBridge::GetSingleton()->Open(s, urgent));
+    }
+
+    RE::BSFixedString StorylineRefusal(RE::StaticFunctionTag*, std::int32_t kind, std::int32_t request, RE::Actor* owner) {
+        if (kind < 1 || kind > 3 || request < 0 || request > static_cast<int>(Storylines::Request::Rescue)) return "unknown kind";
+        return StorylineBridge::GetSingleton()->Refusal(static_cast<Storylines::Kind>(kind),
+                                                         static_cast<Storylines::Request>(request),
+                                                         owner ? owner->GetFormID() : 0, true).c_str();  // asked in conversation
+    }
+
+    bool StorylineEvent(RE::StaticFunctionTag*, std::int32_t id, std::int32_t event) {
+        if (id <= 0 || event < 1 || event > static_cast<int>(Storylines::Event::FellThrough)) return false;
+        return StorylineBridge::GetSingleton()->Apply(static_cast<std::uint32_t>(id), static_cast<Storylines::Event>(event));
+    }
+
+    std::vector<std::int32_t> StorylineOpenIds(RE::StaticFunctionTag*) {
+        const auto ids = StorylineBridge::GetSingleton()->OpenIds();
+        return {ids.begin(), ids.end()};
+    }
+
+    std::vector<std::int32_t> StorylineOverdue(RE::StaticFunctionTag*) {
+        const auto ids = StorylineBridge::GetSingleton()->Overdue();
+        return {ids.begin(), ids.end()};
+    }
+
+    /** One number of a storyline: "slot" (255 none), "objective" (255 none), "stage", "kind", "request",
+     *  "importance". -1 when there is no such storyline. */
+    std::int32_t StorylineField(RE::StaticFunctionTag*, std::int32_t id, RE::BSFixedString field) {
+        const auto s = StorylineBridge::GetSingleton()->Get(static_cast<std::uint32_t>(id));
+        if (!s) return -1;
+        // Lower case first: the game's string pool hands back the first spelling it saw ("Stage", "Request").
+        const auto f = StringUtils::ToLowerStd(field.c_str() ? field.c_str() : "");
+        if (f == "slot") return s->slot;
+        if (f == "objective") return static_cast<std::int32_t>(Storylines::ObjectiveFor(*s));
+        if (f == "stage") return static_cast<std::int32_t>(s->stage);
+        if (f == "kind") return static_cast<std::int32_t>(s->kind);
+        if (f == "request") return static_cast<std::int32_t>(s->request);
+        if (f == "importance") return s->importance;
+        if (f == "comes") return (s->changes & Storylines::Changed::ComesAlong) ? 1 : 0;
+        if (f == "replied") return s->reply.empty() ? 0 : 1;
+        return -1;
+    }
+
+    RE::Actor* StorylineOwner(RE::StaticFunctionTag*, std::int32_t id) {
+        const auto s = StorylineBridge::GetSingleton()->Get(static_cast<std::uint32_t>(id));
+        return s ? RE::TESForm::LookupByID<RE::Actor>(s->owner) : nullptr;
+    }
+
+    RE::Actor* StorylineOther(RE::StaticFunctionTag*, std::int32_t id) {
+        const auto s = StorylineBridge::GetSingleton()->Get(static_cast<std::uint32_t>(id));
+        return s && s->other ? RE::TESForm::LookupByID<RE::Actor>(s->other) : nullptr;
+    }
+
+    RE::BGSLocation* StorylinePlace(RE::StaticFunctionTag*, std::int32_t id) {
+        const auto s = StorylineBridge::GetSingleton()->Get(static_cast<std::uint32_t>(id));
+        return s && s->place ? RE::TESForm::LookupByID<RE::BGSLocation>(s->place) : nullptr;
+    }
+
+    RE::TESObjectREFR* StorylineTarget(RE::StaticFunctionTag*, std::int32_t id) {
+        const auto s = StorylineBridge::GetSingleton()->Get(static_cast<std::uint32_t>(id));
+        return s && s->target ? RE::TESForm::LookupByID<RE::TESObjectREFR>(s->target) : nullptr;
+    }
+
+    RE::TESForm* StorylineItem(RE::StaticFunctionTag*, std::int32_t id) {
+        const auto s = StorylineBridge::GetSingleton()->Get(static_cast<std::uint32_t>(id));
+        return s && s->item ? RE::TESForm::LookupByID(s->item) : nullptr;
+    }
+
+    RE::BSFixedString StorylineMemory(RE::StaticFunctionTag*, std::int32_t id) {
+        return StorylineBridge::GetSingleton()->MemoryFor(static_cast<std::uint32_t>(id)).c_str();
+    }
+
+    std::int32_t StorylineReward(RE::StaticFunctionTag*, std::int32_t id, std::int32_t playerLevel) {
+        const auto s = StorylineBridge::GetSingleton()->Get(static_cast<std::uint32_t>(id));
+        return s ? Storylines::RewardGold(*s, playerLevel) : 0;
+    }
+
+    /** Every kind of item a person can carry, in this order; fn returns true to stop. */
+    template <class Fn>
+    static void ForEachItemForm(RE::TESDataHandler* data, Fn&& fn) {
+        bool stop = false;
+        const auto each = [&](auto& forms) {
+            for (auto* form : forms) {
+                if (stop) return;
+                if (!form) continue;
+                const char* name = GameText::In(form->GetName());
+                if (name && *name && fn(form, name)) stop = true;
+            }
+        };
+        each(data->GetFormArray<RE::AlchemyItem>());
+        each(data->GetFormArray<RE::IngredientItem>());
+        each(data->GetFormArray<RE::TESObjectMISC>());
+        each(data->GetFormArray<RE::TESObjectWEAP>());
+        each(data->GetFormArray<RE::TESObjectARMO>());
+        each(data->GetFormArray<RE::TESObjectBOOK>());
+        each(data->GetFormArray<RE::TESSoulGem>());
+        each(data->GetFormArray<RE::TESAmmo>());
+    }
+
+    // Every item name of the load order, read once at the main menu (kDataLoaded): finding the item someone named is
+    // then a few lookups. ResolveItemByName used to read every item's name up to three times, inside a frame of play,
+    // when someone asked the player to bring something; on a large load order that is tens of thousands of names.
+    // Items made during play (a brewed potion) are not in it; FindItemNamedExactly still matches them by name.
+    namespace {
+        struct ItemBook {
+            std::vector<RE::TESForm*> forms;                        // in the order ForEachItemForm lists them
+            std::unordered_map<std::string, std::uint32_t> exact;   // lower-case name -> the first item called so
+            std::unordered_map<RE::FormID, std::uint32_t> number;   // form -> its number
+            ItemNames::Book names;
+            bool built = false;
+        };
+        ItemBook g_itemBook;
+    }
+
+    void BuildItemBook() {
+        if (g_itemBook.built) return;
+        auto* data = RE::TESDataHandler::GetSingleton();
+        if (!data) return;
+        const auto started = std::chrono::steady_clock::now();
+        ForEachItemForm(data, [](RE::TESForm* form, const char* name) {
+            const auto index = static_cast<std::uint32_t>(g_itemBook.forms.size());
+            g_itemBook.forms.push_back(form);
+            g_itemBook.exact.try_emplace(StringUtils::ToLowerStd(name), index);
+            g_itemBook.number.try_emplace(form->GetFormID(), index);
+            g_itemBook.names.Add(name);
+            return false;
+        });
+        g_itemBook.built = true;
+        const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
+        logger::info("Item names: {} items read at the main menu ({:.0f} ms)", g_itemBook.forms.size(), ms);
+    }
+
+    /** The base form of the item someone named, searched in every kind of item a person can carry; the first
+     *  plugin's wins. In this order: exactly that name (any case); the same item under the modlist's own spelling
+     *  (sorting tags, words turned round, "Sweetroll" for "Sweet Roll": ItemNames::Same); else the plainest item whose
+     *  name ends in the said words ("Mead" is "Nord Mead": ItemNames::Loose). Never part of a word: a storyline must
+     *  never ask for "Vase" when "Ale" was said (the item index has no drinks, and its fuzzy match did exactly that). */
+    RE::TESForm* ResolveItemByName(RE::StaticFunctionTag*, RE::BSFixedString itemName) {
+        if (!itemName.c_str() || !*itemName.c_str()) return nullptr;
+        BuildItemBook();   // at the main menu already; only if that was missed
+        if (!g_itemBook.built) return nullptr;
+        const std::string said = GameText::In(itemName.c_str());   // a name a script read from the game is the game's bytes
+        if (auto it = g_itemBook.exact.find(StringUtils::ToLowerStd(said)); it != g_itemBook.exact.end()) {
+            return g_itemBook.forms[it->second];
+        }
+        if (const auto i = g_itemBook.names.FindSame(said); i >= 0) {
+            auto* found = g_itemBook.forms[static_cast<std::size_t>(i)];
+            logger::info("ResolveItemByName: '{}' is called '{}' here", said, GameText::In(found->GetName()));
+            return found;
+        }
+        if (const auto i = g_itemBook.names.FindLoose(said); i >= 0) {
+            auto* found = g_itemBook.forms[static_cast<std::size_t>(i)];
+            logger::info("ResolveItemByName: no item is called '{}'; taking '{}'", said, GameText::In(found->GetName()));
+            return found;
+        }
+        return nullptr;
+    }
+
+    /** An item this actor carries that is the named item (exactly, or under another spelling of the same words:
+     *  ItemNames::Same), else None. Two mods' "Ale" both count, "[Drink] Ale" too; "Pale Ale" does not. Called every
+     *  two seconds while a request for an item is open: the items that are the same are looked up in the book once
+     *  per call instead of reading each carried item's name. */
+    RE::TESForm* FindItemNamedExactly(RE::StaticFunctionTag*, RE::Actor* actor, RE::BSFixedString itemName) {
+        if (!actor || !itemName.c_str() || !*itemName.c_str()) return nullptr;
+        BuildItemBook();
+        const std::string said = GameText::In(itemName.c_str());   // a name a script read from the game is the game's bytes
+        const auto wanted = StringUtils::ToLowerStd(said);
+        std::unordered_set<RE::FormID> sameForms;
+        for (const auto index : g_itemBook.names.SameAll(said)) sameForms.insert(g_itemBook.forms[index]->GetFormID());
+        RE::TESForm* same = nullptr;
+        for (const auto& [item, data] : actor->GetInventory()) {
+            if (!item || data.first <= 0) continue;
+            const char* name = GameText::In(item->GetName());
+            if (!name || !*name) continue;
+            if (StringUtils::ToLowerStd(name) == wanted) return item;
+            if (same) continue;
+            const bool known = g_itemBook.number.contains(item->GetFormID());
+            if (known ? sameForms.contains(item->GetFormID()) : ItemNames::Same(said, name)) same = item;
+        }
+        return same;
+    }
+
+    std::int32_t StorylineOpenIdFor(RE::StaticFunctionTag*, RE::Actor* owner) {
+        return owner ? static_cast<std::int32_t>(StorylineBridge::GetSingleton()->OpenIdFor(owner->GetFormID())) : 0;
+    }
+
+    // 4.0 branches from conversation: the one who asked changes it, the one it is about answers.
+    bool StorylineCallOff(RE::StaticFunctionTag*, std::int32_t id, RE::BSFixedString note) {
+        if (id <= 0) return false;
+        return StorylineBridge::GetSingleton()->CallOff(static_cast<std::uint32_t>(id), note.c_str() ? note.c_str() : "");
+    }
+
+    /** change: 1 more time, 2 hurry, 3 raise the reward (gold = the sum named), 4 a new person, place or item.
+     *  Returns "" when changed, else why not. */
+    RE::BSFixedString StorylineAmend(RE::StaticFunctionTag*, std::int32_t id, std::int32_t change, RE::Actor* other,
+                                     RE::BGSLocation* place, RE::TESObjectREFR* target, RE::TESForm* item, std::int32_t gold,
+                                     RE::BSFixedString note) {
+        if (id <= 0 || change < 1 || change > static_cast<int>(Storylines::Change::NewSubject)) return "unknown change";
+        Storylines::Book::Amendment a;
+        a.change = static_cast<Storylines::Change>(change);
+        a.other = other ? other->GetFormID() : 0;
+        a.place = place ? place->GetFormID() : 0;
+        a.target = target ? target->GetFormID() : 0;
+        a.item = item ? item->GetFormID() : 0;
+        a.gold = gold;
+        a.note = note.c_str() ? note.c_str() : "";
+        return StorylineBridge::GetSingleton()->Amend(static_cast<std::uint32_t>(id), a).c_str();
+    }
+
+    RE::BSFixedString StorylineReply(RE::StaticFunctionTag*, std::int32_t id, RE::Actor* speaker, RE::BSFixedString reply,
+                                     bool comesAlong) {
+        if (id <= 0 || !speaker) return "nobody";
+        return StorylineBridge::GetSingleton()
+            ->Reply(static_cast<std::uint32_t>(id), speaker->GetFormID(), reply.c_str() ? reply.c_str() : "", comesAlong)
+            .c_str();
+    }
+
+    std::int32_t StorylineAboutId(RE::StaticFunctionTag*, RE::Actor* person) {
+        return person ? static_cast<std::int32_t>(StorylineBridge::GetSingleton()->AboutId(person->GetFormID())) : 0;
+    }
+
+    RE::BSFixedString StorylineOtherMemory(RE::StaticFunctionTag*, std::int32_t id) {
+        return StorylineBridge::GetSingleton()->OtherMemoryFor(static_cast<std::uint32_t>(id)).c_str();
+    }
+
+    std::int32_t StorylineOfferedGold(RE::StaticFunctionTag*, std::int32_t id, std::int32_t playerLevel) {
+        return StorylineBridge::GetSingleton()->OfferedGold(static_cast<std::uint32_t>(id), playerLevel);
+    }
+
+    /** Whether a running quest lets this person go along with the player to whoever asked about them (the setting
+     *  "Quest NPCs may move", as for a quest moment); the storyline's own objective does not count. */
+    bool StorylineMayComeAlong(RE::StaticFunctionTag*, RE::Actor* person) {
+        return LivingWorldBridge::GetSingleton()->MayMoveForStory(person, "quest", true);
+    }
+
+    bool StorylineSetAbout(RE::StaticFunctionTag*, std::int32_t id, RE::BSFixedString text) {
+        if (id <= 0 || !text.c_str()) return false;
+        return StorylineBridge::GetSingleton()->SetAbout(static_cast<std::uint32_t>(id), text.c_str());
+    }
+
+    RE::BSFixedString StorylineText(RE::StaticFunctionTag*, std::int32_t id, RE::BSFixedString field) {
+        const auto s = StorylineBridge::GetSingleton()->Get(static_cast<std::uint32_t>(id));
+        if (!s) return "";
+        // Lower case first: the game's string pool hands back the first spelling it saw ("Reply", "Note").
+        const auto f = StringUtils::ToLowerStd(field.c_str() ? field.c_str() : "");
+        if (f == "about") return s->about.c_str();
+        if (f == "reply") return s->reply.c_str();
+        if (f == "note") return s->note.c_str();
+        return "";
+    }
+
+    // ---------------------------------------------------------------- 4.0 lives of followers left behind
+
+    void LivingWorldTrack(RE::StaticFunctionTag*) {
+        LivingWorldBridge::NotePlayerWhere();   // where the player goes, for private moments (Patrols.h)
+        LivingWorldBridge::GetSingleton()->Track();
+        BondBridge::GetSingleton()->Tick();   // how people stand with the player, where no relationship mod keeps it
+    }
+    bool BondJudge(RE::StaticFunctionTag*, RE::Actor* who) { return BondBridge::GetSingleton()->JudgeNow(who); }
+    void BondPretendNoMod(RE::StaticFunctionTag*, bool on) { BondBridge::GetSingleton()->Pretend(on); }
+    RE::BSFixedString BondDescribe(RE::StaticFunctionTag*, RE::Actor* who) {
+        if (!who) return "";
+        // What was read, and what comes of it where it is used: whether they count as close to the player, and the line
+        // a story's author is told about the two (empty when there is nothing to tell).
+        auto* bonds = BondBridge::GetSingleton();
+        const std::string line = bonds->Describe(who->GetFormID()) + "; close to the player: " + (LivingWorldBridge::GetSingleton()->CloseToPlayer(who) ? "yes" : "no") +
+                                 "; a story's author is told: \"" + HeartBridge::WordsFor(who) + "\"";
+        return line.c_str();
+    }
+    void LivingWorldMarkGreeted(RE::StaticFunctionTag*, RE::Actor* actor) {
+        if (actor) LivingWorldBridge::GetSingleton()->MarkGreeted(actor->GetFormID());
+    }
+    RE::BSFixedString LivingWorldDebugAdventure(RE::StaticFunctionTag*, RE::Actor* actor) {
+        return RE::BSFixedString(LivingWorldBridge::GetSingleton()->DebugAdventure(actor).c_str());
+    }
+    RE::Actor* LivingWorldTakeOrder(RE::StaticFunctionTag*) { return LivingWorldBridge::GetSingleton()->TakeOrder(); }
+    std::vector<RE::Actor*> LivingWorldKeepers(RE::StaticFunctionTag*, std::int32_t limit) {
+        return LivingWorldBridge::GetSingleton()->Keepers(static_cast<std::size_t>(std::clamp(limit, 0, 32)));
+    }
+    std::int32_t LivingWorldOrderKind(RE::StaticFunctionTag*) {
+        return static_cast<std::int32_t>(LivingWorldBridge::GetSingleton()->CurrentOrderKind());
+    }
+    RE::TESObjectREFR* LivingWorldOrderTarget(RE::StaticFunctionTag*) { return LivingWorldBridge::GetSingleton()->OrderTarget(); }
+    float LivingWorldOrderOffset(RE::StaticFunctionTag*, std::int32_t axis) {
+        return LivingWorldBridge::GetSingleton()->OrderOffset(axis);
+    }
+    RE::Actor* LivingWorldOrderCompanion(RE::StaticFunctionTag*) { return LivingWorldBridge::GetSingleton()->OrderCompanion(); }
+    bool LivingWorldOrderProtect(RE::StaticFunctionTag*) { return LivingWorldBridge::GetSingleton()->OrderProtect(); }
+    RE::BSFixedString LivingWorldOrderNarration(RE::StaticFunctionTag*) {
+        return LivingWorldBridge::GetSingleton()->OrderNarration().c_str();
+    }
+    void LivingWorldOrderDone(RE::StaticFunctionTag*, bool ok) { LivingWorldBridge::GetSingleton()->OrderDone(ok); }
+    RE::BSFixedString LivingWorldDescribe(RE::StaticFunctionTag*, RE::Actor* actor) {
+        return LivingWorldBridge::GetSingleton()->Describe(actor).c_str();
+    }
+    // ---------------------------------------------------------------- 4.0 places named in SkyrimNet
+
+    namespace {
+        std::mutex g_placeOffsetsMutex;
+        std::unordered_map<RE::FormID, RE::NiPoint3> g_placeOffsets;  // per NPC: from the anchor to the place
+    }
+
+    RE::TESObjectREFR* ResolveSkyrimNetPlace(RE::StaticFunctionTag*, RE::Actor* npc, RE::BSFixedString destination) {
+        if (!npc) return nullptr;
+        const auto started = std::chrono::steady_clock::now();
+        const auto target = PlaceTargets::Resolve(npc, destination.c_str() ? destination.c_str() : "");
+        // Every trip asks SkyrimNet's places first, inside a frame of play: how long that takes, in the log.
+        const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
+        logger::info("ResolveSkyrimNetPlace('{}'): {} ({:.2f} ms of the game's frame)", destination.c_str() ? destination.c_str() : "",
+                     target ? target->name : std::string("no such place"), ms);
+        if (!target) return nullptr;
+        LocationResolver::GetSingleton()->ClearLastResolvedHome();
+        std::scoped_lock lock(g_placeOffsetsMutex);
+        g_placeOffsets[npc->GetFormID()] = target->offset;
+        return target->anchor;
+    }
+
+    float SkyrimNetPlaceOffset(RE::StaticFunctionTag*, RE::Actor* npc, std::int32_t axis) {
+        if (!npc) return 0.0f;
+        std::scoped_lock lock(g_placeOffsetsMutex);
+        const auto it = g_placeOffsets.find(npc->GetFormID());
+        if (it == g_placeOffsets.end()) return 0.0f;
+        return axis == 0 ? it->second.x : axis == 1 ? it->second.y : axis == 2 ? it->second.z : 0.0f;
+    }
+
+    bool LivingWorldMayMove(RE::StaticFunctionTag*, RE::Actor* npc, RE::BSFixedString storyType) {
+        return LivingWorldBridge::GetSingleton()->MayMoveForStory(npc, storyType.c_str() ? storyType.c_str() : "");
+    }
+
+    void LivingWorldSceneBusy(RE::StaticFunctionTag*, bool busy) { LivingWorldBridge::SetSceneBusy(busy); }
+
+    // Held by the game right now, whatever the settings say: a scene of a real quest they are part of, or a quest of
+    // the player's whose shown objective points at them. (Neloth was walked off by a travel task in the middle of his
+    // own quest.) A scene of the background holds nobody: the bard's songs (BardSongs), two people chatting at an inn,
+    // a market's calls: a quest with no type that shows nothing in the journal. 4.0 counted every scene, so a bard
+    // between two songs and anybody in an idle chat refused every task (the bard's release in Core.AllocateSlot came
+    // too late to help), where 3.8 refused carriage drivers only.
+    namespace {
+        bool SceneHolds(const RE::BGSScene* scene) {
+            auto* quest = scene ? scene->parentQuest : nullptr;
+            if (!quest) return false;
+            const char* id = quest->GetFormEditorID();
+            if (id && _stricmp(id, "BardSongs") == 0) return false;
+            if (quest->GetType() != RE::QUEST_DATA::Type::kNone) return true;
+            for (auto* objective : quest->objectives) {
+                if (!objective) continue;
+                const auto state = objective->state.get();
+                if (state == RE::QUEST_OBJECTIVE_STATE::kDisplayed || state == RE::QUEST_OBJECTIVE_STATE::kCompletedDisplayed ||
+                    state == RE::QUEST_OBJECTIVE_STATE::kFailedDisplayed) {
+                    return true;
+                }
+            }
+            return false;
+        }
+    }
+
+    bool LivingWorldQuestHolds(RE::StaticFunctionTag*, RE::Actor* npc) {
+        if (!npc) return false;
+        if (const auto* scene = npc->GetCurrentScene(); scene && SceneHolds(scene)) return true;
+        return LivingWorldBridge::QuestTie(npc, false) == 2;
+    }
+
+    /** 4.0 living world: a story moment really started with this NPC (the success path only, never a rejection). */
+    void LivingWorldMomentDispatched(RE::StaticFunctionTag*, RE::Actor* npc, RE::BSFixedString storyType) {
+        LivingWorldBridge::GetSingleton()->OnStoryDispatched(npc ? npc->GetFormID() : 0, storyType.c_str() ? storyType.c_str() : "");
+    }
+
     void RecordStoryDispatch(RE::StaticFunctionTag*,
                               RE::BSFixedString storyType,
                               RE::BSFixedString npcName,
@@ -2314,7 +3069,7 @@ namespace IntelEngine::Papyrus {
         auto dialogue = memDB->GetRecentDialogueForActor(formId, 1);
         if (!dialogue.empty()) {
             logger::info("GetPlayerInteractionCount: {} (0x{:X}) tier=2 (has dialogue)",
-                actor->GetName(), formId);
+                GameText::In(actor->GetName()), formId);
             return 2;
         }
 
@@ -2322,7 +3077,7 @@ namespace IntelEngine::Papyrus {
         auto memories = memDB->GetFormattedMemories(formId, 1);
         if (!memories.empty()) {
             logger::info("GetPlayerInteractionCount: {} (0x{:X}) tier=2 (has memories)",
-                actor->GetName(), formId);
+                GameText::In(actor->GetName()), formId);
             return 2;
         }
 
@@ -2331,13 +3086,13 @@ namespace IntelEngine::Papyrus {
         for (const auto& rel : related) {
             if (rel.formId == 0x14) {  // player FormID
                 logger::info("GetPlayerInteractionCount: {} (0x{:X}) tier=1 (shared events, no dialogue)",
-                    actor->GetName(), formId);
+                    GameText::In(actor->GetName()), formId);
                 return 1;
             }
         }
 
         logger::info("GetPlayerInteractionCount: {} (0x{:X}) tier=0 (true stranger)",
-            actor->GetName(), formId);
+            GameText::In(actor->GetName()), formId);
         return 0;
     }
 
@@ -2382,7 +3137,9 @@ namespace IntelEngine::Papyrus {
         const std::string& dmContext,
         const std::unordered_set<std::string>& excludedSet,
         bool playerAtInn,
-        float currentGameTime) {
+        float currentGameTime,
+        const std::string& decidedNpc = "",
+        const std::string& decidedType = "") {
 
         static const char* allTypes[] = {
             "seek_player", "informant", "road_encounter",
@@ -2404,6 +3161,9 @@ namespace IntelEngine::Papyrus {
 
         std::string json = "{";
         json += "\"candidatePool\":\"" + dmContext + "\",";
+        // 4.0 staged director: who acts and the kind of moment, already decided ("" = the dungeon master chooses)
+        json += "\"decided_npc\":\"" + MemoryDB::EscapeJsonString(decidedNpc) + "\",";
+        json += "\"decided_type\":\"" + MemoryDB::EscapeJsonString(decidedType) + "\",";
 
         // Per-type show flags: "1" if allowed, "0" if excluded.
         // MUST always include ALL keys with non-empty values. Inja's variable
@@ -2565,7 +3325,10 @@ namespace IntelEngine::Papyrus {
                            questEditorId = std::move(questEditorId),
                            scriptName = std::move(scriptName),
                            functionName = std::move(functionName)]() mutable {
-                auto snap = NPCIndex::GetSingleton()->BuildStoryDMTickSnapshot(maxC, absenceDays, prefetch);
+              // 4.0: the snapshot is taken a slice per frame; the rest goes on, on the game's thread, once it is done.
+              NPCIndex::GetSingleton()->BuildStoryDMTickSnapshotSpread(maxC, absenceDays, std::move(prefetch),
+                  [excludedSet = std::move(excludedSet), questEditorId = std::move(questEditorId),
+                   scriptName = std::move(scriptName), functionName = std::move(functionName)](NPCIndex::StoryDMTickSnapshot snap) mutable {
                 bool playerAtInn = FactionPolitics::IsPlayerAtInn();
                 float currentGameTime = snap.currentGameTime;
 
@@ -2580,6 +3343,26 @@ namespace IntelEngine::Papyrus {
                                        questEditorId = std::move(questEditorId),
                                        scriptName = std::move(scriptName),
                                        functionName = std::move(functionName)]() mutable {
+                    // 4.0: at the living-world levels each candidate is judged on their own first (StoryDirector);
+                    // the dungeon master then writes the one moment chosen. Classic keeps the single prompt below.
+                    if (StoryDirector::ShouldRun()) {
+                        auto build = [playerAtInn, currentGameTime](const std::string& md, const std::unordered_set<std::string>& ex,
+                                                                    const std::string& npc, const std::string& type) {
+                            return BuildStoryDMRequestJsonCore(md, ex, playerAtInn, currentGameTime, npc, type);
+                        };
+                        auto deliver = [questEditorId, scriptName, functionName](std::string requestJson) {
+                            auto* t2 = SKSE::GetTaskInterface();
+                            if (!t2) {
+                                logger::error("Staged director: TaskInterface unavailable, callback dropped");
+                                return;
+                            }
+                            t2->AddTask([questEditorId, scriptName, functionName, requestJson = std::move(requestJson)]() {
+                                AsyncDispatch::ExecuteQuestFunctionString(questEditorId, scriptName, functionName, requestJson);
+                            });
+                        };
+                        StoryDirector::Run(std::move(snap), std::move(excludedSet), std::move(build), std::move(deliver));
+                        return;
+                    }
                     std::string md = NPCIndex::GetSingleton()->BuildDungeonMasterContextFromSnapshot(snap, excludedSet);
                     std::string requestJson;
                     if (!md.empty()) {
@@ -2598,6 +3381,7 @@ namespace IntelEngine::Papyrus {
                         AsyncDispatch::ExecuteQuestFunctionString(questEditorId, scriptName, functionName, requestJson);
                     });
                 });
+              });
             });
         });
     }
@@ -2843,6 +3627,7 @@ namespace IntelEngine::Papyrus {
     // same events the dashboard sends, delivered on the game thread. Politics and the dashboard keys read the
     // file themselves. Returns how many settings change.
     std::int32_t ApplyPluginSettings(RE::StaticFunctionTag*, RE::BSFixedString configJson) {
+        LanguageBridge::GetSingleton()->Decide();   // the two language settings live in the same file
         FactionPolitics::GetSingleton()->LoadSettings();
         DashboardConfig::GetSingleton()->Reload();
         const auto config = SettingsBridge::ParseConfig(configJson.c_str());
@@ -2858,7 +3643,7 @@ namespace IntelEngine::Papyrus {
             return ok;
         };
         auto changes = SettingsBridge::ApplyFromFile(config, store);
-        if (added > 0) logger::info("SettingsBridge: {} setting(s) the file lacked were added to settings.yaml", added);
+        if (added > 0) logger::info("SettingsBridge: {} setting(s) the file lacked or held unreadably were written to settings.yaml from the game", added);
         if (changes.empty()) return 0;
         const auto count = static_cast<std::int32_t>(changes.size());
         logger::info("SettingsBridge: {} setting(s) taken from settings.yaml", count);
@@ -2895,7 +3680,7 @@ namespace IntelEngine::Papyrus {
     void TestNPCSearch(RE::StaticFunctionTag*, RE::BSFixedString searchTerm) {
         auto* npc = NPCIndex::GetSingleton()->FindByName(searchTerm.c_str());
         if (npc) {
-            logger::info("TestNPCSearch('{}') -> Found: {}", searchTerm.c_str(), npc->GetDisplayFullName());
+            logger::info("TestNPCSearch('{}') -> Found: {}", searchTerm.c_str(), GameText::In(npc->GetDisplayFullName()));
         } else {
             auto suggestion = NPCIndex::GetSingleton()->GetSuggestion(searchTerm.c_str());
             logger::info("TestNPCSearch('{}') -> Not found. Suggestion: {}", searchTerm.c_str(), suggestion.c_str());
@@ -2925,12 +3710,12 @@ namespace IntelEngine::Papyrus {
         if (ref) {
             auto destName = CellAnalyzer::GetSingleton()->GetDoorDestinationName(ref);
             logger::info("TestSemanticResolve('{}', '{}') -> Found: {}",
-                         akNPC->GetDisplayFullName(),
+                         GameText::In(akNPC->GetDisplayFullName()),
                          term.c_str(),
                          destName.c_str());
         } else {
             logger::info("TestSemanticResolve('{}', '{}') -> Cannot resolve",
-                         akNPC->GetDisplayFullName(),
+                         GameText::In(akNPC->GetDisplayFullName()),
                          term.c_str());
         }
     }
@@ -2997,7 +3782,7 @@ namespace IntelEngine::Papyrus {
         for (const auto& [formId, count] : counts) {
             j[std::to_string(formId)] = count;
         }
-        return j.dump();
+        return j.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
     }
 
     // ==========================================================================
@@ -3140,7 +3925,7 @@ namespace IntelEngine::Papyrus {
                 logger::info("[IntelEngine] LookupLeveledActor: '{}' not found exactly, using {} prefix matches",
                             editorID, matches.size());
                 for (auto* m : matches) {
-                    logger::info("  - {} (FormID {:08X})", m->GetName(), m->GetFormID());
+                    logger::info("  - {} (FormID {:08X})", GameText::In(m->GetName()), m->GetFormID());
                 }
                 s_prefixMatchCache[key] = matches;
                 return matches[s_rng() % matches.size()];
@@ -3226,15 +4011,24 @@ namespace IntelEngine::Papyrus {
                 for (int i = 0; i < count; ++i) resolvedBases.push_back(base);
             }
 
+            // They are the enemy the player was sent against: one band (a side of its own), in none of the factions
+            // they came with, and out for blood. Left as the game made them they kept those factions: the Thalmor
+            // of such a quest stood there as the neutrals the game makes them, and the player had to strike first,
+            // at people a guard might count as citizens.
+            auto* band = BattleManager::GetSingleton()->EnemySide();
             for (auto* resolvedBase : resolvedBases) {
                 auto spawned = location->PlaceObjectAtMe(resolvedBase, true);
                 if (spawned) {
                     auto* actor = spawned->As<RE::Actor>();
-                    if (actor) result.push_back(actor);
+                    if (!actor) continue;
+                    BattleManager::StripFactions(actor);
+                    if (band) actor->AddToFaction(band, 0);
+                    actor->AsActorValueOwner()->SetActorValue(RE::ActorValue::kAggression, 2.f);
+                    result.push_back(actor);
                 }
             }
             logger::info("[IntelEngine] SpawnQuestEnemies: {} faction '{}' soldiers spawned at {}",
-                        result.size(), factionId, location->GetName());
+                        result.size(), factionId, GameText::In(location->GetName()));
             return result;
         }
 
@@ -3289,12 +4083,12 @@ namespace IntelEngine::Papyrus {
                 }
                 auto pos = spawned->GetPosition();
                 logger::info("[IntelEngine] SpawnQuestEnemies: spawned '{}' at ({:.0f}, {:.0f})",
-                            baseToSpawn->GetName(), pos.x, pos.y);
+                            GameText::In(baseToSpawn->GetName()), pos.x, pos.y);
             }
         }
 
         logger::info("[IntelEngine] SpawnQuestEnemies: {} {} spawned at {}",
-                    result.size(), type, location->GetName());
+                    result.size(), type, GameText::In(location->GetName()));
         return result;
     }
 
@@ -3374,11 +4168,11 @@ namespace IntelEngine::Papyrus {
             // Use AddObjectToContainer to add the item
             container->AddObjectToContainer(itemObj, nullptr, 1, nullptr);
             logger::info("[IntelEngine] SpawnQuestChest: added '{}' (FormID {:08X}) to chest",
-                        itemObj->GetName(), itemObj->GetFormID());
+                        GameText::In(itemObj->GetName()), itemObj->GetFormID());
         }
 
         logger::info("[IntelEngine] SpawnQuestChest: chest spawned at {} with '{}'",
-                    location->GetName(), nameStr);
+                    GameText::In(location->GetName()), nameStr);
         return chestRef;
     }
 
@@ -3490,7 +4284,7 @@ namespace IntelEngine::Papyrus {
         auto* actor = spawned->As<RE::Actor>();
         if (actor) {
             logger::info("[IntelEngine] SpawnQuestBoss: spawned '{}' boss at ({:.0f}, {:.0f})",
-                        bossBase->GetName(), bossPos.x, bossPos.y);
+                        GameText::In(bossBase->GetName()), bossPos.x, bossPos.y);
         }
         return actor;
     }
@@ -3521,7 +4315,7 @@ namespace IntelEngine::Papyrus {
 
             auto editorId = baseObj->GetFormEditorID();
             std::string editorIdStr = editorId ? StringUtils::ToLowerStd(editorId) : "";
-            auto refName = ref->GetName();
+            auto refName = GameText::In(ref->GetName());
             std::string nameStr = refName ? StringUtils::ToLowerStd(refName) : "";
 
             auto formType = baseObj->GetFormType();
@@ -3555,7 +4349,7 @@ namespace IntelEngine::Papyrus {
             // Coffins/Sarcophagi — Static or Furniture
             if (!coffin && (formType == RE::FormType::Static || formType == RE::FormType::Furniture)) {
                 if (StringUtils::ContainsAny(editorIdStr, {"coffin", "sarcophag"}) ||
-                    StringUtils::ContainsAny(nameStr, {"coffin", "sarcophag"})) {
+                    LanguageBridge::GetSingleton()->NameSays(nameStr, "coffin")) {
                     coffin = ref;
                     logger::info("[IntelEngine] FindDeeperSpawnPoint: coffin '{}'", editorIdStr);
                 }
@@ -3564,7 +4358,7 @@ namespace IntelEngine::Papyrus {
             // Shrines/Altars — Activator or Static
             if (!shrine && (formType == RE::FormType::Activator || formType == RE::FormType::Static)) {
                 if (StringUtils::ContainsAny(editorIdStr, {"shrine", "altar"}) ||
-                    StringUtils::ContainsAny(nameStr, {"shrine", "altar"})) {
+                    LanguageBridge::GetSingleton()->NameSays(nameStr, "shrine")) {
                     shrine = ref;
                     logger::info("[IntelEngine] FindDeeperSpawnPoint: shrine/altar '{}'", editorIdStr);
                 }
@@ -3605,7 +4399,7 @@ namespace IntelEngine::Papyrus {
         }
 
         logger::info("[IntelEngine] FindDeeperSpawnPoint: no landmarks or deeper doors in '{}'",
-                    cell->GetName());
+                    GameText::In(cell->GetName()));
         return nullptr;
     }
 
@@ -3652,21 +4446,21 @@ namespace IntelEngine::Papyrus {
 
             if (!shackle && StringUtils::ContainsAny(editorIdStr, {"shackle", "manacle"})) {
                 shackle = ref;
-                logger::info("[IntelEngine] {}: shackle '{}' in '{}'", tag, editorIdStr, cell->GetName());
+                logger::info("[IntelEngine] {}: shackle '{}' in '{}'", tag, editorIdStr, GameText::In(cell->GetName()));
             }
             if (!cage && StringUtils::ContainsAny(editorIdStr, {"cage", "gibbet"})) {
                 cage = ref;
-                logger::info("[IntelEngine] {}: cage '{}' in '{}'", tag, editorIdStr, cell->GetName());
+                logger::info("[IntelEngine] {}: cage '{}' in '{}'", tag, editorIdStr, GameText::In(cell->GetName()));
             }
             if (!stocks && StringUtils::ContainsAny(editorIdStr, {"stock", "pillory"})) {
                 if (editorIdStr.find("livestock") == std::string::npos) {
                     stocks = ref;
-                    logger::info("[IntelEngine] {}: stocks '{}' in '{}'", tag, editorIdStr, cell->GetName());
+                    logger::info("[IntelEngine] {}: stocks '{}' in '{}'", tag, editorIdStr, GameText::In(cell->GetName()));
                 }
             }
             if (!prison && StringUtils::ContainsAny(editorIdStr, {"prison", "captive", "torture"})) {
                 prison = ref;
-                logger::info("[IntelEngine] {}: prison furniture '{}' in '{}'", tag, editorIdStr, cell->GetName());
+                logger::info("[IntelEngine] {}: prison furniture '{}' in '{}'", tag, editorIdStr, GameText::In(cell->GetName()));
             }
 
             if (shackle) return RE::BSContainer::ForEachResult::kStop;
@@ -3701,7 +4495,7 @@ namespace IntelEngine::Papyrus {
 
             auto editorId = baseObj->GetFormEditorID();
             std::string editorIdStr = editorId ? StringUtils::ToLowerStd(editorId) : "";
-            auto refName = ref->GetName();
+            auto refName = GameText::In(ref->GetName());
             std::string nameStr = refName ? StringUtils::ToLowerStd(refName) : "";
             auto formType = baseObj->GetFormType();
 
@@ -3724,13 +4518,13 @@ namespace IntelEngine::Papyrus {
             }
             if (!coffin && (formType == RE::FormType::Static || formType == RE::FormType::Furniture)) {
                 if (StringUtils::ContainsAny(editorIdStr, {"coffin", "sarcophag"}) ||
-                    StringUtils::ContainsAny(nameStr, {"coffin", "sarcophag"})) {
+                    LanguageBridge::GetSingleton()->NameSays(nameStr, "coffin")) {
                     coffin = ref;
                 }
             }
             if (!shrine && (formType == RE::FormType::Activator || formType == RE::FormType::Static)) {
                 if (StringUtils::ContainsAny(editorIdStr, {"shrine", "altar"}) ||
-                    StringUtils::ContainsAny(nameStr, {"shrine", "altar"})) {
+                    LanguageBridge::GetSingleton()->NameSays(nameStr, "shrine")) {
                     shrine = ref;
                 }
             }
@@ -3754,7 +4548,7 @@ namespace IntelEngine::Papyrus {
         auto* result = ScanCellForPrisonerFurniture(cell);
         if (!result) {
             logger::info("[IntelEngine] FindPrisonerFurniture: no prisoner furniture in '{}'",
-                        cell->GetName());
+                        GameText::In(cell->GetName()));
         }
         return result;
     }
@@ -3771,10 +4565,10 @@ namespace IntelEngine::Papyrus {
         auto* result = ScanCellForUsablePrisonerFurniture(cell);
         if (result) {
             logger::info("[IntelEngine] FindUsablePrisonerFurniture: found usable furniture in '{}'",
-                        cell->GetName());
+                        GameText::In(cell->GetName()));
         } else {
             logger::info("[IntelEngine] FindUsablePrisonerFurniture: no usable furniture in '{}'",
-                        cell->GetName());
+                        GameText::In(cell->GetName()));
         }
         return result;
     }
@@ -3817,7 +4611,7 @@ namespace IntelEngine::Papyrus {
             result = ScanCellForPrisonerFurniture(adjCell);
             if (result) {
                 logger::info("[IntelEngine] FindRescueAnchor: prisoner furniture behind door in '{}'",
-                            adjCell->GetName());
+                            GameText::In(adjCell->GetName()));
                 return result;
             }
         }
@@ -3827,7 +4621,7 @@ namespace IntelEngine::Papyrus {
             result = ScanCellForLandmarks(adjCell);
             if (result) {
                 logger::info("[IntelEngine] FindRescueAnchor: landmark behind door in '{}'",
-                            adjCell->GetName());
+                            GameText::In(adjCell->GetName()));
                 return result;
             }
         }
@@ -3840,7 +4634,7 @@ namespace IntelEngine::Papyrus {
         }
 
         logger::info("[IntelEngine] FindRescueAnchor: nothing found in '{}' or adjacent cells",
-                    playerCell->GetName());
+                    GameText::In(playerCell->GetName()));
         return nullptr;
     }
 
@@ -3871,7 +4665,7 @@ namespace IntelEngine::Papyrus {
 
         if (aheadCells.empty()) {
             logger::info("[IntelEngine] ScanAheadForAnchor: no adjacent interior cells from '{}'",
-                        playerCell->GetName());
+                        GameText::In(playerCell->GetName()));
             return nullptr;
         }
 
@@ -3880,7 +4674,7 @@ namespace IntelEngine::Papyrus {
             auto* result = ScanCellForPrisonerFurniture(cell);
             if (result) {
                 logger::info("[IntelEngine] ScanAheadForAnchor: prisoner furniture in '{}'",
-                            cell->GetName());
+                            GameText::In(cell->GetName()));
                 return result;
             }
         }
@@ -3890,13 +4684,13 @@ namespace IntelEngine::Papyrus {
             auto* result = ScanCellForLandmarks(cell);
             if (result) {
                 logger::info("[IntelEngine] ScanAheadForAnchor: landmark in '{}'",
-                            cell->GetName());
+                            GameText::In(cell->GetName()));
                 return result;
             }
         }
 
         logger::info("[IntelEngine] ScanAheadForAnchor: nothing found ahead from '{}'",
-                    playerCell->GetName());
+                    GameText::In(playerCell->GetName()));
         return nullptr;
     }
 
@@ -3968,7 +4762,7 @@ namespace IntelEngine::Papyrus {
         container->InitInventoryIfRequired();
         container->AddObjectToContainer(itemObj, nullptr, 1, nullptr);
         logger::info("[IntelEngine] EnsureQuestItemInChest: added '{}' to chest {:08X} on cell load",
-                    itemObj->GetName(), container->GetFormID());
+                    GameText::In(itemObj->GetName()), container->GetFormID());
         return true;
     }
 
@@ -3991,7 +4785,15 @@ namespace IntelEngine::Papyrus {
                          factionA.c_str());
             return db->GetRelation(factionA.c_str(), factionB.c_str());
         }
-        return db->AdjustRelation(factionA.c_str(), factionB.c_str(), delta);
+        // Ids as factions.yaml writes them, whatever case they came in; an id that is no faction changes nothing (it
+        // used to leave an orphan row behind).
+        const auto a = FactionPolitics::GetSingleton()->CanonicalId(factionA.c_str());
+        const auto b = FactionPolitics::GetSingleton()->CanonicalId(factionB.c_str());
+        if (a.empty() || b.empty()) {
+            logger::warn("FactionPolitics: relation adjustment for an unknown faction: '{}' / '{}'", factionA.c_str(), factionB.c_str());
+            return 0;
+        }
+        return db->AdjustRelation(a, b, delta);
     }
 
     int GetPlayerFactionStanding(RE::StaticFunctionTag*, RE::BSFixedString factionId) {
@@ -4000,11 +4802,341 @@ namespace IntelEngine::Papyrus {
         return db->GetPlayerStanding(factionId.c_str());
     }
 
+    // 4.0: a faction that holds the player for an enemy sends men after them now and then (Patrols.h says why this
+    // is decided in code). Asked by the story engine at a moment the director lets land; the answer is the 3.8
+    // dungeon master's own for a faction ambush ({"ambushFaction":..,"ambushCount":..}), or nothing.
+    namespace {
+        std::atomic<float> g_lastPatrolDay{-1.0f};   // this session's; not known after a load, and then not held against them
+        std::atomic<bool> g_patrolAlways{false};     // test hook: every roll comes up, no rest between two
+    }
+
+    RE::BSFixedString FactionPatrolDue(RE::StaticFunctionTag*) {
+        static FrameStats stats;
+        FrameClock clock("Patrols: is a faction after the player", stats, FrameClock::Now(), 20);
+        auto* politics = FactionPolitics::GetSingleton();
+        auto* db = PoliticalDB::GetSingleton();
+        if (!politics->IsEnabled() || !db->IsReady()) return "";
+        // Not where nobody could have followed the player (the Soul Cairn has no patrols of the Legion), nor into a
+        // dungeon after them.
+        if (const auto barred = LivingWorldBridge::PlaceBars(); barred != Patrols::Barred::No) {
+            logger::info("Patrols: nobody comes now: {}", Patrols::Word(barred));
+            return "";
+        }
+        // Never upon somebody who is with somebody or has settled somewhere (the test switch does not lift this).
+        if (const auto priv = LivingWorldBridge::PrivateMoment(); priv != Patrols::Private::No) {
+            logger::info("Patrols: nobody comes now: {}", Patrols::Word(priv));
+            return "";
+        }
+        std::string worst;
+        int standing = 0;
+        for (const auto& s : db->GetAllPlayerStandings()) {
+            if (s.factionId.rfind("PE_", 0) == 0) continue;   // another mod's realms: they field no soldiers of ours
+            if (s.standing < standing) {
+                standing = s.standing;
+                worst = s.factionId;
+            }
+        }
+        if (worst.empty() || standing > Patrols::kHostile) return "";
+        auto* calendar = RE::Calendar::GetSingleton();
+        const float now = calendar ? calendar->GetCurrentGameTime() : 0.0f;
+        static thread_local std::mt19937 rng{std::random_device{}()};
+        const std::uint32_t roll = static_cast<std::uint32_t>(rng() % 10000u);
+        const bool test = g_patrolAlways.load();
+        if (!test && !Patrols::Due(standing, now, g_lastPatrolDay.load(), roll)) {
+            logger::info("Patrols: {} holds the player for an enemy (standing {}): no patrol at this moment (one in {:.0f} of them, "
+                         "and not within {:.0f} days of the last)",
+                         worst, standing, 1.0f / Patrols::Chance(standing), Patrols::kRestDays);
+            return "";
+        }
+        const int size = Patrols::Size(standing, roll);
+        logger::info("Patrols: {} sends {} after the player (standing {}{})", worst, size, standing, test ? "; asked for by a test" : "");
+        nlohmann::json out;
+        out["ambushFaction"] = worst;
+        out["ambushCount"] = std::to_string(size);
+        return out.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace).c_str();
+    }
+
+    void FactionPatrolSent(RE::StaticFunctionTag*) {
+        auto* calendar = RE::Calendar::GetSingleton();
+        g_lastPatrolDay.store(calendar ? calendar->GetCurrentGameTime() : 0.0f);
+        LivingWorldBridge::GetSingleton()->OnPatrolSent();
+    }
+
+    std::int32_t PlaceBarsArrival(RE::StaticFunctionTag*, RE::Actor* who, RE::TESObjectREFR* dest) {
+        // 0: no. 1: the player is in a dungeon (a story's visitor is not set down there). 2: the player is where nobody
+        // could have followed (nobody at all is set down there).
+        return static_cast<std::int32_t>(LivingWorldBridge::BarsArrival(who, dest));
+    }
+
+    RE::BSFixedString PlaceBarsNow(RE::StaticFunctionTag*) {
+        LivingWorldBridge::NotePlayerWhere();   // a test asks right after moving: look now
+        if (auto* player = RE::PlayerCharacter::GetSingleton()) {
+            auto* world = player->GetWorldspace();
+            auto* location = player->GetCurrentLocation();
+            logger::info("LivingWorld: test: the player is in {} (worldspace {:08X} '{}', parent {:08X}, takes from it {:#x}), location '{}': {}",
+                         player->GetParentCell() && player->GetParentCell()->IsInteriorCell() ? "a room" : "the open",
+                         world ? world->GetFormID() : 0, world && world->GetFormEditorID() ? world->GetFormEditorID() : "",
+                         world && world->parentWorld ? world->parentWorld->GetFormID() : 0,
+                         world ? static_cast<unsigned>(world->parentUseFlags.underlying()) : 0u,
+                         location && GameText::In(location->GetFullName()) ? GameText::In(location->GetFullName()) : "none",
+                         LivingWorldBridge::PlaceBars() == Patrols::Barred::No ? "people may come" : Patrols::Word(LivingWorldBridge::PlaceBars()));
+        }
+        return Patrols::Word(LivingWorldBridge::PlaceBars());
+    }
+
+    float LivingWorldClockHours(RE::StaticFunctionTag*) {
+        // How often the dungeon master looks by the clock above Classic: the director's own smallest gap between two
+        // moments (LivingWorld.h). A look that finds the budget spent ends before any model is asked.
+        return LivingWorld::kMinGapDays * 24.0f;
+    }
+
+    RE::BSFixedString PrivateMomentNow(RE::StaticFunctionTag*) {
+        // Test hook: why nobody in arms would come upon the player now; "" when they may.
+        return Patrols::Word(LivingWorldBridge::PrivateMoment());
+    }
+
+    void FactionPatrolTest(RE::StaticFunctionTag*, bool always) {
+        g_patrolAlways.store(always);
+        logger::info("Patrols: test: {}", always ? "every moment that may land is a patrol's" : "the roll and the rest count again");
+    }
+
+    // 4.0: a faction the player stands well with asks them for help now and then (FactionQuests.h says why this is
+    // decided in code). Asked by the story engine at a moment the director lets land, with the story-type switches of
+    // the settings (StoryEngine.PackToggleBitmask); the answer is what the 3.8 dungeon master wrote for a faction's
+    // quest ({"type":"quest","questSubType":"faction_combat",...}), handled as that was, or nothing.
+    namespace {
+        std::atomic<float> g_lastFactionQuestDay{-1.0f};   // this session's; not known after a load, and then not held against them
+        std::atomic<bool> g_factionQuestAlways{false};     // test hook: every roll comes up, no rest between two
+
+        RE::BGSLocation* HoldAbove(RE::BGSLocation* location) {
+            for (int depth = 0; location && depth < 12; location = location->parentLoc, ++depth) {
+                if (location->HasKeywordString("LocTypeHold")) return location;
+            }
+            return nullptr;
+        }
+
+        // "the Imperial Legion" of "Imperial Legion" or "The Imperial Legion"; capital first when it begins a sentence.
+        std::string TheFaction(const std::string& name, bool capital) {
+            std::string out = (name.rfind("The ", 0) == 0 || name.rfind("the ", 0) == 0) ? "the " + name.substr(4) : "the " + name;
+            if (capital) out[0] = 'T';
+            return out;
+        }
+
+        std::string LocationName(RE::BGSLocation* location) {
+            const char* name = location ? GameText::In(location->GetFullName()) : nullptr;
+            return name ? name : "";
+        }
+    }
+
+    RE::BSFixedString FactionQuestDue(RE::StaticFunctionTag*, std::int32_t toggles) {
+        static FrameStats stats;
+        FrameClock clock("Faction quests: does a faction ask the player", stats, FrameClock::Now(), 20);
+        auto* politics = FactionPolitics::GetSingleton();
+        auto* db = PoliticalDB::GetSingleton();
+        if (!politics->IsEnabled() || !db->IsReady()) return "";
+        // The settings' switches, as the dungeon master's were (bit 6 "quest", 11 to 13 the faction kinds).
+        FactionQuests::Climate climate;
+        const bool questOn = (toggles & (1 << 6)) != 0;
+        climate.combatOn = questOn && (toggles & (1 << 11)) != 0;
+        climate.rescueOn = questOn && (toggles & (1 << 12)) != 0;
+        climate.battleOn = questOn && (toggles & (1 << 13)) != 0;
+        if (!climate.combatOn && !climate.rescueOn && !climate.battleOn) return "";
+        // Not where nobody could have come with word (the Soul Cairn has no soldiers of the Legion), nor into a dungeon.
+        if (const auto barred = LivingWorldBridge::PlaceBars(); barred != Patrols::Barred::No) {
+            logger::info("Faction quests: nobody comes now: {}", Patrols::Word(barred));
+            return "";
+        }
+        // Never upon somebody who is with somebody or has settled somewhere (the test switch does not lift this).
+        if (const auto priv = LivingWorldBridge::PrivateMoment(); priv != Patrols::Private::No) {
+            logger::info("Faction quests: nobody comes now: {}", Patrols::Word(priv));
+            return "";
+        }
+
+        // Who asks: the faction that stands best with the player; against whom: its enemy at war with it, else the
+        // faction it stands worst with. Never one the game's own story still binds (it is that story's).
+        std::vector<std::pair<int, std::string>> friends;
+        for (const auto& s : db->GetAllPlayerStandings()) {
+            if (s.factionId.rfind("PE_", 0) == 0 || s.standing < FactionQuests::kFriendly) continue;   // another mod's realms field nobody of ours
+            friends.emplace_back(s.standing, s.factionId);
+        }
+        if (friends.empty()) return "";
+        std::stable_sort(friends.begin(), friends.end(), [](const auto& a, const auto& b) { return a.first > b.first; });
+        const auto fit = [&](const std::string& other, const std::string& ally) {
+            return !other.empty() && other != ally && other.rfind("PE_", 0) != 0 && politics->GetFaction(other).has_value() &&
+                   !politics->GetSoldierTemplate(other).empty() && politics->BoundBy(other).empty();
+        };
+        const auto wars = db->GetActiveWars();
+        const auto relations = db->GetAllRelations();
+        std::string ally, enemy;
+        int standing = 0;
+        bool atWar = false;
+        for (const auto& [st, id] : friends) {
+            if (!politics->BoundBy(id).empty() || !politics->GetFaction(id)) continue;
+            std::string foe;
+            bool war = false;
+            for (const auto& w : wars) {
+                const std::string other = w.factionA == id ? w.factionB : w.factionB == id ? w.factionA : std::string();
+                if (!fit(other, id)) continue;
+                foe = other;
+                war = true;
+                break;
+            }
+            if (foe.empty()) {
+                int worst = 0;
+                for (const auto& r : relations) {
+                    const std::string other = r.factionA == id ? r.factionB : r.factionB == id ? r.factionA : std::string();
+                    if (r.relationScore >= worst || !fit(other, id)) continue;
+                    worst = r.relationScore;
+                    foe = other;
+                }
+            }
+            if (foe.empty()) continue;
+            ally = id;
+            enemy = foe;
+            standing = st;
+            atWar = war;
+            break;
+        }
+        if (ally.empty()) {
+            logger::info("Faction quests: {} faction(s) stand well with the player, none has an enemy to send them against", friends.size());
+            return "";
+        }
+
+        auto* calendar = RE::Calendar::GetSingleton();
+        const float now = calendar ? calendar->GetCurrentGameTime() : 0.0f;
+        static thread_local std::mt19937 rng{std::random_device{}()};
+        const std::uint32_t roll = static_cast<std::uint32_t>(rng() % 10000u);
+        const bool test = g_factionQuestAlways.load();
+        if (!test && !FactionQuests::Due(standing, atWar, now, g_lastFactionQuestDay.load(), roll)) {
+            logger::info("Faction quests: {} (standing {}) has {} against {}: no quest at this moment (one in {:.0f} of them, and not within {:.0f} days of the last)",
+                         ally, standing, atWar ? "a war" : "a feud", enemy, 1.0f / FactionQuests::Chance(standing, atWar), FactionQuests::kRestDays);
+            return "";
+        }
+        if (politics->IsDisbanded(ally) || politics->IsDisbanded(enemy)) {
+            logger::info("Faction quests: {} or {} is no more: no quest", ally, enemy);
+            return "";
+        }
+
+        // Where: a fort or a camp in the enemy's land, else in the faction's own, else in the hold the player is in. A
+        // place a quest of the game or a story still needs, one where nobody fights (a temple, a palace) and the last
+        // places quests went to are left out.
+        auto* resolver = LocationResolver::GetSingleton();
+        const auto allyCfg = politics->GetFaction(ally);
+        const auto enemyCfg = politics->GetFaction(enemy);
+        RE::BGSLocation* allyHome = allyCfg && !allyCfg->hold.empty() ? resolver->ResolveLocation(allyCfg->hold) : nullptr;
+        RE::BGSLocation* enemyHome = enemyCfg && !enemyCfg->hold.empty() ? resolver->ResolveLocation(enemyCfg->hold) : nullptr;
+        auto* player = RE::PlayerCharacter::GetSingleton();
+        std::vector<RE::BGSLocation*> holds;
+        for (auto* hold : {HoldAbove(enemyHome), HoldAbove(allyHome), player ? HoldAbove(player->GetCurrentLocation()) : nullptr}) {
+            if (hold && std::find(holds.begin(), holds.end(), hold) == holds.end()) holds.push_back(hold);
+        }
+        const std::string recent = NPCIndex::GetSingleton()->GetRecentQuestLocationsString();
+        std::string fortName;
+        {
+            const auto anchors = resolver->DungeonAnchors();
+            for (auto* hold : holds) {
+                std::vector<std::string> forts;
+                for (const auto& [locationId, anchorId] : anchors) {
+                    auto* location = anchorId ? RE::TESForm::LookupByID<RE::BGSLocation>(locationId) : nullptr;
+                    if (!location || HoldAbove(location) != hold) continue;
+                    if (!location->HasKeywordString("LocTypeMilitaryFort") && !location->HasKeywordString("LocTypeMilitaryCamp") &&
+                        !location->HasKeywordString("LocTypeBanditCamp")) {
+                        continue;
+                    }
+                    const std::string name = LocationName(location);
+                    if (name.empty() || recent.find(name) != std::string::npos) continue;
+                    if (CellAnalyzer::GetSingleton()->IsLocationNonCombative(location)) continue;
+                    if (ArcBridge::GetSingleton()->GameNeedsPlace(locationId) || ArcBridge::GetSingleton()->PlaceInStory(locationId)) continue;
+                    forts.push_back(name);
+                }
+                if (!forts.empty()) {
+                    fortName = forts[roll % forts.size()];
+                    break;
+                }
+            }
+        }
+        const std::string homeName = !LocationName(allyHome).empty() ? LocationName(allyHome) : LocationName(enemyHome);
+        // Who is held, for a rescue: somebody of the faction's own town, out of the player's sight, by the measure a tale
+        // holds a captive to.
+        std::string victimName;
+        if (climate.rescueOn && !fortName.empty() && allyHome) {
+            if (const auto victim = ArcBridge::GetSingleton()->CaptiveOf(allyHome, roll); victim != 0) {
+                auto* who = RE::TESForm::LookupByID<RE::Actor>(victim);
+                const char* name = who ? GameText::In(who->GetDisplayFullName()) : nullptr;
+                if (name && *name) victimName = name;
+            }
+        }
+        auto* battles = BattleManager::GetSingleton();
+        climate.enemy = true;
+        climate.atWar = atWar;
+        climate.battleFree = atWar && !homeName.empty() && !battles->IsBattleActive() && !battles->HasPendingBattle(ally, enemy);
+        climate.fort = !fortName.empty();
+        climate.captive = !victimName.empty();
+        const auto kind = FactionQuests::Pick(climate, roll / 7u);
+        if (kind == FactionQuests::Kind::None) {
+            logger::info("Faction quests: {} would ask the player, but nothing fits now (a fort in reach: {}, somebody who may be held: {}, the field free: {})",
+                         ally, climate.fort ? "yes" : "no", climate.captive ? "yes" : "no", climate.battleFree ? "yes" : "no");
+            return "";
+        }
+
+        const std::string allyName = politics->GetFactionDisplayName(ally);
+        const std::string enemyName = politics->GetFactionDisplayName(enemy);
+        const char* rawPlayer = player ? GameText::In(player->GetDisplayFullName()) : nullptr;
+        const std::string playerName = rawPlayer && *rawPlayer ? rawPlayer : "the traveller";
+        nlohmann::json out;
+        out["should_act"] = true;
+        out["type"] = "quest";
+        out["npc"] = "";
+        out["sender"] = "";
+        out["questSubType"] = FactionQuests::SubType(kind);
+        out["alliedFaction"] = ally;
+        out["enemyType"] = "faction:" + enemy;
+        std::string plea, place;
+        if (kind == FactionQuests::Kind::Battle) {
+            place = homeName;
+            out["enemyFaction"] = enemy;
+            plea = TheFaction(allyName, true) + " gathers its strength near " + place + " against " + TheFaction(enemyName, false) +
+                   ", and calls on " + playerName + " to stand in its line.";
+        } else if (kind == FactionQuests::Kind::Rescue) {
+            place = fortName;
+            out["victimName"] = victimName;
+            plea = "Soldiers of " + TheFaction(enemyName, false) + " hold " + victimName + " of " + homeName + " captive at " + place + ". " +
+                   TheFaction(allyName, true) + " asks " + playerName + " to bring them home.";
+        } else {
+            place = fortName;
+            plea = "Soldiers of " + TheFaction(enemyName, false) + " have dug in at " + place + ". " + TheFaction(allyName, true) + " wants them driven out, and asks " +
+                   playerName + " for help.";
+        }
+        out["questLocation"] = place;
+        out["msgContent"] = plea;
+        out["narration"] = plea;
+        logger::info("Faction quests: {} (standing {}{}) asks the player: {} against {} at {}{}{}", ally, standing, atWar ? ", at war" : "",
+                     FactionQuests::SubType(kind), enemy, place, victimName.empty() ? "" : ", " + victimName + " held there",
+                     test ? "; asked for by a test" : "");
+        return out.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace).c_str();
+    }
+
+    void FactionQuestSent(RE::StaticFunctionTag*) {
+        auto* calendar = RE::Calendar::GetSingleton();
+        g_lastFactionQuestDay.store(calendar ? calendar->GetCurrentGameTime() : 0.0f);
+        logger::info("Faction quests: one went out; the next not within {:.0f} days", FactionQuests::kRestDays);
+    }
+
+    void FactionQuestTest(RE::StaticFunctionTag*, bool always) {
+        g_factionQuestAlways.store(always);
+        logger::info("Faction quests: test: {}", always ? "every moment that may land asks a faction first, no rest between two" : "the roll and the rest count again");
+    }
+
     int AdjustPlayerFactionStanding(RE::StaticFunctionTag*, RE::BSFixedString factionId, int delta) {
         auto* db = PoliticalDB::GetSingleton();
         if (!db->IsReady()) return 0;
         float gameTime = RE::Calendar::GetSingleton() ? RE::Calendar::GetSingleton()->GetHoursPassed() : 0.0f;
-        return db->AdjustPlayerStanding(factionId.c_str(), delta, gameTime);
+        const auto id = FactionPolitics::GetSingleton()->CanonicalId(factionId.c_str());
+        if (id.empty()) {
+            logger::warn("FactionPolitics: standing adjustment for an unknown faction: '{}'", factionId.c_str());
+            return 0;
+        }
+        return db->AdjustPlayerStanding(id, delta, gameTime);
     }
 
     bool IsFactionAtWar(RE::StaticFunctionTag*, RE::BSFixedString factionA, RE::BSFixedString factionB) {
@@ -4070,6 +5202,7 @@ namespace IntelEngine::Papyrus {
 
         // Phase A — main thread.
         auto snap = politics->BuildPoliticsTickSnapshot(currentGameTime);
+        politics->HoldToTheGamesWar(snap);   // first: what the game's own civil war allows
         politics->EnforceWarRule(snap);  // fix 94: before the context build so this tick's DM sees the new war
 
         AsyncDispatch::Submit([snap = std::move(snap),
@@ -4103,11 +5236,31 @@ namespace IntelEngine::Papyrus {
     }
 
     RE::BSFixedString GetPoliticalEventsAfter(RE::StaticFunctionTag*, int afterId, int limit) {
-        return RE::BSFixedString(PoliticalDB::GetSingleton()->GetPoliticalEventsAfter(afterId, limit).dump());
+        return RE::BSFixedString(PoliticalDB::GetSingleton()->GetPoliticalEventsAfter(afterId, limit).dump(-1, ' ', false, nlohmann::json::error_handler_t::replace));
     }
 
     RE::BSFixedString GetFactionsJson(RE::StaticFunctionTag*) {
         return RE::BSFixedString(FactionPolitics::GetSingleton()->GetFactionsJson().c_str());
+    }
+
+    // The dashboard's World page: the talk of the day, the stories and quests the player has taken on, what people
+    // have asked of them, and their people. Asked for only while the page is open (a refresh), never in play.
+    RE::BSFixedString BuildWorldDashboardJson(RE::StaticFunctionTag*) {
+        static FrameStats stats;
+        const auto began = FrameClock::Now();
+        FrameClock clock("Dashboard: the World page's state", stats, began, 20, 0.5);
+        std::string out = "{\"rumors\":" + RumorBridge::GetSingleton()->DashboardJson();
+        out += ",\"stories\":" + ArcBridge::GetSingleton()->DashboardJson();
+        out += ",\"quests\":" + QuestBridge::GetSingleton()->DashboardJson();
+        out += ",\"asks\":" + StorylineBridge::GetSingleton()->DashboardJson();
+        out += ",\"people\":" + LivingWorldBridge::GetSingleton()->DashboardJson();
+        out += ",\"bonds\":" + BondBridge::GetSingleton()->DashboardJson();
+        // The player's name: the page says "you" where the engine's lines name them.
+        auto* player = RE::PlayerCharacter::GetSingleton();
+        const char* playerName = player ? GameText::In(player->GetDisplayFullName()) : nullptr;
+        out += ",\"player\":" + nlohmann::json(std::string(playerName ? playerName : "")).dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
+        out += "}";
+        return RE::BSFixedString(out.c_str());
     }
 
     RE::BSFixedString BuildPoliticalDashboardJson(RE::StaticFunctionTag*) {
@@ -4156,7 +5309,7 @@ namespace IntelEngine::Papyrus {
 
             ProcessUtils::ForEachLoadedActor([&](RE::Actor* actor) -> bool {
                 if (!actor || actor->IsDead()) return false;
-                const char* displayName = actor->GetDisplayFullName();
+                const char* displayName = GameText::In(actor->GetDisplayFullName());
                 if (!displayName || !IsFactionLeaderNameMatch(displayName, leaderName)) return false;
 
                 const bool inPlayerCell = playerCell && actor->GetParentCell() == playerCell;
@@ -4168,10 +5321,17 @@ namespace IntelEngine::Papyrus {
                 return false;
             });
 
+            if (!bestMatch) {
+                // Nobody of that name is about. By record: a game in another language ("Legatin Rikke"), or a leader
+                // the configuration gives by record.
+                auto* npcIndex = NPCIndex::GetSingleton();
+                auto* byRecord = npcIndex->GetActorFromFormId(npcIndex->FindFactionLeaderFormId(leaderName));
+                if (byRecord && !byRecord->IsDead()) bestMatch = byRecord;
+            }
             if (bestMatch) {
                 result.push_back(bestMatch);
                 logger::info("GetFactionLeaderActors: '{}' -> '{}' (FormID=0x{:08X}, sameCell={})",
-                    leaderName, bestMatch->GetDisplayFullName(), bestMatch->GetFormID(), bestInPlayerCell);
+                    leaderName, GameText::In(bestMatch->GetDisplayFullName()), bestMatch->GetFormID(), bestInPlayerCell);
             }
         }
         return result;
@@ -4232,7 +5392,15 @@ namespace IntelEngine::Papyrus {
         std::string targetFacId(targetFaction.c_str());
         std::string attackerFacId(attackerFaction.c_str());
 
-        // 1. Find leader in player's cell/proximity
+        // Never in the player's own home: a leader who happens to stand there (a spouse, a guest) drew the assassin
+        // into the house ("random assassins spawn in player homes").
+        if (CellAnalyzer::GetSingleton()->IsPlayerInOwnHome()) {
+            logger::info("ExecuteAssassination: not in the player's own home");
+            return nullptr;
+        }
+
+        // 1. Whom: a leader of that faction in the player's room, or near them out of doors. Not somebody who
+        // travels with the player, not a child, not somebody in the middle of a scene of the game's.
         auto leaders = GetFactionLeaderActors(nullptr, targetFaction);
         RE::Actor* target = nullptr;
         auto* playerCell = player->GetSaveParentCell();
@@ -4240,12 +5408,14 @@ namespace IntelEngine::Papyrus {
         bool isInterior = playerCell && playerCell->IsInteriorCell();
 
         for (auto* leader : leaders) {
-            if (!leader || leader->IsDead()) continue;
+            if (!leader || leader->IsDead() || leader->IsDisabled() || !leader->Is3DLoaded()) continue;
+            if (leader->IsPlayerTeammate() || leader->IsChild() || leader->GetCurrentScene()) continue;
             if (isInterior) {
                 auto* leaderCell = leader->GetSaveParentCell();
                 if (!leaderCell) leaderCell = leader->GetParentCell();
                 if (leaderCell == playerCell) { target = leader; break; }
             } else {
+                if (leader->GetWorldspace() != player->GetWorldspace()) continue;
                 auto ppos = player->GetPosition();
                 auto lpos = leader->GetPosition();
                 float dx = ppos.x - lpos.x, dy = ppos.y - lpos.y, dz = ppos.z - lpos.z;
@@ -4259,73 +5429,131 @@ namespace IntelEngine::Papyrus {
         }
 
         logger::info("ExecuteAssassination: target={} ({}), attacker={}",
-            target->GetDisplayFullName(), targetFacId, attackerFacId);
+            GameText::In(target->GetDisplayFullName()), targetFacId, attackerFacId);
 
-        // 2. Find spawn point: nearest door to leader, or behind leader if no door
-        RE::TESObjectREFR* spawnAnchor = target->As<RE::TESObjectREFR>();
-        std::vector<RE::TESObjectREFR*> doors = CellAnalyzer::GetSingleton()->GetDoors(player);
-        float bestDist = 999999.f;
-        RE::NiPoint3 tgtPos = target->GetPosition();
-        for (auto* door : doors) {
-            if (!door) continue;
-            RE::NiPoint3 dpos = door->GetPosition();
-            float dx = dpos.x - tgtPos.x, dy = dpos.y - tgtPos.y, dz = dpos.z - tgtPos.z;
-            float dist = std::sqrt(dx*dx + dy*dy + dz*dz);
-            if (dist < bestDist) {
-                bestDist = dist;
-                spawnAnchor = door;
+        // 2. Where the killer comes from. Never out of thin air in the player's view (they used to be made at the
+        // nearest door whether the player was looking at it or not, and on top of the leader when there was no door).
+        // Dressed as one of the leader's own people: the target faction's soldiers.
+        RE::Actor* assassin = nullptr;
+        auto* battles = BattleManager::GetSingleton();
+        if (isInterior) {
+            // Through a door of the room: made on its far side when that is at hand, so that they come in by it; at
+            // the door itself only when the player is not looking at it.
+            RE::TESObjectREFR* door = nullptr;
+            float bestDist = 999999.f;
+            const RE::NiPoint3 tgtPos = target->GetPosition();
+            for (auto* candidate : CellAnalyzer::GetSingleton()->GetDoors(player)) {
+                if (!candidate || !candidate->extraList.HasType(RE::ExtraDataType::kTeleport)) continue;
+                const float dist = candidate->GetPosition().GetDistance(tgtPos);
+                if (dist < bestDist) {
+                    bestDist = dist;
+                    door = candidate;
+                }
             }
-        }
-        if (spawnAnchor != target->As<RE::TESObjectREFR>()) {
-            logger::info("ExecuteAssassination: spawning at door nearest to leader (dist={:.0f})", bestDist);
+            RE::TESObjectREFR* from = nullptr;
+            if (door) {
+                auto* teleport = door->extraList.GetByType<RE::ExtraTeleport>();
+                auto* farSide = (teleport && teleport->teleportData) ? teleport->teleportData->linkedDoor.get().get() : nullptr;
+                bool unused = false;
+                if (farSide && farSide->GetParentCell() && !farSide->IsDisabled()) {
+                    from = farSide;
+                    logger::info("ExecuteAssassination: the killer starts beyond the door nearest to the leader ({:.0f} units from them)", bestDist);
+                } else if (!player->HasLineOfSight(door, unused)) {
+                    from = door;
+                    logger::info("ExecuteAssassination: the killer starts at the door nearest to the leader, which the player does not see");
+                }
+            }
+            if (!from) {
+                logger::info("ExecuteAssassination: no way into the room that the player would not see the killer appear at");
+                return nullptr;
+            }
+            auto made = SpawnBattleSoldiers(nullptr, RE::BSFixedString(targetFacId + ":1"), from);
+            assassin = made.empty() ? nullptr : made.front();
         } else {
-            // No doors found — spawn at leader position (Papyrus will offset 500 units behind)
-            logger::info("ExecuteAssassination: no doors — spawning near leader");
+            Battlefield::Vec at;
+            if (!battles->PickApproach(player, target, at)) {
+                logger::info("ExecuteAssassination: nowhere for the killer to come from unseen");
+                return nullptr;
+            }
+            const float facing = Battlefield::Bearing(at, Battlefield::Vec{target->GetPositionX(), target->GetPositionY()});
+            assassin = battles->RaiseLoner(targetFacId, at, facing, player);
         }
-
-        // Single assassin
-        // Infiltrators — spawn using TARGET faction template so they blend in
-        std::string spawnArg = targetFacId + ":1";
-        auto soldiers = SpawnBattleSoldiers(nullptr,
-            RE::BSFixedString(spawnArg), spawnAnchor);
-
-        if (soldiers.empty()) {
-            logger::error("ExecuteAssassination: SpawnBattleSoldiers returned empty");
+        if (!assassin) {
+            logger::error("ExecuteAssassination: nobody could be made");
             return nullptr;
         }
 
-        // 3. Setup: strip factions, set kIgnoreFriendlyHits, passive aggression
+        // 3. In no faction at all (nobody's friend, nobody's crime to kill), and starting nothing until the blow.
+        BattleManager::StripFactions(assassin);
+        assassin->formFlags |= RE::TESForm::RecordFlags::kIgnoreFriendlyHits;
+        assassin->AsActorValueOwner()->SetActorValue(RE::ActorValue::kAggression, 0.f);
+        assassin->AsActorValueOwner()->SetActorValue(RE::ActorValue::kConfidence, 4.f);
+
         s_assassinFormIds.clear();
+        s_assassinFormIds.push_back(assassin->GetFormID());
         s_assassinTargetFormId = target->GetFormID();
-        s_assassinLeaderName = target->GetDisplayFullName();
-
-        RE::Actor* assassin = nullptr;
-        for (auto* soldier : soldiers) {
-            if (!soldier) continue;
-
-            // Strip ALL factions — factionless means no crime consequences
-            std::vector<RE::TESFaction*> toRemove;
-            soldier->VisitFactions([&](RE::TESFaction* fac, std::int8_t) -> bool {
-                if (fac) toRemove.push_back(fac);
-                return false;
-            });
-            for (auto* fac : toRemove) {
-                soldier->AddToFaction(fac, -1);
-            }
-            soldier->formFlags |= RE::TESForm::RecordFlags::kIgnoreFriendlyHits;
-            soldier->AsActorValueOwner()->SetActorValue(RE::ActorValue::kAggression, 0.f);
-            soldier->AsActorValueOwner()->SetActorValue(RE::ActorValue::kConfidence, 4.f);
-
-            s_assassinFormIds.push_back(soldier->GetFormID());
-            assassin = soldier;
-
-            logger::info("ExecuteAssassination: soldier {:08X} ready (factionless, aggression 0)",
-                soldier->GetFormID());
-        }
-
-        logger::info("ExecuteAssassination: assassin={:08X}, target={}",
-            assassin ? assassin->GetFormID() : 0, target->GetDisplayFullName());
+        s_assassinLeaderName = GameText::In(target->GetDisplayFullName());
+        logger::info("ExecuteAssassination: assassin={:08X}, target={}", assassin->GetFormID(), GameText::In(target->GetDisplayFullName()));
         return assassin;
+    }
+
+    void ManifestationFailed(RE::StaticFunctionTag*) { FactionPolitics::GetSingleton()->ManifestationFailed(); }
+
+    void ManifestationDone(RE::StaticFunctionTag*) { FactionPolitics::GetSingleton()->ManifestationDone(); }
+
+    RE::BSFixedString AssassinationOutcome(RE::StaticFunctionTag*, RE::BSFixedString targetFaction, RE::BSFixedString attackerFaction,
+                                           RE::BSFixedString leaderName, RE::BSFixedString outcome) {
+        auto* player = RE::PlayerCharacter::GetSingleton();
+        const std::string place = player ? std::string(GetActorParentLocationName(nullptr, player).c_str()) : std::string();
+        const std::string name = player ? GameText::In(player->GetDisplayFullName()) : "a stranger";
+        const std::string hold = player ? NPCIndex::GetNPCHoldName(player) : std::string();
+        return RE::BSFixedString(FactionPolitics::GetSingleton()->AssassinationOutcome(
+            targetFaction.c_str(), attackerFaction.c_str(), leaderName.c_str(), outcome.c_str(), place, name, hold).c_str());
+    }
+
+    void BattleSetSkirmish(RE::StaticFunctionTag*, int size) { BattleManager::GetSingleton()->SetSkirmish(size); }
+
+    bool BattleFieldBusy(RE::StaticFunctionTag*) { return BattleManager::GetSingleton()->IsFieldBusy(); }
+
+    RE::BSFixedString BattleFlankLine(RE::StaticFunctionTag*, RE::BSFixedString side, int first, int count, RE::Actor* player) {
+        return RE::BSFixedString(BattleManager::GetSingleton()->ReinforceLine(side.c_str(), first, count, player, 1).c_str());
+    }
+
+    RE::BSFixedString BattleChampionLine(RE::StaticFunctionTag*, RE::BSFixedString side, RE::Actor* player) {
+        return RE::BSFixedString(BattleManager::GetSingleton()->ReinforceLine(side.c_str(), 0, 1, player, 2).c_str());
+    }
+
+    RE::BSFixedString BattleTurnCoats(RE::StaticFunctionTag*, RE::BSFixedString side) {
+        return RE::BSFixedString(BattleManager::GetSingleton()->TurnCoats(side.c_str()).c_str());
+    }
+
+    void BattleSetTwists(RE::StaticFunctionTag*, int champion, int flank, int turncoat) {
+        BattleManager::GetSingleton()->SetTwists(champion, flank, turncoat);
+    }
+
+    int PlayerFactionRank(RE::StaticFunctionTag*, RE::BSFixedString factionId) {
+        return FactionPolitics::GetSingleton()->PlayerRank(factionId.c_str());
+    }
+
+    RE::BSFixedString PlayerRankTitle(RE::StaticFunctionTag*, RE::BSFixedString factionId) {
+        auto* fp = FactionPolitics::GetSingleton();
+        return RE::BSFixedString(fp->RankTitle(factionId.c_str(), fp->PlayerRank(factionId.c_str())).c_str());
+    }
+
+    RE::BSFixedString PlayerDidFor(RE::StaticFunctionTag*, RE::BSFixedString factionId, RE::BSFixedString deed) {
+        // (A key from a script: read without regard to capitals.)
+        std::string what = deed.c_str();
+        for (auto& c : what) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        auto* fp = FactionPolitics::GetSingleton();
+        int risen = 0;
+        if (what == "quest") risen = fp->EarnRenown(factionId.c_str(), Ranks::Deed::Quest);
+        else if (what == "saved") risen = fp->EarnRenown(factionId.c_str(), Ranks::Deed::Saved);
+        if (risen > 0) fp->WritePoliticalStateFile();
+        return RE::BSFixedString(risen > 0 ? fp->RankTitle(factionId.c_str(), risen).c_str() : "");
+    }
+
+    RE::BSFixedString BattlePickAmbush(RE::StaticFunctionTag*, RE::Actor* player) {
+        return RE::BSFixedString(BattleManager::GetSingleton()->PickAmbush(player).c_str());
     }
 
     RE::Actor* GetAssassinationTarget(RE::StaticFunctionTag*) {
@@ -4361,11 +5589,11 @@ namespace IntelEngine::Papyrus {
             attackCount++;
 
             logger::info("TriggerAssassinationAttack: soldier {:08X} attacking {}", fid,
-                target->GetDisplayFullName());
+                GameText::In(target->GetDisplayFullName()));
         }
 
         logger::info("TriggerAssassinationAttack: {} soldiers attacking {}", attackCount,
-            target->GetDisplayFullName());
+            GameText::In(target->GetDisplayFullName()));
 
         // Cleanup tracking
         s_assassinFormIds.clear();
@@ -4552,7 +5780,7 @@ namespace IntelEngine::Papyrus {
     RE::TESFaction* GetSkyrimFaction(RE::StaticFunctionTag*, RE::BSFixedString factionId) {
         auto config = FactionPolitics::GetSingleton()->GetFaction(factionId.c_str());
         if (!config || config->skyrimFactionId.empty()) return nullptr;
-        return RE::TESForm::LookupByEditorID<RE::TESFaction>(config->skyrimFactionId);
+        return FactionEditor::GameFaction(config->skyrimFactionId);
     }
 
     RE::BSFixedString GetFactionRival(RE::StaticFunctionTag*, RE::BSFixedString factionId) {
@@ -4599,6 +5827,11 @@ namespace IntelEngine::Papyrus {
             if (actor->IsInCombat()) return false;
             // Only humanoid NPCs — skip creatures, animals, daedra (e.g., Volkihar death hounds)
             if (kwActorTypeNPC && !actor->HasKeyword(kwActorTypeNPC)) return false;
+            // A person of a playable people, no child, nobody made at run time, and no enemy of the player: a mod's
+            // creature that carries the "NPC" keyword and its faction was sent as a faction's messenger, and
+            // everything in sight attacked it ("a little banekamp creature").
+            if (actor->IsDynamicForm() || actor->IsChild() || actor->IsHostileToActor(player)) return false;
+            if (auto* race = actor->GetRace(); !race || !race->GetPlayable() || race->IsChildRace()) return false;
 
             // Skip high-status NPCs (Jarls, court wizards, stewards, housecarls)
             if (NPCIndex::IsHighStatus(actor)) return false;
@@ -4628,7 +5861,7 @@ namespace IntelEngine::Papyrus {
         best = bestGeneric ? bestGeneric : bestUnique;
         bestDist = bestGeneric ? bestGenericDist : bestUniqueDist;
         if (best) {
-            bestName = best->GetDisplayFullName();
+            bestName = GameText::In(best->GetDisplayFullName());
         }
 
         if (best) {
@@ -4698,7 +5931,7 @@ namespace IntelEngine::Papyrus {
 
         logger::info("[IntelEngine] SpawnBattleSoldiers: base FormID={:08X} type={} name='{}', template='{}', spawnAt='{}'",
                     base->GetFormID(), static_cast<int>(base->GetFormType()),
-                    base->GetName(), templateId, spawnAt->GetName());
+                    GameText::In(base->GetName()), templateId, GameText::In(spawnAt->GetName()));
 
         // PlaceObjectAtMe with a LeveledNPC base returns type 61 (REFR) instead of
         // type 62 (Actor), making the refs unusable in Papyrus. Resolve the leveled
@@ -4766,15 +5999,20 @@ namespace IntelEngine::Papyrus {
         // attack everyone on sight, then add them to the political faction they fight for.
         // For faction templates: soldiers already belong to the right faction.
         // Battle factions (Intel_BattleSideA/B) are assigned later by Papyrus.
+        // Every soldier, from a fallback template or a faction's own, belongs to the side they were called up for
+        // and to nothing else. Only fallback bandits used to be stripped: soldiers from a real template kept its
+        // factions, and where that template is the game's bandits, thieves or Forsworn (several of the default
+        // factions) they attacked the player on sight, a player who had sided with nobody ("random people spawn and
+        // attack me", gone with politics switched off). A hold's guards kept their crime faction, too.
         bool isFallbackTemplate = templateId.empty() || !LookupLeveledActor(templateId.c_str());
-        if (isFallbackTemplate) {
+        {
             // Look up the political faction's Skyrim engine faction (e.g., CWSonsFaction)
             RE::TESFaction* politicalFaction = nullptr;
             auto factionConfig = FactionPolitics::GetSingleton()->GetFaction(factionId);
             if (factionConfig && !factionConfig->skyrimFactionId.empty()) {
                 auto* dataHandler = RE::TESDataHandler::GetSingleton();
                 if (dataHandler) {
-                    politicalFaction = RE::TESForm::LookupByEditorID<RE::TESFaction>(factionConfig->skyrimFactionId);
+                    politicalFaction = FactionEditor::GameFaction(factionConfig->skyrimFactionId);
                 }
             }
 
@@ -4787,7 +6025,7 @@ namespace IntelEngine::Papyrus {
                     return false;
                 });
                 for (auto* fac : toRemove) {
-                    actor->AddToFaction(fac, -1);
+                    if (fac != politicalFaction) actor->AddToFaction(fac, -1);
                 }
                 // Add to the political faction they fight for
                 if (politicalFaction) {
@@ -4822,21 +6060,71 @@ namespace IntelEngine::Papyrus {
         }
     }
 
-    RE::BSFixedString ExecuteFullBattleSpawn(RE::StaticFunctionTag*,
-                                              RE::BSFixedString questAutoJoinFaction,
-                                              RE::Actor* player, float playerAngleZ,
-                                              RE::TESObjectREFR* spawnAnchor) {
-        auto* bm = BattleManager::GetSingleton();
-        if (!bm) return RE::BSFixedString("{}");
-        return RE::BSFixedString(bm->ExecuteFullBattleSpawn(
-            questAutoJoinFaction.c_str(), player, playerAngleZ, spawnAnchor).c_str());
+    RE::BSFixedString BattlePickField(RE::StaticFunctionTag*, RE::Actor* player, RE::TESObjectREFR* place) {
+        return RE::BSFixedString(BattleManager::GetSingleton()->PickField(player, place).c_str());
     }
 
-    RE::BSFixedString SpawnReinforcements(RE::StaticFunctionTag*, int count, RE::Actor* player,
-                                          RE::TESObjectREFR* spawnAnchor) {
-        auto* bm = BattleManager::GetSingleton();
-        if (!bm) return RE::BSFixedString("{}");
-        return RE::BSFixedString(bm->SpawnReinforcements(count, player, spawnAnchor).c_str());
+    RE::BSFixedString BattleMusterLine(RE::StaticFunctionTag*, RE::BSFixedString side, int first, int count, RE::Actor* player) {
+        return RE::BSFixedString(BattleManager::GetSingleton()->MusterLine(side.c_str(), first, count, player).c_str());
+    }
+
+    RE::BSFixedString BattleReinforceLine(RE::StaticFunctionTag*, RE::BSFixedString side, int first, int count, RE::Actor* player) {
+        return RE::BSFixedString(BattleManager::GetSingleton()->ReinforceLine(side.c_str(), first, count, player).c_str());
+    }
+
+    RE::BSFixedString BattleSettle(RE::StaticFunctionTag*) {
+        return RE::BSFixedString(BattleManager::GetSingleton()->SettleSoldiers().c_str());
+    }
+
+    int BattlePrepareGroup(RE::StaticFunctionTag*, RE::BSFixedString side, int kind, RE::Actor* player) {
+        return BattleManager::GetSingleton()->PrepareGroup(side.c_str(), player, kind);
+    }
+
+    void BattleBeginFight(RE::StaticFunctionTag*) { BattleManager::GetSingleton()->BeginFight(); }
+
+    RE::BSFixedString BattleIdleHands(RE::StaticFunctionTag*, int most) {
+        return RE::BSFixedString(BattleManager::GetSingleton()->IdleHands(most).c_str());
+    }
+
+    RE::BSFixedString BattleVerdict(RE::StaticFunctionTag*) {
+        return RE::BSFixedString(BattleManager::GetSingleton()->Verdict().c_str());
+    }
+
+    void BattleNoteTurnedDown(RE::StaticFunctionTag*, RE::BSFixedString factionId) {
+        BattleManager::GetSingleton()->NoteTurnedDown(factionId.c_str());
+    }
+
+    void BattleNotePlayerLeft(RE::StaticFunctionTag*) { BattleManager::GetSingleton()->NotePlayerLeft(); }
+
+    RE::BSFixedString BattleCall(RE::StaticFunctionTag*) {
+        return RE::BSFixedString(BattleManager::GetSingleton()->Call().c_str());
+    }
+
+    void BattleTendBounty(RE::StaticFunctionTag*) { BattleManager::GetSingleton()->SuppressBountyTick(); }
+
+    RE::TESObjectREFR* BattleWayHome(RE::StaticFunctionTag*, RE::BSFixedString factionId, float x, float y, float dirX, float dirY, bool beaten,
+                                     RE::TESObjectREFR* notTo) {
+        return BattleManager::GetSingleton()->WayHome(factionId.c_str(), {x, y}, {dirX, dirY}, beaten, notTo ? notTo->GetFormID() : 0);
+    }
+
+    void BattleCallText(RE::StaticFunctionTag*, RE::BSFixedString factionId, RE::BSFixedString place) {
+        BattleManager::GetSingleton()->SetCallText(factionId.c_str(), place.c_str());
+    }
+
+    RE::BSFixedString BattleFieldInfo(RE::StaticFunctionTag*) {
+        return RE::BSFixedString(BattleManager::GetSingleton()->FieldInfo().c_str());
+    }
+
+    int GetBattleWaveOf(RE::StaticFunctionTag*, RE::BSFixedString side) { return BattleManager::GetSingleton()->GetWave(side.c_str()); }
+
+    void AdvanceBattleWaveOf(RE::StaticFunctionTag*, RE::BSFixedString side) { BattleManager::GetSingleton()->AdvanceWaveOf(side.c_str()); }
+
+    RE::BSFixedString BattleSay(RE::StaticFunctionTag*, RE::BSFixedString what, RE::BSFixedString a, RE::BSFixedString b,
+                                RE::BSFixedString name, int number, int other) {
+        // What a battle says to the player (notices, the names on a champion or a turncoat, the words on buttons)
+        // in the game's language where its pack has the sentence (LanguageBridge.h).
+        return RE::BSFixedString(LanguageBridge::GetSingleton()->Label(
+            BattleManager::GetSingleton()->Say(what.c_str(), a.c_str(), b.c_str(), name.c_str(), number, other)));
     }
 
     RE::BSFixedString GetBattleSoldierFormIds(RE::StaticFunctionTag*, RE::BSFixedString side) {
@@ -4848,6 +6136,12 @@ namespace IntelEngine::Papyrus {
     void SetBattleSoldiersAsTeammates(RE::StaticFunctionTag*, RE::BSFixedString side) {
         auto* bm = BattleManager::GetSingleton();
         if (bm) bm->SetBattleSoldiersAsTeammates(side.c_str(), true);
+    }
+
+    void BattleDebugBodies(RE::StaticFunctionTag*) { BattleManager::GetSingleton()->DebugBodies(); }
+
+    int BattleCeaseFire(RE::StaticFunctionTag*, int first, int count, bool amongThemselves) {
+        return BattleManager::GetSingleton()->CeaseFire(first, count, amongThemselves);
     }
 
     int CountDeadBattleSoldiers(RE::StaticFunctionTag*, RE::BSFixedString side) {
@@ -4877,13 +6171,6 @@ namespace IntelEngine::Papyrus {
         if (bm) bm->SnapshotBounties();
     }
 
-    // Snapshot of bounty at battle start — only clear what was added DURING the battle
-    static std::unordered_map<RE::FormID, std::int32_t> s_preBattleBounty;
-    static constexpr RE::FormID kHoldCrimeFactions[] = {
-        0x00029DB0, 0x00029DB1, 0x00029DB2, 0x00029DB3, 0x00029DB4,
-        0x00029DB5, 0x00029DB6, 0x00029DB7, 0x00029DB8
-    };
-
     void ClearBattleTeammates(RE::StaticFunctionTag*) {
         // Centralized: delegates to BattleManager::RestoreEnlistedGuards which uses
         // tracked FormIDs (works even if guards unloaded). No more ForEachLoadedActor guesswork.
@@ -4891,29 +6178,10 @@ namespace IntelEngine::Papyrus {
     }
 
     void ClearAllHoldBounties(RE::StaticFunctionTag*) {
-        // Revert bounty to pre-battle snapshot — only clears what accumulated DURING the battle.
-        // First call snapshots current bounty; subsequent calls revert to snapshot.
-        if (s_preBattleBounty.empty()) {
-            // First call — take snapshot
-            for (auto fid : kHoldCrimeFactions) {
-                auto* faction = RE::TESForm::LookupByID<RE::TESFaction>(fid);
-                if (faction) {
-                    s_preBattleBounty[fid] = faction->GetCrimeGold();
-                }
-            }
-            return;
-        }
-        // Subsequent calls — revert to snapshot
-        for (auto fid : kHoldCrimeFactions) {
-            auto* faction = RE::TESForm::LookupByID<RE::TESFaction>(fid);
-            if (!faction) continue;
-            auto it = s_preBattleBounty.find(fid);
-            std::int32_t preBattle = (it != s_preBattleBounty.end()) ? it->second : 0;
-            if (faction->GetCrimeGold() > preBattle) {
-                faction->SetCrimeGold(preBattle);
-                faction->SetCrimeGoldViolent(0);
-            }
-        }
+        // Does nothing any more (kept for scripts of an older version). It was meant to take back the bounty a battle
+        // brought, in every hold. Of its nine "hold crime factions" one was a crime faction, Haafingar: only Solitude's
+        // bounty was ever noted and set back, wherever the battle was. The soldiers of a battle belong to no crime
+        // faction: killing them brings no bounty to take back.
     }
 
     // ClearBattleBounties and RestoreBounties implementations removed.
@@ -4953,7 +6221,7 @@ namespace IntelEngine::Papyrus {
     RE::BSFixedString GetSlotStatusNative(RE::StaticFunctionTag*,
                                            RE::BSFixedString taskType, int taskState,
                                            RE::BSFixedString targetName, RE::BSFixedString cellName) {
-        std::string type = taskType.c_str();
+        std::string type = StringUtils::ToLowerStd(taskType.c_str());  // pooled spelling may be "Travel"
         std::string target = targetName.c_str();
         std::string cell = cellName.c_str();
         std::string status;
@@ -5050,7 +6318,7 @@ namespace IntelEngine::Papyrus {
     }
 
     RE::BSFixedString BuildStuckNarration(RE::StaticFunctionTag*, RE::BSFixedString taskType) {
-        std::string type = taskType.c_str();
+        std::string type = StringUtils::ToLowerStd(taskType.c_str());  // pooled spelling may be "Fetch_npc"
         if (type == "fetch_npc") return RE::BSFixedString("tried to carry out the task but couldn't get going and gave up.");
         if (type == "deliver_message") return RE::BSFixedString("tried to deliver the message but was unable to reach the destination and gave up.");
         if (type == "search_for_actor") return RE::BSFixedString("searched but couldn't find who they were looking for and gave up.");
@@ -5167,7 +6435,6 @@ namespace IntelEngine::Papyrus {
 
     void ResetBattleState(RE::StaticFunctionTag*) {
         BattleManager::GetSingleton()->ResetBattleState();
-        s_preBattleBounty.clear();  // Reset bounty snapshot for next battle
     }
 
     RE::BSFixedString CalculateBattleMarkerPosition(RE::StaticFunctionTag*,
@@ -5207,7 +6474,7 @@ namespace IntelEngine::Papyrus {
             if (a->IsDead() || a->IsPlayerRef() || a->IsDeleted()) continue;
 
             // Skip unnamed (generic spawns)
-            auto name = a->GetName();
+            auto name = GameText::In(a->GetName());
             if (!name || name[0] == '\0') continue;
 
             // Skip if too far
@@ -5219,6 +6486,9 @@ namespace IntelEngine::Papyrus {
 
             // Skip battle-spawned soldiers (they have temp FormIDs in FF range)
             if ((a->GetFormID() >> 24) == 0xFF) continue;
+            // People witness things. (Two chickens and a cow of Chillfurrow Farm were given the memory of having
+            // witnessed a battle between the Legion and the Stormcloaks, 2026-11-20.)
+            if (!a->HasKeywordString("ActorTypeNPC")) continue;
 
             result.push_back(a);
         }
@@ -5326,7 +6596,10 @@ namespace IntelEngine::Papyrus {
         auto* player = RE::PlayerCharacter::GetSingleton();
         if (!player) return -1;
         auto pos = player->GetPosition();
-        return BattleManager::GetSingleton()->PollPendingBattles(pos.x, pos.y, pos.z);
+        auto* cell = player->GetParentCell();
+        auto* world = player->GetWorldspace();
+        return BattleManager::GetSingleton()->PollPendingBattles(pos.x, pos.y, world ? world->GetFormID() : 0,
+                                                                 !cell || cell->IsInteriorCell());
     }
 
     void RemovePendingBattle(RE::StaticFunctionTag*, int id) {
@@ -5377,7 +6650,7 @@ namespace IntelEngine::Papyrus {
                 if (arr[index].is_string()) {
                     return RE::BSFixedString(arr[index].get<std::string>());
                 }
-                return RE::BSFixedString(arr[index].dump());
+                return RE::BSFixedString(arr[index].dump(-1, ' ', false, nlohmann::json::error_handler_t::replace));
             }
         } catch (...) {}
         return RE::BSFixedString("");

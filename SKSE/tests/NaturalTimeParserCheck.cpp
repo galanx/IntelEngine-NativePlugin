@@ -193,6 +193,21 @@ int main() {
     ExpectHour("room 101", -1.0f);
     ExpectHour("someone", -1.0f);
 
+    // Counted hours and minutes in words or in larger numbers. "in two hours" was not read and became the 6 PM
+    // default (2026-11-18); a clock time "at 13 hours" stays a clock time.
+    ExpectHour("in two hours", 6.0f, 4.0f);
+    ExpectHour("two hours from now", 16.0f, 14.0f);
+    ExpectHour("in three hours", 1.0f, 22.0f);
+    ExpectHour("in twelve hours", 2.0f, 14.0f);
+    ExpectHour("in 24 hours", 38.0f, 14.0f);
+    ExpectHour("in 36 hours", 50.0f, 14.0f);
+    ExpectHour("in 10 minutes", 12.0f + 10.0f / 60.0f, 12.0f);
+    ExpectHour("in twenty minutes", 12.0f + 20.0f / 60.0f, 12.0f);
+    ExpectHour("in forty-five minutes", 12.75f, 12.0f);
+    ExpectHour("in a minute", 12.0f + 1.0f / 60.0f, 12.0f);
+    ExpectHour("in three days at 13 hours", 85.0f, 14.0f);
+    ExpectHour("in two hours", -1.0f, -1.0f);
+
     if (failures != 0) {
         std::cerr << failures << " time parser case(s) failed\n";
         return 1;
