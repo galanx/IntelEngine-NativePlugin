@@ -1360,6 +1360,63 @@ def run_hold_restriction_checks(files, history):
     print("actual PEX hold restriction: Director informant retained, automatic abort silent, stale guard passed")
 
 
+def run_walk_rule_checks(files, history):
+    """Someone coming to the player at a walk lets it be when the player has gone farther off than they were when the
+    visitor set out, and never because the visitor set out from elsewhere; a visit ordered from the dashboard is not
+    called off by this rule at all. (Reach as IntelEngine.ArcReachOf gives it: 0 here, 1 elsewhere in the hold, 2
+    another hold.) Before, anybody not in the player's own place was called off at the first look."""
+    class WalkVM(NearPlayerVM):
+        def __init__(self, files, history):
+            super().__init__(files, history)
+            self.reach, self.loaded, self.distance = 0, False, 9000.0
+
+        def external(self, method, args, script):
+            if method == "ArcReachOf": return self.reach
+            return super().external(method, args, script)
+
+    def set_out(origin, reach):
+        vm = WalkVM(files, history)
+        vm.properties.update({"IsActive": False, "ActiveStoryNPC": None,
+            "ActiveStoryType": "seek_player", "SlotStates": [0] * 5})
+        vm.properties["AgentAlias00"].actor = None
+        vm.reach = reach
+        vm.invoke("IntelEngine_StoryEngine", "DispatchToTarget",
+            (vm.agent, vm.player, "came with news", "story", origin))
+        require(vm.properties["IsActive"] and vm.properties["SlotStates"][0] == 1 and
+                vm.storage.get((vm.agent, "Intel_WalkStartReach")) == reach,
+                "a visitor setting out did not note how far off the player is (%s, reach %d)" % (origin, reach))
+        return vm
+
+    # (who sent them, the player's distance as they set out, the same at the look, called off?)
+    cases = (("Director", 1, 1, False), ("Director", 2, 2, False), ("Director", 0, 2, False),
+             ("Story engine", 0, 0, False), ("Story engine", 1, 1, False), ("Story engine", 2, 2, False),
+             ("Story engine", 1, 0, False), ("Story engine", 0, 1, True), ("Story engine", 0, 2, True),
+             ("Story engine", 1, 2, True))
+    for origin, start, later, called_off in cases:
+        for asked in ("CheckStoryNPCArrival", "LetsItBe"):
+            vm = set_out(origin, start)
+            vm.reach = later
+            vm.effects.clear()
+            if asked == "LetsItBe":
+                answer = vm.invoke("IntelEngine_StoryEngine", "LetsItBe", (vm.agent,))
+                require(bool(answer) == called_off, "LetsItBe answered %s for %s, set out at %d, now %d"
+                        % (answer, origin, start, later))
+            else:
+                vm.invoke("IntelEngine_StoryEngine", "CheckStoryNPCArrival")
+            gone = [e for e in vm.effects if e[0] == "Trace" and "could not reach the player (gone)" in e[1]]
+            if called_off:
+                require(not vm.properties["IsActive"] and vm.properties["SlotStates"][0] == 0 and len(gone) == 1 and
+                        (vm.agent, "Intel_WalkStartReach") not in vm.storage,
+                        "%s: a visitor (%s, set out at %d, now %d) the player left behind was not called off cleanly"
+                        % (asked, origin, start, later))
+            else:
+                require(vm.properties["IsActive"] and vm.properties["SlotStates"][0] == 1 and not gone,
+                        "%s: a visitor (%s, set out at %d, now %d) was called off although the player went no farther"
+                        % (asked, origin, start, later))
+    print("actual PEX walk rule: %d cases; called off only when the player went farther, never a dashboard order"
+          % (2 * len(cases)))
+
+
 def run_soft_stuck_checks(files, history):
     class StuckVM(VM):
         loaded = True
@@ -2309,6 +2366,7 @@ def main():
     run_last_stretch_checks(files, history)
     run_load_recovery_checks(files, history)
     run_hold_restriction_checks(files, history)
+    run_walk_rule_checks(files, history)
     run_soft_stuck_checks(files, history)
     run_bard_release_checks(files, history)
     run_review_note_checks(files, history)

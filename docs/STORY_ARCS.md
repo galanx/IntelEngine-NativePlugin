@@ -194,9 +194,18 @@ gets `TravelPackage_Walk` unless `ActiveStoryHurries`, which is `IntelEngine.Arc
 the player (`LivingWorldBridge::CloseToPlayer`) or an asker who came from another hold (`Flag::CameFar`). Having missed
 the player once is no reason to run the next time. Attackers keep their own packages.
 
-**Letting it be.** A walking visitor does not follow the player across the world: `DeferStory` when the player is in
-another place (`ArcReachOf >= 1`) or walked off faster than they follow (2500 units beyond the nearest they got, and
-more than 3500 away). `Core.HandleOffScreenTravel` asks `StoryEngine.LetsItBe` before it would set a visitor down near
+**Letting it be.** A walking visitor does not follow the player across the world: `DeferStory` when the player has
+gone farther off than they were when the visitor set out (`StoryEngine.PlayerWentFarther`: `ArcReachOf` now above
+`Intel_WalkStartReach`, noted in `DispatchToTarget`; so out of the visitor's place, or out of the hold) or walked off
+faster than they follow (2500 units beyond the nearest they got, and more than 3500 away). Until 2026-11-24 the test
+was `ArcReachOf >= 1`, true from the first step for anybody who set out from elsewhere: a tale's person from another
+part of the hold, an asker let come (`Flag::Sent`), a Classic visitor and an order from the dashboard were all called
+off three seconds after setting out (a report with logs: Hilund in Thirsk Mead Hall, the player near the Skaal
+Village). A visit ordered from the dashboard (`OrderedFromDashboard`, the slot's origin "Director") is the player's
+own order and is not called off by this rule at all, as it never was by the hold restriction. Offline:
+`RunArrivalDeliveryBytecodeCheck` `run_walk_rule_checks`. Played: Faendal ordered from Riverwood and Gerdur as a
+tale's visitor both come in by the Bannered Mare's door, Alvor ordered in Riverwood follows the player to Whiterun,
+Ysolda as a tale's visitor lets it be when the player leaves Whiterun. `Core.HandleOffScreenTravel` asks `StoryEngine.LetsItBe` before it would set a visitor down near
 the player (Faendal of Riverwood stood in the Bannered Mare a minute and a half after the player had left). The arc is
 flagged `Deferred`, keeps three more days, and `ArcBridge::Lapse` sends the offer again when the asker is loaded, in the
 same space, within 3000 units, at least a minute later.
