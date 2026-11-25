@@ -4103,6 +4103,40 @@ namespace IntelEngine {
         std::int32_t ArcReachOf(RE::StaticFunctionTag*, RE::Actor* actor) { return actor ? NPCIndex::ReachOf(actor) : 2; }
         // Test hook: how the director's distance rule sees someone: reach (0 here, 1 the hold, 2 another hold), plus 10
         // when they are close to the player.
+        // Test hook (a crash report of 2026-11-25): for every faction of the game's own in this person's record the
+        // game's call for the name answers with a number where a text's address belongs (106, as in the report), the
+        // line that describes them is built, and the factions are put back. The length of that line, or -1 without
+        // such a faction. With 4.0.0 this ended the game.
+        // (The stored name itself is left alone: the game's own call reads it and would fall over first. What is
+        // swapped for the moment is the table of calls of the faction's name part, its sixth entry: GetFullName.)
+        std::int32_t ArcDebugBadFactionName(RE::StaticFunctionTag*, RE::Actor* actor) {
+            auto* base = actor ? actor->GetActorBase() : nullptr;
+            if (!base) return -1;
+            static void* answers[6] = {};
+            std::vector<std::pair<void***, void**>> kept;
+            for (auto& fr : base->factions) {
+                if (!fr.faction || (fr.faction->GetFormID() >> 24) != 0) continue;
+                auto* slot = reinterpret_cast<void***>(static_cast<RE::TESFullName*>(fr.faction));
+                if (!answers[0]) {
+                    for (int i = 0; i < 6; ++i) answers[i] = (*slot)[i];
+                    answers[5] = reinterpret_cast<void*>(+[](RE::TESFullName*) -> const char* {
+                        return reinterpret_cast<const char*>(std::uintptr_t{0x6A});
+                    });
+                }
+                if (*slot == answers) continue;                       // listed twice
+                kept.emplace_back(slot, *slot);
+                *slot = answers;
+            }
+            // (Where the game hands out no editor names every faction is skipped before its name is read: for this
+            // one call each of them is described.)
+            NPCIndex::DescribeEveryFaction(true);
+            const std::string line = kept.empty() ? std::string() : NPCIndex::GetNPCBioFallbackLine(actor);
+            NPCIndex::DescribeEveryFaction(false);
+            for (const auto& [slot, name] : kept) *slot = name;
+            const std::string whole = NPCIndex::GetNPCBioFallbackLine(actor);
+            logger::info("[NPCIndex] test: {} with {} faction name(s) that are no text: '{}'; with the names back: '{}'", GameText::In(actor->GetDisplayFullName()), kept.size(), line, whole);
+            return kept.empty() ? -1 : static_cast<std::int32_t>(line.size());
+        }
         std::int32_t ArcDebugReach(RE::StaticFunctionTag*, RE::Actor* actor) {
             if (!actor) return -1;
             const int reach = NPCIndex::ReachOf(actor);
@@ -4173,6 +4207,7 @@ namespace IntelEngine {
         a_vm->RegisterFunction("ArcAmbushDone", script, ArcAmbushDone); ++count;
         a_vm->RegisterFunction("ArcInWilds", script, ArcInWilds); ++count;
         a_vm->RegisterFunction("ArcDebugReach", script, ArcDebugReach); ++count;
+        a_vm->RegisterFunction("ArcDebugBadFactionName", script, ArcDebugBadFactionName); ++count;
         a_vm->RegisterFunction("ArcOfferLater", script, ArcOfferLater); ++count;
         a_vm->RegisterFunction("ArcOfferDeferred", script, ArcOfferDeferred); ++count;
         a_vm->RegisterFunction("ArcOffer", script, ArcOffer); ++count;

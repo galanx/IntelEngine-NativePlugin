@@ -2025,6 +2025,24 @@ namespace IntelEngine {
     // Used by Phase A (main thread) so the snapshot captures a fast value without
     // hitting the bio-file disk I/O. Phase B then prefers the file-based bio if
     // GetNPCBioSummary returns non-empty for this NPC.
+    namespace {
+        std::atomic<bool> g_describeEveryFaction{false};   // test hook only (NPCIndex::DescribeEveryFaction)
+
+        // The kind and the id of a record whose address came from a list the plugin did not make, read under a guard:
+        // false when there is nothing readable at that address. (Two plain fields, no call into the record.)
+        bool PeekForm(RE::TESForm* form, RE::FormType& kind, RE::FormID& id) noexcept {
+            __try {
+                kind = form->GetFormType();
+                id = form->GetFormID();
+                return true;
+            } __except (1) {
+                return false;
+            }
+        }
+    }
+
+    void NPCIndex::DescribeEveryFaction(bool on) { g_describeEveryFaction.store(on); }
+
     std::string NPCIndex::GetNPCBioFallbackLine(RE::Actor* actor) {
         if (!actor) return "";
         auto* base = actor->GetActorBase();
@@ -2042,10 +2060,20 @@ namespace IntelEngine {
         std::vector<std::string> factionNames;
         for (const auto& fr : base->factions) {
             if (!fr.faction) continue;
-            if (fr.faction->GetFormType() != RE::FormType::Faction) {
+            // An entry of this list can be anything: a record of another kind, or one that another mod left broken.
+            // Nothing of it is used before the game's own table of records agrees that this is the faction it claims
+            // to be (a crash report of 2026-11-25: an entry passed for a faction and its name was no text).
+            RE::FormType kind = RE::FormType::None;
+            RE::FormID factionId = 0;
+            const bool readable = PeekForm(fr.faction, kind, factionId);
+            if (!readable || kind != RE::FormType::Faction || RE::TESForm::LookupByID(factionId) != fr.faction) {
                 static bool warned = false;
                 if (!warned) {
-                    logger::warn("[NPCIndex] Skipping non-faction entry {:08X} (type {}) in faction list of {:08X} '{}'", fr.faction->GetFormID(), static_cast<uint32_t>(fr.faction->GetFormType()), base->GetFormID(), GameText::In(base->GetFullName()));
+                    logger::warn("[NPCIndex] Skipping an entry that is no faction ({}) in the faction list of {:08X} '{}'",
+                                 !readable ? std::string("it cannot be read")
+                                 : kind != RE::FormType::Faction ? fmt::format("record {:08X} of type {}", factionId, static_cast<uint32_t>(kind))
+                                 : fmt::format("not the record the game holds as {:08X}", factionId),
+                                 base->GetFormID(), GameText::In(base->GetFullName()));
                     warned = true;
                 }
                 continue;
@@ -2053,12 +2081,12 @@ namespace IntelEngine {
 
             // Only include vanilla factions (Skyrim.esm = mod index 0)
             // Filters out modded factions (VectorPlexus, Schlongified, etc.)
-            uint8_t modIdx = static_cast<uint8_t>(fr.faction->GetFormID() >> 24);
+            uint8_t modIdx = static_cast<uint8_t>(factionId >> 24);
             if (modIdx != 0) continue;
 
-            auto editorId = fr.faction->GetFormEditorID();
-            if (!editorId || !editorId[0]) continue;
-            std::string eid(editorId);
+            std::string eid = GameText::Peek(fr.faction->GetFormEditorID());
+            if (eid.empty() && g_describeEveryFaction.load()) eid = fmt::format("Faction{:08X}", factionId);   // test hook only
+            if (eid.empty()) continue;
 
             if (eid.find("CrimeFaction") != std::string::npos) continue;
             if (eid.find("CurrentFollower") != std::string::npos) continue;
@@ -2072,8 +2100,17 @@ namespace IntelEngine {
             if (eid.find("Favor") != std::string::npos) continue;
             if (eid.find("defaultDisallow") != std::string::npos) continue;
 
-            auto dispName = GameText::In(fr.faction->GetFullName());
-            if (dispName && dispName[0]) {
+            // The name is read under a guard: a faction whose name is no text is called by its editor name instead.
+            bool noText = false;
+            const std::string dispName = GameText::In(GameText::Peek(fr.faction->GetFullName(), &noText));
+            if (noText) {
+                static bool told = false;
+                if (!told) {
+                    logger::warn("[NPCIndex] Faction {:08X} '{}' has a name that is no text (another mod left the record broken): it is called by its editor name", factionId, eid);
+                    told = true;
+                }
+            }
+            if (!dispName.empty()) {
                 factionNames.push_back(dispName);
             } else {
                 if (eid.size() > 7 && eid.substr(eid.size() - 7) == "Faction") {

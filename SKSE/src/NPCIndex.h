@@ -296,6 +296,9 @@ namespace IntelEngine {
         // Engine-touch fallback only (no bio file I/O). Use in Phase A snapshots
         // so the slow file read can move to Phase B (worker thread).
         static std::string GetNPCBioFallbackLine(RE::Actor* actor);
+        /** Test hook only: while on, a faction without an editor name is described too (as "Faction<id>"), so the
+         *  reading of faction names can be driven on a setup where the game hands out no editor names. */
+        static void DescribeEveryFaction(bool on);
 
         /**
          * Resolve uniquely within the latest DM/social pools, exact display name first,
