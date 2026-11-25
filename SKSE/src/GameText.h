@@ -397,14 +397,55 @@ namespace IntelEngine::GameText {
 
     // A name as the game hands it out (a pointer, perhaps null), as UTF-8. The same pointer whenever the text is
     // already what it should be.
+    // (An address in the first 64 KB is never text: Windows maps nothing there. A record another mod left broken hands
+    // out such a "name": a faction's name came back as the number 106 where a pointer belongs, and reading it ended
+    // the game, a crash report of 2026-11-25. Such a name is an empty one.)
+    inline bool NoAddress(const char* text) { return reinterpret_cast<std::uintptr_t>(text) < 0x10000; }
+
     inline const char* In(const char* gameText) {
         if (!gameText) return gameText;
+        if (NoAddress(gameText)) return "";
         const char* p = gameText;
         while (*p && static_cast<unsigned char>(*p) < 0x80) ++p;
         if (!*p) return gameText;
         const std::string_view text(gameText);
         if (WellFormed(text)) return gameText;
         return detail::Kept(text);
+    }
+
+    namespace detail {
+        // Copies text from an address that may not be readable at all; false, and nothing copied, when it is not.
+        // (No object with a destructor may live in a function that guards itself this way: hence this small one.)
+        inline bool Copy(const char* from, char* to, std::size_t room) noexcept {
+#ifdef _MSC_VER
+            __try {
+#endif
+                std::size_t i = 0;
+                for (; i + 1 < room && from[i]; ++i) to[i] = from[i];
+                to[i] = 0;
+                return true;
+#ifdef _MSC_VER
+            } __except (1) {
+                to[0] = 0;
+                return false;
+            }
+#endif
+        }
+    }
+
+    // The bytes at an address the game handed out for a record that may be broken (another mod's, or one changed while
+    // the game runs), as the game wrote them: copied under a guard, 511 bytes at most. Empty when there is no text to
+    // read there; `unreadable` then says whether the address itself was the trouble. For names taken from lists the
+    // plugin did not make, where a wrong pointer would otherwise end the game.
+    inline std::string Peek(const char* gameText, bool* unreadable = nullptr) {
+        if (unreadable) *unreadable = false;
+        if (!gameText) return {};
+        char copy[512];
+        if (NoAddress(gameText) || !detail::Copy(gameText, copy, sizeof(copy))) {
+            if (unreadable) *unreadable = true;
+            return {};
+        }
+        return std::string(copy);
     }
 
     // Any text that came from the game (what a script read there and passed on), as UTF-8.
