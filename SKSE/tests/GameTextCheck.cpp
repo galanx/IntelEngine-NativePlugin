@@ -128,6 +128,18 @@ int main() {
             Require(GameText::In(english) == english && GameText::In(german) == german && GameText::In(russian) == russian,
                     "ASCII and UTF-8 come back as the same pointer");
             Require(GameText::In(static_cast<const char*>(nullptr)) == nullptr, "no name stays no name");
+            // A name that is no address at all (a broken record handed out the number 106: a crash report of
+            // 2026-11-25) is an empty name, and so is one at an address nothing can be read from.
+            const char* const number = reinterpret_cast<const char*>(std::uintptr_t{0x6A});
+            const char* const nowhere = reinterpret_cast<const char*>(std::uintptr_t{0x00007FFFFFFE0000ull});
+            bool unreadable = false;
+            Require(*GameText::In(number) == 0, "a number where a name's address belongs reads as an empty name");
+            Require(GameText::Peek(number, &unreadable).empty() && unreadable, "a number is no address to read from");
+            Require(GameText::Peek(nowhere, &unreadable).empty() && unreadable, "an address nothing lives at reads as nothing");
+            Require(GameText::Peek(english, &unreadable) == english && !unreadable, "a real name is read whole");
+            Require(GameText::Peek(nullptr, &unreadable).empty() && !unreadable, "no name is an empty one, and no trouble");
+            const std::string longName(900, 'a');
+            Require(GameText::Peek(longName.c_str()).size() == 511, "a name is read up to 511 bytes");
             const std::string legacy = "Wei\xDF" "lauf";
             const char* once = GameText::In(legacy.c_str());
             Require(once != legacy.c_str() && std::string(once) == "Weißlauf" && GameText::In(legacy.c_str()) == once,

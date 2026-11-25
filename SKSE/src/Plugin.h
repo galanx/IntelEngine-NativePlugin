@@ -11,7 +11,7 @@
 #include <spdlog/async.h>
 #include <spdlog/sinks/basic_file_sink.h>
 
-#define INTELENGINE_VERSION "4.0.0"
+#define INTELENGINE_VERSION "4.0.1"
 
 using namespace std::literals;
 
