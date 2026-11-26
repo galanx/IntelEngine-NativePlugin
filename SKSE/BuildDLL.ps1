@@ -49,6 +49,7 @@ Write-Host "Safe threads: $Threads (RAM-safe: $ramSafeThreads, CPU-safe: $cpuSaf
 
 # ── Apply thread limit to vcpkg internal builds ──
 $previousVcpkgConcurrency = $env:VCPKG_MAX_CONCURRENCY
+$previousVcpkgVisualStudio = $env:VCPKG_VISUAL_STUDIO_PATH
 
 $defaultBuildDir = Join-Path $SKSEDir "build"
 if ([string]::IsNullOrWhiteSpace($BuildDir)) {
@@ -74,6 +75,9 @@ $previousSkyrimFolder = $env:SKYRIM_FOLDER
 $previousSkyrimModsFolder = $env:SKYRIM_MODS_FOLDER
 try {
     $env:VCPKG_MAX_CONCURRENCY = $Threads
+    # vcpkg otherwise picks the newest Visual Studio on the machine; a static CommonLib from a newer MSVC
+    # does not link with this toolset (unresolved __std_* STL helpers).
+    $env:VCPKG_VISUAL_STUDIO_PATH = $vsPath
     $currentProcess.PriorityClass = [System.Diagnostics.ProcessPriorityClass]::BelowNormal
     Write-Host "Process priority: BelowNormal (OS stays responsive)" -ForegroundColor Cyan
     Remove-Item Env:SKYRIM_FOLDER -ErrorAction SilentlyContinue
@@ -137,5 +141,10 @@ try {
         Remove-Item Env:VCPKG_MAX_CONCURRENCY -ErrorAction SilentlyContinue
     } else {
         $env:VCPKG_MAX_CONCURRENCY = $previousVcpkgConcurrency
+    }
+    if ($null -eq $previousVcpkgVisualStudio) {
+        Remove-Item Env:VCPKG_VISUAL_STUDIO_PATH -ErrorAction SilentlyContinue
+    } else {
+        $env:VCPKG_VISUAL_STUDIO_PATH = $previousVcpkgVisualStudio
     }
 }
